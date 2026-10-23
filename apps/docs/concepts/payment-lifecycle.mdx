@@ -1,0 +1,12 @@
+---
+title: Payment lifecycle
+---
+
+```
+CREATED → AWAITING_PAYMENT → PROCESSING → SETTLED
+                 ↘ EXPIRED
+                 ↘ FAILED
+PROCESSING → REFUND_PENDING → REFUNDED
+```
+
+Invalid transitions are rejected with `INVALID_STATE_TRANSITION`. Audit events are persisted for each status change.

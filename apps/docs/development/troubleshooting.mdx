@@ -1,0 +1,10 @@
+---
+title: Troubleshooting
+---
+
+| Symptom | Fix |
+| --- | --- |
+| `DEMO_MERCHANT_API_KEY` errors | Re-run `pnpm db:seed` and copy the printed key into `.env` |
+| Database connection failed | Start Docker Compose Postgres |
+| Live mode 503 | Expected — live provider not configured |
+| Idempotency conflict | Reuse the same key only with an identical body |

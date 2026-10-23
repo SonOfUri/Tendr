@@ -1,0 +1,5 @@
+---
+title: Idempotency
+---
+
+Send `Idempotency-Key` on `POST /v1/checkout/sessions`. Replays with the same key and body return the original response. Different bodies with the same key return `IDEMPOTENCY_CONFLICT`.

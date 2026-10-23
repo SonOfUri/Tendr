@@ -1,0 +1,33 @@
+---
+title: Quickstart
+---
+
+# Quickstart
+
+```bash
+cd Tendr
+cp .env.example .env
+docker compose -f infra/docker/docker-compose.yml up -d
+pnpm install
+pnpm db:generate
+pnpm db:migrate
+pnpm db:seed   # prints DEMO_MERCHANT_API_KEY — add to .env
+pnpm dev
+```
+
+Create a sandbox session:
+
+```bash
+curl -sS http://localhost:4000/v1/checkout/sessions \
+  -H "Authorization: Bearer $DEMO_MERCHANT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-1" \
+  -d '{
+    "merchantReference": "order_123",
+    "amount": "49.99",
+    "currency": "USD",
+    "successUrl": "http://localhost:3000/success",
+    "cancelUrl": "http://localhost:3000/cancel",
+    "mode": "sandbox"
+  }'
+```

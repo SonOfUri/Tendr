@@ -1,0 +1,20 @@
+---
+title: Create checkout session
+---
+
+`POST /v1/checkout/sessions`
+
+```json
+{
+  "merchantReference": "order_123",
+  "amount": "49.99",
+  "currency": "USD",
+  "description": "Demo purchase",
+  "successUrl": "https://merchant.example/success",
+  "cancelUrl": "https://merchant.example/cancel",
+  "mode": "sandbox",
+  "metadata": {}
+}
+```
+
+Amounts are decimal strings (not floating point).

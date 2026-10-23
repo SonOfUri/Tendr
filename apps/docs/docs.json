@@ -1,0 +1,69 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Tendr",
+  "theme": "mint",
+  "colors": {
+    "primary": "#4035F5",
+    "light": "#16C7F7",
+    "dark": "#080D1B"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "Getting started",
+            "pages": ["introduction", "quickstart"]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/checkout-sessions",
+              "concepts/quotes-and-expiry",
+              "concepts/payment-lifecycle",
+              "concepts/sandbox-vs-live",
+              "concepts/idempotency"
+            ]
+          },
+          {
+            "group": "API reference",
+            "pages": [
+              "api-reference/overview",
+              "api-reference/create-checkout-session",
+              "api-reference/retrieve-checkout-session",
+              "api-reference/create-quote",
+              "api-reference/retrieve-payment",
+              "api-reference/webhooks"
+            ]
+          },
+          {
+            "group": "SDKs",
+            "pages": ["sdks/typescript"]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/ecommerce",
+              "integrations/gaming",
+              "integrations/fintech",
+              "integrations/near-intents"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/api-keys",
+              "security/webhook-signatures",
+              "security/production-checklist"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": ["development/local-setup", "development/troubleshooting"]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+---
+title: Webhook signatures
+---
+
+```ts
+import { verifyWebhookSignature } from '@tendr/sdk/webhook';
+
+const ok = verifyWebhookSignature({
+  payload: rawBody,
+  secret: process.env.WEBHOOK_SIGNING_SECRET!,
+  signatureHeader: req.headers['tendr-signature'] as string,
+  timestampHeader: req.headers['tendr-timestamp'] as string,
+});
+```

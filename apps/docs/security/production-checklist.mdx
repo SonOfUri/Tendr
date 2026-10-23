@@ -1,0 +1,11 @@
+---
+title: Production checklist
+---
+
+- [ ] Live provider implemented against official docs
+- [ ] `CHECKOUT_LIVE_ENABLED` gated and monitored
+- [ ] HTTPS everywhere; webhook URL allowlisting
+- [ ] Production merchant auth (not demo keys)
+- [ ] Secret manager for credentials
+- [ ] Queue-backed webhook delivery (Redis optional adapter)
+- [ ] No secrets in client bundles

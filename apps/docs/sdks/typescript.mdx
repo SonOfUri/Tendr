@@ -1,0 +1,15 @@
+---
+title: TypeScript SDK
+---
+
+```ts
+import { TendrClient } from '@tendr/sdk';
+import { verifyWebhookSignature } from '@tendr/sdk/webhook';
+
+const client = new TendrClient({
+  baseUrl: 'http://localhost:4000',
+  apiKey: process.env.DEMO_MERCHANT_API_KEY,
+});
+```
+
+Webhook verification is Node-only — do not import `@tendr/sdk/webhook` into browser bundles.

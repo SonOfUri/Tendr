@@ -1,0 +1,32 @@
+{
+  "name": "@tendr/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "lint": "eslint src --max-warnings 0",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@tendr/config-eslint": "*",
+    "@tendr/config-typescript": "*",
+    "@types/node": "^22.15.3",
+    "eslint": "^9.25.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.2"
+  }
+}

@@ -1,0 +1,185 @@
+@import '@tendr/ui/tokens.css';
+
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@500;600;700&family=Sora:wght@400;500;600;700&display=swap');
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: var(--tendr-navy);
+  color: var(--tendr-white);
+  font-family: var(--tendr-font-sans);
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(64, 53, 245, 0.35), transparent 60%),
+    radial-gradient(900px 500px at -10% 20%, rgba(22, 199, 247, 0.18), transparent 55%),
+    linear-gradient(180deg, #080d1b 0%, #0b1224 45%, #080d1b 100%);
+  background-attachment: fixed;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+main {
+  width: min(1120px, calc(100% - 2rem));
+  margin: 0 auto;
+}
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 0;
+  gap: 1rem;
+}
+
+.brand {
+  font-family: var(--tendr-font-display);
+  font-weight: 700;
+  font-size: 1.35rem;
+  letter-spacing: -0.03em;
+}
+
+.nav {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  color: var(--tendr-lavender);
+  font-size: 0.95rem;
+}
+
+.hero {
+  display: grid;
+  gap: 2rem;
+  padding: 3rem 0 4rem;
+  min-height: calc(100vh - 5rem);
+  align-content: center;
+}
+
+.hero h1 {
+  font-family: var(--tendr-font-display);
+  font-size: clamp(2.4rem, 6vw, 4.4rem);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+  margin: 0 0 1rem;
+  max-width: 14ch;
+}
+
+.hero p {
+  max-width: 42rem;
+  color: var(--tendr-muted);
+  font-size: 1.1rem;
+  line-height: 1.6;
+}
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.section {
+  padding: 3.5rem 0;
+  border-top: 1px solid var(--tendr-border);
+}
+
+.section h2 {
+  font-family: var(--tendr-font-display);
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  margin: 0 0 0.75rem;
+}
+
+.section p.lead {
+  color: var(--tendr-muted);
+  max-width: 40rem;
+  margin-top: 0;
+}
+
+.grid-3 {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-top: 1.75rem;
+}
+
+.tile {
+  padding: 1.25rem 0;
+  border-top: 1px solid var(--tendr-border);
+}
+
+.tile h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.tile p {
+  margin: 0;
+  color: var(--tendr-muted);
+  line-height: 1.55;
+}
+
+.code-panel {
+  margin-top: 1.5rem;
+  padding: 1.25rem;
+  border: 1px solid var(--tendr-border);
+  border-radius: var(--tendr-radius);
+  background: rgba(15, 22, 41, 0.8);
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--tendr-lavender);
+}
+
+.checkout-shell {
+  max-width: 480px;
+  margin: 2rem auto;
+  padding: 1.5rem;
+  border: 1px solid var(--tendr-border);
+  border-radius: calc(var(--tendr-radius) + 4px);
+  background: rgba(15, 22, 41, 0.9);
+}
+
+.sandbox-banner {
+  margin-bottom: 1rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  background: rgba(22, 199, 247, 0.12);
+  color: var(--tendr-cyan);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--tendr-muted);
+}
+
+@keyframes tendr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+.site-footer {
+  border-top: 1px solid var(--tendr-border);
+  padding: 2rem 0 3rem;
+  color: var(--tendr-muted);
+  font-size: 0.9rem;
+}

@@ -1,0 +1,16 @@
+:root {
+  --tendr-navy: #080d1b;
+  --tendr-indigo: #4035f5;
+  --tendr-white: #ffffff;
+  --tendr-cyan: #16c7f7;
+  --tendr-lavender: #c9c6ff;
+  --tendr-muted: #8b93a7;
+  --tendr-surface: #0f1629;
+  --tendr-border: rgba(201, 198, 255, 0.18);
+  --tendr-danger: #ff5c7a;
+  --tendr-success: #2dd4a8;
+  --tendr-warning: #f5b942;
+  --tendr-font-sans: 'Sora', 'Segoe UI', sans-serif;
+  --tendr-font-display: 'Instrument Sans', 'Sora', sans-serif;
+  --tendr-radius: 12px;
+}
