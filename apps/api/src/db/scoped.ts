@@ -163,6 +163,7 @@ const RAW_OPS = new Set([
   '$queryRawTyped',
   '$runCommandRaw',
 ]);
+
 function scopeExtension(ctx: ScopeContext, readOnly: boolean) {
   return Prisma.defineExtension({
     name: readOnly ? 'tendr-read-only' : 'tendr-scoped',
