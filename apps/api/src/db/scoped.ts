@@ -49,12 +49,6 @@ function scopeWhere(where: unknown, tenant: Args): Args {
   return { ...base, AND: [tenant, ...and] };
 }
 
-function assertTenantImmutable(data: unknown): void {
-  if (data && typeof data === 'object' && TENANT_FIELDS.some((f) => Object.hasOwn(data, f))) {
-    throw forbidden('tenant fields cannot be changed');
-  }
-}
-
 /** model → (field → kind): `'scalar'` or the related model's name. */
 const FIELDS = new Map(
   Prisma.dmmf.datamodel.models.map((m) => [
@@ -64,29 +58,65 @@ const FIELDS = new Map(
 );
 
 /**
- * The root's tenant filter does not follow relations, so traversals (include, select,
- * `_count`, relation filters, nested writes) are allowed only where the target is
- * confined by composite FKs: into the merchant, shared models, or per-mode models from
- * a per-mode source. Shared/merchant → per-mode would see both modes; infra is never reachable.
+ * Write payloads (`data`, `create`, `update`) may set scalar columns only. Any relation
+ * key (`connect`, `connectOrCreate`, `set`, `disconnect`, nested create/update/delete, …)
+ * is rejected: a `connect` copies the target's merchant/mode into composite FK columns,
+ * and nested writes bypass tenant injection. With scalars only, the tenant columns stay
+ * fixed and the DB composite FKs validate every reference. Updates may not set tenant columns.
  */
-function assertRelationsAllowed(model: string, value: unknown): void {
-  if (Array.isArray(value)) return value.forEach((v) => assertRelationsAllowed(model, v));
+function assertScalarWrite(model: string, payload: unknown, isUpdate: boolean): void {
+  const rows = Array.isArray(payload) ? payload : [payload];
+  const fields = FIELDS.get(model);
+  for (const row of rows) {
+    if (row === null || typeof row !== 'object') continue;
+    for (const key of Object.keys(row)) {
+      if (fields?.get(key) !== 'scalar' && fields?.has(key)) {
+        throw forbidden(`relation writes (${model}.${key}) are not available; set FK columns`);
+      }
+      if (isUpdate && TENANT_FIELDS.includes(key))
+        throw forbidden('tenant fields cannot be changed');
+    }
+  }
+}
+
+/**
+ * The root's tenant filter does not follow relations, so traversals (include, select,
+ * `_count`, relation filters, orderBy) are allowed only where the target is confined by
+ * composite FKs: into the merchant, shared models, or per-mode models from a per-mode
+ * source. Shared/merchant → per-mode would see both modes; infra is never reachable.
+ *
+ * Keys are classified by field lookup on the current model: a relation field switches the
+ * walk to its target model, a scalar field's value is skipped (it may hold JSON), and any
+ * other key is a Prisma argument keyword (`where`, `include`, `some`, `AND`, …) walked on
+ * the same model. `_count: true` under include/select counts every relation at once, so it
+ * is rejected; callers must name relations via `_count: { select: { … } }`.
+ */
+function assertRelationsAllowed(model: string, value: unknown, parentKey?: string): void {
+  if (Array.isArray(value)) {
+    return value.forEach((v) => assertRelationsAllowed(model, v, parentKey));
+  }
   if (value === null || typeof value !== 'object' || Prisma.Decimal.isDecimal(value)) return;
   const fields = FIELDS.get(model);
   for (const [key, child] of Object.entries(value)) {
     const target = fields?.get(key);
     if (target === 'scalar') continue;
+    if (key === '_count' && child === true && (parentKey === 'include' || parentKey === 'select')) {
+      throw forbidden('_count: true is not available; select relations explicitly');
+    }
     if (target !== undefined) {
       const reachable =
         target === 'Merchant' || shared.has(target) || (perMode.has(target) && perMode.has(model));
       if (!reachable) throw forbidden(`relation ${model}.${key} is not accessible`);
     }
-    assertRelationsAllowed(target ?? model, child);
+    assertRelationsAllowed(target ?? model, child, key);
   }
 }
 
 function scopeArgs(model: string, operation: string, args: Args, ctx: ScopeContext): Args {
   const tenant = tenantFilter(model, ctx);
+  assertScalarWrite(model, args.data, UPDATE_OPS.has(operation));
+  assertScalarWrite(model, args.create, false);
+  assertScalarWrite(model, args.update, true);
   assertRelationsAllowed(model, args);
   if (READ_OPS.has(operation) || DELETE_OPS.has(operation)) {
     if (model === 'Merchant' && DELETE_OPS.has(operation))
@@ -94,7 +124,6 @@ function scopeArgs(model: string, operation: string, args: Args, ctx: ScopeConte
     return { ...args, where: scopeWhere(args.where, tenant) };
   }
   if (UPDATE_OPS.has(operation)) {
-    assertTenantImmutable(args.data);
     return { ...args, where: scopeWhere(args.where, tenant) };
   }
   if (model === 'Merchant') throw forbidden('merchants cannot be created');
@@ -105,7 +134,6 @@ function scopeArgs(model: string, operation: string, args: Args, ctx: ScopeConte
     return { ...args, data };
   }
   if (operation === 'upsert') {
-    assertTenantImmutable(args.update);
     return {
       ...args,
       where: scopeWhere(args.where, tenant),
@@ -146,18 +174,26 @@ function scopeExtension(ctx: ScopeContext, readOnly: boolean) {
  * its `tx` client carries the same query extension, so it is scoped too.
  */
 export function scopedDb(ctx: ScopeContext) {
-  return prisma.$extends(scopeExtension(ctx, false));
+  return prisma.$extends(scopeExtension(ctx, false)).$extends({
+    client: { $disconnect: rejectDisconnect },
+  });
 }
 
 /** Read-only access to one merchant + mode. AI services only ever receive this. */
 export function readOnlyDb(ctx: ScopeContext) {
   return prisma.$extends(scopeExtension(ctx, true)).$extends({
     client: {
+      $disconnect: rejectDisconnect,
       $transaction() {
         return Promise.reject(forbidden('read-only data access'));
       },
     },
   });
+}
+
+/** Scoped clients share the process-wide connection pool; only infra code may close it. */
+function rejectDisconnect(): Promise<never> {
+  return Promise.reject(forbidden('scoped clients cannot disconnect the shared client'));
 }
 
 export type ScopedDb = ReturnType<typeof scopedDb>;

@@ -218,8 +218,164 @@ describe('scoped data access', () => {
       () => testDb.merchant.findMany({ select: { _count: { select: { sessions: true } } } }),
       () => testDb.checkoutTheme.findMany({ include: { sessions: true } }),
       () => testDb.checkoutTheme.findMany({ where: { sessions: { some: {} } } }),
+      () => testDb.merchant.findMany({ include: { _count: true } }),
+      () => testDb.checkoutTheme.findMany({ select: { _count: true } }),
     ];
     for (const attempt of attempts) await expect(attempt()).rejects.toMatchObject(forbidden);
+  });
+
+  it('_count over reachable relations and row-count aggregates still work', async () => {
+    const m = await createMerchant();
+    const payment = await createRow('Payment', m.id, true);
+    const db = scopedDb({ merchantId: m.id, livemode: true });
+    const s = await db.session.findUniqueOrThrow({
+      where: { id: payment.sessionId as string },
+      select: { _count: { select: { payments: true } } },
+    });
+    expect(s._count.payments).toBe(1);
+    expect((await db.session.aggregate({ _count: true }))._count).toBe(1);
+  });
+
+  describe('write payloads cannot write relations', () => {
+    const relationKey = (err: unknown) =>
+      expect(err).toMatchObject({
+        ...forbidden,
+        message: expect.stringMatching(/relation writes/),
+      });
+
+    it('connect cannot repoint a child at another merchant’s parent', async () => {
+      const a = await createMerchant();
+      const b = await createMerchant();
+      const quoteA = await createRow('Quote', a.id, true);
+      const sessB = await createRow('Session', b.id, true);
+      const dbA = scopedDb({ merchantId: a.id, livemode: true }) as AnyDb;
+      await dbA.quote
+        .update({ where: { id: quoteA.id }, data: { session: { connect: { id: sessB.id } } } })
+        .then(() => expect.fail('resolved'), relationKey);
+      expect(await prisma.quote.findUniqueOrThrow({ where: { id: quoteA.id } })).toMatchObject({
+        merchantId: a.id,
+        sessionId: quoteA.sessionId,
+      });
+    });
+
+    it('connect cannot pull another merchant’s child into an own parent', async () => {
+      const a = await createMerchant();
+      const b = await createMerchant();
+      const quoteB = await createRow('Quote', b.id, true);
+      const sessA = await createRow('Session', a.id, true);
+      const dbA = scopedDb({ merchantId: a.id, livemode: true }) as AnyDb;
+      await dbA.session
+        .update({ where: { id: sessA.id }, data: { quotes: { connect: [{ id: quoteB.id }] } } })
+        .then(() => expect.fail('resolved'), relationKey);
+      expect(await prisma.quote.findUniqueOrThrow({ where: { id: quoteB.id } })).toMatchObject({
+        merchantId: b.id,
+        sessionId: quoteB.sessionId,
+      });
+    });
+
+    it('create cannot connect another merchant’s children', async () => {
+      const a = await createMerchant();
+      const b = await createMerchant();
+      const quoteB = await createRow('Quote', b.id, true);
+      const dbA = scopedDb({ merchantId: a.id, livemode: true }) as AnyDb;
+      const {
+        merchantId: _m,
+        livemode: _l,
+        ...rest
+      } = minimalSession({ merchantId: a.id, livemode: true });
+      await dbA.session
+        .create({ data: { ...rest, quotes: { connect: [{ id: quoteB.id }] } } })
+        .then(() => expect.fail('resolved'), relationKey);
+      expect(await prisma.quote.findUniqueOrThrow({ where: { id: quoteB.id } })).toMatchObject({
+        merchantId: b.id,
+      });
+      expect(await prisma.session.count({ where: { merchantId: a.id } })).toBe(0);
+    });
+
+    it('connect cannot cross modes', async () => {
+      const m = await createMerchant();
+      const entry = await createRow('RevenueEntry', m.id, false);
+      const livePayment = await createRow('Payment', m.id, true);
+      const testDb = scopedDb({ merchantId: m.id, livemode: false }) as AnyDb;
+      await testDb.revenueEntry
+        .update({ where: { id: entry.id }, data: { payment: { connect: { id: livePayment.id } } } })
+        .then(() => expect.fail('resolved'), relationKey);
+      expect(
+        await prisma.revenueEntry.findUniqueOrThrow({ where: { id: entry.id } }),
+      ).toMatchObject({
+        livemode: false,
+        paymentId: entry.paymentId,
+      });
+    });
+
+    it('nested create, connectOrCreate, set, disconnect and upsert payloads are rejected', async () => {
+      const m = await createMerchant();
+      const session = await createRow('Session', m.id, true);
+      const theme = await createRow('CheckoutTheme', m.id, true);
+      const db = scopedDb({ merchantId: m.id, livemode: true }) as AnyDb;
+      const nestedQuote = {
+        id: 'quo_nested',
+        originAssetId: 'nep141:eth.test',
+        depositAddress: 'deposit-nested',
+        amountIn: '1',
+        amountOut: '1',
+        refundTo: 'buyer.testnet',
+        deadline: new Date(Date.now() + 60_000),
+      };
+      const attempts: (() => Promise<unknown>)[] = [
+        () =>
+          db.session.update({
+            where: { id: session.id },
+            data: { quotes: { create: nestedQuote } },
+          }),
+        () =>
+          db.session.update({
+            where: { id: session.id },
+            data: { theme: { connectOrCreate: { where: { id: theme.id }, create: {} } } },
+          }),
+        () => db.session.update({ where: { id: session.id }, data: { quotes: { set: [] } } }),
+        () =>
+          db.session.update({ where: { id: session.id }, data: { theme: { disconnect: true } } }),
+        () =>
+          db.session.upsert({
+            where: { id: session.id },
+            create: minimalSession({ merchantId: m.id, livemode: true }),
+            update: { quotes: { create: nestedQuote } },
+          }),
+        () =>
+          db.session.upsert({
+            where: { id: 'ses_new' },
+            create: {
+              ...minimalSession({ id: 'ses_new', merchantId: m.id, livemode: true }),
+              quotes: { create: nestedQuote },
+            },
+            update: {},
+          }),
+      ];
+      for (const attempt of attempts)
+        await attempt().then(() => expect.fail('resolved'), relationKey);
+      expect(await prisma.quote.count()).toBe(0);
+    });
+
+    it('scalar FK columns are validated by the composite FK', async () => {
+      const a = await createMerchant();
+      const b = await createMerchant();
+      const quoteA = await createRow('Quote', a.id, true);
+      const sessB = await createRow('Session', b.id, true);
+      const dbA = scopedDb({ merchantId: a.id, livemode: true });
+      await expect(
+        dbA.quote.update({ where: { id: quoteA.id }, data: { sessionId: sessB.id } }),
+      ).rejects.toThrow();
+      expect((await prisma.quote.findUniqueOrThrow({ where: { id: quoteA.id } })).sessionId).toBe(
+        quoteA.sessionId,
+      );
+    });
+  });
+
+  it('neither client can disconnect the shared Prisma client', async () => {
+    const ctx = { merchantId: 'mer_x', livemode: true };
+    await expect(scopedDb(ctx).$disconnect()).rejects.toMatchObject(forbidden);
+    await expect(readOnlyDb(ctx).$disconnect()).rejects.toMatchObject(forbidden);
   });
 
   it('per-mode relations stay within the mode (composite FKs)', async () => {
