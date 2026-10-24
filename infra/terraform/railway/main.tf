@@ -154,7 +154,7 @@ resource "railway_service" "api" {
   source_repo_branch = var.source_repo_branch
   regions            = local.regions
 
-  build_command     = "npm ci && npm run db:generate && npx turbo run build --filter=@tendr/api..."
+  build_command     = "npm ci --include=dev && npm run db:generate && npx turbo run build --filter=@tendr/api..."
   predeploy_command = "npm run db:migrate"
   start_command     = "npm run start --workspace=@tendr/api"
 
@@ -169,7 +169,7 @@ resource "railway_service" "worker" {
   source_repo_branch = var.source_repo_branch
   regions            = local.regions
 
-  build_command = "npm ci && npm run db:generate && npx turbo run build --filter=@tendr/api..."
+  build_command = "npm ci --include=dev && npm run db:generate && npx turbo run build --filter=@tendr/api..."
   start_command = "npm run start:worker --workspace=@tendr/api"
 
   # The worker's health server listens on WORKER_HEALTH_PORT; PORT points Railway's check at it.

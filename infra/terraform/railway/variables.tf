@@ -50,7 +50,7 @@ variable "gcp_project_id" {
 variable "gcp_kms_location" {
   description = "Cloud KMS location (GCP_KMS_LOCATION); `gcp_kms_location` output of ../gcp."
   type        = string
-  default     = "global"
+  default     = "us-east4"
 }
 
 variable "gcp_kms_keyring" {

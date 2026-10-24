@@ -31,7 +31,7 @@ export default function HomePage() {
         <div className="grid-3">
           <div className="tile">
             <h3>1. Create a session</h3>
-            <p>Pass amount, currency, and return URLs. Sandbox mode is the default.</p>
+            <p>Pass amount, currency, and return URLs. Test-mode keys never move real funds.</p>
           </div>
           <div className="tile">
             <h3>2. Present options</h3>
@@ -57,7 +57,7 @@ export default function HomePage() {
           </div>
           <div className="tile">
             <h3>Fintech</h3>
-            <p>Fund features with clearly labelled sandbox balances.</p>
+            <p>Fund features, with test mode clearly separated from live.</p>
           </div>
           <div className="tile">
             <h3>Gaming</h3>
@@ -72,15 +72,10 @@ export default function HomePage() {
           Honest about support: Tendr only presents routes that are configured. NEAR Intents may
           power execution for supported routes—it is not the product brand.
         </p>
-        <pre className="code-panel">{`POST /v1/checkout/sessions
-{
-  "merchantReference": "order_123",
-  "amount": "49.99",
-  "currency": "USD",
-  "successUrl": "https://merchant.example/success",
-  "cancelUrl": "https://merchant.example/cancel",
-  "mode": "sandbox"
-}`}</pre>
+        <pre className="code-panel">{`# Checkout API — coming soon.
+# Today: test-mode (tdr_test_…) and live-mode (tdr_live_…) keys.
+curl -H "Authorization: Bearer tdr_test_..." \\
+  https://api.tendr.example/v1/ping`}</pre>
       </section>
 
       <section className="section">
@@ -91,13 +86,13 @@ export default function HomePage() {
         </div>
         <div className="tile">
           <h3>Is the demo moving real money?</h3>
-          <p>No. Sandbox mode is deterministic simulation and is always labelled.</p>
+          <p>No. Checkout is not live yet, and test mode will never move real funds.</p>
         </div>
         <div className="tile">
           <h3>Where does NEAR fit?</h3>
           <p>
             NEAR Intents is an optional execution adapter behind Tendr for supported routes. Live
-            settlement is not enabled in this scaffold.
+            settlement is not enabled yet.
           </p>
         </div>
       </section>

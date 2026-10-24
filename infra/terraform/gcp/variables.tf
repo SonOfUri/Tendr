@@ -4,9 +4,9 @@ variable "project_id" {
 }
 
 variable "location" {
-  description = "Cloud KMS location of the key ring (GCP_KMS_LOCATION)."
+  description = "Cloud KMS location of the key ring (GCP_KMS_LOCATION). Cloud HSM keys are not available in `global`; use a region."
   type        = string
-  default     = "global"
+  default     = "us-east4"
 }
 
 variable "key_ring_name" {

@@ -92,6 +92,19 @@ describe('seed', () => {
     expect(await liveConfigs()).toMatchObject([{ payoutAddress: PAYOUT }]);
   });
 
+  it('warns, without changing it, when SEED_PAYOUT_ADDRESS differs from the live config', async () => {
+    await seed({ payoutAddress: PAYOUT, out: silent });
+    const other = '0x0000000000000000000000000000000000000002';
+    const lines: string[] = [];
+    await seed({ payoutAddress: other, out: (l) => lines.push(l) });
+    expect(lines.join('\n')).toMatch(/differs from the existing live settlement config/);
+    expect(await liveConfigs()).toMatchObject([{ payoutAddress: PAYOUT }]);
+
+    const again: string[] = [];
+    await seed({ payoutAddress: PAYOUT.toLowerCase(), out: (l) => again.push(l) });
+    expect(again.join('\n')).not.toMatch(/differs/);
+  });
+
   it('seeded keys authenticate through the gateway', async () => {
     const { merchantId, rawKeys } = await seed({ payoutAddress: undefined, out: silent });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});

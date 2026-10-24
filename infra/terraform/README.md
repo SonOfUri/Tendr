@@ -29,7 +29,10 @@ docker run --rm -v "$PWD/infra/terraform:/tf" -w /tf/gcp hashicorp/terraform:1.9
 
 ## `gcp/` — keys and identity
 
-- Key ring `tendr-prod` (location `var.location`, default `global`).
+- Key ring `tendr-prod` (location `var.location`, default `us-east4`). Cloud HSM keys are not
+  offered in the `global` location, so the key ring must be regional. Keep the Railway region
+  (`region`, default `us-east4-eqdc4a`) close to it: every secret decrypt and signature is a KMS
+  round trip.
 - `tendr-kek`: symmetric `ENCRYPT_DECRYPT`, rotated every 90 days. Envelope encryption for stored
   secrets.
 - Signing keys (`ASYMMETRIC_SIGN`, never exported):
@@ -38,8 +41,10 @@ docker run --rm -v "$PWD/infra/terraform:/tf" -w /tf/gcp hashicorp/terraform:1.9
   - No EVM or Solana gas keys: that sponsorship goes through Pimlico (an API key stored as a secret).
 - `protection_level` defaults to `HSM`. If Cloud KMS rejects an algorithm at HSM level in the chosen
   location, set a per-key fallback in `protection_level_overrides` (e.g.
-  `{ "relayer-near" = "SOFTWARE" }`). Run `npm run kms:verify --workspace=@tendr/api` first: it
-  checks both curves against real Cloud KMS and reports which protection level worked.
+  `{ "relayer-near" = "SOFTWARE" }`). Run `npm run kms:verify --workspace=@tendr/api` first, with
+  `GCP_KMS_LOCATION` set to the same location as `var.location` (HSM availability differs by
+  location): it checks both curves against real Cloud KMS and reports which protection level
+  worked.
 - Service account `tendr-api`: `roles/cloudkms.cryptoKeyEncrypterDecrypter` on `tendr-kek` only, and
   `roles/cloudkms.signerVerifier` + `roles/cloudkms.publicKeyViewer` on each signing key. No
   project-level roles.
@@ -90,8 +95,13 @@ services over private networking.
 - **Health check vs rate limit.** `/v1/health` is limited to 60 requests/min per IP. Railway's
   healthcheck polls during deploys; confirm its probe frequency (and whether all probes share one
   source IP) stays well under that, or exempt the health route from the per-IP limit.
-- **Build command.** `npm ci && npm run db:generate && npx turbo run build --filter=@tendr/api...`
+- **Build command.** `npm ci --include=dev && npm run db:generate && npx turbo run build --filter=@tendr/api...`
   builds the API and its workspace dependencies. Confirm Railway's Nixpacks/Railpack picks Node 22.
+- **Dev dependencies at build time.** Railway exposes service variables (including
+  `NODE_ENV=production`) during the build, and a plain `npm ci` then skips devDependencies — turbo,
+  typescript, prisma, dotenv-cli — which the build, `db:generate` and the pre-deploy `db:migrate`
+  all need. Keep `--include=dev` in both build commands, and confirm the first build log installs
+  them.
 
 ## Postgres roles: least privilege on `events`
 

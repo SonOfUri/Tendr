@@ -151,7 +151,17 @@ export async function seed(opts: SeedOptions = {}): Promise<SeedResult> {
     });
   }
 
-  let liveSettlementConfigured = (await liveDb.settlementConfig.count()) > 0;
+  const liveConfigs = await liveDb.settlementConfig.findMany({ select: { payoutAddress: true } });
+  let liveSettlementConfigured = liveConfigs.length > 0;
+  if (
+    payoutAddress &&
+    liveSettlementConfigured &&
+    !liveConfigs.some((c) => c.payoutAddress?.toLowerCase() === payoutAddress.toLowerCase())
+  ) {
+    out(
+      `Warning: SEED_PAYOUT_ADDRESS (${payoutAddress}) differs from the existing live settlement config; the seed does not change it.`,
+    );
+  }
   if (!liveSettlementConfigured && payoutAddress) {
     await liveDb.settlementConfig.create({
       data: {

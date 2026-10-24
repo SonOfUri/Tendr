@@ -7,7 +7,7 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Tendr — One checkout. Every way to pay.',
   description:
-    'Tendr is a universal checkout layer for digital commerce. Sandbox demos do not move real funds.',
+    'Tendr is a universal checkout layer for digital commerce. Checkout is coming soon; test mode never moves real funds.',
   manifest: '/manifest.webmanifest',
   appleWebApp: {
     capable: true,

@@ -10,7 +10,7 @@ export function SiteFooter() {
         <Link href="/terms">Terms</Link>
       </p>
       <p className="muted">
-        Sandbox demos do not move real funds. NEAR Intents is an optional execution integration.
+        Test mode never moves real funds. NEAR Intents is an optional execution integration.
       </p>
     </footer>
   );
