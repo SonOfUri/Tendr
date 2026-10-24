@@ -9,6 +9,8 @@ const EnvSchema = z.object({
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   REDIS_URL: z.string().url(),
+  KEYVAULT_DRIVER: z.enum(['local', 'gcp']).default('local'),
+  LOCAL_KEYVAULT_PATH: z.string().min(1).default('.keyvault/local.json'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
