@@ -805,5 +805,7 @@ model EventOutbox {
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
+  // The dispatcher reads the oldest rows first (ORDER BY created_at LIMIT 100).
+  @@index([createdAt])
   @@map("event_outbox")
 }

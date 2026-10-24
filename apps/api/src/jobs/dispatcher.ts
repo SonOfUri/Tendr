@@ -5,12 +5,17 @@ import { handlerNamesFor, JOB_ID_SEPARATOR } from './handlers.js';
 import { EVENT_JOB_OPTIONS, getEventsQueue, type EventJobData } from './queue.js';
 
 export const DISPATCH_BATCH_SIZE = 100;
+/** Bound on enqueueing a batch; well under the transaction timeout so a dead Redis fails the batch. */
+export const ENQUEUE_TIMEOUT_MS = 5_000;
+const TX_TIMEOUT_MS = 15_000;
 
 export interface DispatchOptions {
   /** Defaults to the process-wide events queue. */
   queue?: Queue<EventJobData>;
   /** Merged over the default retry policy (tests shorten it). */
   jobOptions?: JobsOptions;
+  /** Defaults to `ENQUEUE_TIMEOUT_MS`. */
+  enqueueTimeoutMs?: number;
   /** Test hook: runs after enqueueing, before the outbox rows are deleted. */
   beforeDelete?: () => void | Promise<void>;
 }
@@ -24,6 +29,13 @@ export interface DispatchOptions {
  * at once. If anything fails after enqueueing, the transaction rolls back and the rows are
  * dispatched again; the deterministic job id (`{eventId}__{handler}`) makes BullMQ ignore the
  * duplicate while the first job is queued or retained (completed jobs are kept 24h).
+ *
+ * Delivery is decided by the handler registry of the process running the dispatcher (the
+ * worker, which registers every handler via `register-handlers.ts`): rows for event types with
+ * no handler there are deleted without enqueueing anything. `events` stays the permanent record.
+ *
+ * If Redis is unreachable, enqueueing is abandoned after `enqueueTimeoutMs` so the transaction
+ * rolls back promptly and the caller sees the error.
  *
  * Returns the number of outbox rows dispatched.
  */
@@ -54,14 +66,30 @@ export async function dispatchOnce(opts: DispatchOptions = {}): Promise<number> 
           },
         })),
       );
-      if (jobs.length > 0) await queue.addBulk(jobs);
+      if (jobs.length > 0) {
+        await withTimeout(queue.addBulk(jobs), opts.enqueueTimeoutMs ?? ENQUEUE_TIMEOUT_MS);
+      }
+      const unhandled = events.filter((e) => handlerNamesFor(e.type).length === 0).length;
+      if (unhandled > 0) {
+        log('debug', 'outbox rows dropped with no handler', { count: unhandled });
+      }
 
       await opts.beforeDelete?.();
       await tx.$executeRaw`DELETE FROM event_outbox WHERE event_id = ANY(${ids})`;
       return ids.length;
     },
-    { timeout: 15_000 },
+    { timeout: TX_TIMEOUT_MS },
   );
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`enqueue timed out after ${ms}ms`)), ms);
+  });
+  // The abandoned enqueue may still land later; its rows are re-dispatched and deduped by job id.
+  p.catch(() => {});
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**

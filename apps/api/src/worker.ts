@@ -6,6 +6,8 @@ import { Worker, type Job } from 'bullmq';
 import { env, loadEnv } from './env.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
+// Registers every event handler; must load before the dispatcher runs (see dispatchOnce).
+import './jobs/register-handlers.js';
 import {
   closeConnection,
   createEventsQueue,
@@ -69,6 +71,8 @@ export interface HealthServer {
 export async function startHealthServer(opts: {
   port: number;
   redisUrl: string;
+  /** Interface to bind; Node's default (all interfaces) when omitted. */
+  host?: string;
 }): Promise<HealthServer> {
   const redis = createRedis(opts.redisUrl);
   const server = createServer((req, res) => {
@@ -91,7 +95,7 @@ export async function startHealthServer(opts: {
       res.end(JSON.stringify(body));
     })();
   });
-  await new Promise<void>((done) => server.listen(opts.port, done));
+  await new Promise<void>((done) => server.listen(opts.port, opts.host, done));
   return {
     port: (server.address() as AddressInfo).port,
     close: async () => {
@@ -154,6 +158,7 @@ export async function startWorker(
 
   const health = await startHealthServer({
     port: opts.healthPort ?? env().WORKER_HEALTH_PORT,
+    host: env().WORKER_HEALTH_HOST,
     redisUrl: env().REDIS_URL,
   });
 
@@ -177,11 +182,19 @@ async function main() {
   const worker = await startWorker();
   log('info', 'Tendr worker started', { healthPort: worker.healthPort });
 
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return; // a second signal must not run stop() again
+    shuttingDown = true;
     log('info', 'shutting down', { signal });
-    await worker.stop();
-    await prisma.$disconnect();
-    process.exit(0);
+    try {
+      await worker.stop();
+      await prisma.$disconnect();
+      process.exit(0);
+    } catch (err) {
+      log('error', 'shutdown failed', { err: String(err) });
+      process.exit(1);
+    }
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));

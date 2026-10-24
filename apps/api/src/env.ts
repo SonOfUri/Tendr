@@ -7,6 +7,8 @@ const EnvSchema = z
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     API_PORT: z.coerce.number().int().positive().default(4000),
     WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(4100),
+    /** Defaults to 0.0.0.0 in production (reachable by the platform), 127.0.0.1 otherwise. */
+    WORKER_HEALTH_HOST: optionalString,
     API_BASE_URL: z.string().url().default('http://localhost:4000'),
     WEB_URL: z.string().url().default('http://localhost:3000'),
     DATABASE_URL: z.string().min(1),
@@ -53,7 +55,12 @@ const EnvSchema = z
         message: 'must be a service-account JSON object',
       });
     }
-  });
+  })
+  .transform((e) => ({
+    ...e,
+    WORKER_HEALTH_HOST:
+      e.WORKER_HEALTH_HOST ?? (e.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
+  }));
 
 function isJsonObject(text: string): boolean {
   try {

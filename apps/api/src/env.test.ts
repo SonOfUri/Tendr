@@ -37,3 +37,13 @@ describe('loadEnv keyvault rules', () => {
     expect(e.GCP_KMS_KEK).toBe('tendr-kek');
   });
 });
+
+describe('loadEnv worker health', () => {
+  it('binds 0.0.0.0 in production and 127.0.0.1 otherwise, unless WORKER_HEALTH_HOST is set', () => {
+    const prod = loadEnv({ ...base, ...gcp, NODE_ENV: 'production', KEYVAULT_DRIVER: 'gcp' });
+    expect(prod.WORKER_HEALTH_HOST).toBe('0.0.0.0');
+    expect(prod.WORKER_HEALTH_PORT).toBe(4100);
+    expect(loadEnv({ ...base, NODE_ENV: 'development' }).WORKER_HEALTH_HOST).toBe('127.0.0.1');
+    expect(loadEnv({ ...base, WORKER_HEALTH_HOST: '::' }).WORKER_HEALTH_HOST).toBe('::');
+  });
+});

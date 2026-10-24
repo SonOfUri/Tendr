@@ -4,12 +4,12 @@ import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { recordEvent } from '../events/record.js';
-import { env } from '../env.js';
+import { env, loadEnv } from '../env.js';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { createMerchant, resetDb } from '../test/helpers.js';
 import { startHealthServer, startWorker } from '../worker.js';
-import { dispatchOnce } from './dispatcher.js';
+import { dispatchOnce, ENQUEUE_TIMEOUT_MS, startDispatcher } from './dispatcher.js';
 import { clearEventHandlers, registerEventHandler } from './handlers.js';
 import {
   closeConnection,
@@ -97,9 +97,18 @@ describe('event dispatch', () => {
     const b = await record('payment.settled');
     const c = await record('nobody.listens'); // no handlers: just leaves the outbox
 
-    expect(await dispatchOnce({ queue })).toBe(3);
+    loadEnv({ ...process.env, LOG_LEVEL: 'debug' });
+    try {
+      expect(await dispatchOnce({ queue })).toBe(3);
+    } finally {
+      loadEnv();
+    }
     expect(await outboxCount()).toBe(0);
     expect(await dispatchOnce({ queue })).toBe(0);
+    // The no-handler row is dropped (events keeps the record), and that is logged at debug.
+    const logged = vi.mocked(console.log).mock.calls.map((args) => String(args[0]));
+    expect(logged.some((l) => l.includes('outbox rows dropped with no handler'))).toBe(true);
+    expect(logged.find((l) => l.includes('no handler'))).toContain('"count":1');
 
     await runWorker();
     await waitFor(() => calls.length === 3);
@@ -212,6 +221,55 @@ describe('event dispatch', () => {
       removeOnFail: false,
     });
   });
+});
+
+describe('dispatch with Redis down', () => {
+  let connection: Redis;
+  let deadQueue: Queue;
+
+  beforeEach(async () => {
+    await resetDb();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Nothing listens on port 1: the queue connection never becomes ready.
+    connection = createQueueConnection('redis://127.0.0.1:1');
+    deadQueue = createEventsQueue({ connection, prefix });
+    deadQueue.on('error', () => {});
+  });
+  afterEach(async () => {
+    clearEventHandlers();
+    connection.disconnect();
+    vi.restoreAllMocks();
+  });
+
+  it('dispatchOnce fails within the enqueue timeout and leaves the outbox rows', async () => {
+    registerEventHandler('session.created', 'audit', async () => {});
+    const m = await createMerchant();
+    await prisma.$transaction((tx) =>
+      recordEvent(tx, {
+        merchantId: m.id,
+        livemode: false,
+        aggregateType: 'session',
+        aggregateId: newId('ses'),
+        type: 'session.created',
+        payload: {},
+      }),
+    );
+
+    const started = Date.now();
+    await expect(dispatchOnce({ queue: deadQueue })).rejects.toThrow('enqueue timed out');
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(ENQUEUE_TIMEOUT_MS - 50);
+    expect(elapsed).toBeLessThan(ENQUEUE_TIMEOUT_MS + 1000);
+    expect(await prisma.eventOutbox.count()).toBe(1);
+
+    // A dispatcher stuck on the dead queue still stops within the enqueue timeout.
+    const stop = startDispatcher(50, { queue: deadQueue });
+    await sleep(100);
+    const stopStarted = Date.now();
+    await stop();
+    expect(Date.now() - stopStarted).toBeLessThan(ENQUEUE_TIMEOUT_MS + 1000);
+    expect(await prisma.eventOutbox.count()).toBe(1);
+  }, 20_000);
 });
 
 describe('registerEventHandler', () => {
