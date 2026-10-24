@@ -30,7 +30,7 @@ export default function HomePage() {
         </p>
         <div className="grid-3">
           <div className="tile">
-            <h3>1. Create a session</h3>
+            <h3>1. Create a session (coming soon)</h3>
             <p>Pass amount, currency, and return URLs. Test-mode keys never move real funds.</p>
           </div>
           <div className="tile">

@@ -58,8 +58,13 @@ npm run db:seed                                           # prints the demo API 
 npm run dev                                               # web + api + worker
 ```
 
-The seed is idempotent: it creates the **Demo Merchant** with secret and publishable keys for
-test and live mode and prints the raw keys once (a rerun prints "already seeded" and no keys).
+An existing local `tendr` database that still has the old sandbox migration needs a reset: run
+`npm run db:migrate:dev --workspace=@tendr/api` (it prompts before resetting) or point
+`DATABASE_URL` at a fresh database.
+
+The seed is idempotent: it creates the **Demo Merchant** with secret keys (every scope) and
+publishable keys (`sessions:read`, `sessions:write`, `payment_links:read`) for test and live mode
+and prints the raw keys once (a rerun prints "already seeded" and no keys).
 Keys look like:
 
 | Key               | Prefix         | Use                    |
