@@ -240,3 +240,16 @@ The sandbox checkout routes, services, providers, old state machine, old schema/
 - GCP Cloud KMS supports Ed25519 signing usable for NEAR transactions and secp256k1 signing usable for EVM/Tron (both verified in this project).
 - 1Click has no testnet, so test mode must be simulated (affects project 2, not this one).
 - Gas sponsorship coverage (project 5): EVM via Pimlico; Solana via Pimlico (per the user, Pimlico now supports Solana — confirm in its docs before designing project 5); Tron via Tendr's own `gas-tron` key (user's decision).
+
+## Amendments made during the build (2026-10-24)
+
+Decisions taken while implementing, superseding the text above where they differ:
+
+- **Gateway order:** per-IP limit (3000/min) → auth + scope (`onRequest`, before the body is read) → per-principal limit → secure JSON parse (raw body kept) → signature check (`preValidation`) → idempotency (`preHandler`). Exactly one proxy hop is trusted for client IP.
+- **Publishable keys** are held to their stored scopes as well as to the routes that allow them; seeded publishable keys get `sessions:read`, `sessions:write`, `payment_links:read`.
+- **Suspended or closed merchants** cannot authenticate with any credential.
+- **Idempotency** is namespaced per principal: unique on `(merchant_id, livemode, principal_ref, key)`.
+- **State changes** go through `tenantTransaction(ctx, fn)`; `transitionSession`/`transitionPayment`/`recordEvent` take the same tenant context and never touch another tenant's rows. Scoped clients forbid nested relation writes and `id` changes.
+- **Events** are readable (never writable) through scoped and read-only clients; `event_outbox` stays infrastructure-only.
+- **Dispatch** only claims outbox rows whose event type has a registered handler; unhandled rows wait (no silent drop). Handlers are registered in one module, `src/jobs/register-handlers.ts`.
+- **KMS** location defaults to `us-east4` (HSM keys are not offered in `global`); every Cloud KMS call verifies CRC32C checksums; the local vault is refused in production at boot.
