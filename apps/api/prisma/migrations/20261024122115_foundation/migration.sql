@@ -574,7 +574,7 @@ CREATE INDEX "quotes_merchant_id_idx" ON "quotes"("merchant_id");
 CREATE INDEX "quotes_session_id_idx" ON "quotes"("session_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "quotes_id_merchant_id_livemode_key" ON "quotes"("id", "merchant_id", "livemode");
+CREATE UNIQUE INDEX "quotes_id_session_id_merchant_id_livemode_key" ON "quotes"("id", "session_id", "merchant_id", "livemode");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "quotes_livemode_deposit_address_key" ON "quotes"("livemode", "deposit_address");
@@ -718,7 +718,7 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_merchant_id_fkey" FOREIGN KEY ("
 ALTER TABLE "payments" ADD CONSTRAINT "payments_session_id_merchant_id_livemode_fkey" FOREIGN KEY ("session_id", "merchant_id", "livemode") REFERENCES "sessions"("id", "merchant_id", "livemode") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "payments" ADD CONSTRAINT "payments_quote_id_merchant_id_livemode_fkey" FOREIGN KEY ("quote_id", "merchant_id", "livemode") REFERENCES "quotes"("id", "merchant_id", "livemode") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "payments" ADD CONSTRAINT "payments_quote_id_session_id_merchant_id_livemode_fkey" FOREIGN KEY ("quote_id", "session_id", "merchant_id", "livemode") REFERENCES "quotes"("id", "session_id", "merchant_id", "livemode") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
 ALTER TABLE "refunds" ADD CONSTRAINT "refunds_merchant_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -786,8 +786,10 @@ ALTER TABLE "idempotency_keys" ADD CONSTRAINT "idempotency_keys_merchant_id_fkey
 -- AddForeignKey
 ALTER TABLE "event_outbox" ADD CONSTRAINT "event_outbox_event_id_fkey" FOREIGN KEY ("event_id") REFERENCES "events"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
--- events is append-only: reject every UPDATE and DELETE.
+-- events is append-only: reject every UPDATE, DELETE and TRUNCATE.
 CREATE FUNCTION events_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'events is append-only'; END $$;
 CREATE TRIGGER events_no_update BEFORE UPDATE OR DELETE ON events
   FOR EACH ROW EXECUTE FUNCTION events_append_only();
+CREATE TRIGGER events_no_truncate BEFORE TRUNCATE ON events
+  FOR EACH STATEMENT EXECUTE FUNCTION events_append_only();

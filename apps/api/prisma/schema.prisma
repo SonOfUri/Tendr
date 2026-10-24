@@ -489,7 +489,8 @@ model Quote {
   session  Session   @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   payments Payment[]
 
-  @@unique([id, merchantId, livemode])
+  // Lets payments pin their quote to the same session (payments FK below).
+  @@unique([id, sessionId, merchantId, livemode])
   @@unique([livemode, depositAddress])
   @@index([merchantId])
   @@index([sessionId])
@@ -517,7 +518,7 @@ model Payment {
 
   merchant                 Merchant         @relation(fields: [merchantId], references: [id])
   session                  Session          @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
-  quote                    Quote            @relation(fields: [quoteId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  quote                    Quote            @relation(fields: [quoteId, sessionId, merchantId, livemode], references: [id, sessionId, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   refunds                  Refund[]
   revenueEntries           RevenueEntry[]
   recoveredGasSponsorships GasSponsorship[]

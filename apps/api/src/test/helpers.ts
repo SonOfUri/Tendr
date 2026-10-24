@@ -13,7 +13,9 @@ const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex
  * Empties every table. `events` is append-only, so it is cleared with
  * `session_replication_role = replica` (which skips user triggers) — test-only.
  * Its children (`event_outbox`, `webhook_deliveries`) are deleted first because
- * replica mode also skips FK checks.
+ * replica mode also skips FK checks. The final `TRUNCATE ... CASCADE` reaches `events`
+ * through its `merchants` FK; the `events_no_truncate` trigger does not fire in replica
+ * mode, and `events` is already empty by then.
  */
 export async function resetDb(): Promise<void> {
   const tables = await prisma.$queryRaw<{ tablename: string }[]>`

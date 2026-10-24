@@ -44,6 +44,34 @@ describe('foundation schema', () => {
     );
   });
 
+  it('events cannot be truncated', async () => {
+    await insertEvent();
+    await expect(prisma.$executeRawUnsafe('TRUNCATE events CASCADE')).rejects.toThrow(
+      /append-only/,
+    );
+  });
+
+  it("a payment cannot use another session's quote", async () => {
+    const m = await createMerchant();
+    const quoteB = await createRow('Quote', m.id, false);
+    const sessionA = await createRow('Session', m.id, false);
+    const payment = (quoteId: string, sessionId: string) =>
+      prisma.payment.create({
+        data: {
+          id: `pay_${ulid()}`,
+          merchantId: m.id,
+          livemode: false,
+          sessionId,
+          quoteId,
+          amountReceived: '1',
+        },
+      });
+    await expect(payment(quoteB.id, sessionA.id)).rejects.toThrow(/Foreign key constraint/);
+    await expect(payment(quoteB.id, quoteB.sessionId as string)).resolves.toMatchObject({
+      quoteId: quoteB.id,
+    });
+  });
+
   it('sessions.external_ref is unique per merchant and mode', async () => {
     const m = await createMerchant();
     await prisma.session.create({
