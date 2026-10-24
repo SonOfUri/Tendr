@@ -1,4 +1,6 @@
+import { KeyManagementServiceClient } from '@google-cloud/kms';
 import { env } from '../env.js';
+import { GcpKeyVault } from './gcp.js';
 import { LocalKeyVault } from './local.js';
 import type { KeyVault } from './types.js';
 
@@ -17,6 +19,17 @@ export function getKeyVault(): KeyVault {
       vault = new LocalKeyVault(e.LOCAL_KEYVAULT_PATH);
       return vault;
     case 'gcp':
-      throw new Error('KEYVAULT_DRIVER=gcp is not implemented until Task 7 (GcpKeyVault)');
+      // env() has already required these when KEYVAULT_DRIVER=gcp.
+      vault = new GcpKeyVault({
+        client: new KeyManagementServiceClient({
+          projectId: e.GCP_PROJECT_ID!,
+          credentials: JSON.parse(e.GCP_CREDENTIALS_JSON!) as Record<string, string>,
+        }),
+        projectId: e.GCP_PROJECT_ID!,
+        location: e.GCP_KMS_LOCATION!,
+        keyRing: e.GCP_KMS_KEYRING!,
+        kekKey: e.GCP_KMS_KEK,
+      });
+      return vault;
   }
 }

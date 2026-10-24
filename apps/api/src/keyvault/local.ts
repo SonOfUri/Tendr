@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import {
   closeSync,
   linkSync,
@@ -12,13 +12,21 @@ import {
 import { dirname } from 'node:path';
 import { ed25519 } from '@noble/curves/ed25519';
 import { secp256k1 } from '@noble/curves/secp256k1';
+import {
+  IV_BYTES,
+  TAG_BYTES,
+  b64,
+  gcmDecrypt,
+  gcmEncrypt,
+  openEnvelope,
+  sealEnvelope,
+  unb64,
+} from './envelope.js';
 import { curveOf } from './keys.js';
 import { derToRsv } from './secp256k1.js';
-import type { Curve, Envelope, KeyName, KeyVault, Signature } from './types.js';
+import type { Curve, KeyName, KeyVault, Signature } from './types.js';
 
 const KEK_ID = 'local';
-const IV_BYTES = 12;
-const TAG_BYTES = 16;
 const LOCK_TIMEOUT_MS = 5_000;
 const SLEEP = new Int32Array(new SharedArrayBuffer(4));
 
@@ -26,40 +34,6 @@ interface KeyFile {
   v: 1;
   kek: string; // base64, 32 bytes
   keys: Partial<Record<KeyName, string>>; // base64 private keys
-}
-
-const b64 = (b: Uint8Array): string => Buffer.from(b).toString('base64');
-const unb64 = (s: string): Buffer => Buffer.from(s, 'base64');
-
-function gcmEncrypt(key: Uint8Array, plaintext: Uint8Array, aad?: string) {
-  const iv = randomBytes(IV_BYTES);
-  const cipher = createCipheriv('aes-256-gcm', key, iv);
-  if (aad !== undefined) cipher.setAAD(Buffer.from(aad, 'utf8'));
-  const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  return { iv, tag: cipher.getAuthTag(), ct };
-}
-
-function gcmDecrypt(key: Uint8Array, iv: Buffer, tag: Buffer, ct: Buffer, aad?: string): Buffer {
-  if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES) throw new Error('Invalid envelope');
-  const decipher = createDecipheriv('aes-256-gcm', key, iv);
-  if (aad !== undefined) decipher.setAAD(Buffer.from(aad, 'utf8'));
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ct), decipher.final()]);
-}
-
-function parseEnvelope(serialized: string): Envelope {
-  const e = JSON.parse(serialized) as Partial<Envelope>;
-  if (
-    e.v !== 1 ||
-    typeof e.kek !== 'string' ||
-    typeof e.wrappedDek !== 'string' ||
-    typeof e.iv !== 'string' ||
-    typeof e.tag !== 'string' ||
-    typeof e.ct !== 'string'
-  ) {
-    throw new Error('Invalid envelope');
-  }
-  return e as Envelope;
 }
 
 /**
@@ -80,40 +54,22 @@ export class LocalKeyVault implements KeyVault {
   }
 
   async encrypt(plaintext: Uint8Array, aad: string): Promise<string> {
-    const dek = randomBytes(32);
-    try {
-      const data = gcmEncrypt(dek, plaintext, aad);
-      const wrapped = gcmEncrypt(this.kek(), dek);
-      const envelope: Envelope = {
-        v: 1,
-        kek: KEK_ID,
-        // Local DEK wrap is self-contained: iv || tag || ciphertext.
-        wrappedDek: b64(Buffer.concat([wrapped.iv, wrapped.tag, wrapped.ct])),
-        iv: b64(data.iv),
-        tag: b64(data.tag),
-        ct: b64(data.ct),
-      };
-      return JSON.stringify(envelope);
-    } finally {
-      dek.fill(0);
-    }
+    return sealEnvelope(KEK_ID, plaintext, aad, (dek) => {
+      // Local DEK wrap is self-contained: iv || tag || ciphertext.
+      const w = gcmEncrypt(this.kek(), dek);
+      return Buffer.concat([w.iv, w.tag, w.ct]);
+    });
   }
 
   async decrypt(serialized: string, aad: string): Promise<Uint8Array> {
-    const e = parseEnvelope(serialized);
-    if (e.kek !== KEK_ID) throw new Error(`Envelope KEK "${e.kek}" is not the local KEK`);
-    const w = unb64(e.wrappedDek);
-    const dek = gcmDecrypt(
-      this.kek(),
-      w.subarray(0, IV_BYTES),
-      w.subarray(IV_BYTES, IV_BYTES + TAG_BYTES),
-      w.subarray(IV_BYTES + TAG_BYTES),
+    return openEnvelope(KEK_ID, serialized, aad, (w) =>
+      gcmDecrypt(
+        this.kek(),
+        w.subarray(0, IV_BYTES),
+        w.subarray(IV_BYTES, IV_BYTES + TAG_BYTES),
+        w.subarray(IV_BYTES + TAG_BYTES),
+      ),
     );
-    try {
-      return new Uint8Array(gcmDecrypt(dek, unb64(e.iv), unb64(e.tag), unb64(e.ct), aad));
-    } finally {
-      dek.fill(0);
-    }
   }
 
   async sign(key: KeyName, payload: Uint8Array): Promise<Signature> {
