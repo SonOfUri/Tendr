@@ -12,9 +12,9 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "dev": "turbo run dev --filter=@tendr/web --filter=@tendr/api",
+    "dev": "turbo run dev dev:worker --filter=@tendr/web --filter=@tendr/api",
     "dev:web": "turbo run dev --filter=@tendr/web",
-    "dev:api": "turbo run dev --filter=@tendr/api",
+    "dev:api": "turbo run dev dev:worker --filter=@tendr/api",
     "dev:docs": "npm run dev --workspace=@tendr/docs",
     "build": "turbo run build",
     "lint": "turbo run lint",
