@@ -3,9 +3,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { ApiKey, Merchant, Prisma } from '@prisma/client';
 import { ALL_SCOPES, type Scope } from '@tendr/contracts';
 import { ulid } from 'ulid';
+import { PER_MODE_MODELS, SHARED_MODELS } from '../db/models.js';
+import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 
-const id = (prefix: string): string => `${prefix}_${ulid()}`;
 const unique = (label: string): string => `${label}-${ulid().toLowerCase()}`;
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -35,7 +36,7 @@ export async function createMerchant(
   overrides: Partial<Prisma.MerchantUncheckedCreateInput> = {},
 ): Promise<Merchant> {
   return prisma.merchant.create({
-    data: { id: id('mer'), name: 'Test Merchant', slug: unique('merchant'), ...overrides },
+    data: { id: newId('mer'), name: 'Test Merchant', slug: unique('merchant'), ...overrides },
   });
 }
 
@@ -58,7 +59,7 @@ export async function createApiKey(
   const raw = `${prefix}${randomBytes(24).toString('hex')}`;
   const record = await prisma.apiKey.create({
     data: {
-      id: id('key'),
+      id: newId('key'),
       merchantId,
       livemode: opts.livemode,
       name: `${kind} key`,
@@ -79,7 +80,7 @@ export function minimalSession(
   overrides: Partial<SessionInput> & Pick<SessionInput, 'merchantId' | 'livemode'>,
 ): SessionInput {
   return {
-    id: id('ses'),
+    id: newId('ses'),
     amountMode: 'EXACT_OUT',
     amount: '49.00',
     amountCurrency: 'USD',
@@ -101,49 +102,37 @@ export type CreatedRow = { id: string; merchantId: string | null } & Record<stri
 type Overrides = Record<string, unknown>;
 type Builder = (merchantId: string, livemode: boolean, o: Overrides) => Promise<CreatedRow>;
 
-/** Every model that carries a `merchant_id`. */
+/** Every model that carries a `merchant_id`: the scoped models plus the merchant-owned infra ones. */
 export const MERCHANT_OWNED_MODELS = [
-  'MerchantUser',
-  'ApiKey',
-  'AccountKey',
-  'SettlementConfig',
-  'PayoutAllowlistEntry',
-  'WebhookEndpoint',
-  'GasPolicy',
-  'PaymentLink',
-  'Session',
-  'Quote',
-  'Payment',
-  'Refund',
-  'WebhookDelivery',
-  'HookCall',
-  'GasSponsorship',
-  'ScreeningResult',
+  ...PER_MODE_MODELS,
+  ...SHARED_MODELS,
   'Event',
-  'FeePlan',
-  'RevenueEntry',
-  'CheckoutTheme',
-  'ThemeAsset',
   'IdempotencyKey',
 ] as const;
 export type MerchantOwnedModel = (typeof MERCHANT_OWNED_MODELS)[number];
 
 async function createSecret(): Promise<{ id: string }> {
   return prisma.secret.create({
-    data: { id: id('sec'), purpose: 'test', ciphertext: '{}', kek: 'local' },
+    data: { id: newId('sec'), purpose: 'test', ciphertext: '{}', kek: 'local' },
   });
 }
 
 const builders: Record<MerchantOwnedModel, Builder> = {
   MerchantUser: (merchantId, _l, o) =>
     prisma.merchantUser.create({
-      data: { id: id('usr'), merchantId, email: `${unique('user')}@example.com`, role: 'owner', ...o },
+      data: {
+        id: newId('usr'),
+        merchantId,
+        email: `${unique('user')}@example.com`,
+        role: 'owner',
+        ...o,
+      },
     }),
   ApiKey: async (merchantId, livemode) => (await createApiKey(merchantId, { livemode })).record,
   AccountKey: (merchantId, _l, o) =>
     prisma.accountKey.create({
       data: {
-        id: id('ak'),
+        id: newId('akey'),
         merchantId,
         nearAccountId: 'merchant.testnet',
         publicKey: `ed25519:${unique('pk')}`,
@@ -154,7 +143,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   SettlementConfig: (merchantId, livemode, o) =>
     prisma.settlementConfig.create({
       data: {
-        id: id('stc'),
+        id: newId('stc'),
         merchantId,
         livemode,
         destAssetId: 'nep141:usdc.test',
@@ -167,7 +156,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   PayoutAllowlistEntry: (merchantId, livemode, o) =>
     prisma.payoutAllowlistEntry.create({
       data: {
-        id: id('pal'),
+        id: newId('pal'),
         merchantId,
         livemode,
         chain: 'near',
@@ -179,7 +168,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   WebhookEndpoint: async (merchantId, livemode, o) =>
     prisma.webhookEndpoint.create({
       data: {
-        id: id('whe'),
+        id: newId('whe'),
         merchantId,
         livemode,
         url: 'https://example.com/webhooks',
@@ -191,7 +180,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   GasPolicy: (merchantId, livemode, o) =>
     prisma.gasPolicy.create({
       data: {
-        id: id('gsp'),
+        id: newId('gpol'),
         merchantId,
         livemode,
         perPaymentCapUsd: '1',
@@ -203,7 +192,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   PaymentLink: (merchantId, livemode, o) =>
     prisma.paymentLink.create({
       data: {
-        id: id('plink'),
+        id: newId('plink'),
         merchantId,
         livemode,
         slug: unique('link'),
@@ -220,7 +209,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   Quote: async (merchantId, livemode, o) =>
     prisma.quote.create({
       data: {
-        id: id('quo'),
+        id: newId('quo'),
         merchantId,
         livemode,
         sessionId: (await builders.Session(merchantId, livemode, {})).id,
@@ -237,7 +226,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
     const quote = await builders.Quote(merchantId, livemode, {});
     return prisma.payment.create({
       data: {
-        id: id('pay'),
+        id: newId('pay'),
         merchantId,
         livemode,
         sessionId: quote.sessionId as string,
@@ -250,7 +239,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   Refund: async (merchantId, livemode, o) =>
     prisma.refund.create({
       data: {
-        id: id('ref'),
+        id: newId('ref'),
         merchantId,
         livemode,
         paymentId: (await builders.Payment(merchantId, livemode, {})).id,
@@ -261,7 +250,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   WebhookDelivery: async (merchantId, livemode, o) =>
     prisma.webhookDelivery.create({
       data: {
-        id: id('whd'),
+        id: newId('whd'),
         merchantId,
         livemode,
         endpointId: (await builders.WebhookEndpoint(merchantId, livemode, {})).id,
@@ -274,7 +263,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   HookCall: async (merchantId, livemode, o) =>
     prisma.hookCall.create({
       data: {
-        id: id('hkc'),
+        id: newId('hook'),
         merchantId,
         livemode,
         sessionId: (await builders.Session(merchantId, livemode, {})).id,
@@ -286,7 +275,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   GasSponsorship: async (merchantId, livemode, o) =>
     prisma.gasSponsorship.create({
       data: {
-        id: id('gas'),
+        id: newId('gas'),
         merchantId,
         livemode,
         sessionId: (await builders.Session(merchantId, livemode, {})).id,
@@ -300,7 +289,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   ScreeningResult: async (merchantId, livemode, o) =>
     prisma.screeningResult.create({
       data: {
-        id: id('scr'),
+        id: newId('scr'),
         merchantId,
         livemode,
         sessionId: (await builders.Session(merchantId, livemode, {})).id,
@@ -315,11 +304,11 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   Event: (merchantId, livemode, o) =>
     prisma.event.create({
       data: {
-        id: id('evt'),
+        id: newId('evt'),
         merchantId,
         livemode,
         aggregateType: 'session',
-        aggregateId: id('ses'),
+        aggregateId: newId('ses'),
         type: 'session.created',
         payload: {},
         ...o,
@@ -328,7 +317,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   FeePlan: (merchantId, _l, o) =>
     prisma.feePlan.create({
       data: {
-        id: id('fpl'),
+        id: newId('fplan'),
         merchantId,
         feeBps: 50,
         defaultFeePayer: 'merchant',
@@ -340,7 +329,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   RevenueEntry: async (merchantId, livemode, o) =>
     prisma.revenueEntry.create({
       data: {
-        id: id('rev'),
+        id: newId('rev'),
         merchantId,
         livemode,
         paymentId: (await builders.Payment(merchantId, livemode, {})).id,
@@ -353,7 +342,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   CheckoutTheme: (merchantId, _l, o) =>
     prisma.checkoutTheme.create({
       data: {
-        id: id('thm'),
+        id: newId('thm'),
         merchantId,
         name: 'Default',
         displayName: 'Test Merchant',
@@ -372,7 +361,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   ThemeAsset: async (merchantId, livemode, o) =>
     prisma.themeAsset.create({
       data: {
-        id: id('tas'),
+        id: newId('tasset'),
         merchantId,
         themeId: (await builders.CheckoutTheme(merchantId, livemode, {})).id,
         kind: 'logo',
@@ -386,7 +375,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
   IdempotencyKey: (merchantId, livemode, o) =>
     prisma.idempotencyKey.create({
       data: {
-        id: id('idk'),
+        id: newId('idem'),
         merchantId,
         livemode,
         key: unique('idem'),
@@ -397,20 +386,6 @@ const builders: Record<MerchantOwnedModel, Builder> = {
       },
     }),
 };
-
-/** Merchant-owned models shared across modes (no `livemode` column). */
-export const SHARED_MODELS: readonly MerchantOwnedModel[] = [
-  'MerchantUser',
-  'AccountKey',
-  'FeePlan',
-  'CheckoutTheme',
-  'ThemeAsset',
-];
-
-/** Merchant-owned models with a `livemode` column. */
-export const PER_MODE_MODELS: readonly MerchantOwnedModel[] = MERCHANT_OWNED_MODELS.filter(
-  (m) => !SHARED_MODELS.includes(m),
-);
 
 /**
  * Creates a minimal valid row of `model` owned by `merchantId`, creating any required
