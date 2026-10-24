@@ -1,8 +1,10 @@
+import { Prisma } from '@prisma/client';
 import { deriveRefundStatus } from '@tendr/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { createMerchant, createRow, resetDb } from '../test/helpers.js';
+import { recordEvent } from './record.js';
 import { transitionPayment, transitionSession } from './transitions.js';
 
 beforeEach(resetDb);
@@ -69,31 +71,103 @@ describe('transitionSession', () => {
     );
   });
 
-  it('concurrent transitions: exactly one wins', async () => {
+  it('concurrent transitions: the loser gets CONFLICT and writes no event', async () => {
     const m = await createMerchant();
     const s = await createRow('Session', m.id, false);
-    // Both transactions read PENDING_DEPOSIT before either writes; the barrier forces the race.
-    let arrived = 0;
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    const racer = (to: 'PROCESSING' | 'EXPIRED') =>
+    // Deterministic race: right after the transition's own read of the status, a competing
+    // transaction commits PENDING_DEPOSIT → EXPIRED, so the guarded updateMany matches 0 rows.
+    await expect(
       prisma.$transaction(async (tx) => {
-        await tx.session.findUniqueOrThrow({ where: { id: s.id } });
-        if (++arrived === 2) release();
-        await gate;
-        await transitionSession(tx, s.id, to);
-      });
-    const results = await Promise.allSettled([racer('PROCESSING'), racer('EXPIRED')]);
-    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-    const failed = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
-    expect(failed.reason).toMatchObject({ status: 409 });
-    expect(['CONFLICT', 'INVALID_STATE_TRANSITION']).toContain(failed.reason.code);
-    expect((await counts(s.id)).events).toBe(1);
+        const racing = new Proxy(tx, {
+          get(target, prop) {
+            if (prop !== 'session') return Reflect.get(target, prop);
+            return new Proxy(target.session, {
+              get(sess, op) {
+                if (op !== 'findUnique') return Reflect.get(sess, op);
+                return async (...args: Parameters<typeof sess.findUnique>) => {
+                  const row = await sess.findUnique(...args);
+                  await prisma.session.update({ where: { id: s.id }, data: { status: 'EXPIRED' } });
+                  return row;
+                };
+              },
+            });
+          },
+        });
+        await transitionSession(racing, s.id, 'PROCESSING');
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
+    expect((await prisma.session.findUniqueOrThrow({ where: { id: s.id } })).status).toBe(
+      'EXPIRED',
+    );
+    expect(await counts(s.id)).toEqual({ events: 0, outbox: 0 });
+  });
+
+  it('payload cannot overwrite from/to', async () => {
+    const m = await createMerchant();
+    const s = await createRow('Session', m.id, false);
+    await prisma.$transaction((tx) =>
+      transitionSession(tx, s.id, 'PROCESSING', { from: 'X', to: 'Y', extra: 1 }),
+    );
+    const ev = await prisma.event.findFirstOrThrow({ where: { aggregateId: s.id } });
+    expect(ev.payload).toEqual({ from: 'PENDING_DEPOSIT', to: 'PROCESSING', extra: 1 });
+  });
+
+  it('rejects the root client (state change and event must share a transaction)', async () => {
+    const m = await createMerchant();
+    const s = await createRow('Session', m.id, false);
+    const p = await createRow('Payment', m.id, false);
+    await expect(transitionSession(prisma, s.id, 'PROCESSING')).rejects.toThrow(
+      /transaction client/,
+    );
+    await expect(transitionPayment(prisma, p.id, 'PROCESSING')).rejects.toThrow(
+      /transaction client/,
+    );
+    await expect(
+      recordEvent(prisma, {
+        merchantId: m.id,
+        livemode: false,
+        aggregateType: 'session',
+        aggregateId: s.id,
+        type: 'x',
+        payload: {},
+      }),
+    ).rejects.toThrow(/transaction client/);
+    expect((await prisma.session.findUniqueOrThrow({ where: { id: s.id } })).status).toBe(
+      'PENDING_DEPOSIT',
+    );
+  });
+});
+
+describe('recordEvent payload', () => {
+  it('normalises Decimals (deeply) to plain strings', async () => {
+    const m = await createMerchant();
+    const id = await prisma.$transaction((tx) =>
+      recordEvent(tx, {
+        merchantId: m.id,
+        livemode: true,
+        aggregateType: 'payment',
+        aggregateId: newId('pay'),
+        type: 'payment.test',
+        payload: {
+          big: new Prisma.Decimal('1e30'),
+          nested: { small: new Prisma.Decimal('1e-18') },
+          list: [new Prisma.Decimal('1e30')],
+        },
+      }),
+    );
+    const ev = await prisma.event.findUniqueOrThrow({ where: { id } });
+    expect(ev.payload).toEqual({
+      big: '1000000000000000000000000000000',
+      nested: { small: '0.000000000000000001' },
+      list: ['1000000000000000000000000000000'],
+    });
   });
 });
 
 describe('spec scenarios', () => {
-  it('quote expiry leaves session PENDING_DEPOSIT', async () => {
+  // Spec placeholder: no code path expires quotes yet. The real test arrives with project 2's
+  // quote-expiry worker; for now it only documents that quote deadlines never move the session.
+  it('spec placeholder: quote expiry leaves session PENDING_DEPOSIT', async () => {
     const m = await createMerchant();
     const s = await createRow('Session', m.id, false);
     await createRow('Quote', m.id, false, {

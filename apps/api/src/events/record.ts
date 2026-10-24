@@ -1,7 +1,27 @@
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { newId } from '../lib/ids.js';
+import { toJsonDecimal } from '../lib/serialize.js';
 
 type Tx = Prisma.TransactionClient;
+
+/** Rejects the root PrismaClient: event + state change must share one transaction. */
+export function assertTransaction(tx: Tx): void {
+  if ('$transaction' in tx) {
+    throw new Error(
+      'recordEvent/transition functions require a transaction client, not the root client',
+    );
+  }
+}
+
+/** Deeply converts Prisma.Decimal values to plain decimal strings so the payload is JSON-safe. */
+function normalisePayload(v: unknown): unknown {
+  if (Prisma.Decimal.isDecimal(v)) return toJsonDecimal(v as Prisma.Decimal);
+  if (Array.isArray(v)) return v.map(normalisePayload);
+  if (v && typeof v === 'object' && !(v instanceof Date)) {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, normalisePayload(x)]));
+  }
+  return v;
+}
 
 export interface RecordEventInput {
   merchantId: string | null;
@@ -18,6 +38,7 @@ export interface RecordEventInput {
  * `event_outbox` to fan events out.
  */
 export async function recordEvent(tx: Tx, e: RecordEventInput): Promise<string> {
+  assertTransaction(tx);
   const id = newId('evt');
   await tx.event.create({
     data: {
@@ -27,9 +48,9 @@ export async function recordEvent(tx: Tx, e: RecordEventInput): Promise<string> 
       aggregateType: e.aggregateType,
       aggregateId: e.aggregateId,
       type: e.type,
-      payload: e.payload as Prisma.InputJsonValue,
+      payload: normalisePayload(e.payload) as Prisma.InputJsonValue,
     },
   });
-  await tx.eventOutbox.create({ data: { id: newId('evt'), eventId: id } });
+  await tx.eventOutbox.create({ data: { id: newId('obx'), eventId: id } });
   return id;
 }

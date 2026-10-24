@@ -7,16 +7,23 @@ import {
 } from '@tendr/contracts';
 import { conflict, invalidState, notFound } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
-import { recordEvent } from './record.js';
+import { assertTransaction, recordEvent } from './record.js';
 
 type Tx = Prisma.TransactionClient;
 
+/**
+ * Moves a session to `to` inside the caller's transaction. Illegal moves throw
+ * INVALID_STATE_TRANSITION; a lost race (status changed since the read) throws CONFLICT.
+ * Writes `session.status_changed` plus its outbox row in the same transaction.
+ * `from`/`to` in the event payload cannot be overridden by `payload`.
+ */
 export async function transitionSession(
   tx: Tx,
   sessionId: string,
   to: SessionStatus,
   payload: object = {},
 ): Promise<void> {
+  assertTransaction(tx);
   const row = await tx.session.findUnique({
     where: { id: sessionId },
     select: { status: true, merchantId: true, livemode: true },
@@ -38,16 +45,23 @@ export async function transitionSession(
     aggregateType: 'session',
     aggregateId: sessionId,
     type: 'session.status_changed',
-    payload: { from, to, ...payload },
+    payload: { ...payload, from, to },
   });
 }
 
+/**
+ * Moves a payment to `to` inside the caller's transaction. Illegal moves throw
+ * INVALID_STATE_TRANSITION; a lost race (status changed since the read) throws CONFLICT.
+ * Writes `payment.status_changed` plus its outbox row in the same transaction.
+ * `from`/`to` in the event payload cannot be overridden by `payload`.
+ */
 export async function transitionPayment(
   tx: Tx,
   paymentId: string,
   to: PaymentStatus,
   payload: object = {},
 ): Promise<void> {
+  assertTransaction(tx);
   const row = await tx.payment.findUnique({
     where: { id: paymentId },
     select: { status: true, merchantId: true, livemode: true },
@@ -69,6 +83,6 @@ export async function transitionPayment(
     aggregateType: 'payment',
     aggregateId: paymentId,
     type: 'payment.status_changed',
-    payload: { from, to, ...payload },
+    payload: { ...payload, from, to },
   });
 }

@@ -20,6 +20,7 @@ export type IdPrefix =
   | 'gas'
   | 'scr'
   | 'evt'
+  | 'obx'
   | 'fplan'
   | 'rev'
   | 'thm'
