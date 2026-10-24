@@ -1,6 +1,8 @@
+import { connect, createServer, type AddressInfo, type Server, type Socket } from 'node:net';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp, type BuildAppOptions } from '../app.js';
+import { DEFAULT_LIMITS } from './rate-limit.js';
 import { createApiKey, createMerchant, resetDb } from '../test/helpers.js';
 
 const bearer = (raw: string) => ({ authorization: `Bearer ${raw}` });
@@ -130,5 +132,51 @@ describe('gateway rate limits', () => {
     expect(res.statusCode).toBe(200);
     const lines = logSpy.mock.calls.map((c) => String(c[0]));
     expect(lines.some((l) => l.includes('"level":"warn"') && l.includes('failing open'))).toBe(true);
+  });
+
+  it('fails open within ~1s when Redis stops replying mid-connection', async () => {
+    // A TCP proxy to the real Redis that can start swallowing traffic: a blackholed connection.
+    let blackhole = false;
+    const sockets: Socket[] = [];
+    const target = new URL(process.env.REDIS_URL ?? 'redis://localhost:6379');
+    const server: Server = createServer((client) => {
+      const upstream = connect(Number(target.port || 6379), target.hostname);
+      sockets.push(client, upstream);
+      client.on('error', () => {});
+      upstream.on('error', () => {});
+      client.on('data', (d) => {
+        if (!blackhole) upstream.write(d);
+      });
+      upstream.on('data', (d) => {
+        if (!blackhole) client.write(d);
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const { port } = server.address() as AddressInfo;
+      await start({ redisUrl: `redis://127.0.0.1:${port}` });
+      const k = await createApiKey(merchantId, { livemode: false });
+      // Redis is reachable through the proxy: the request is counted normally.
+      const ok = await app.inject({ url: '/v1/ping', headers: bearer(k.raw) });
+      expect(ok.headers['ratelimit-remaining']).toBeDefined();
+
+      blackhole = true;
+      const t0 = Date.now();
+      const res = await app.inject({ url: '/v1/ping', headers: bearer(k.raw) });
+      expect(res.statusCode).toBe(200);
+      expect(Date.now() - t0).toBeLessThan(1000);
+      const lines = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(lines.some((l) => l.includes('"level":"warn"') && l.includes('failing open'))).toBe(
+        true,
+      );
+    } finally {
+      await app.close();
+      sockets.forEach((x) => x.destroy());
+      await new Promise((r) => server.close(r));
+    }
+  });
+
+  it('keeps the global IP budget above the per-key budgets', () => {
+    expect(DEFAULT_LIMITS.ip_global).toBeGreaterThan(DEFAULT_LIMITS.secret_key);
   });
 });

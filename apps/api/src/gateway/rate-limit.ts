@@ -1,6 +1,6 @@
 // Redis-backed rate limits, one-minute windows.
 //
-//   ip_global       600 / IP          every /v1 route, BEFORE auth — bounds credential guessing
+//   ip_global      3000 / IP          every /v1 route, BEFORE auth — bounds credential guessing
 //   secret_key     1000 / key
 //   publishable_key  60 / (key, IP)   one key is shared by every browser on a merchant's site
 //   session_client  120 / session
@@ -26,7 +26,7 @@ export type RateLimitKind =
   | 'public';
 
 export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
-  ip_global: 600,
+  ip_global: 3000,
   secret_key: 1000,
   publishable_key: 60,
   session_client: 120,

@@ -2,12 +2,21 @@ import { Redis } from 'ioredis';
 import { env } from '../env.js';
 import { log } from './logger.js';
 
+/** Per-command timeout; a dead Redis adds at most ~2x this per /v1 request (two limiter hooks). */
+export const COMMAND_TIMEOUT_MS = 300;
+
 /**
  * A Redis client that fails fast instead of queueing: with Redis down, commands reject at once
  * so callers can fail open rather than hang.
  */
 export function createRedis(url: string): Redis {
-  const client = new Redis(url, { maxRetriesPerRequest: 1, enableOfflineQueue: false });
+  const client = new Redis(url, {
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    // Bounds a command on a blackholed connection (half-open TCP), which the two options above
+    // do not cover, so rate limiting fails open quickly instead of hanging.
+    commandTimeout: COMMAND_TIMEOUT_MS,
+  });
   // Without a listener ioredis would print every connection error; log them at `warn`.
   client.on('error', (err) => log('warn', 'redis error', { err: String(err) }));
   return client;
