@@ -8,6 +8,7 @@ import { sha256 } from '../lib/crypto.js';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { createApiKey, createMerchant, minimalSession, resetDb } from '../test/helpers.js';
+import { flushLastUsed, routeAuth } from './auth.js';
 import { principalRef, requirePrincipal } from './principal.js';
 
 /** Throwaway routes exercising principal kinds and scopes. */
@@ -21,6 +22,11 @@ function testRoutes(app: FastifyInstance) {
     '/v1/test/sessions-write',
     { config: { auth: { principals: ['secret_key'], scope: 'sessions:write' } } },
     async () => ({ ok: true }),
+  );
+  app.post(
+    '/v1/test/echo',
+    { config: { auth: { principals: ['secret_key'] } } },
+    async (req) => ({ body: req.body }),
   );
   app.get(
     '/v1/test/pk-sessions-write',
@@ -65,6 +71,7 @@ describe('gateway auth', () => {
   });
 
   afterEach(async () => {
+    await flushLastUsed();
     await app.close();
     logSpy.mockRestore();
   });
@@ -112,6 +119,34 @@ describe('gateway auth', () => {
       expect(res.statusCode).toBe(401);
       expect(res.json().error).toMatchObject({ code: 'UNAUTHORIZED', requestId: expect.any(String) });
     }
+  });
+
+  it('accepts the auth scheme case-insensitively', async () => {
+    const { raw } = await createApiKey(m.id, { livemode: false });
+    for (const scheme of ['bearer', 'BEARER']) {
+      const res = await app.inject({ url: '/v1/ping', headers: { authorization: `${scheme} ${raw}` } });
+      expect(res.statusCode).toBe(200);
+    }
+  });
+
+  it('refuses unauthenticated callers before parsing the body', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/test/echo',
+      headers: { 'content-type': 'application/json' },
+      payload: '{not json',
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error.code).toBe('UNAUTHORIZED');
+
+    const { raw } = await createApiKey(m.id, { livemode: false });
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/v1/test/echo',
+      headers: { ...bearer(raw), 'content-type': 'application/json' },
+      payload: '{"a":1}',
+    });
+    expect(ok.json()).toEqual({ body: { a: 1 } });
   });
 
   it('401 when prefix mode disagrees with stored mode', async () => {
@@ -234,6 +269,21 @@ describe('gateway auth', () => {
     });
   });
 
+  it('logs forbidden attempts without the credential', async () => {
+    const { raw } = await createApiKey(m.id, { livemode: false, kind: 'publishable' });
+    const res = await get('/v1/test/secret-only', raw);
+    expect(res.statusCode).toBe(403);
+    const lines = logSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(lines.some((l: string) => l.includes(raw))).toBe(false);
+    const entry = lines.map((l: string) => JSON.parse(l)).find((l) => l.merchantId === m.id);
+    expect(entry).toMatchObject({
+      requestId: res.headers['x-request-id'],
+      livemode: false,
+      principal: 'publishable_key',
+      outcome: 'forbidden',
+    });
+  });
+
   it('health stays public; unknown routes are 404', async () => {
     expect((await get('/v1/health')).statusCode).toBe(200);
     expect((await get('/v1/nope')).statusCode).toBe(404);
@@ -244,5 +294,23 @@ describe('route auth config', () => {
   it('route without auth config fails at startup', async () => {
     const a = await buildApp({ extraRoutes: (f) => f.get('/v1/naked', async () => ({})) });
     await expect(a.ready()).rejects.toThrow(/auth config/);
+    await a.close();
+  });
+
+  it('the bare /v1 url counts as a /v1 route', async () => {
+    const a = await buildApp({
+      extraRoutes: (f) =>
+        void f.register(async (s) => void s.get('', async () => ({})), { prefix: '/v1' }),
+    });
+    await expect(a.ready()).rejects.toThrow(/auth config: GET \/v1\b/);
+    await a.close();
+  });
+
+  it('per-request check fails closed for /v1 routes without auth config', () => {
+    expect(() => routeAuth('/v1', undefined)).toThrow(/route missing auth config/);
+    expect(() => routeAuth('/v1/x', undefined)).toThrow(/route missing auth config/);
+    expect(routeAuth('/other', undefined)).toBeNull();
+    expect(routeAuth(undefined, undefined)).toBeNull(); // unmatched (404) requests
+    expect(routeAuth('/v1/x', 'public')).toBe('public');
   });
 });

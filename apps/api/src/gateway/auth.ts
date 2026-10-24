@@ -1,9 +1,9 @@
 // Authentication and authorization for `/v1` routes.
 //
 // Every `/v1/*` route must declare `config.auth`; a missing declaration fails startup.
-// A `preHandler` resolves the Bearer credential to a principal, checks the route's allowed
-// principal kinds and scope, and attaches a client scoped to the principal's merchant + mode
-// as `req.db`.
+// An `onRequest` hook resolves the Bearer credential to a principal, checks the route's
+// allowed principal kinds and scope, and attaches a client scoped to the principal's
+// merchant + mode as `req.db`.
 //
 // Credential lookups are infrastructure work and use the unscoped `prisma`.
 import { ScopeValues, type Scope } from '@tendr/contracts';
@@ -11,10 +11,10 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { scopedDb } from '../db/scoped.js';
 import { safeEqualHex, sha256 } from '../lib/crypto.js';
-import { forbidden, unauthorized } from '../lib/errors.js';
+import { AppError, forbidden, unauthorized } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
-import type { Principal } from './principal.js';
+import type { Principal, RouteAuth } from './principal.js';
 
 /** Key prefixes; publishable ones first, since `tdr_pk_…` must not parse as a secret key. */
 const KEY_PREFIXES = [
@@ -33,8 +33,24 @@ const KNOWN_SCOPES = new Set<string>(ScopeValues);
 
 function bearerToken(req: FastifyRequest): string | undefined {
   const header = req.headers.authorization;
-  const match = header ? /^Bearer +(\S+)\s*$/.exec(header) : null;
+  // Auth schemes are case-insensitive (RFC 7235).
+  const match = header ? /^Bearer +(\S+)\s*$/i.exec(header) : null;
   return match?.[1];
+}
+
+/** Whether a route URL is under the authenticated `/v1` namespace (including `/v1` itself). */
+export function isV1(url: string | undefined): boolean {
+  return url === '/v1' || (url?.startsWith('/v1/') ?? false);
+}
+
+/**
+ * The auth config to apply to a matched route. Fails closed: a `/v1` route without config
+ * is refused with 500 even though startup already rejects such routes.
+ */
+export function routeAuth(url: string | undefined, auth: RouteAuth | undefined): RouteAuth | null {
+  if (auth !== undefined) return auth;
+  if (isV1(url)) throw new AppError('INTERNAL_ERROR', 'route missing auth config', 500);
+  return null;
 }
 
 async function resolveApiKey(raw: string): Promise<Principal | null> {
@@ -68,11 +84,13 @@ async function resolveSessionSecret(raw: string): Promise<Principal | null> {
   };
 }
 
+const pendingTouches = new Set<Promise<void>>();
+
 /** Records key use at most once per minute. Fire-and-forget: never fails the request. */
 function touchLastUsed(apiKeyId: string): void {
   const now = new Date();
   const staleBefore = new Date(now.getTime() - LAST_USED_INTERVAL_MS);
-  prisma.apiKey
+  const touch = prisma.apiKey
     .updateMany({
       where: {
         id: apiKeyId,
@@ -80,9 +98,19 @@ function touchLastUsed(apiKeyId: string): void {
       },
       data: { lastUsedAt: now },
     })
-    .catch((err: unknown) => {
-      log('error', 'failed to record api key use', { apiKeyId, err: String(err) });
-    });
+    .then(
+      () => undefined,
+      (err: unknown) => {
+        log('error', 'failed to record api key use', { apiKeyId, err: String(err) });
+      },
+    )
+    .finally(() => pendingTouches.delete(touch));
+  pendingTouches.add(touch);
+}
+
+/** Waits for in-flight `last_used_at` writes (tests, shutdown). */
+export async function flushLastUsed(): Promise<void> {
+  await Promise.all([...pendingTouches]);
 }
 
 async function resolvePrincipal(raw: string): Promise<Principal | null> {
@@ -92,9 +120,12 @@ async function resolvePrincipal(raw: string): Promise<Principal | null> {
 const authPlugin: FastifyPluginAsync = async (app) => {
   // Routes are collected as they are added and rejected in `onReady`, so `ready()` /
   // `listen()` fail; a throw in `onRoute` would surface wherever the route was added.
+  app.decorateRequest('principal', undefined);
+  app.decorateRequest('db', undefined);
+
   const unconfigured: string[] = [];
   app.addHook('onRoute', (route) => {
-    if (route.url.startsWith('/v1/') && route.config?.auth === undefined) {
+    if (isV1(route.url) && route.config?.auth === undefined) {
       unconfigured.push(`${String(route.method)} ${route.url}`);
     }
   });
@@ -104,21 +135,37 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     }
   });
 
-  app.addHook('preHandler', async (req) => {
-    const auth = req.routeOptions.config.auth;
-    if (auth === undefined || auth === 'public') return;
+  const requestLog = (req: FastifyRequest, p: Principal, fields: Record<string, unknown>) =>
+    log('info', 'request', {
+      requestId: req.id,
+      method: req.method,
+      route: req.routeOptions.url,
+      merchantId: p.merchantId,
+      livemode: p.livemode,
+      principal: p.kind,
+      ...fields,
+    });
+
+  // `onRequest`, so unauthenticated callers are refused before any body is read or validated.
+  // Request signing (which needs the raw body) runs later, in `preHandler`.
+  app.addHook('onRequest', async (req) => {
+    const auth = routeAuth(req.routeOptions.url, req.routeOptions.config.auth);
+    if (auth === null || auth === 'public') return;
 
     const raw = bearerToken(req);
     const principal = raw ? await resolvePrincipal(raw) : null;
     if (!principal) throw unauthorized('Invalid or missing credentials');
 
-    if (!auth.principals.includes(principal.kind)) {
-      throw forbidden(`This endpoint is not available to ${principal.kind} credentials`);
-    }
-    // API keys (secret and publishable) carry scopes; session clients are confined by the
-    // kind allowlist alone.
-    if (auth.scope && 'scopes' in principal && !principal.scopes.includes(auth.scope)) {
-      throw forbidden(`Missing scope ${auth.scope}`);
+    const denial = !auth.principals.includes(principal.kind)
+      ? `This endpoint is not available to ${principal.kind} credentials`
+      : // API keys (secret and publishable) carry scopes; session clients are confined by
+        // the kind allowlist alone.
+        auth.scope && 'scopes' in principal && !principal.scopes.includes(auth.scope)
+        ? `Missing scope ${auth.scope}`
+        : null;
+    if (denial) {
+      requestLog(req, principal, { outcome: 'forbidden', statusCode: 403 });
+      throw forbidden(denial);
     }
 
     req.principal = principal;
@@ -126,17 +173,9 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   });
 
   app.addHook('onResponse', async (req, reply) => {
-    const p = req.principal;
-    if (!p) return;
-    log('info', 'request', {
-      requestId: req.id,
-      method: req.method,
-      route: req.routeOptions.url,
-      statusCode: reply.statusCode,
-      merchantId: p.merchantId,
-      livemode: p.livemode,
-      principal: p.kind,
-    });
+    if (req.principal) {
+      requestLog(req, req.principal, { outcome: 'ok', statusCode: reply.statusCode });
+    }
   });
 };
 
