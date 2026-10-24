@@ -47,3 +47,12 @@ describe('loadEnv worker health', () => {
     expect(loadEnv({ ...base, WORKER_HEALTH_HOST: '::' }).WORKER_HEALTH_HOST).toBe('::');
   });
 });
+
+describe('loadEnv api host', () => {
+  it('binds 0.0.0.0 in production and 127.0.0.1 otherwise, unless API_HOST is set', () => {
+    const prod = loadEnv({ ...base, ...gcp, NODE_ENV: 'production', KEYVAULT_DRIVER: 'gcp' });
+    expect(prod.API_HOST).toBe('0.0.0.0');
+    expect(loadEnv({ ...base, NODE_ENV: 'development' }).API_HOST).toBe('127.0.0.1');
+    expect(loadEnv({ ...base, API_HOST: '::' }).API_HOST).toBe('::');
+  });
+});

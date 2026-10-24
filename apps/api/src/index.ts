@@ -12,7 +12,7 @@ loadDotenvFile(resolve(process.cwd(), '.env'));
 async function main() {
   loadEnv();
   const app = await buildApp();
-  const port = env().API_PORT;
+  const { API_PORT: port, API_HOST: host } = env();
 
   const shutdown = async (signal: string) => {
     log('info', 'shutting down', { signal });
@@ -23,9 +23,8 @@ async function main() {
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
-  const host = process.env.API_HOST ?? '127.0.0.1';
   await app.listen({ port, host });
-  log('info', 'Tendr API listening', { port });
+  log('info', 'Tendr API listening', { host, port });
 }
 
 main().catch((err) => {

@@ -6,6 +6,8 @@ const EnvSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     API_PORT: z.coerce.number().int().positive().default(4000),
+    /** Defaults to 0.0.0.0 in production (reachable by the platform), 127.0.0.1 otherwise. */
+    API_HOST: optionalString,
     WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(4100),
     /** Defaults to 0.0.0.0 in production (reachable by the platform), 127.0.0.1 otherwise. */
     WORKER_HEALTH_HOST: optionalString,
@@ -58,6 +60,7 @@ const EnvSchema = z
   })
   .transform((e) => ({
     ...e,
+    API_HOST: e.API_HOST ?? (e.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
     WORKER_HEALTH_HOST:
       e.WORKER_HEALTH_HOST ?? (e.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
   }));
