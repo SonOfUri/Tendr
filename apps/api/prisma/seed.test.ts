@@ -1,10 +1,11 @@
+import { ALL_SCOPES } from '@tendr/contracts';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { flushLastUsed } from '../src/gateway/auth.js';
 import { prisma } from '../src/lib/prisma.js';
 import { resetDb } from '../src/test/helpers.js';
-import { DEMO_MERCHANT_NAME, isValidEvmAddress, seed } from './seed.js';
+import { DEMO_MERCHANT_NAME, isValidEvmAddress, PUBLISHABLE_KEY_SCOPES, seed } from './seed.js';
 
 const PAYOUT = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const silent = () => {};
@@ -103,6 +104,22 @@ describe('seed', () => {
     const again: string[] = [];
     await seed({ payoutAddress: PAYOUT.toLowerCase(), out: (l) => again.push(l) });
     expect(again.join('\n')).not.toMatch(/differs/);
+  });
+
+  it('publishable keys get narrow checkout scopes; secret keys get every scope', async () => {
+    await seed({ payoutAddress: undefined, out: silent });
+    const keys = await prisma.apiKey.findMany({ select: { kind: true, scopes: true } });
+    expect(keys).toHaveLength(4);
+    for (const key of keys) {
+      expect(key.scopes.sort()).toEqual(
+        [...(key.kind === 'publishable' ? PUBLISHABLE_KEY_SCOPES : ALL_SCOPES)].sort(),
+      );
+    }
+    expect(PUBLISHABLE_KEY_SCOPES).toEqual([
+      'sessions:read',
+      'sessions:write',
+      'payment_links:read',
+    ]);
   });
 
   it('seeded keys authenticate through the gateway', async () => {

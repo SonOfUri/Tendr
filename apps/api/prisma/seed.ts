@@ -14,7 +14,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
-import { ALL_SCOPES } from '@tendr/contracts';
+import { ALL_SCOPES, type Scope } from '@tendr/contracts';
 import { scopedDb } from '../src/db/scoped.js';
 import { generateApiKey } from '../src/lib/crypto.js';
 import { newId } from '../src/lib/ids.js';
@@ -30,6 +30,13 @@ const USDC_BASE_ASSET_ID = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda029
 const USDC_BASE_CHAIN = 'base';
 /** Test mode moves no funds, so any well-formed address will do. Never used in live mode. */
 const TEST_PAYOUT_ADDRESS = '0x0000000000000000000000000000000000000001';
+
+/** Publishable keys ship in browsers: only what a checkout page needs, never admin scopes. */
+export const PUBLISHABLE_KEY_SCOPES: readonly Scope[] = [
+  'sessions:read',
+  'sessions:write',
+  'payment_links:read',
+];
 
 const KEY_SPECS = [
   { kind: 'secret', livemode: false, label: 'Secret test key' },
@@ -130,7 +137,7 @@ export async function seed(opts: SeedOptions = {}): Promise<SeedResult> {
         kind: spec.kind,
         keyPrefix: key.prefix,
         keyHash: key.hash,
-        scopes: [...ALL_SCOPES],
+        scopes: [...(spec.kind === 'publishable' ? PUBLISHABLE_KEY_SCOPES : ALL_SCOPES)],
       },
     });
     rawKeys[spec.label] = key.raw;
