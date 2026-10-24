@@ -88,7 +88,9 @@ function stubClient(keys: Keys, tamper: Partial<Record<string, boolean>> = {}) {
         {
           name: tamper.signName ? versionPath('other') : req.name,
           signature,
-          signatureCrc32c: crc(tamper.signBytes ? Buffer.from('x') : signature),
+          signatureCrc32c: tamper.signNoCrc
+            ? undefined
+            : crc(tamper.signBytes ? Buffer.from('x') : signature),
           verifiedDigestCrc32c: tamper.signVerified ? false : verifiedDigest,
           verifiedDataCrc32c: tamper.signVerified ? false : verifiedData,
         },
@@ -249,27 +251,30 @@ describe('GcpKeyVault', () => {
 
   describe('CRC32C integrity', () => {
     const digest = keccak_256(utf8ToBytes('d'));
-    const cases: [string, (kv: GcpKeyVault) => Promise<unknown>][] = [
-      ['signBytes', (kv) => kv.sign('relayer-evm', digest)],
-      ['signVerified', (kv) => kv.sign('relayer-evm', digest)],
-      ['signVerified', (kv) => kv.sign('relayer-near', digest)],
-      ['signName', (kv) => kv.sign('relayer-near', digest)],
-      ['pem', (kv) => kv.publicKey('relayer-near')],
-      ['encryptCrc', (kv) => kv.encrypt(Buffer.from('x'), 'a')],
-      ['encryptVerified', (kv) => kv.encrypt(Buffer.from('x'), 'a')],
+    const cases: [string, RegExp, (kv: GcpKeyVault) => Promise<unknown>][] = [
+      ['signBytes', /signature CRC32C mismatch/, (kv) => kv.sign('relayer-evm', digest)],
+      ['signNoCrc', /missing the signature CRC32C/, (kv) => kv.sign('relayer-evm', digest)],
+      ['signVerified', /verify the request digest CRC32C/, (kv) => kv.sign('relayer-evm', digest)],
+      ['signVerified', /verify the request data CRC32C/, (kv) => kv.sign('relayer-near', digest)],
+      ['signName', /unexpected key name/, (kv) => kv.sign('relayer-near', digest)],
+      ['pem', /public key CRC32C mismatch/, (kv) => kv.publicKey('relayer-near')],
+      ['encryptCrc', /ciphertext CRC32C mismatch/, (kv) => kv.encrypt(Buffer.from('x'), 'a')],
+      [
+        'encryptVerified',
+        /verify the request plaintext CRC32C/,
+        (kv) => kv.encrypt(Buffer.from('x'), 'a'),
+      ],
     ];
-    for (const [flag, call] of cases) {
-      it(`throws when ${flag} is corrupted`, async () => {
-        await expect(call(vault(stubClient(keys, { [flag]: true })))).rejects.toThrow(
-          /CRC32C|integrity|name/i,
-        );
+    for (const [flag, message, call] of cases) {
+      it(`throws when ${flag} is corrupted (${message.source})`, async () => {
+        await expect(call(vault(stubClient(keys, { [flag]: true })))).rejects.toThrow(message);
       });
     }
 
     it('throws when the decrypt plaintext checksum mismatches', async () => {
       const kv = vault(stubClient(keys, { decryptCrc: true }));
       const env = await kv.encrypt(Buffer.from('x'), 'a');
-      await expect(kv.decrypt(env, 'a')).rejects.toThrow(/CRC32C/);
+      await expect(kv.decrypt(env, 'a')).rejects.toThrow(/plaintext CRC32C mismatch/);
     });
   });
 });

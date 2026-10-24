@@ -29,8 +29,10 @@ const KEY_RING = 'tendr-verify';
 const KEK = 'tendr-kek';
 const ED_KEY = 'verify-ed25519';
 const K1_KEY = 'verify-secp256k1';
+const INVALID_ARGUMENT = 3;
 const NOT_FOUND = 5;
 const ALREADY_EXISTS = 6;
+const FAILED_PRECONDITION = 9;
 
 loadDotenvFile(resolve(fileURLToPath(new URL('.', import.meta.url)), '../../../.env'));
 
@@ -99,15 +101,20 @@ async function ensureKey(
       await createKey(parent, id, purpose, algorithm, 'HSM');
       console.log(`key ${id}: created (HSM, ${algorithm})`);
     } catch (hsmErr) {
-      if (codeOf(hsmErr) === ALREADY_EXISTS) {
+      const code = codeOf(hsmErr);
+      if (code === ALREADY_EXISTS) {
         console.log(`key ${id}: exists`);
-      } else {
+      } else if (code === INVALID_ARGUMENT || code === FAILED_PRECONDITION) {
+        // Only a request-level rejection (e.g. algorithm unsupported at HSM level) falls back.
+        // Quota, permission, location and transient errors are rethrown so a SOFTWARE key is
+        // never created by accident.
         console.warn(
-          `WARNING: HSM rejected ${algorithm} for ${id} (${(hsmErr as Error).message}); ` +
-            'falling back to SOFTWARE protection',
+          `WARNING: HSM key creation failed for ${id} (code ${code}: ${(hsmErr as Error).message}) — falling back to SOFTWARE`,
         );
         await createKey(parent, id, purpose, algorithm, 'SOFTWARE');
         console.log(`key ${id}: created (SOFTWARE, ${algorithm})`);
+      } else {
+        throw hsmErr;
       }
     }
   }
@@ -129,16 +136,17 @@ async function check(name: string, fn: () => Promise<void>): Promise<void> {
     await fn();
     console.log(`PASS: ${name}`);
   } catch (err) {
-    console.error(`FAILED: ${name}: ${(err as Error).message}`);
-    process.exit(1);
+    throw new Error(`${name}: ${(err as Error).message}`);
   }
 }
 
-async function main(): Promise<void> {
-  const ring = await ensureKeyRing();
-  await ensureKey(ring, KEK, 'ENCRYPT_DECRYPT', 'GOOGLE_SYMMETRIC_ENCRYPTION');
-  await ensureKey(ring, ED_KEY, 'ASYMMETRIC_SIGN', 'EC_SIGN_ED25519');
-  await ensureKey(ring, K1_KEY, 'ASYMMETRIC_SIGN', 'EC_SIGN_SECP256K1_SHA256');
+async function run(): Promise<void> {
+  await check('setup (key ring and keys)', async () => {
+    const ring = await ensureKeyRing();
+    await ensureKey(ring, KEK, 'ENCRYPT_DECRYPT', 'GOOGLE_SYMMETRIC_ENCRYPTION');
+    await ensureKey(ring, ED_KEY, 'ASYMMETRIC_SIGN', 'EC_SIGN_ED25519');
+    await ensureKey(ring, K1_KEY, 'ASYMMETRIC_SIGN', 'EC_SIGN_SECP256K1_SHA256');
+  });
 
   const vault = new GcpKeyVault({
     client,
@@ -185,7 +193,21 @@ async function main(): Promise<void> {
   console.log('ALL CHECKS PASSED');
 }
 
-main().catch((err: unknown) => {
-  console.error(`FAILED: setup: ${(err as Error).message}`);
-  process.exit(1);
-});
+/** Runs the checks, always closes the KMS client (its grpc channel keeps the process alive), then exits. */
+async function main(): Promise<never> {
+  let code = 0;
+  try {
+    await run();
+  } catch (err) {
+    console.error(`FAILED: ${(err as Error).message}`);
+    code = 1;
+  }
+  try {
+    await client.close();
+  } catch (err) {
+    console.error(`WARNING: closing the KMS client failed: ${(err as Error).message}`);
+  }
+  process.exit(code);
+}
+
+void main();
