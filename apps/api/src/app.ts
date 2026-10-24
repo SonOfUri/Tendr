@@ -1,13 +1,20 @@
 import cors from '@fastify/cors';
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import { env } from './env.js';
+import { auth } from './gateway/auth.js';
 import { AppError } from './lib/errors.js';
 import { log } from './lib/logger.js';
 import { healthRoutes } from './routes/health.js';
+import { pingRoutes } from './routes/ping.js';
 import { randomUUID } from 'node:crypto';
 
-export async function buildApp() {
+export type BuildAppOptions = {
+  /** Extra routes (tests); registered after the auth plugin so they get the same checks. */
+  extraRoutes?: (app: FastifyInstance) => void;
+};
+
+export async function buildApp(opts: BuildAppOptions = {}) {
   const app = Fastify({
     logger: false,
     requestIdHeader: 'x-request-id',
@@ -69,7 +76,10 @@ export async function buildApp() {
     });
   });
 
+  await app.register(auth);
   await app.register(healthRoutes);
+  await app.register(pingRoutes);
+  opts.extraRoutes?.(app);
 
   return app;
 }

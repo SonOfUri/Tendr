@@ -1,14 +1,19 @@
 import { env } from '../env.js';
 
-const REDACT_KEYS = new Set([
-  'authorization',
-  'apiKey',
-  'api_key',
-  'secret',
-  'signature',
-  'walletSignature',
-  'privateKey',
-]);
+// Field names are matched case-insensitively, so entries are stored lowercased.
+const REDACT_KEYS = new Set(
+  [
+    'authorization',
+    'apiKey',
+    'api_key',
+    'secret',
+    'clientSecret',
+    'client_secret',
+    'signature',
+    'walletSignature',
+    'privateKey',
+  ].map((k) => k.toLowerCase()),
+);
 
 function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);

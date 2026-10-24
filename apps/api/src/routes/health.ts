@@ -2,9 +2,9 @@ import type { FastifyPluginAsync } from 'fastify';
 import { prisma } from '../lib/prisma.js';
 
 export const healthRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/v1/health', async () => ({ status: 'ok' }));
+  app.get('/v1/health', { config: { auth: 'public' } }, async () => ({ status: 'ok' }));
 
-  app.get('/v1/ready', async (_request, reply) => {
+  app.get('/v1/ready', { config: { auth: 'public' } }, async (_request, reply) => {
     try {
       await prisma.$queryRaw`SELECT 1`;
       return { status: 'ready', database: 'up' };
