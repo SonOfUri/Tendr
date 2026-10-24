@@ -2,7 +2,7 @@
   "name": "tendr",
   "private": true,
   "version": "0.1.0",
-  "description": "Tendr — universal checkout and payment orchestration for digital commerce",
+  "description": "Tendr — AI powered universal checkout and payment orchestration for digital commerce",
   "packageManager": "pnpm@10.29.3",
   "workspaces": [
     "apps/*",
