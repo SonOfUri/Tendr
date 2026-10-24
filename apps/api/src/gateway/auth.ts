@@ -46,10 +46,9 @@ async function resolveApiKey(raw: string): Promise<Principal | null> {
   if (key.kind !== expected.kind || key.livemode !== expected.livemode) return null;
 
   touchLastUsed(key.id);
-  const base = { merchantId: key.merchantId, livemode: key.livemode, apiKeyId: key.id };
-  if (key.kind === 'publishable') return { kind: 'publishable_key', ...base };
   const scopes = key.scopes.filter((s): s is Scope => KNOWN_SCOPES.has(s));
-  return { kind: 'secret_key', ...base, scopes };
+  const base = { merchantId: key.merchantId, livemode: key.livemode, apiKeyId: key.id, scopes };
+  return { kind: key.kind === 'publishable' ? 'publishable_key' : 'secret_key', ...base };
 }
 
 /** Expired sessions still authenticate: the checkout screens must be able to show EXPIRED. */
@@ -116,8 +115,9 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     if (!auth.principals.includes(principal.kind)) {
       throw forbidden(`This endpoint is not available to ${principal.kind} credentials`);
     }
-    // Only secret keys carry scopes; the other kinds are confined by the kind allowlist.
-    if (auth.scope && principal.kind === 'secret_key' && !principal.scopes.includes(auth.scope)) {
+    // API keys (secret and publishable) carry scopes; session clients are confined by the
+    // kind allowlist alone.
+    if (auth.scope && 'scopes' in principal && !principal.scopes.includes(auth.scope)) {
       throw forbidden(`Missing scope ${auth.scope}`);
     }
 

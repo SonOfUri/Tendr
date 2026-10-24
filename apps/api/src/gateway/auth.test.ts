@@ -23,6 +23,11 @@ function testRoutes(app: FastifyInstance) {
     async () => ({ ok: true }),
   );
   app.get(
+    '/v1/test/pk-sessions-write',
+    { config: { auth: { principals: ['publishable_key'], scope: 'sessions:write' } } },
+    async () => ({ ok: true }),
+  );
+  app.get(
     '/v1/test/session-client',
     { config: { auth: { principals: ['session_client'] } } },
     async (req) => {
@@ -139,6 +144,20 @@ describe('gateway auth', () => {
 
     const full = await createApiKey(m.id, { livemode: false });
     expect((await get('/v1/test/sessions-write', full.raw)).statusCode).toBe(200);
+  });
+
+  it('403 publishable key missing scope', async () => {
+    const narrow = await createApiKey(m.id, {
+      livemode: false,
+      kind: 'publishable',
+      scopes: ['payments:read'],
+    });
+    const res = await get('/v1/test/pk-sessions-write', narrow.raw);
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('FORBIDDEN');
+
+    const full = await createApiKey(m.id, { livemode: false, kind: 'publishable' });
+    expect((await get('/v1/test/pk-sessions-write', full.raw)).statusCode).toBe(200);
   });
 
   it('session client secret reads only its own session principal', async () => {

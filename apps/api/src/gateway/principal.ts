@@ -9,7 +9,7 @@ type Base = { merchantId: string; livemode: boolean };
 
 export type Principal =
   | (Base & { kind: 'secret_key'; apiKeyId: string; scopes: Scope[] })
-  | (Base & { kind: 'publishable_key'; apiKeyId: string })
+  | (Base & { kind: 'publishable_key'; apiKeyId: string; scopes: Scope[] })
   | (Base & { kind: 'session_client'; sessionId: string })
   // Resolved by the dashboard login (project 3); nothing produces it yet.
   | (Base & { kind: 'dashboard_user'; userId: string; role: MerchantUserRole })
