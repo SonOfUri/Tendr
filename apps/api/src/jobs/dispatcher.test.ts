@@ -4,7 +4,7 @@ import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { recordEvent } from '../events/record.js';
-import { env, loadEnv } from '../env.js';
+import { env } from '../env.js';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { createMerchant, resetDb } from '../test/helpers.js';
@@ -97,26 +97,38 @@ describe('event dispatch', () => {
 
     const a = await record('session.created');
     const b = await record('payment.settled');
-    const c = await record('nobody.listens'); // no handlers: just leaves the outbox
+    const c = await record('nobody.listens'); // no handlers: stays in the outbox
 
-    loadEnv({ ...process.env, LOG_LEVEL: 'debug' });
-    try {
-      expect(await dispatchOnce({ queue })).toBe(3);
-    } finally {
-      loadEnv();
-    }
-    expect(await outboxCount()).toBe(0);
+    expect(await dispatchOnce({ queue })).toBe(2);
     expect(await dispatchOnce({ queue })).toBe(0);
-    // The no-handler row is dropped (events keeps the record), and that is logged at debug.
-    const logged = vi.mocked(console.log).mock.calls.map((args) => String(args[0]));
-    expect(logged.some((l) => l.includes('outbox rows dropped with no handler'))).toBe(true);
-    expect(logged.find((l) => l.includes('no handler'))).toContain('"count":1');
+    // The unhandled row is not claimed, let alone dropped.
+    expect(await prisma.eventOutbox.findMany({ select: { eventId: true } })).toEqual([
+      { eventId: c },
+    ]);
 
     await runWorker();
     await waitFor(() => calls.length === 3);
     await sleep(100);
     expect(calls.sort()).toEqual([`audit:${a}`, `audit:${b}`, `notify:${a}`].sort());
     expect(calls.some((x) => x.endsWith(c))).toBe(false);
+  });
+
+  it('unhandled outbox rows wait for a handler instead of being dropped', async () => {
+    const early = await record('later.handled');
+    // No handlers registered at all: nothing is claimed or touched.
+    expect(await dispatchOnce({ queue })).toBe(0);
+    registerEventHandler('session.created', 'audit', async () => {});
+    expect(await dispatchOnce({ queue })).toBe(0);
+    expect(await outboxCount()).toBe(1);
+
+    // A release that handles the type (e.g. after a rolling deploy) dispatches it.
+    const seen: string[] = [];
+    registerEventHandler('later.handled', 'audit', async (e) => void seen.push(e.id));
+    expect(await dispatchOnce({ queue })).toBe(1);
+    expect(await outboxCount()).toBe(0);
+    await runWorker();
+    await waitFor(() => seen.length === 1);
+    expect(seen).toEqual([early]);
   });
 
   it('events committed out of id order are still dispatched', async () => {

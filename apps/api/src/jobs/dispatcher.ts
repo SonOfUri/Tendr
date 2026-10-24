@@ -1,7 +1,7 @@
 import type { JobsOptions, Queue } from 'bullmq';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
-import { handlerNamesFor, JOB_ID_SEPARATOR } from './handlers.js';
+import { handledEventTypes, handlerNamesFor, JOB_ID_SEPARATOR } from './handlers.js';
 import { EVENT_JOB_OPTIONS, getEventsQueue, type EventJobData } from './queue.js';
 
 export const DISPATCH_BATCH_SIZE = 100;
@@ -30,9 +30,11 @@ export interface DispatchOptions {
  * dispatched again; the deterministic job id (`{eventId}__{handler}`) makes BullMQ ignore the
  * duplicate while the first job is queued or retained (completed jobs are kept 24h).
  *
- * Delivery is decided by the handler registry of the process running the dispatcher (the
- * worker, which registers every handler via `register-handlers.ts`): rows for event types with
- * no handler there are deleted without enqueueing anything. `events` stays the permanent record.
+ * Only rows whose event type has at least one handler in this process's registry (the worker
+ * registers every handler via `register-handlers.ts`) are claimed. Rows of other types are left
+ * untouched — never deleted — so during a rolling deploy an older dispatcher cannot drop events
+ * a newer release handles; they are dispatched once a dispatcher with a handler runs. With no
+ * handlers registered at all, nothing is claimed.
  *
  * If Redis is unreachable, enqueueing is abandoned after `enqueueTimeoutMs` so the transaction
  * rolls back promptly and the caller sees the error.
@@ -40,14 +42,18 @@ export interface DispatchOptions {
  * Returns the number of outbox rows dispatched.
  */
 export async function dispatchOnce(opts: DispatchOptions = {}): Promise<number> {
+  const handledTypes = handledEventTypes();
+  if (handledTypes.length === 0) return 0;
   const queue = opts.queue ?? getEventsQueue();
   return prisma.$transaction(
     async (tx) => {
       const rows = await tx.$queryRaw<{ event_id: string }[]>`
-        SELECT event_id FROM event_outbox
-        ORDER BY created_at
+        SELECT o.event_id FROM event_outbox o
+        JOIN events e ON e.id = o.event_id
+        WHERE e.type = ANY(${handledTypes})
+        ORDER BY o.created_at
         LIMIT ${DISPATCH_BATCH_SIZE}
-        FOR UPDATE SKIP LOCKED`;
+        FOR UPDATE OF o SKIP LOCKED`;
       if (rows.length === 0) return 0;
       const ids = rows.map((r) => r.event_id);
 
@@ -66,13 +72,7 @@ export async function dispatchOnce(opts: DispatchOptions = {}): Promise<number> 
           },
         })),
       );
-      if (jobs.length > 0) {
-        await withTimeout(queue.addBulk(jobs), opts.enqueueTimeoutMs ?? ENQUEUE_TIMEOUT_MS);
-      }
-      const unhandled = events.filter((e) => handlerNamesFor(e.type).length === 0).length;
-      if (unhandled > 0) {
-        log('debug', 'outbox rows dropped with no handler', { count: unhandled });
-      }
+      await withTimeout(queue.addBulk(jobs), opts.enqueueTimeoutMs ?? ENQUEUE_TIMEOUT_MS);
 
       await opts.beforeDelete?.();
       await tx.$executeRaw`DELETE FROM event_outbox WHERE event_id = ANY(${ids})`;

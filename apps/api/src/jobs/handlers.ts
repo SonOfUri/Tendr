@@ -31,6 +31,11 @@ export function handlerNamesFor(eventType: string): string[] {
   return [...(registry.get(eventType)?.keys() ?? [])];
 }
 
+/** Event types with at least one registered handler — the only outbox rows the dispatcher claims. */
+export function handledEventTypes(): string[] {
+  return [...registry.keys()];
+}
+
 export function getEventHandler(eventType: string, name: string): EventHandler | undefined {
   return registry.get(eventType)?.get(name);
 }
