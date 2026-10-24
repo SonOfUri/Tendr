@@ -213,16 +213,10 @@ const idempotencyPlugin: FastifyPluginAsync = async (app) => {
     return payload;
   });
 
-  // Safety net: a claimed request that never reached onSend (e.g. the reply failed to
-  // serialise) releases its key so the client can retry.
-  app.addHook('onResponse', async (req) => {
-    const token = claims.get(req);
-    if (token === undefined) return;
-    claims.delete(req);
-    await release(token).catch((err: unknown) => {
-      log('error', 'failed to release idempotency key', { requestId: req.id, err: String(err) });
-    });
-  });
+  // No `onResponse` fallback release: it could fire for a request whose handler is still
+  // running (e.g. the client disconnected), freeing the key for a second execution. A claimed
+  // request that never reaches onSend keeps its row in_progress until the 60 s lock timeout,
+  // after which a retry of the same request takes it over.
 };
 
 export const idempotency = fp(idempotencyPlugin, { name: 'tendr-idempotency' });

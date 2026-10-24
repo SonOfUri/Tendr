@@ -1,4 +1,5 @@
 import cors from '@fastify/cors';
+import { Prisma } from '@prisma/client';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import { env } from './env.js';
@@ -23,11 +24,34 @@ export type BuildAppOptions = {
   rateLimitNamespace?: string;
 };
 
+const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * The request id: the client's `x-request-id` when it is a safe token (≤128 chars of
+ * `[A-Za-z0-9._:-]`), otherwise a fresh UUID. It is echoed in a header and written to logs, so
+ * arbitrary client bytes (newlines, huge values) are never taken as-is.
+ */
+export function requestIdFor(header: unknown): string {
+  return typeof header === 'string' && REQUEST_ID.test(header) ? header : randomUUID();
+}
+
+/**
+ * Prisma errors a route can trigger by input alone, mapped to fixed public messages so a
+ * unique-violation or missing-row probe is a 4xx without internal details, never a 500.
+ */
+const PRISMA_ERRORS: Partial<
+  Record<string, { status: number; code: 'CONFLICT' | 'NOT_FOUND'; message: string }>
+> = {
+  P2002: { status: 409, code: 'CONFLICT', message: 'Resource already exists' },
+  P2025: { status: 404, code: 'NOT_FOUND', message: 'Resource not found' },
+};
+
 export async function buildApp(opts: BuildAppOptions = {}) {
   const app = Fastify({
     logger: false,
-    requestIdHeader: 'x-request-id',
-    genReqId: () => randomUUID(),
+    // Fastify would take the header verbatim; `genReqId` validates it instead.
+    requestIdHeader: false,
+    genReqId: (req) => requestIdFor(req.headers['x-request-id']),
     bodyLimit: 1_048_576,
     // Trust exactly one proxy hop (Railway's edge): `req.ip` is the address that proxy appended to
     // X-Forwarded-For, which a client cannot forge. `true` would trust the whole header, letting any
@@ -105,6 +129,13 @@ export async function buildApp(opts: BuildAppOptions = {}) {
           requestId,
           details: error.details,
         },
+      });
+    }
+    const mapped =
+      error instanceof Prisma.PrismaClientKnownRequestError ? PRISMA_ERRORS[error.code] : undefined;
+    if (mapped) {
+      return reply.status(mapped.status).send({
+        error: { code: mapped.code, message: mapped.message, requestId },
       });
     }
     if ((error as { statusCode?: number }).statusCode === 429) {
