@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import { env } from './env.js';
 import { auth } from './gateway/auth.js';
+import { idempotency } from './gateway/idempotency.js';
 import { createRateLimiters, type RateLimitKind } from './gateway/rate-limit.js';
 import { closeClient, closeRedis, createRedis, getRedis, whenReady } from './lib/redis.js';
 import { AppError } from './lib/errors.js';
@@ -154,6 +155,8 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   app.addHook('onRequest', limiters.ip);
   await app.register(auth);
   app.addHook('onRequest', limiters.principal);
+  // preHandler: after auth and the signature check (preValidation).
+  await app.register(idempotency);
   await app.register(healthRoutes);
   await app.register(pingRoutes);
   opts.extraRoutes?.(app);
