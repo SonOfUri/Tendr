@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { Queue, type JobsOptions } from 'bullmq';
 import { Redis } from 'ioredis';
 import { env } from '../env.js';
@@ -85,7 +86,14 @@ export async function listFailedJobs(queue: Queue): Promise<FailedJob[]> {
     .map((j) => ({ id: j.id, handler: j.name, attempts: j.attemptsMade, error: j.failedReason }));
 }
 
-/** Deletes expired idempotency keys; returns how many were removed. */
-export async function purgeExpiredIdempotencyKeys(): Promise<number> {
-  return prisma.$executeRaw`DELETE FROM idempotency_keys WHERE expires_at < now()`;
+/**
+ * Deletes expired idempotency keys; returns how many were removed. `expires_at` is a
+ * `timestamp(3)` holding UTC (Prisma's convention), so it is compared with the database's UTC
+ * wall clock — a bare `now()` would be shifted by the session time zone. `db` lets tests run it
+ * on a connection with a non-UTC time zone.
+ */
+export async function purgeExpiredIdempotencyKeys(
+  db: Pick<Prisma.TransactionClient, '$executeRaw'> = prisma,
+): Promise<number> {
+  return db.$executeRaw`DELETE FROM idempotency_keys WHERE expires_at < (now() AT TIME ZONE 'UTC')`;
 }

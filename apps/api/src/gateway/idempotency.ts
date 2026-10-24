@@ -1,7 +1,9 @@
 // Idempotency keys for `POST /v1/*` (spec: `idempotency_keys`).
 //
-// A request carrying `Idempotency-Key` claims the row (merchant, mode, key) before the
-// handler runs. A retry with the same key and the same request replays the stored response
+// A request carrying `Idempotency-Key` claims the row (merchant, mode, principal, key) before
+// the handler runs. Keys are namespaced per credential (`principal_ref` =
+// `${kind}:${principalRef}`), so a publishable key or session client can never have the secret
+// key's stored response replayed to it, and vice versa. A retry with the same key and the same request replays the stored response
 // (`Idempotent-Replayed: true`); a different request is 409 IDEMPOTENCY_CONFLICT; a retry
 // while the first is still running is 409 IDEMPOTENCY_IN_PROGRESS. 5xx responses are not
 // stored, so the client can retry. A row whose lock is older than 60 s (its request died
@@ -22,6 +24,7 @@ import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { isV1 } from './auth.js';
+import { principalRef, type Principal } from './principal.js';
 
 export const IDEMPOTENCY_HEADER = 'idempotency-key';
 export const REPLAYED_HEADER = 'Idempotent-Replayed';
@@ -46,7 +49,12 @@ const idempotencyError = (code: 'IDEMPOTENCY_CONFLICT' | 'IDEMPOTENCY_IN_PROGRES
     409,
   );
 
-type Scope = { merchantId: string; livemode: boolean; key: string };
+type Scope = { merchantId: string; livemode: boolean; principalRef: string; key: string };
+
+/** The idempotency namespace of a principal: its kind plus its credential id. */
+export function idempotencyPrincipalRef(p: Principal): string {
+  return `${p.kind}:${principalRef(p)}`;
+}
 
 type ExistingRow = {
   status: 'in_progress' | 'completed';
@@ -63,7 +71,8 @@ type Outcome =
   | { kind: 'in_progress' };
 
 const rowWhere = (s: Scope) =>
-  Prisma.sql`merchant_id = ${s.merchantId} AND livemode = ${s.livemode} AND key = ${s.key}`;
+  Prisma.sql`merchant_id = ${s.merchantId} AND livemode = ${s.livemode}
+    AND principal_ref = ${s.principalRef} AND key = ${s.key}`;
 
 /**
  * Claims the key or classifies the existing row. Each claim path is one statement; the row
@@ -77,11 +86,12 @@ async function claim(s: Scope, hash: string): Promise<Outcome> {
 
     const inserted = await prisma.$queryRaw<{ id: string }[]>`
       INSERT INTO idempotency_keys
-        (id, merchant_id, livemode, key, request_hash, status, locked_at, expires_at, updated_at)
+        (id, merchant_id, livemode, principal_ref, key, request_hash, status, locked_at,
+         expires_at, updated_at)
       VALUES
-        (${token}, ${s.merchantId}, ${s.livemode}, ${s.key}, ${hash}, 'in_progress',
-         ${NOW}, ${NOW} + ${TTL}, ${NOW})
-      ON CONFLICT (merchant_id, livemode, key) DO NOTHING
+        (${token}, ${s.merchantId}, ${s.livemode}, ${s.principalRef}, ${s.key}, ${hash},
+         'in_progress', ${NOW}, ${NOW} + ${TTL}, ${NOW})
+      ON CONFLICT (merchant_id, livemode, principal_ref, key) DO NOTHING
       RETURNING id`;
     if (inserted.length > 0) return { kind: 'claimed', token };
 
@@ -162,7 +172,10 @@ const idempotencyPlugin: FastifyPluginAsync = async (app) => {
 
     const { merchantId, livemode } = req.principal;
     const hash = requestHash(req.method, req.url, req.rawBody ?? Buffer.alloc(0));
-    const outcome = await claim({ merchantId, livemode, key: header }, hash);
+    const outcome = await claim(
+      { merchantId, livemode, principalRef: idempotencyPrincipalRef(req.principal), key: header },
+      hash,
+    );
     switch (outcome.kind) {
       case 'claimed':
         claims.set(req, outcome.token);

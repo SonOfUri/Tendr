@@ -300,6 +300,7 @@ describe('purge-idempotency', () => {
       id: newId('idem'),
       merchantId: m.id,
       livemode: false,
+      principalRef: 'secret_key:key_x',
       key,
       requestHash: 'h',
       lockedAt: new Date(),
@@ -310,6 +311,29 @@ describe('purge-idempotency', () => {
     });
     expect(await purgeExpiredIdempotencyKeys()).toBe(1);
     expect((await prisma.idempotencyKey.findMany()).map((k) => k.key)).toEqual(['fresh']);
+  });
+
+  it('compares in UTC regardless of the session time zone', async () => {
+    const m = await createMerchant();
+    await prisma.idempotencyKey.create({
+      data: {
+        id: newId('idem'),
+        merchantId: m.id,
+        livemode: false,
+        principalRef: 'secret_key:key_x',
+        key: 'in-an-hour',
+        requestHash: 'h',
+        lockedAt: new Date(),
+        expiresAt: new Date(Date.now() + 3_600_000),
+      },
+    });
+    // UTC+14: a bare now() would treat the UTC timestamp as local and see it as 13 h expired.
+    const removed = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SET LOCAL TIME ZONE 'Pacific/Kiritimati'`;
+      return purgeExpiredIdempotencyKeys(tx);
+    });
+    expect(removed).toBe(0);
+    expect(await prisma.idempotencyKey.count()).toBe(1);
   });
 });
 

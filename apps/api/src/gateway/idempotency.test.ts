@@ -14,6 +14,9 @@ describe('idempotency keys', () => {
   let app: FastifyInstance;
   let merchantId: string;
   let testKey: string;
+  let testKeyId: string;
+  let otherSecretKey: string;
+  let publishableKey: string;
   let liveKey: string;
   let signedKey: string;
   let counter = 0;
@@ -22,7 +25,14 @@ describe('idempotency keys', () => {
   beforeAll(async () => {
     await resetDb();
     merchantId = (await createMerchant()).id;
-    testKey = (await createApiKey(merchantId, { livemode: false })).raw;
+    ({
+      raw: testKey,
+      record: { id: testKeyId },
+    } = await createApiKey(merchantId, { livemode: false }));
+    otherSecretKey = (await createApiKey(merchantId, { livemode: false })).raw;
+    publishableKey = (
+      await createApiKey(merchantId, { livemode: false, kind: 'publishable', scopes: [] })
+    ).raw;
     liveKey = (await createApiKey(merchantId, { livemode: true })).raw;
     signedKey = (
       await createApiKey(merchantId, {
@@ -39,6 +49,14 @@ describe('idempotency keys', () => {
           await new Promise((r) => setTimeout(r, 200));
           return reply.code(201).send({ n: counter, body: req.body ?? null });
         });
+        a.post(
+          '/v1/test-idem-any',
+          { config: { auth: { principals: ['secret_key', 'publishable_key'] } } },
+          async (_req, reply) => {
+            counter += 1;
+            return reply.code(201).send({ n: counter });
+          },
+        );
         a.post('/v1/test-idem-503', { config: { auth } }, async (_req, reply) => {
           failures += 1;
           return reply.code(503).send({ n: failures });
@@ -88,18 +106,18 @@ describe('idempotency keys', () => {
       },
     });
 
+  /** The row of `key` for the default test key (or any principal when there is just one). */
   const row = (key: string, livemode = false) =>
-    prisma.idempotencyKey.findUnique({
-      where: { merchantId_livemode_key: { merchantId, livemode, key } },
-    });
+    prisma.idempotencyKey.findFirst({ where: { merchantId, livemode, key } });
 
   /** A row as a crashed or still-running request would leave it, `lockedSecondsAgo` in DB time. */
   const insertInProgress = async (key: string, body: string, lockedSecondsAgo: number) => {
     await prisma.$executeRaw`
       INSERT INTO idempotency_keys
-        (id, merchant_id, livemode, key, request_hash, status, locked_at, expires_at, updated_at)
+        (id, merchant_id, livemode, principal_ref, key, request_hash, status, locked_at,
+         expires_at, updated_at)
       VALUES
-        (${`idem_seed_${key}`}, ${merchantId}, false, ${key},
+        (${`idem_seed_${key}`}, ${merchantId}, false, ${`secret_key:${testKeyId}`}, ${key},
          ${requestHash('POST', '/v1/test-idem', Buffer.from(body))}, 'in_progress',
          (now() AT TIME ZONE 'UTC') - make_interval(secs => ${lockedSecondsAgo}),
          (now() AT TIME ZONE 'UTC') + interval '24 hours', now() AT TIME ZONE 'UTC')`;
@@ -158,6 +176,31 @@ describe('idempotency keys', () => {
     expect(counter).toBe(2);
     expect((await row(key, false))?.status).toBe('completed');
     expect((await row(key, true))?.status).toBe('completed');
+  });
+
+  it('same key and body from different principals of one merchant + mode never replays', async () => {
+    const key = freshKey();
+    const url = '/v1/test-idem-any';
+    const responses = [
+      await post(key, '{"p":1}', { url, apiKey: testKey }),
+      await post(key, '{"p":1}', { url, apiKey: publishableKey }),
+      await post(key, '{"p":1}', { url, apiKey: otherSecretKey }),
+    ];
+    for (const res of responses) {
+      expect(res.statusCode).toBe(201);
+      expect(res.headers['idempotent-replayed']).toBeUndefined();
+    }
+    expect(responses.map((r) => r.json().n)).toEqual([1, 2, 3]);
+    expect(counter).toBe(3);
+    const rows = await prisma.idempotencyKey.findMany({ where: { merchantId, key } });
+    const refs = rows.map((r) => r.principalRef);
+    expect(new Set(refs).size).toBe(3);
+    expect(refs).toContain(`secret_key:${testKeyId}`);
+    expect(refs.filter((r) => r.startsWith('publishable_key:'))).toHaveLength(1);
+    // Each principal still gets its own response replayed.
+    const again = await post(key, '{"p":1}', { url, apiKey: publishableKey });
+    expect(again.headers['idempotent-replayed']).toBe('true');
+    expect(again.json().n).toBe(2);
   });
 
   it('5xx response is not stored', async () => {
@@ -310,9 +353,9 @@ describe('idempotency keys', () => {
     expect(bad.statusCode).toBe(401);
     expect(await row(key)).toBeNull();
     const t = Math.floor(Date.now() / 1000);
-    expect((await post(key, body, { apiKey: signedKey, signature: sign(t, body) })).statusCode).toBe(
-      201,
-    );
+    expect(
+      (await post(key, body, { apiKey: signedKey, signature: sign(t, body) })).statusCode,
+    ).toBe(201);
     const forged = await post(key, body, { apiKey: signedKey, signature: sign(t, '{"x":0}') });
     expect(forged.statusCode).toBe(401);
     expect(forged.headers['idempotent-replayed']).toBeUndefined();

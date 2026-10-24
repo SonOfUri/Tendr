@@ -767,6 +767,9 @@ model IdempotencyKey {
   id           String            @id
   merchantId   String            @map("merchant_id")
   livemode     Boolean
+  /// `${principal.kind}:${principalRef(principal)}`: keys are namespaced per credential, so one
+  /// principal can never have another principal's stored response replayed.
+  principalRef String            @map("principal_ref")
   key          String
   requestHash  String            @map("request_hash")
   status       IdempotencyStatus @default(in_progress)
@@ -779,7 +782,7 @@ model IdempotencyKey {
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
 
-  @@unique([merchantId, livemode, key])
+  @@unique([merchantId, livemode, principalRef, key])
   @@map("idempotency_keys")
 }
 

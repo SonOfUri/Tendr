@@ -384,6 +384,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         id: newId('idem'),
         merchantId,
         livemode,
+        principalRef: 'secret_key:key_test',
         key: unique('idem'),
         requestHash: sha256('{}'),
         lockedAt: new Date(),
