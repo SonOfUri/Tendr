@@ -1,6 +1,7 @@
 {
   "name": "tendr",
   "private": true,
+  "packageManager": "npm@10.9.4",
   "version": "0.1.0",
   "description": "Tendr \u2014 AI powered universal checkout and payment orchestration for digital commerce",
   "workspaces": [

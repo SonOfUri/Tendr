@@ -7,7 +7,6 @@ export function SiteHeader() {
         Tendr
       </Link>
       <nav className="nav" aria-label="Primary">
-        <Link href="/demo">Demo</Link>
         <Link href="/dashboard">Dashboard</Link>
         <a href="http://localhost:3001" rel="noreferrer">
           Docs

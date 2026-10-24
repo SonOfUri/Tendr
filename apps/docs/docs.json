@@ -14,15 +14,14 @@
         "groups": [
           {
             "group": "Getting started",
-            "pages": ["introduction", "quickstart"]
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
           },
           {
             "group": "Concepts",
             "pages": [
-              "concepts/checkout-sessions",
-              "concepts/quotes-and-expiry",
-              "concepts/payment-lifecycle",
-              "concepts/sandbox-vs-live",
               "concepts/idempotency"
             ]
           },
@@ -30,23 +29,19 @@
             "group": "API reference",
             "pages": [
               "api-reference/overview",
-              "api-reference/create-checkout-session",
-              "api-reference/retrieve-checkout-session",
-              "api-reference/create-quote",
-              "api-reference/retrieve-payment",
               "api-reference/webhooks"
             ]
           },
           {
             "group": "SDKs",
-            "pages": ["sdks/typescript"]
+            "pages": [
+              "sdks/typescript"
+            ]
           },
           {
             "group": "Integrations",
             "pages": [
               "integrations/ecommerce",
-              "integrations/gaming",
-              "integrations/fintech",
               "integrations/near-intents"
             ]
           },
@@ -60,7 +55,10 @@
           },
           {
             "group": "Development",
-            "pages": ["development/local-setup", "development/troubleshooting"]
+            "pages": [
+              "development/local-setup",
+              "development/troubleshooting"
+            ]
           }
         ]
       }

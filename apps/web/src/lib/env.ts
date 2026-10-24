@@ -15,7 +15,6 @@ export const publicEnv = {
 export function serverEnv() {
   return {
     apiBaseUrl: process.env.API_BASE_URL ?? publicEnv.apiBaseUrl,
-    demoMerchantApiKey: process.env.DEMO_MERCHANT_API_KEY ?? '',
     webUrl: process.env.WEB_URL ?? 'http://localhost:3000',
   };
 }

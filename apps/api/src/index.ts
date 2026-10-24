@@ -25,15 +25,11 @@ async function main() {
 
   const host = process.env.API_HOST ?? '127.0.0.1';
   await app.listen({ port, host });
-  log('info', 'Tendr API listening', {
-    port,
-    provider: env().PAYMENT_PROVIDER,
-    liveEnabled: env().CHECKOUT_LIVE_ENABLED,
-  });
+  log('info', 'Tendr API listening', { port });
 }
 
 main().catch((err) => {
-  // eslint-disable-next-line no-console
+   
   console.error(err);
   process.exit(1);
 });

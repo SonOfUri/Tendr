@@ -15,11 +15,8 @@ export default function HomePage() {
             payment complexity, so your product doesn’t have to.
           </p>
           <div className="cta-row">
-            <Link href="/demo">
-              <Button>Explore the demo</Button>
-            </Link>
-            <Link href="/demo">
-              <Button variant="secondary">Build with Tendr</Button>
+            <Link href="/dashboard">
+              <Button>Build with Tendr</Button>
             </Link>
           </div>
         </div>

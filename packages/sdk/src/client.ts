@@ -1,17 +1,3 @@
-import {
-  CheckoutSessionSchema,
-  CreateCheckoutSessionRequestSchema,
-  CreateQuoteRequestSchema,
-  CreateWebhookEndpointRequestSchema,
-  PaymentSchema,
-  QuoteSchema,
-  type CreateCheckoutSessionRequest,
-  type CreateQuoteRequest,
-  type CreateWebhookEndpointRequest,
-  type CheckoutSession,
-  type Payment,
-  type Quote,
-} from '@tendr/contracts';
 import { TendrApiError } from './errors.js';
 
 export interface TendrClientOptions {
@@ -34,54 +20,6 @@ export class TendrClient {
     this.fetchImpl = opts.fetch ?? fetch;
   }
 
-  async createCheckoutSession(
-    body: CreateCheckoutSessionRequest,
-    opts?: { idempotencyKey?: string },
-  ): Promise<CheckoutSession> {
-    const parsed = CreateCheckoutSessionRequestSchema.parse(body);
-    return this.request('POST', '/v1/checkout/sessions', CheckoutSessionSchema, {
-      body: parsed,
-      idempotencyKey: opts?.idempotencyKey,
-    });
-  }
-
-  async getCheckoutSession(sessionId: string): Promise<CheckoutSession> {
-    return this.request('GET', `/v1/checkout/sessions/${sessionId}`, CheckoutSessionSchema);
-  }
-
-  async createQuote(sessionId: string, body: CreateQuoteRequest = {}): Promise<Quote> {
-    const parsed = CreateQuoteRequestSchema.parse(body);
-    return this.request('POST', `/v1/checkout/sessions/${sessionId}/quote`, QuoteSchema, {
-      body: parsed,
-    });
-  }
-
-  async confirmCheckout(
-    sessionId: string,
-    quoteId: string,
-  ): Promise<{ session: CheckoutSession; payment: Payment }> {
-    const data = await this.requestRaw('POST', `/v1/checkout/sessions/${sessionId}/confirm`, {
-      body: { quoteId },
-    });
-    return {
-      session: CheckoutSessionSchema.parse(data.session),
-      payment: PaymentSchema.parse(data.payment),
-    };
-  }
-
-  async getPayment(paymentId: string): Promise<Payment> {
-    return this.request('GET', `/v1/payments/${paymentId}`, PaymentSchema);
-  }
-
-  async createWebhookEndpoint(body: CreateWebhookEndpointRequest) {
-    const parsed = CreateWebhookEndpointRequestSchema.parse(body);
-    return this.requestRaw('POST', '/v1/webhooks/endpoints', { body: parsed });
-  }
-
-  async listWebhookEndpoints() {
-    return this.requestRaw('GET', '/v1/webhooks/endpoints');
-  }
-
   private async request<T>(
     method: string,
     path: string,
@@ -96,7 +34,7 @@ export class TendrClient {
     method: string,
     path: string,
     opts?: { body?: unknown; idempotencyKey?: string },
-  ): Promise<any> {
+  ): Promise<Record<string, unknown>> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {

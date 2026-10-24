@@ -1,16 +1,10 @@
 import cors from '@fastify/cors';
-import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
 import { ZodError } from 'zod';
 import { env } from './env.js';
 import { AppError } from './lib/errors.js';
 import { log } from './lib/logger.js';
-import { authPlugin } from './plugins/auth.js';
-import { checkoutRoutes } from './routes/checkout.js';
 import { healthRoutes } from './routes/health.js';
-import { openapiRoutes } from './routes/openapi.js';
-import { paymentRoutes } from './routes/payments.js';
-import { webhookRoutes } from './routes/webhooks.js';
 import { randomUUID } from 'node:crypto';
 
 export async function buildApp() {
@@ -25,10 +19,6 @@ export async function buildApp() {
   await app.register(cors, {
     origin: origins,
     credentials: true,
-  });
-  await app.register(rateLimit, {
-    max: 200,
-    timeWindow: '1 minute',
   });
 
   app.addHook('onRequest', async (request, reply) => {
@@ -80,11 +70,6 @@ export async function buildApp() {
   });
 
   await app.register(healthRoutes);
-  await app.register(openapiRoutes);
-  await app.register(authPlugin);
-  await app.register(checkoutRoutes);
-  await app.register(paymentRoutes);
-  await app.register(webhookRoutes);
 
   return app;
 }

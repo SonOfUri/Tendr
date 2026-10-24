@@ -35,6 +35,6 @@ export function log(level: Level, message: string, fields?: Record<string, unkno
     time: new Date().toISOString(),
     ...(fields ? (redact(fields) as Record<string, unknown>) : {}),
   };
-  // eslint-disable-next-line no-console
+   
   console.log(JSON.stringify(line));
 }
