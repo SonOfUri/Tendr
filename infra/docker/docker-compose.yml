@@ -17,5 +17,20 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: tendr-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - tendr_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   tendr_pg_data:
+  tendr_redis_data:

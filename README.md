@@ -40,7 +40,6 @@ Tendr/
 ## Quick start
 
 ```bash
-cd Tendr
 cp .env.example .env
 docker compose -f infra/docker/docker-compose.yml up -d
 npm install

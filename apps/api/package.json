@@ -10,10 +10,11 @@
     "lint": "eslint src --max-warnings 0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate deploy",
-    "db:migrate:dev": "prisma migrate dev",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:generate": "dotenv -e ../../.env -- prisma generate",
+    "db:migrate": "dotenv -e ../../.env -- prisma migrate deploy",
+    "db:migrate:dev": "dotenv -e ../../.env -- prisma migrate dev",
+    "db:seed": "dotenv -e ../../.env -- tsx prisma/seed.ts",
+    "db:migrate:test": "tsx scripts/migrate-test.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.1",
@@ -28,6 +29,7 @@
     "@tendr/config-eslint": "*",
     "@tendr/config-typescript": "*",
     "@types/node": "^22.15.3",
+    "dotenv-cli": "^8.0.0",
     "eslint": "^9.25.1",
     "prisma": "^6.7.0",
     "tsx": "^4.19.4",

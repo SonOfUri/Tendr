@@ -2,15 +2,13 @@
   "name": "tendr",
   "private": true,
   "version": "0.1.0",
-  "description": "Tendr — AI powered universal checkout and payment orchestration for digital commerce",
-  "packageManager": "pnpm@10.29.3",
+  "description": "Tendr \u2014 AI powered universal checkout and payment orchestration for digital commerce",
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "engines": {
-    "node": ">=22.0.0",
-    "pnpm": ">=10.0.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "dev": "turbo run dev --filter=@tendr/web --filter=@tendr/api",

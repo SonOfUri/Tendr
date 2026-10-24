@@ -16,3 +16,4 @@ test-results
 apps/api/prisma/*.db
 apps/api/prisma/*.db-journal
 .mintlify
+.keyvault/
