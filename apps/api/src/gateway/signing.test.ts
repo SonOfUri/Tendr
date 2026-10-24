@@ -76,9 +76,12 @@ describe('request signing (gateway)', () => {
       signingSecret: SECRET,
     });
     dangling = dk.raw;
-    await prisma.$executeRawUnsafe('SET session_replication_role = replica');
-    await prisma.$executeRawUnsafe(`DELETE FROM secrets WHERE id = '${dk.record.signingSecretRef}'`);
-    await prisma.$executeRawUnsafe('SET session_replication_role = DEFAULT');
+    // A dangling ref (FK checks skipped). One transaction with SET LOCAL, so the replica role
+    // stays on this connection only and cannot leak to other pooled queries.
+    await prisma.$transaction([
+      prisma.$executeRawUnsafe('SET LOCAL session_replication_role = replica'),
+      prisma.$executeRaw`DELETE FROM secrets WHERE id = ${dk.record.signingSecretRef}`,
+    ]);
     app = await buildApp({
       extraRoutes: (a) => {
         a.post(
