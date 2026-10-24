@@ -28,6 +28,20 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     credentials: true,
   });
 
+  // JSON only: Fastify's default text/plain parser would deliver bodies that signing never covers.
+  app.removeContentTypeParser('text/plain');
+  // Keep the raw bytes for request-signature verification, then parse as JSON.
+  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
+    const buf = body as Buffer;
+    req.rawBody = buf;
+    if (buf.length === 0) return done(null, undefined);
+    try {
+      done(null, JSON.parse(buf.toString('utf8')));
+    } catch {
+      done(Object.assign(new Error('Invalid JSON body'), { statusCode: 400 }), undefined);
+    }
+  });
+
   app.addHook('onRequest', async (request, reply) => {
     reply.header('x-request-id', request.id);
   });
@@ -59,6 +73,17 @@ export async function buildApp(opts: BuildAppOptions = {}) {
         error: {
           code: 'RATE_LIMITED',
           message: 'Too many requests',
+          requestId,
+        },
+      });
+    }
+    // Fastify-native client errors (bad JSON, 413, 415, ...) keep their status.
+    const status = (error as { statusCode?: number }).statusCode;
+    if (status !== undefined && status >= 400 && status < 500) {
+      return reply.status(status).send({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: status === 400 ? 'Invalid request' : (error as Error).message,
           requestId,
         },
       });

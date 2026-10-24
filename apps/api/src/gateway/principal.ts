@@ -26,6 +26,8 @@ declare module 'fastify' {
   interface FastifyRequest {
     principal?: Principal;
     db?: ScopedDb;
+    /** Raw bytes of a JSON request body, captured by the content-type parser. */
+    rawBody?: Buffer;
   }
 }
 

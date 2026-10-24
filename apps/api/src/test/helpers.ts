@@ -6,6 +6,7 @@ import { ulid } from 'ulid';
 import { PER_MODE_MODELS, SHARED_MODELS } from '../db/models.js';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
+import { putSecret } from '../secrets/secrets.js';
 
 const unique = (label: string): string => `${label}-${ulid().toLowerCase()}`;
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
@@ -52,11 +53,15 @@ export async function createApiKey(
     kind?: 'secret' | 'publishable';
     scopes?: Scope[];
     signingRequired?: boolean;
+    signingSecret?: string;
   },
 ): Promise<{ raw: string; record: ApiKey }> {
   const kind = opts.kind ?? 'secret';
   const prefix = KEY_PREFIXES[kind][`${opts.livemode}`];
   const raw = `${prefix}${randomBytes(24).toString('hex')}`;
+  const signingSecretRef = opts.signingSecret
+    ? await putSecret(opts.signingSecret, 'api_key_signing')
+    : undefined;
   const record = await prisma.apiKey.create({
     data: {
       id: newId('key'),
@@ -68,6 +73,7 @@ export async function createApiKey(
       keyHash: sha256(raw),
       scopes: [...(opts.scopes ?? ALL_SCOPES)],
       signingRequired: opts.signingRequired ?? false,
+      signingSecretRef,
     },
   });
   return { raw, record };

@@ -14,7 +14,9 @@ import { safeEqualHex, sha256 } from '../lib/crypto.js';
 import { AppError, forbidden, unauthorized } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
+import { getSecret } from '../secrets/secrets.js';
 import type { Principal, RouteAuth } from './principal.js';
+import { verifyRequestSignature } from './signing.js';
 
 /** Key prefixes; publishable ones first, since `tdr_pk_…` must not parse as a secret key. */
 const KEY_PREFIXES = [
@@ -53,7 +55,13 @@ export function routeAuth(url: string | undefined, auth: RouteAuth | undefined):
   return null;
 }
 
-async function resolveApiKey(raw: string): Promise<Principal | null> {
+/** Signing settings of the authenticated secret key; kept off the public Principal. */
+type SigningConfig = { signingSecretRef: string | null; signingRequired: boolean };
+const signingConfigs = new WeakMap<FastifyRequest, SigningConfig>();
+
+type Resolved = { principal: Principal; signing?: SigningConfig };
+
+async function resolveApiKey(raw: string): Promise<Resolved | null> {
   const expected = KEY_PREFIXES.find((p) => raw.startsWith(p.prefix));
   if (!expected) return null;
   const key = await prisma.apiKey.findUnique({ where: { keyHash: sha256(raw) } });
@@ -64,11 +72,14 @@ async function resolveApiKey(raw: string): Promise<Principal | null> {
   touchLastUsed(key.id);
   const scopes = key.scopes.filter((s): s is Scope => KNOWN_SCOPES.has(s));
   const base = { merchantId: key.merchantId, livemode: key.livemode, apiKeyId: key.id, scopes };
-  return { kind: key.kind === 'publishable' ? 'publishable_key' : 'secret_key', ...base };
+  return {
+    principal: { kind: key.kind === 'publishable' ? 'publishable_key' : 'secret_key', ...base },
+    signing: { signingSecretRef: key.signingSecretRef, signingRequired: key.signingRequired },
+  };
 }
 
 /** Expired sessions still authenticate: the checkout screens must be able to show EXPIRED. */
-async function resolveSessionSecret(raw: string): Promise<Principal | null> {
+async function resolveSessionSecret(raw: string): Promise<Resolved | null> {
   const match = SESSION_SECRET.exec(raw);
   if (!match) return null;
   const session = await prisma.session.findUnique({
@@ -77,12 +88,17 @@ async function resolveSessionSecret(raw: string): Promise<Principal | null> {
   });
   if (!session || !safeEqualHex(sha256(raw), session.clientSecretHash)) return null;
   return {
-    kind: 'session_client',
-    merchantId: session.merchantId,
-    livemode: session.livemode,
-    sessionId: session.id,
+    principal: {
+      kind: 'session_client',
+      merchantId: session.merchantId,
+      livemode: session.livemode,
+      sessionId: session.id,
+    },
   };
 }
+
+const signatureInvalid = (message = 'Request signature invalid') =>
+  new AppError('SIGNATURE_INVALID', message, 401);
 
 const pendingTouches = new Set<Promise<void>>();
 
@@ -113,7 +129,7 @@ export async function flushLastUsed(): Promise<void> {
   await Promise.all([...pendingTouches]);
 }
 
-async function resolvePrincipal(raw: string): Promise<Principal | null> {
+async function resolvePrincipal(raw: string): Promise<Resolved | null> {
   return raw.startsWith('ses_') ? resolveSessionSecret(raw) : resolveApiKey(raw);
 }
 
@@ -122,6 +138,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   // `listen()` fail; a throw in `onRoute` would surface wherever the route was added.
   app.decorateRequest('principal', undefined);
   app.decorateRequest('db', undefined);
+  app.decorateRequest('rawBody', undefined);
 
   const unconfigured: string[] = [];
   app.addHook('onRoute', (route) => {
@@ -153,8 +170,9 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     if (auth === null || auth === 'public') return;
 
     const raw = bearerToken(req);
-    const principal = raw ? await resolvePrincipal(raw) : null;
-    if (!principal) throw unauthorized('Invalid or missing credentials');
+    const resolved = raw ? await resolvePrincipal(raw) : null;
+    if (!resolved) throw unauthorized('Invalid or missing credentials');
+    const { principal, signing } = resolved;
 
     const denial = !auth.principals.includes(principal.kind)
       ? `This endpoint is not available to ${principal.kind} credentials`
@@ -169,7 +187,32 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     }
 
     req.principal = principal;
+    if (signing) signingConfigs.set(req, signing);
     req.db = scopedDb({ merchantId: principal.merchantId, livemode: principal.livemode });
+  });
+
+  // Needs the raw body, so it runs after parsing. Secret keys only.
+  app.addHook('preHandler', async (req) => {
+    if (req.principal?.kind !== 'secret_key') return;
+    const cfg = signingConfigs.get(req);
+    if (!cfg) return;
+    const header = req.headers['tendr-signature'];
+    const headerValue = Array.isArray(header) ? header.join(',') : header;
+    const present = headerValue !== undefined && headerValue.trim() !== '';
+    if (!cfg.signingRequired && !present) return;
+    // A key that requires signing but has no secret can never verify: fail closed.
+    const secret = cfg.signingSecretRef ? await getSecret(cfg.signingSecretRef) : null;
+    if (secret === null) {
+      if (cfg.signingRequired) throw signatureInvalid();
+      return; // optional signing and nothing to verify against
+    }
+    const result = verifyRequestSignature(
+      headerValue,
+      req.rawBody ?? Buffer.alloc(0),
+      secret,
+      Math.floor(Date.now() / 1000),
+    );
+    if (result !== 'ok') throw signatureInvalid(`Request signature ${result}`);
   });
 
   app.addHook('onResponse', async (req, reply) => {
