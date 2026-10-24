@@ -6,95 +6,122 @@ Tendr is a universal checkout and payment-orchestration layer for digital commer
 
 NEAR Intents is an optional execution integration behind the scenes—not the Tendr brand.
 
-> **Scaffold status:** runnable **sandbox** vertical slice. Live settlement and production auth are **not** implemented.
+> **Status:** foundation. The platform underneath checkout is in place: database schema, API
+> gateway (API keys, scopes, request signing, rate limits, idempotency), append-only event log,
+> BullMQ worker with outbox dispatch, and a key vault (local file in dev, Cloud KMS in
+> production). Checkout endpoints (sessions, quotes, payments, webhooks) come in the checkout
+> project; nothing here moves funds yet.
 
 ## Monorepo layout
 
 ```text
 Tendr/
 ├── apps/web          # Next.js App Router + PWA
-├── apps/api          # Fastify REST /v1
+├── apps/api          # Fastify REST /v1 (api) + BullMQ worker
 ├── apps/docs         # Mintlify docs
 ├── packages/contracts|sdk|ui|config-*
 ├── apps/api/prisma   # schema, migrations, seed
-└── infra/docker      # Postgres (host port 5433)
+└── infra
+    ├── docker        # Postgres (host port 5433) + Redis (host port 6380)
+    └── terraform     # GCP Cloud KMS + Railway (written, not applied)
 ```
 
 ## What is implemented
 
-- Checkout sessions, quotes, confirm, payment status (sandbox)
-- PostgreSQL persistence via Prisma
-- Idempotency, request IDs, typed errors, webhook HMAC signing
-- Four demo experiences sharing one checkout engine
-- Typed TypeScript SDK + Mintlify docs
-- Adapter boundary for NEAR Intents (not live)
+- PostgreSQL schema for merchants, keys, sessions, payments, refunds, webhooks, themes and the
+  event log, with composite FKs that keep merchants and test/live modes apart
+- `/v1` gateway: secret and publishable API keys per mode, scopes, optional HMAC request
+  signing (`Tendr-Signature`), per-principal rate limits, `Idempotency-Key` on `POST`
+- Scoped data access: every request reads and writes only its own merchant and mode
+- Append-only `events` table with an outbox drained by the worker
+- `KeyVault`: envelope encryption and Ed25519 / secp256k1 signing (local file or Cloud KMS)
+- Health checks for the api (`GET /v1/health`) and worker (`GET /health` on `WORKER_HEALTH_PORT`)
 
-## What is not implemented
+## What is not implemented yet
 
-- Live NEAR Intents payment settlement
-- Custody / private keys
-- Production merchant auth / KYC
-- Real prediction-market or game inventory fulfillment
-- Fiat settlement
+- Checkout sessions, quotes, payments, refunds, webhook delivery (checkout project)
+- Live settlement through NEAR Intents
+- Merchant dashboard sign-in / KYC
 
 ## Quick start
 
+Requires Node 22+, npm 10+ and Docker.
+
 ```bash
 cp .env.example .env
-docker compose -f infra/docker/docker-compose.yml up -d
+docker compose -f infra/docker/docker-compose.yml up -d   # Postgres + Redis
 npm install
-npm run build --workspace=@tendr/contracts
-npm run build --workspace=@tendr/sdk
-npm run build --workspace=@tendr/ui
-npm run db:generate
-npm run db:migrate
-npm run db:seed          # prints DEMO_MERCHANT_API_KEY — paste into .env
-npm run dev
+npm run build --workspace=@tendr/contracts                # used by the seed script
+npm run db:migrate:dev --workspace=@tendr/api             # dev database (DATABASE_URL)
+npm run db:migrate:test --workspace=@tendr/api            # test database (TEST_DATABASE_URL)
+npm run db:seed                                           # prints the demo API keys once
+npm run dev                                               # web + api + worker
 ```
 
-Local Postgres is on **host port 5433** (see `.env.example`) so it does not collide with other local databases on 5432.
+The seed is idempotent: it creates the **Demo Merchant** with secret and publishable keys for
+test and live mode and prints the raw keys once (a rerun prints "already seeded" and no keys).
+Keys look like:
 
-- Web: http://localhost:3000  
-- API: http://localhost:4000 (or set `API_PORT` / `API_HOST` if Windows blocks the port — try `18080`)  
+| Key               | Prefix         | Use                    |
+| ----------------- | -------------- | ---------------------- |
+| Secret, test      | `tdr_test_`    | server-side, test mode |
+| Secret, live      | `tdr_live_`    | server-side, live mode |
+| Publishable, test | `tdr_pk_test_` | browser, test mode     |
+| Publishable, live | `tdr_pk_live_` | browser, live mode     |
+
+```bash
+curl -H "Authorization: Bearer tdr_test_..." http://localhost:4000/v1/ping
+# {"merchantId":"mer_...","livemode":false,"principal":"secret_key","scopes":[...]}
+```
+
+Live mode has no settlement config until you seed one with a real payout address
+(`SEED_PAYOUT_ADDRESS=0x... npm run db:seed`); the zero address is refused.
+
+Local Postgres is on **host port 5433** and Redis on **6380** (see `.env.example`), so they do
+not collide with other local services.
+
+- Web: http://localhost:3000
+- API: http://localhost:4000 (`GET /v1/health`)
+- Worker health: http://localhost:4100/health
 - Docs: `npm run dev:docs` (Mintlify via `npx`)
+
+### Cloud KMS check
+
+Production keeps keys in Google Cloud KMS. To check that the GCP project supports both curves
+(envelope encryption, an Ed25519 signature valid for NEAR, a secp256k1 signature that recovers to
+the key's EVM address), set the `GCP_*` variables in `.env` and run:
+
+```bash
+npm run kms:verify --workspace=@tendr/api
+```
+
+It creates keys in a separate `tendr-verify` key ring and deploys nothing.
 
 ### Windows notes
 
-- Prefer **npm** workspaces on Windows without Developer Mode (pnpm needs symlink privileges).
-- If `listen EACCES` occurs on `API_PORT`, Windows may have excluded that port range — set `API_PORT=18080` and matching `API_BASE_URL` / `NEXT_PUBLIC_API_BASE_URL`.
-- API defaults to `API_HOST=127.0.0.1`.
+- If `listen EACCES` occurs on `API_PORT`, Windows may have excluded that port range — set
+  `API_PORT=18080` and matching `API_BASE_URL` / `NEXT_PUBLIC_API_BASE_URL`.
+- The API defaults to `API_HOST=127.0.0.1`.
 
-Seed prints a demo merchant API key. Prefer calling the API from Next.js server routes; never embed secret keys in client bundles.
-
-## Sandbox vs live
-
-| Mode | Behavior |
-| --- | --- |
-| Sandbox (default) | Deterministic simulation. Labelled **Sandbox — no real funds move.** |
-| Live | Only when `CHECKOUT_LIVE_ENABLED=true` and a real provider is configured and healthy. Off by default. |
-
-## Judge demo path
-
-1. Open http://localhost:3000 → **Explore the demo**
-2. Pick E-commerce → create sandbox checkout → authorize payment
-3. See pending → settled states driven by the API (not the browser)
+Never embed secret keys (`tdr_test_` / `tdr_live_`) in client bundles; only publishable keys
+belong in the browser.
 
 ## Scripts
 
-| Script | Description |
-| --- | --- |
-| `npm run dev` | Web + API (Turbo) |
-| `npm run dev:docs` | Mintlify docs |
-| `npm run build` / `lint` / `typecheck` / `test` | CI gates |
-| `npm run test:e2e` | Playwright smoke |
-| `npm run db:migrate` / `db:seed` | Database |
+| Script                                          | Description                                |
+| ----------------------------------------------- | ------------------------------------------ |
+| `npm run dev`                                   | Web + API + worker (Turbo)                 |
+| `npm run dev:docs`                              | Mintlify docs                              |
+| `npm run build` / `lint` / `typecheck` / `test` | CI gates (tests need Postgres + Redis)     |
+| `npm run test:e2e`                              | Playwright smoke                           |
+| `npm run db:migrate`                            | Apply migrations (`prisma migrate deploy`) |
+| `npm run db:seed`                               | Seed the Demo Merchant                     |
+| `npm run jobs:failed --workspace=@tendr/api`    | List failed (dead-letter) jobs             |
 
-## Enabling NEAR Intents later
+## Deployment
 
-1. Read https://docs.near-intents.org/ and record API versions in docs/ADR
-2. Implement `NearIntentsProvider` methods (no invented fields)
-3. Set provider credentials server-side only
-4. Feature-flag with `CHECKOUT_LIVE_ENABLED` after verifier tests pass
+Railway (api, worker, Postgres, Redis) and GCP Cloud KMS are described in
+`infra/terraform/` and are **not applied** — see `infra/terraform/README.md`.
 
 ## Product docs
 

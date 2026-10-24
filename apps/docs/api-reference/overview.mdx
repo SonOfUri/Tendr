@@ -4,7 +4,14 @@ title: API overview
 
 Base URL (local): `http://localhost:4000`
 
-Auth: `Authorization: Bearer <api_key>`
+Auth: `Authorization: Bearer <api_key>` — see [API keys](/security/api-keys).
+
+| Endpoint         | Auth                      | Description                                   |
+| ---------------- | ------------------------- | --------------------------------------------- |
+| `GET /v1/health` | none                      | Liveness check                                |
+| `GET /v1/ping`   | secret or publishable key | Echoes the caller's merchant, mode and scopes |
+
+Checkout endpoints (sessions, quotes, payments, refunds, webhook endpoints) are coming in the checkout project.
 
 Errors:
 
@@ -17,5 +24,3 @@ Errors:
   }
 }
 ```
-
-OpenAPI: `GET /v1/openapi.json`

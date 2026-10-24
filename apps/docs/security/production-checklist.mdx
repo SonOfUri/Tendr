@@ -3,9 +3,8 @@ title: Production checklist
 ---
 
 - [ ] Live provider implemented against official docs
-- [ ] `CHECKOUT_LIVE_ENABLED` gated and monitored
+- [ ] `NODE_ENV=production` with `KEYVAULT_DRIVER=gcp` (Cloud KMS); the local key vault is refused in production
 - [ ] HTTPS everywhere; webhook URL allowlisting
-- [ ] Production merchant auth (not demo keys)
-- [ ] Secret manager for credentials
-- [ ] Queue-backed webhook delivery (Redis optional adapter)
+- [ ] Production merchant auth (not seeded keys)
+- [ ] Runtime database role without `UPDATE`/`DELETE` on `events` (see `infra/terraform/README.md`)
 - [ ] No secrets in client bundles

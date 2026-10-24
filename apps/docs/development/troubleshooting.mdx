@@ -2,9 +2,9 @@
 title: Troubleshooting
 ---
 
-| Symptom | Fix |
-| --- | --- |
-| `DEMO_MERCHANT_API_KEY` errors | Re-run `pnpm db:seed` and copy the printed key into `.env` |
-| Database connection failed | Start Docker Compose Postgres |
-| Live mode 503 | Expected — live provider not configured |
-| Idempotency conflict | Reuse the same key only with an identical body |
+| Symptom                            | Fix                                                                                                                                                                                                         |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `401 UNAUTHORIZED` from `/v1/ping` | Use a key printed by `npm run db:seed`. Raw keys are shown once; to get new ones, reset the dev database (`npx dotenv -e ../../.env -- prisma migrate reset` in `apps/api`) and run `npm run db:seed` again |
+| Database connection failed         | Start Docker Compose Postgres (`docker compose -f infra/docker/docker-compose.yml up -d`)                                                                                                                   |
+| Redis connection errors            | Start Docker Compose Redis (host port 6380)                                                                                                                                                                 |
+| `409 IDEMPOTENCY_CONFLICT`         | An `Idempotency-Key` was reused with a different request; use a new key                                                                                                                                     |

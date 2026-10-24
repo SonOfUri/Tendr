@@ -5,29 +5,32 @@ title: Quickstart
 # Quickstart
 
 ```bash
-cd Tendr
 cp .env.example .env
-docker compose -f infra/docker/docker-compose.yml up -d
-pnpm install
-pnpm db:generate
-pnpm db:migrate
-pnpm db:seed   # prints DEMO_MERCHANT_API_KEY — add to .env
-pnpm dev
+docker compose -f infra/docker/docker-compose.yml up -d   # Postgres + Redis
+npm install
+npm run build --workspace=@tendr/contracts
+npm run db:migrate:dev --workspace=@tendr/api
+npm run db:migrate:test --workspace=@tendr/api
+npm run db:seed   # prints the Demo Merchant's API keys once
+npm run dev
 ```
 
-Create a sandbox session:
+Check a seeded key against the API:
 
 ```bash
-curl -sS http://localhost:4000/v1/checkout/sessions \
-  -H "Authorization: Bearer $DEMO_MERCHANT_API_KEY" \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: demo-1" \
-  -d '{
-    "merchantReference": "order_123",
-    "amount": "49.99",
-    "currency": "USD",
-    "successUrl": "http://localhost:3000/success",
-    "cancelUrl": "http://localhost:3000/cancel",
-    "mode": "sandbox"
-  }'
+curl -sS http://localhost:4000/v1/ping \
+  -H "Authorization: Bearer tdr_test_..."
 ```
+
+```json
+{
+  "merchantId": "mer_...",
+  "livemode": false,
+  "principal": "secret_key",
+  "scopes": ["sessions:read", "..."]
+}
+```
+
+A `tdr_live_` key returns `"livemode": true`. See [API keys](/security/api-keys) for key formats and request signing.
+
+<Note>Checkout endpoints (sessions, quotes, payments) are coming in the checkout project.</Note>

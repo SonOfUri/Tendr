@@ -17,3 +17,10 @@ apps/api/prisma/*.db
 apps/api/prisma/*.db-journal
 .mintlify
 .keyvault/
+
+# Terraform (provider lock files are committed)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example

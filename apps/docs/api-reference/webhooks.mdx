@@ -2,8 +2,11 @@
 title: Webhooks
 ---
 
-Events: `checkout.session.created`, `payment.pending`, `payment.processing`, `payment.settled`, `payment.failed`, `payment.expired`, `payment.refunded`.
+<Note>
+  Webhook delivery is coming in the checkout project. Events are already recorded in an append-only
+  event log and dispatched by the worker through an outbox, which delivery will build on.
+</Note>
 
-Headers: `Tendr-Signature`, `Tendr-Timestamp`, `Tendr-Event-Id`, `Tendr-Event-Type`.
+Planned headers: `Tendr-Signature`, `Tendr-Timestamp`, `Tendr-Event-Id`, `Tendr-Event-Type`. See [Webhook signatures](/security/webhook-signatures).
 
-Retry with exponential backoff and jitter (scaffold in-process runner; Redis optional later).
+Delivery will retry with exponential backoff.

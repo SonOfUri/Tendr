@@ -3,7 +3,7 @@ title: NEAR Intents
 ---
 
 <Warning>
-Live NEAR Intents settlement is **not implemented** in this scaffold. The `NearIntentsProvider` is an adapter boundary only.
+  Live NEAR Intents settlement is **not implemented yet**; it is coming in the checkout project.
 </Warning>
 
 Before enabling live mode:
@@ -11,7 +11,5 @@ Before enabling live mode:
 1. Read https://docs.near-intents.org/
 2. Record API versions, request/response examples, supported assets/networks, and limitations in an ADR
 3. Implement provider methods without inventing fields
-4. Keep credentials server-side
-5. Feature-flag with `CHECKOUT_LIVE_ENABLED=true` only after verifier tests pass
-
-Unconfigured live calls return `PROVIDER_NOT_CONFIGURED`.
+4. Keep credentials server-side (stored encrypted through the key vault)
+5. Enable live settlement only after verifier tests pass

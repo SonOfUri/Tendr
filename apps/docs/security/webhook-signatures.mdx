@@ -2,13 +2,20 @@
 title: Webhook signatures
 ---
 
+<Note>
+  Webhook delivery is coming in the checkout project. Each webhook endpoint will get its own signing
+  secret, shown once when the endpoint is created. The SDK verification helper is already available.
+</Note>
+
 ```ts
 import { verifyWebhookSignature } from '@tendr/sdk/webhook';
 
 const ok = verifyWebhookSignature({
-  payload: rawBody,
-  secret: process.env.WEBHOOK_SIGNING_SECRET!,
+  payload: rawBody, // the raw request body, not re-serialised JSON
+  secret: endpointSigningSecret,
   signatureHeader: req.headers['tendr-signature'] as string,
   timestampHeader: req.headers['tendr-timestamp'] as string,
 });
 ```
+
+Signatures older than 5 minutes are rejected. Verify before parsing or acting on the body.

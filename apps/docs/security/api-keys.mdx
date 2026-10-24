@@ -2,4 +2,35 @@
 title: API keys
 ---
 
-API keys are stored as SHA-256 hashes. Raw keys are shown once at issuance (seed / webhook secret flows). Never put secret keys in `NEXT_PUBLIC_*` variables or browser bundles.
+Every merchant has separate keys for **test** and **live** mode. The key prefix decides the mode; a test key can never read or write live data.
+
+| Prefix         | Kind                   | Where to use it    |
+| -------------- | ---------------------- | ------------------ |
+| `tdr_test_`    | Secret, test mode      | Your server only   |
+| `tdr_live_`    | Secret, live mode      | Your server only   |
+| `tdr_pk_test_` | Publishable, test mode | Browser / checkout |
+| `tdr_pk_live_` | Publishable, live mode | Browser / checkout |
+
+Send the key as `Authorization: Bearer <key>`. Keys carry scopes (for example `sessions:write`); a request outside the key's scopes gets `403 FORBIDDEN`. Publishable keys reach only the endpoints meant for the browser.
+
+Keys are stored as SHA-256 hashes; the raw key is shown once when it is issued (today by `npm run db:seed`). Never put secret keys in `NEXT_PUBLIC_*` variables or browser bundles.
+
+## Request signing (optional)
+
+A secret key can have a signing secret. When it does, requests may carry a `Tendr-Signature` header, and a key marked "signing required" rejects any request without a valid one (`401 SIGNATURE_INVALID`).
+
+```text
+Tendr-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(signing secret, "<t>.<raw body>")>
+```
+
+- The MAC covers the exact raw body bytes sent, not re-serialised JSON. A request without a body signs `"<t>."`.
+- `t` must be within 5 minutes of the server's clock.
+- Several `v1=` values may be sent (one per secret) while rotating; any one matching is accepted.
+
+```ts
+import { createHmac } from 'node:crypto';
+
+const t = Math.floor(Date.now() / 1000);
+const v1 = createHmac('sha256', signingSecret).update(`${t}.${rawBody}`).digest('hex');
+headers['Tendr-Signature'] = `t=${t},v1=${v1}`;
+```

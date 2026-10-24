@@ -4,21 +4,21 @@
 
 Email security concerns to the maintainers via the repository contact. Do not open public issues for vulnerabilities that expose secrets, payment integrity, or user data.
 
-## Scaffold limitations
+## Current status
 
-This repository is a **hackathon / development scaffold**. It is **not** production-ready payment infrastructure.
+This repository is the **foundation** of Tendr. It is **not** yet production payment infrastructure: checkout endpoints, settlement and merchant sign-in are built in later projects, and nothing here moves funds.
 
 Known limitations:
 
-- Merchant dashboard and API-key flows are **demo/development-only**. There is no production authentication or KYC.
-- Live payment providers are **disabled by default**. Sandbox mode never moves real funds.
-- Webhook delivery uses an in-process runner; Redis-backed queues are optional and not required for local sandbox.
-- Do not store seed phrases, private keys, or custodian credentials in this application.
-- Never commit `.env` files or real API keys.
+- There is no merchant dashboard sign-in or KYC yet; API keys are issued by the seed script.
+- Live mode has no settlement path; live payments stay disabled until settlement is built and a merchant has a live settlement config.
+- Do not store seed phrases, private keys, or custodian credentials in this application. Signing keys live in Cloud KMS in production (`KEYVAULT_DRIVER=gcp`); the local key vault is for development and refuses to run with `NODE_ENV=production`.
+- Never commit `.env` files, `.keyvault/`, Terraform state or real API keys.
 
 ## Safe defaults
 
-- `CHECKOUT_LIVE_ENABLED=false`
-- `PAYMENT_PROVIDER=sandbox`
-- Browser clients cannot mark payments as settled
-- Secrets must stay server-side; do not put them in `NEXT_PUBLIC_*` variables
+- API keys are stored as SHA-256 hashes; raw keys are shown once.
+- Every request is confined to its merchant and mode (test vs live) by scoped data access and composite foreign keys.
+- `events` is append-only (enforced by a database trigger).
+- Browser clients cannot mark payments as settled.
+- Secrets must stay server-side; do not put them in `NEXT_PUBLIC_*` variables.

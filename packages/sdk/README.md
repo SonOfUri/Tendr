@@ -7,18 +7,13 @@ import { TendrClient } from '@tendr/sdk';
 
 const client = new TendrClient({
   baseUrl: 'http://localhost:4000',
-  apiKey: process.env.TENDR_API_KEY,
-});
-
-const session = await client.createCheckoutSession({
-  merchantReference: 'order_123',
-  amount: '49.99',
-  currency: 'USD',
-  successUrl: 'http://localhost:3000/success',
-  cancelUrl: 'http://localhost:3000/cancel',
-  mode: 'sandbox',
+  apiKey: process.env.TENDR_SECRET_KEY, // tdr_test_… or tdr_live_…
 });
 ```
+
+The client handles authentication, `Idempotency-Key` headers, timeouts and typed errors
+(`TendrApiError`). Endpoint methods (sessions, quotes, payments) are coming in the checkout
+project.
 
 Webhook verification (Node only):
 
