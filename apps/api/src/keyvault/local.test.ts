@@ -1,6 +1,17 @@
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { ed25519 } from '@noble/curves/ed25519';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha2';
@@ -113,5 +124,76 @@ describe('LocalKeyVault', () => {
     expect(curveOf('relayer-near')).toBe('ed25519');
     expect(curveOf('funding-near')).toBe('ed25519');
     expect(curveOf('solver-hot')).toBe('ed25519');
+  });
+});
+
+describe('LocalKeyVault shared keyfile', () => {
+  const kekOf = (path: string): string => JSON.parse(readFileSync(path, 'utf8')).kek;
+
+  it('two instances on a fresh path used concurrently share one KEK and the same keys', async () => {
+    const path = tmpPath();
+    const a = new LocalKeyVault(path);
+    const b = new LocalKeyVault(path);
+    const [envA, sigB, envB] = await Promise.all([
+      a.encrypt(Buffer.from('from-a'), 'sec_a'),
+      b.sign('gas-tron', keccak_256(utf8ToBytes('tron'))),
+      b.encrypt(Buffer.from('from-b'), 'sec_b'),
+    ]);
+    expect(sigB.curve).toBe('secp256k1');
+    const fresh = new LocalKeyVault(path);
+    expect(Buffer.from(await fresh.decrypt(envA, 'sec_a')).toString()).toBe('from-a');
+    expect(Buffer.from(await fresh.decrypt(envB, 'sec_b')).toString()).toBe('from-b');
+    const [pa, pb] = await Promise.all([a.publicKey('gas-tron'), b.publicKey('gas-tron')]);
+    expect(bytesToHex(pa.raw)).toBe(bytesToHex(pb.raw));
+    // Keys added by either instance are merged, never dropped.
+    await a.publicKey('relayer-near');
+    await b.publicKey('solver-hot');
+    const onDisk = Object.keys(JSON.parse(readFileSync(path, 'utf8')).keys).sort();
+    expect(onDisk).toEqual(['gas-tron', 'relayer-near', 'solver-hot']);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dirname(path))).toEqual(['local.json']); // no temp or lock files left
+  });
+
+  it('separate processes racing on a fresh keyfile agree on one KEK and one key per name', async () => {
+    const path = tmpPath();
+    const script = join(dir, `race-${n++}.mts`);
+    const localTs = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'local.ts')).href;
+    writeFileSync(
+      script,
+      `import { LocalKeyVault } from ${JSON.stringify(localTs)};
+const kv = new LocalKeyVault(process.argv[2]);
+const aad = 'sec_' + process.pid;
+const env = await kv.encrypt(Buffer.from('p' + process.pid), aad);
+const evm = Buffer.from((await kv.publicKey('relayer-evm')).raw).toString('hex');
+const near = Buffer.from((await kv.publicKey('funding-near')).raw).toString('hex');
+console.log(JSON.stringify({ aad, env, evm, near, pid: process.pid }));
+`,
+    );
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
+    const tsx = join(repoRoot, 'node_modules/.bin/tsx');
+    const run = promisify(execFile);
+    const outs = await Promise.all(
+      Array.from({ length: 6 }, () => run(tsx, [script, path], { cwd: repoRoot })),
+    );
+    const results = outs.map((o) => JSON.parse(o.stdout.trim()) as Record<string, string>);
+    const kv = new LocalKeyVault(path);
+    for (const r of results) {
+      expect(Buffer.from(await kv.decrypt(r.env!, r.aad!)).toString()).toBe(`p${r.pid}`);
+    }
+    expect(new Set(results.map((r) => r.evm)).size).toBe(1);
+    expect(new Set(results.map((r) => r.near)).size).toBe(1);
+    expect(bytesToHex((await kv.publicKey('relayer-evm')).raw)).toBe(results[0]!.evm);
+    expect(existsSync(`${path}.lock`)).toBe(false);
+  }, 60_000);
+
+  it('refuses to adopt a different KEK after one is loaded', async () => {
+    const path = tmpPath();
+    const a = new LocalKeyVault(path);
+    await a.encrypt(Buffer.from('x'), 'sec_1');
+    const kek = kekOf(path);
+    rmSync(path);
+    await new LocalKeyVault(path).publicKey('funding-near'); // recreates with a new KEK
+    expect(kekOf(path)).not.toBe(kek);
+    await expect(a.publicKey('relayer-evm')).rejects.toThrow(/KEK/);
   });
 });

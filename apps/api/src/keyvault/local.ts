@@ -1,5 +1,14 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 import { ed25519 } from '@noble/curves/ed25519';
 import { secp256k1 } from '@noble/curves/secp256k1';
@@ -10,6 +19,8 @@ import type { Curve, Envelope, KeyName, KeyVault, Signature } from './types.js';
 const KEK_ID = 'local';
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
+const LOCK_TIMEOUT_MS = 5_000;
+const SLEEP = new Int32Array(new SharedArrayBuffer(4));
 
 interface KeyFile {
   v: 1;
@@ -54,6 +65,10 @@ function parseEnvelope(serialized: string): Envelope {
 /**
  * Dev/test key vault backed by a JSON keyfile (mode 0600) holding a KEK and one private key
  * per key name, each created on first use. Refuses to run in production.
+ *
+ * Several processes (api + worker) may share one keyfile: it is created once via an atomic
+ * link (first creator's KEK wins), every later write is temp-file + rename, key additions
+ * merge under a lockfile, and a loaded KEK is never replaced.
  */
 export class LocalKeyVault implements KeyVault {
   private file: KeyFile | null = null;
@@ -128,38 +143,114 @@ export class LocalKeyVault implements KeyVault {
   private privateKey(key: KeyName): Uint8Array {
     const cached = this.load().keys[key];
     if (cached) return unb64(cached);
-    // Re-read before adding a key so another process's keys in the same file are not lost.
-    this.file = null;
-    const file = this.load();
-    const existing = file.keys[key];
-    if (existing) return unb64(existing);
-    const priv =
-      curveOf(key) === 'ed25519'
-        ? ed25519.utils.randomPrivateKey()
-        : secp256k1.utils.randomPrivateKey();
-    file.keys[key] = b64(priv);
-    this.save(file);
-    return priv;
+    return this.withLock(() => {
+      // Re-read under the lock: another process may have added this (or another) key.
+      const file = this.adopt(this.readDisk() ?? this.fail('keyfile disappeared'));
+      const existing = file.keys[key];
+      if (existing) return unb64(existing);
+      const priv =
+        curveOf(key) === 'ed25519'
+          ? ed25519.utils.randomPrivateKey()
+          : secp256k1.utils.randomPrivateKey();
+      const next: KeyFile = { ...file, keys: { ...file.keys, [key]: b64(priv) } };
+      this.replaceFile(next);
+      this.file = next;
+      return priv;
+    });
   }
 
+  /** Loads the keyfile, creating it exactly once across processes (first creator's KEK wins). */
   private load(): KeyFile {
     if (this.file) return this.file;
-    if (existsSync(this.path)) {
-      const parsed = JSON.parse(readFileSync(this.path, 'utf8')) as KeyFile;
-      if (parsed.v !== 1 || typeof parsed.kek !== 'string' || typeof parsed.keys !== 'object') {
-        throw new Error(`Invalid local keyvault file at ${this.path}`);
-      }
-      this.file = parsed;
-    } else {
-      this.file = { v: 1, kek: b64(randomBytes(32)), keys: {} };
-      this.save(this.file);
-    }
-    return this.file;
+    const onDisk = this.readDisk();
+    if (onDisk) return this.adopt(onDisk);
+    const fresh: KeyFile = { v: 1, kek: b64(randomBytes(32)), keys: {} };
+    if (this.createExclusive(fresh)) return this.adopt(fresh);
+    // Lost the creation race: use the winner's file, never our own KEK.
+    return this.adopt(this.readDisk() ?? this.fail('keyfile missing after EEXIST'));
   }
 
-  private save(file: KeyFile): void {
+  /** Accepts a freshly read file, refusing to switch KEK under an already-loaded one. */
+  private adopt(file: KeyFile): KeyFile {
+    if (this.file && this.file.kek !== file.kek) {
+      throw new Error(`Local keyvault KEK at ${this.path} changed underneath this process`);
+    }
+    this.file = file;
+    return file;
+  }
+
+  private readDisk(): KeyFile | null {
+    let text: string;
+    try {
+      text = readFileSync(this.path, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+    const parsed = JSON.parse(text) as KeyFile;
+    if (parsed.v !== 1 || typeof parsed.kek !== 'string' || typeof parsed.keys !== 'object') {
+      throw new Error(`Invalid local keyvault file at ${this.path}`);
+    }
+    return parsed;
+  }
+
+  /** Writes a complete temp file (0600) next to the keyfile and returns its path. */
+  private writeTemp(file: KeyFile): string {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-    writeFileSync(this.path, JSON.stringify(file, null, 2), { mode: 0o600 });
-    chmodSync(this.path, 0o600); // `mode` only applies when the file is created
+    const tmp = `${this.path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    writeFileSync(tmp, JSON.stringify(file, null, 2), { mode: 0o600, flag: 'wx' });
+    return tmp;
+  }
+
+  /** Atomic create-if-absent: hard-link a complete temp file into place (fails on EEXIST). */
+  private createExclusive(file: KeyFile): boolean {
+    const tmp = this.writeTemp(file);
+    try {
+      linkSync(tmp, this.path);
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw err;
+    } finally {
+      rmSync(tmp, { force: true });
+    }
+  }
+
+  /** Atomic replace: readers see the old or the new file, never a partial one. */
+  private replaceFile(file: KeyFile): void {
+    const tmp = this.writeTemp(file);
+    try {
+      renameSync(tmp, this.path);
+    } catch (err) {
+      rmSync(tmp, { force: true });
+      throw err;
+    }
+  }
+
+  /** Serialises key additions across processes with an O_EXCL lockfile. */
+  private withLock<T>(fn: () => T): T {
+    const lock = `${this.path}.lock`;
+    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    for (;;) {
+      try {
+        closeSync(openSync(lock, 'wx', 0o600));
+        break;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        if (Date.now() > deadline) {
+          throw new Error(`Timed out waiting for ${lock}; remove it if no process holds it`);
+        }
+        Atomics.wait(SLEEP, 0, 0, 10);
+      }
+    }
+    try {
+      return fn();
+    } finally {
+      rmSync(lock, { force: true });
+    }
+  }
+
+  private fail(reason: string): never {
+    throw new Error(`Local keyvault at ${this.path}: ${reason}`);
   }
 }
