@@ -42,14 +42,16 @@ describe('event dispatch', () => {
 
   const record = (type: string) =>
     prisma.$transaction((tx) =>
-      recordEvent(tx, {
-        merchantId,
-        livemode: false,
-        aggregateType: 'session',
-        aggregateId: newId('ses'),
-        type,
-        payload: { n: 1 },
-      }),
+      recordEvent(
+        tx,
+        { merchantId, livemode: false },
+        {
+          aggregateType: 'session',
+          aggregateId: newId('ses'),
+          type,
+          payload: { n: 1 },
+        },
+      ),
     );
   const outboxCount = () => prisma.eventOutbox.count();
   const runWorker = async () => {
@@ -128,14 +130,16 @@ describe('event dispatch', () => {
     // tx A records first (older ULID, older outbox created_at) but stays open.
     const txA = prisma.$transaction(
       async (tx) => {
-        const id = await recordEvent(tx, {
-          merchantId,
-          livemode: false,
-          aggregateType: 'session',
-          aggregateId: newId('ses'),
-          type: 'session.created',
-          payload: {},
-        });
+        const id = await recordEvent(
+          tx,
+          { merchantId, livemode: false },
+          {
+            aggregateType: 'session',
+            aggregateId: newId('ses'),
+            type: 'session.created',
+            payload: {},
+          },
+        );
         recorded();
         await held;
         return id;
@@ -245,14 +249,16 @@ describe('dispatch with Redis down', () => {
     registerEventHandler('session.created', 'audit', async () => {});
     const m = await createMerchant();
     await prisma.$transaction((tx) =>
-      recordEvent(tx, {
-        merchantId: m.id,
-        livemode: false,
-        aggregateType: 'session',
-        aggregateId: newId('ses'),
-        type: 'session.created',
-        payload: {},
-      }),
+      recordEvent(
+        tx,
+        { merchantId: m.id, livemode: false },
+        {
+          aggregateType: 'session',
+          aggregateId: newId('ses'),
+          type: 'session.created',
+          payload: {},
+        },
+      ),
     );
 
     const started = Date.now();

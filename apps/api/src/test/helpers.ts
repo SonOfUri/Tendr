@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { ApiKey, Merchant, Prisma } from '@prisma/client';
 import { ALL_SCOPES, type Scope } from '@tendr/contracts';
 import { ulid } from 'ulid';
-import { PER_MODE_MODELS, SHARED_MODELS } from '../db/models.js';
+import { PER_MODE_MODELS, READ_ONLY_PER_MODE_MODELS, SHARED_MODELS } from '../db/models.js';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { putSecret } from '../secrets/secrets.js';
@@ -108,11 +108,11 @@ export type CreatedRow = { id: string; merchantId: string | null } & Record<stri
 type Overrides = Record<string, unknown>;
 type Builder = (merchantId: string, livemode: boolean, o: Overrides) => Promise<CreatedRow>;
 
-/** Every model that carries a `merchant_id`: the scoped models plus the merchant-owned infra ones. */
+/** Every model that carries a `merchant_id`: the scoped models plus the merchant-owned infra one. */
 export const MERCHANT_OWNED_MODELS = [
   ...PER_MODE_MODELS,
+  ...READ_ONLY_PER_MODE_MODELS,
   ...SHARED_MODELS,
-  'Event',
   'IdempotencyKey',
 ] as const;
 export type MerchantOwnedModel = (typeof MERCHANT_OWNED_MODELS)[number];

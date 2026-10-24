@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import type { ScopeContext } from '../db/scoped.js';
 import { newId } from '../lib/ids.js';
 import { toJsonDecimal } from '../lib/serialize.js';
 
@@ -24,8 +25,6 @@ function normalisePayload(v: unknown): unknown {
 }
 
 export interface RecordEventInput {
-  merchantId: string | null;
-  livemode: boolean | null;
   aggregateType: 'session' | 'payment' | (string & {});
   aggregateId: string;
   type: string;
@@ -33,18 +32,24 @@ export interface RecordEventInput {
 }
 
 /**
- * Appends an event and its outbox row. Must run inside the caller's transaction so the
- * event exists if and only if the state change it describes committed; the worker drains
- * `event_outbox` to fan events out.
+ * Appends an event and its outbox row. Must run inside the caller's transaction (for merchant
+ * events: `tenantTransaction` with the same `ctx`) so the event exists if and only if the state
+ * change it describes committed; the worker drains `event_outbox` to fan events out.
+ * A merchant event takes its merchant and mode from `ctx`; `ctx` is null only for system events
+ * (no merchant), which no scoped client can read.
  */
-export async function recordEvent(tx: Tx, e: RecordEventInput): Promise<string> {
+export async function recordEvent(
+  tx: Tx,
+  ctx: ScopeContext | null,
+  e: RecordEventInput,
+): Promise<string> {
   assertTransaction(tx);
   const id = newId('evt');
   await tx.event.create({
     data: {
       id,
-      merchantId: e.merchantId,
-      livemode: e.livemode,
+      merchantId: ctx?.merchantId ?? null,
+      livemode: ctx?.livemode ?? null,
       aggregateType: e.aggregateType,
       aggregateId: e.aggregateId,
       type: e.type,

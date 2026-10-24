@@ -9,7 +9,7 @@
 import { Prisma } from '@prisma/client';
 import { forbidden } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
-import { PER_MODE_MODELS, SHARED_MODELS } from './models.js';
+import { PER_MODE_MODELS, READ_ONLY_PER_MODE_MODELS, SHARED_MODELS } from './models.js';
 
 export type ScopeContext = { merchantId: string; livemode: boolean };
 
@@ -28,16 +28,23 @@ const READ_OPS = new Set([
 const UPDATE_OPS = new Set(['update', 'updateMany', 'updateManyAndReturn']);
 const DELETE_OPS = new Set(['delete', 'deleteMany']);
 const CREATE_OPS = new Set(['create', 'createMany', 'createManyAndReturn']);
+const WRITE_OPS = new Set([...UPDATE_OPS, ...DELETE_OPS, ...CREATE_OPS, 'upsert']);
 
-/** Columns/relations that pin a row to its tenant; never writable through a scoped update. */
-const TENANT_FIELDS = ['merchantId', 'livemode', 'merchant'];
+/**
+ * Columns/relations never writable through a scoped update: the primary key (changing it would
+ * re-identify a row and break references) and the tenant columns that pin a row to its tenant.
+ */
+const IMMUTABLE_FIELDS = ['id', 'merchantId', 'livemode', 'merchant'];
 
 const perMode = new Set<string>(PER_MODE_MODELS);
+const readOnlyPerMode = new Set<string>(READ_ONLY_PER_MODE_MODELS);
 const shared = new Set<string>(SHARED_MODELS);
+/** Models confined to one merchant + mode, whether writable or read-only. */
+const isPerMode = (model: string): boolean => perMode.has(model) || readOnlyPerMode.has(model);
 
 /** The filter (and, for creates, the column values) that confine `model` to the tenant. */
 function tenantFilter(model: string, ctx: ScopeContext): Args {
-  if (perMode.has(model)) return { merchantId: ctx.merchantId, livemode: ctx.livemode };
+  if (isPerMode(model)) return { merchantId: ctx.merchantId, livemode: ctx.livemode };
   if (shared.has(model)) return { merchantId: ctx.merchantId };
   if (model === 'Merchant') return { id: ctx.merchantId };
   throw forbidden(`model ${model} is not accessible through scoped data access`);
@@ -62,7 +69,8 @@ const FIELDS = new Map(
  * key (`connect`, `connectOrCreate`, `set`, `disconnect`, nested create/update/delete, …)
  * is rejected: a `connect` copies the target's merchant/mode into composite FK columns,
  * and nested writes bypass tenant injection. With scalars only, the tenant columns stay
- * fixed and the DB composite FKs validate every reference. Updates may not set tenant columns.
+ * fixed and the DB composite FKs validate every reference. Updates may not set `id` or tenant
+ * columns.
  */
 function assertScalarWrite(model: string, payload: unknown, isUpdate: boolean): void {
   const rows = Array.isArray(payload) ? payload : [payload];
@@ -73,8 +81,9 @@ function assertScalarWrite(model: string, payload: unknown, isUpdate: boolean): 
       if (fields?.get(key) !== 'scalar' && fields?.has(key)) {
         throw forbidden(`relation writes (${model}.${key}) are not available; set FK columns`);
       }
-      if (isUpdate && TENANT_FIELDS.includes(key))
-        throw forbidden('tenant fields cannot be changed');
+      if (isUpdate && IMMUTABLE_FIELDS.includes(key)) {
+        throw forbidden(`${key === 'id' ? 'id' : 'tenant fields'} cannot be changed`);
+      }
     }
   }
 }
@@ -105,7 +114,7 @@ function assertRelationsAllowed(model: string, value: unknown, parentKey?: strin
     }
     if (target !== undefined) {
       const reachable =
-        target === 'Merchant' || shared.has(target) || (perMode.has(target) && perMode.has(model));
+        target === 'Merchant' || shared.has(target) || (isPerMode(target) && isPerMode(model));
       if (!reachable) throw forbidden(`relation ${model}.${key} is not accessible`);
     }
     assertRelationsAllowed(target ?? model, child, key);
@@ -114,6 +123,9 @@ function assertRelationsAllowed(model: string, value: unknown, parentKey?: strin
 
 function scopeArgs(model: string, operation: string, args: Args, ctx: ScopeContext): Args {
   const tenant = tenantFilter(model, ctx);
+  if (readOnlyPerMode.has(model) && WRITE_OPS.has(operation)) {
+    throw forbidden(`model ${model} is read-only through scoped data access`);
+  }
   assertScalarWrite(model, args.data, UPDATE_OPS.has(operation));
   assertScalarWrite(model, args.create, false);
   assertScalarWrite(model, args.update, true);
@@ -151,8 +163,6 @@ const RAW_OPS = new Set([
   '$queryRawTyped',
   '$runCommandRaw',
 ]);
-const WRITE_OPS = new Set([...UPDATE_OPS, ...DELETE_OPS, ...CREATE_OPS, 'upsert']);
-
 function scopeExtension(ctx: ScopeContext, readOnly: boolean) {
   return Prisma.defineExtension({
     name: readOnly ? 'tendr-read-only' : 'tendr-scoped',

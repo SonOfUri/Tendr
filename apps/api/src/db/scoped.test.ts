@@ -2,7 +2,12 @@ import { Prisma } from '@prisma/client';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import { createMerchant, createRow, minimalSession, resetDb } from '../test/helpers.js';
-import { INFRA_MODELS, PER_MODE_MODELS, SHARED_MODELS } from './models.js';
+import {
+  INFRA_MODELS,
+  PER_MODE_MODELS,
+  READ_ONLY_PER_MODE_MODELS,
+  SHARED_MODELS,
+} from './models.js';
 import { readOnlyDb, scopedDb } from './scoped.js';
 
 // Dynamic model access (`db[delegate]`) is untyped by design in these tests.
@@ -24,22 +29,27 @@ describe('scoped data access', () => {
     await prisma.$disconnect();
   });
 
-  it.each(PER_MODE_MODELS)('%s: test-mode client cannot see live rows', async (model) => {
-    const m = await createMerchant();
-    const liveRow = await createRow(model, m.id, true);
-    const testDb = scopedDb({ merchantId: m.id, livemode: false });
-    expect(await delegate(testDb, model).findMany({})).toEqual([]);
-    expect(await delegate(testDb, model).findFirst({ where: { id: liveRow.id } })).toBeNull();
-    expect(await delegate(testDb, model).findUnique({ where: { id: liveRow.id } })).toBeNull();
-    expect(await delegate(testDb, model).count()).toBe(0);
+  it.each([...PER_MODE_MODELS, ...READ_ONLY_PER_MODE_MODELS])(
+    '%s: test-mode client cannot see live rows',
+    async (model) => {
+      const m = await createMerchant();
+      const liveRow = await createRow(model, m.id, true);
+      const testDb = scopedDb({ merchantId: m.id, livemode: false });
+      expect(await delegate(testDb, model).findMany({})).toEqual([]);
+      expect(await delegate(testDb, model).findFirst({ where: { id: liveRow.id } })).toBeNull();
+      expect(await delegate(testDb, model).findUnique({ where: { id: liveRow.id } })).toBeNull();
+      expect(await delegate(testDb, model).count()).toBe(0);
 
-    const liveDb = scopedDb({ merchantId: m.id, livemode: true });
-    expect(await delegate(liveDb, model).findUnique({ where: { id: liveRow.id } })).toMatchObject({
-      id: liveRow.id,
-    });
-  });
+      const liveDb = scopedDb({ merchantId: m.id, livemode: true });
+      expect(await delegate(liveDb, model).findUnique({ where: { id: liveRow.id } })).toMatchObject(
+        {
+          id: liveRow.id,
+        },
+      );
+    },
+  );
 
-  it.each([...PER_MODE_MODELS, ...SHARED_MODELS])(
+  it.each([...PER_MODE_MODELS, ...READ_ONLY_PER_MODE_MODELS, ...SHARED_MODELS])(
     '%s: another merchant’s rows are invisible',
     async (model) => {
       const a = await createMerchant();
@@ -174,6 +184,32 @@ describe('scoped data access', () => {
       update: {},
     });
     expect(s).toMatchObject({ merchantId: m.id, livemode: false });
+  });
+
+  it('id cannot be changed through update, updateMany or upsert', async () => {
+    const m = await createMerchant();
+    const row = await createRow('Session', m.id, true);
+    const db = scopedDb({ merchantId: m.id, livemode: true });
+    const idChange = { message: 'id cannot be changed', ...forbidden };
+    await expect(
+      db.merchant.update({ where: { id: m.id }, data: { id: 'mer_hijacked' } }),
+    ).rejects.toMatchObject(idChange);
+    await expect(
+      db.session.update({ where: { id: row.id }, data: { id: 'ses_renamed' } }),
+    ).rejects.toMatchObject(idChange);
+    await expect(db.session.updateMany({ data: { id: 'ses_renamed' } })).rejects.toMatchObject(
+      idChange,
+    );
+    await expect(
+      db.session.upsert({
+        where: { id: row.id },
+        create: minimalSession({ merchantId: m.id, livemode: true }),
+        update: { id: 'ses_renamed' },
+      }),
+    ).rejects.toMatchObject(idChange);
+    expect(await prisma.merchant.findUnique({ where: { id: m.id } })).not.toBeNull();
+    expect(await prisma.session.findUnique({ where: { id: row.id } })).not.toBeNull();
+    expect(await prisma.session.count()).toBe(1);
   });
 
   it.each(['merchantId', 'livemode', 'merchant'])(
@@ -394,7 +430,7 @@ describe('scoped data access', () => {
     const delivery = await createRow('WebhookDelivery', m.id, true);
     const db = scopedDb({ merchantId: m.id, livemode: true }) as AnyDb;
     const attempts: (() => Promise<unknown>)[] = [
-      () => db.webhookDelivery.findMany({ include: { event: true } }),
+      () => db.event.findMany({ include: { outbox: true } }),
       () => db.webhookEndpoint.findMany({ select: { secret: { select: { ciphertext: true } } } }),
       () => db.webhookEndpoint.findMany({ where: { secret: { kek: 'local' } } }),
       () => db.apiKey.findMany({ include: { signingSecret: true } }),
@@ -417,6 +453,78 @@ describe('scoped data access', () => {
       await expect(delegate(readOnlyDb(ctx), model).findMany({})).rejects.toMatchObject(forbidden);
     },
   );
+
+  describe('events are read-only and tenant-scoped', () => {
+    it('both clients read their own events only (not other merchants, modes or system events)', async () => {
+      const a = await createMerchant();
+      const b = await createMerchant();
+      const own = await createRow('Event', a.id, true);
+      await createRow('Event', a.id, false);
+      const other = await createRow('Event', b.id, true);
+      await prisma.event.create({
+        data: {
+          id: 'evt_system',
+          aggregateType: 'system',
+          aggregateId: 'sys',
+          type: 'system.tick',
+          payload: {},
+        },
+      });
+      for (const db of [
+        scopedDb({ merchantId: a.id, livemode: true }),
+        readOnlyDb({ merchantId: a.id, livemode: true }),
+      ]) {
+        expect((await db.event.findMany({})).map((e) => e.id)).toEqual([own.id]);
+        expect(await db.event.findUnique({ where: { id: other.id } })).toBeNull();
+        expect(await db.event.findUnique({ where: { id: 'evt_system' } })).toBeNull();
+        expect(await db.event.count()).toBe(1);
+      }
+    });
+
+    it('a delivery can include its event; an event can include its deliveries', async () => {
+      const m = await createMerchant();
+      const delivery = await createRow('WebhookDelivery', m.id, true);
+      const db = scopedDb({ merchantId: m.id, livemode: true });
+      const d = await db.webhookDelivery.findUniqueOrThrow({
+        where: { id: delivery.id },
+        include: { event: true },
+      });
+      expect(d.event.id).toBe(delivery.eventId);
+      const e = await db.event.findUniqueOrThrow({
+        where: { id: delivery.eventId as string },
+        include: { deliveries: true },
+      });
+      expect(e.deliveries.map((x) => x.id)).toEqual([delivery.id]);
+    });
+
+    it('events cannot be created, updated, upserted or deleted', async () => {
+      const m = await createMerchant();
+      const ev = await createRow('Event', m.id, true, { type: 'session.created' });
+      const db = scopedDb({ merchantId: m.id, livemode: true }) as AnyDb;
+      const data = {
+        id: 'evt_forged',
+        aggregateType: 'session',
+        aggregateId: 'ses_x',
+        type: 'session.status_changed',
+        payload: {},
+      };
+      const attempts: (() => Promise<unknown>)[] = [
+        () => db.event.create({ data }),
+        () => db.event.createMany({ data: [data] }),
+        () => db.event.update({ where: { id: ev.id }, data: { type: 'forged' } }),
+        () => db.event.updateMany({ data: { type: 'forged' } }),
+        () => db.event.upsert({ where: { id: ev.id }, create: data, update: { type: 'forged' } }),
+        () => db.event.delete({ where: { id: ev.id } }),
+        () => db.event.deleteMany({}),
+        () => db.$transaction((tx: AnyDb) => tx.event.create({ data })),
+      ];
+      for (const attempt of attempts) await expect(attempt()).rejects.toMatchObject(forbidden);
+      expect(await prisma.event.findUniqueOrThrow({ where: { id: ev.id } })).toMatchObject({
+        type: 'session.created',
+      });
+      expect(await prisma.event.count()).toBe(1);
+    });
+  });
 
   it.each(['$queryRaw', '$queryRawUnsafe', '$executeRaw', '$executeRawUnsafe'])(
     '%s is blocked on scoped and read-only clients',
