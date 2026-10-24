@@ -164,7 +164,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     });
 
   // `onRequest`, so unauthenticated callers are refused before any body is read or validated.
-  // Request signing (which needs the raw body) runs later, in `preHandler`.
+  // Request signing (which needs the raw body) runs later, in `preValidation`.
   app.addHook('onRequest', async (req) => {
     const auth = routeAuth(req.routeOptions.url, req.routeOptions.config.auth);
     if (auth === null || auth === 'public') return;
@@ -192,7 +192,8 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   });
 
   // Needs the raw body, so it runs after parsing. Secret keys only.
-  app.addHook('preHandler', async (req) => {
+  // `preValidation`, so a schema validator can never answer 400 before the signature is checked.
+  app.addHook('preValidation', async (req) => {
     if (req.principal?.kind !== 'secret_key') return;
     const cfg = signingConfigs.get(req);
     if (!cfg) return;
@@ -200,11 +201,22 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     const headerValue = Array.isArray(header) ? header.join(',') : header;
     const present = headerValue !== undefined && headerValue.trim() !== '';
     if (!cfg.signingRequired && !present) return;
-    // A key that requires signing but has no secret can never verify: fail closed.
-    const secret = cfg.signingSecretRef ? await getSecret(cfg.signingSecretRef) : null;
-    if (secret === null) {
+    let secret: string | null = null;
+    try {
+      secret = cfg.signingSecretRef ? await getSecret(cfg.signingSecretRef) : null;
+    } catch (err) {
+      // A dangling ref or key-vault failure: a required key fails closed with 401, not 500.
+      log('error', 'failed to load api key signing secret', {
+        requestId: req.id,
+        err: String(err),
+      });
       if (cfg.signingRequired) throw signatureInvalid();
-      return; // optional signing and nothing to verify against
+      throw err;
+    }
+    if (secret === null) {
+      // No secret configured: a required key can never verify, so fail closed.
+      if (cfg.signingRequired) throw signatureInvalid();
+      return; // signing optional and nothing to verify against
     }
     const result = verifyRequestSignature(
       headerValue,

@@ -31,15 +31,24 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   // JSON only: Fastify's default text/plain parser would deliver bodies that signing never covers.
   app.removeContentTypeParser('text/plain');
   // Keep the raw bytes for request-signature verification, then parse as JSON.
+  // Parsing uses Fastify's own secure parser: `__proto__` / `constructor.prototype` keys are rejected.
+  const secureJson = app.getDefaultJsonParser('error', 'error');
   app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
     const buf = body as Buffer;
     req.rawBody = buf;
     if (buf.length === 0) return done(null, undefined);
-    try {
-      done(null, JSON.parse(buf.toString('utf8')));
-    } catch {
-      done(Object.assign(new Error('Invalid JSON body'), { statusCode: 400 }), undefined);
-    }
+    secureJson(req, buf.toString('utf8'), (err, parsed) => {
+      if (err) {
+        return done(
+          Object.assign(new Error('Invalid JSON body'), {
+            code: 'FST_ERR_CTP_INVALID_JSON_BODY',
+            statusCode: 400,
+          }),
+          undefined,
+        );
+      }
+      done(null, parsed);
+    });
   });
 
   app.addHook('onRequest', async (request, reply) => {
@@ -78,12 +87,23 @@ export async function buildApp(opts: BuildAppOptions = {}) {
       });
     }
     // Fastify-native client errors (bad JSON, 413, 415, ...) keep their status.
-    const status = (error as { statusCode?: number }).statusCode;
-    if (status !== undefined && status >= 400 && status < 500) {
+    const { statusCode: status, code } = error as { statusCode?: number; code?: unknown };
+    if (
+      typeof code === 'string' &&
+      code.startsWith('FST_') &&
+      status !== undefined &&
+      status >= 400 &&
+      status < 500
+    ) {
+      const messages: Record<number, string> = {
+        400: 'Invalid request',
+        413: 'Request body too large',
+        415: 'Unsupported content type',
+      };
       return reply.status(status).send({
         error: {
           code: 'VALIDATION_ERROR',
-          message: status === 400 ? 'Invalid request' : (error as Error).message,
+          message: messages[status] ?? 'Invalid request',
           requestId,
         },
       });

@@ -25,9 +25,11 @@ function parseHeader(header: string): { t: number; v1: string[] } | null {
     const key = item.slice(0, eq).trim();
     const value = item.slice(eq + 1).trim();
     if (key === 't') {
-      if (t !== undefined || !/^\d{1,12}$/.test(value)) return null; // duplicate or non-numeric t
+      // Duplicate, non-numeric or zero-padded t (canonical form only).
+      if (t !== undefined || !/^(0|[1-9]\d{0,11})$/.test(value)) return null;
       t = Number(value);
     } else if (key === 'v1') {
+      if (!/^[0-9a-f]{64}$/.test(value)) return null; // lowercase hex sha256 only
       v1.push(value);
     } // unknown keys (future schemes) are ignored
   }

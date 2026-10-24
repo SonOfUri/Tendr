@@ -39,6 +39,12 @@ describe('verifyRequestSignature', () => {
     expect(verifyRequestSignature(`t=x,v1=${hmac(SECRET, now, body)}`, buf, SECRET, now)).toBe(
       'invalid',
     );
+    const good = hmac(SECRET, now, body);
+    expect(verifyRequestSignature(`t=${now},v1=${good}zz`, buf, SECRET, now)).toBe('invalid');
+    expect(verifyRequestSignature(`t=${now},v1=${good.toUpperCase()}`, buf, SECRET, now)).toBe(
+      'invalid',
+    );
+    expect(verifyRequestSignature(`t=0${now},v1=${good}`, buf, SECRET, now)).toBe('invalid');
     expect(
       verifyRequestSignature(`t=${now},t=${now},v1=${hmac(SECRET, now, body)}`, buf, SECRET, now),
     ).toBe('invalid');
@@ -51,6 +57,8 @@ describe('request signing (gateway)', () => {
   let optional: string;
   let unsigned: string;
   let publishable: string;
+  let noSecret: string;
+  let dangling: string;
 
   beforeAll(async () => {
     await resetDb();
@@ -61,6 +69,16 @@ describe('request signing (gateway)', () => {
     optional = (await createApiKey(m.id, { livemode: false, signingSecret: SECRET })).raw;
     unsigned = (await createApiKey(m.id, { livemode: false })).raw;
     publishable = (await createApiKey(m.id, { livemode: false, kind: 'publishable' })).raw;
+    noSecret = (await createApiKey(m.id, { livemode: false, signingRequired: true })).raw;
+    const dk = await createApiKey(m.id, {
+      livemode: false,
+      signingRequired: true,
+      signingSecret: SECRET,
+    });
+    dangling = dk.raw;
+    await prisma.$executeRawUnsafe('SET session_replication_role = replica');
+    await prisma.$executeRawUnsafe(`DELETE FROM secrets WHERE id = '${dk.record.signingSecretRef}'`);
+    await prisma.$executeRawUnsafe('SET session_replication_role = DEFAULT');
     app = await buildApp({
       extraRoutes: (a) => {
         a.post(
@@ -166,6 +184,22 @@ describe('request signing (gateway)', () => {
     });
     expect(media.statusCode).toBe(415);
     expect(media.json().error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('rejects prototype-poisoning bodies with 400', async () => {
+    for (const body of ['{"__proto__":{"polluted":1}}', '{"constructor":{"prototype":{"p":1}}}']) {
+      const res = await post(unsigned, body);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('VALIDATION_ERROR');
+    }
+  });
+
+  it('fails closed with 401 for a required key with no secret or a dangling secret', async () => {
+    for (const key of [noSecret, dangling]) {
+      const res = await post(key, '{}', sign(SECRET, nowSec(), '{}'));
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error.code).toBe('SIGNATURE_INVALID');
+    }
   });
 
   it('treats an empty JSON body as no body', async () => {
