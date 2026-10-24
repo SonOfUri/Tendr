@@ -1,3 +1,12 @@
+// Tendr foundation schema — see docs/superpowers/specs/2026-10-23-foundation-design.md §1.
+//
+// Rules:
+// - ids are Stripe-style `<prefix>_<ULID>` strings supplied by application code (no @default).
+// - every FK between merchant-owned tables is composite: (parent_id, merchant_id[, livemode]),
+//   so the database rejects cross-merchant and cross-mode links. Parents therefore carry
+//   @@unique([id, merchantId]) / @@unique([id, merchantId, livemode]).
+// - `events` is append-only (trigger in the foundation migration).
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,166 +16,793 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Merchant {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// ─── Enums ──────────────────────────────────────────────────────────────────
 
-  apiKeys          ApiKey[]
-  checkoutSessions CheckoutSession[]
-  payments         Payment[]
-  webhookEndpoints WebhookEndpoint[]
-  auditEvents      AuditEvent[]
+enum MerchantKind {
+  merchant
+  integrator
+
+  @@map("merchant_kind")
+}
+
+enum MerchantStatus {
+  active
+  suspended
+  closed
+
+  @@map("merchant_status")
+}
+
+enum MerchantUserRole {
+  owner
+  admin
+  finance
+  viewer
+
+  @@map("merchant_user_role")
+}
+
+enum ApiKeyKind {
+  secret
+  publishable
+
+  @@map("api_key_kind")
+}
+
+enum AccountKeyKind {
+  passkey
+  fn_call
+
+  @@map("account_key_kind")
+}
+
+enum PayoutMode {
+  wallet
+  intents
+
+  @@map("payout_mode")
+}
+
+enum AllowlistStatus {
+  pending
+  active
+  revoked
+
+  @@map("allowlist_status")
+}
+
+enum PaymentLinkStatus {
+  active
+  inactive
+  expired
+
+  @@map("payment_link_status")
+}
+
+enum GasSponsor {
+  default
+  merchant
+  buyer
+
+  @@map("gas_sponsor")
+}
+
+enum ResolvedGasSponsor {
+  merchant
+  buyer
+
+  @@map("resolved_gas_sponsor")
+}
+
+enum AmountMode {
+  EXACT_IN
+  EXACT_OUT
+
+  @@map("amount_mode")
+}
+
+enum Delivery {
+  WEBHOOK
+  HOOK
+
+  @@map("delivery")
+}
+
+enum FeePayer {
+  merchant
+  payer
+
+  @@map("fee_payer")
+}
+
+enum SessionStatus {
+  PENDING_DEPOSIT
+  PROCESSING
+  SETTLED
+  REFUNDED
+  EXPIRED
+  LATE_DEPOSIT
+
+  @@map("session_status")
+}
+
+enum PaymentStatus {
+  DETECTED
+  PROCESSING
+  SETTLED
+  REFUNDING
+  REFUNDED
+
+  @@map("payment_status")
+}
+
+enum RefundReason {
+  expired
+  late
+  underpaid
+  failed
+
+  @@map("refund_reason")
+}
+
+enum ExternalTxStatus {
+  pending
+  submitted
+  confirmed
+  failed
+
+  @@map("external_tx_status")
+}
+
+enum SponsorshipMethod {
+  eip3009
+  permit
+  paymaster
+  paymaster_verifying
+  paymaster_erc20
+  energy
+  fee_payer
+
+  @@map("sponsorship_method")
+}
+
+enum Sponsor {
+  merchant
+  tendr
+
+  @@map("sponsor")
+}
+
+enum ScreeningDecision {
+  allow
+  block
+
+  @@map("screening_decision")
+}
+
+enum RevenueSource {
+  app_fee
+  spread
+
+  @@map("revenue_source")
+}
+
+enum ThemeStatus {
+  draft
+  published
+
+  @@map("theme_status")
+}
+
+enum ThemeMode {
+  light
+  dark
+  auto
+
+  @@map("theme_mode")
+}
+
+enum ThemeLayout {
+  modal
+  inline
+  page
+
+  @@map("theme_layout")
+}
+
+enum ThemeAssetKind {
+  logo
+  image
+  font
+
+  @@map("theme_asset_kind")
+}
+
+enum IdempotencyStatus {
+  in_progress
+  completed
+
+  @@map("idempotency_status")
+}
+
+// ─── Merchant domain ────────────────────────────────────────────────────────
+
+model Merchant {
+  id            String         @id
+  name          String
+  slug          String         @unique
+  kind          MerchantKind   @default(merchant)
+  aupAcceptedAt DateTime?      @map("aup_accepted_at")
+  status        MerchantStatus @default(active)
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  users             MerchantUser[]
+  apiKeys           ApiKey[]
+  accountKeys       AccountKey[]
+  settlementConfigs SettlementConfig[]
+  payoutAllowlist   PayoutAllowlistEntry[]
+  webhookEndpoints  WebhookEndpoint[]
+  gasPolicies       GasPolicy[]
+  paymentLinks      PaymentLink[]
+  sessions          Session[]
+  quotes            Quote[]
+  payments          Payment[]
+  refunds           Refund[]
+  webhookDeliveries WebhookDelivery[]
+  hookCalls         HookCall[]
+  gasSponsorships   GasSponsorship[]
+  screeningResults  ScreeningResult[]
+  events            Event[]
+  feePlans          FeePlan[]
+  revenueEntries    RevenueEntry[]
+  checkoutThemes    CheckoutTheme[]
+  themeAssets       ThemeAsset[]
+  idempotencyKeys   IdempotencyKey[]
+
+  @@map("merchants")
+}
+
+model MerchantUser {
+  id           String           @id
+  merchantId   String           @map("merchant_id")
+  email        String
+  role         MerchantUserRole
+  authProvider String?          @map("auth_provider")
+  mfaEnabled   Boolean          @default(false) @map("mfa_enabled")
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@unique([merchantId, email])
+  @@map("merchant_users")
 }
 
 model ApiKey {
-  id         String    @id @default(cuid())
-  merchantId String
-  name       String
-  keyPrefix  String
-  keyHash    String    @unique
-  lastUsedAt DateTime?
-  revokedAt  DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id               String     @id
+  merchantId       String     @map("merchant_id")
+  livemode         Boolean
+  name             String
+  kind             ApiKeyKind
+  keyPrefix        String     @map("key_prefix")
+  keyHash          String     @unique @map("key_hash")
+  scopes           String[]
+  signingSecretRef String?    @map("signing_secret_ref")
+  signingRequired  Boolean    @default(false) @map("signing_required")
+  lastUsedAt       DateTime?  @map("last_used_at")
+  revokedAt        DateTime?  @map("revoked_at")
+  createdAt        DateTime   @default(now()) @map("created_at")
+  updatedAt        DateTime   @updatedAt @map("updated_at")
+
+  merchant      Merchant @relation(fields: [merchantId], references: [id])
+  signingSecret Secret?  @relation(fields: [signingSecretRef], references: [id], onDelete: Restrict)
+
+  @@index([merchantId])
+  @@map("api_keys")
+}
+
+model AccountKey {
+  id            String         @id
+  merchantId    String         @map("merchant_id")
+  nearAccountId String         @map("near_account_id")
+  publicKey     String         @map("public_key")
+  kind          AccountKeyKind
+  revokedAt     DateTime?      @map("revoked_at")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
 
   @@index([merchantId])
-  @@index([keyPrefix])
+  @@map("account_keys")
 }
 
-model CheckoutSession {
-  id                String   @id @default(cuid())
-  merchantId        String
-  merchantReference String
-  amount            Decimal  @db.Decimal(28, 8)
-  currency          String
-  description       String?
-  successUrl        String
-  cancelUrl         String
-  mode              String
-  status            String
-  metadata          Json     @default("{}")
-  expiresAt         DateTime
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+// ─── Configuration ──────────────────────────────────────────────────────────
 
-  merchant Merchant  @relation(fields: [merchantId], references: [id])
-  payment  Payment?
-  quotes   Quote[]
+model SettlementConfig {
+  id            String     @id
+  merchantId    String     @map("merchant_id")
+  livemode      Boolean
+  destAssetId   String     @map("dest_asset_id")
+  destChain     String     @map("dest_chain")
+  payoutMode    PayoutMode @map("payout_mode")
+  payoutAddress String?    @map("payout_address")
+  nearAccount   String?    @map("near_account")
+  isDefault     Boolean    @default(false) @map("is_default")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
 
-  @@unique([merchantId, merchantReference])
-  @@index([status])
-  @@index([expiresAt])
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@index([merchantId])
+  @@map("settlement_configs")
 }
 
-model Payment {
-  id                String    @id @default(cuid())
-  sessionId         String    @unique
-  merchantId        String
-  status            String
-  amount            Decimal   @db.Decimal(28, 8)
-  currency          String
-  mode              String
-  provider          String
-  providerReference String?
-  failureReason     String?
-  settledAt         DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+model PayoutAllowlistEntry {
+  id         String          @id
+  merchantId String          @map("merchant_id")
+  livemode   Boolean
+  chain      String
+  address    String
+  status     AllowlistStatus @default(pending)
+  activeFrom DateTime        @map("active_from")
+  createdAt  DateTime        @default(now()) @map("created_at")
+  updatedAt  DateTime        @updatedAt @map("updated_at")
 
-  session  CheckoutSession @relation(fields: [sessionId], references: [id])
-  merchant Merchant        @relation(fields: [merchantId], references: [id])
+  merchant Merchant @relation(fields: [merchantId], references: [id])
 
-  @@index([merchantId, createdAt])
-  @@index([status])
-}
-
-model Quote {
-  id                 String   @id @default(cuid())
-  sessionId          String
-  sourceAsset        String
-  sourceNetwork      String
-  destinationAsset   String
-  destinationNetwork String
-  sourceAmount       Decimal  @db.Decimal(28, 8)
-  destinationAmount  Decimal  @db.Decimal(28, 8)
-  expiresAt          DateTime
-  provider           String
-  createdAt          DateTime @default(now())
-
-  session CheckoutSession @relation(fields: [sessionId], references: [id])
-
-  @@index([sessionId])
-  @@index([expiresAt])
+  @@unique([merchantId, livemode, chain, address])
+  @@map("payout_allowlist")
 }
 
 model WebhookEndpoint {
-  id            String    @id @default(cuid())
-  merchantId    String
-  url           String
-  description   String?
-  secretHash    String
-  secretPreview String
-  enabled       Boolean   @default(true)
-  deletedAt     DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id         String   @id
+  merchantId String   @map("merchant_id")
+  livemode   Boolean
+  url        String
+  secretRef  String   @map("secret_ref")
+  events     String[]
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
-  merchant  Merchant          @relation(fields: [merchantId], references: [id])
+  merchant   Merchant          @relation(fields: [merchantId], references: [id])
+  secret     Secret            @relation(fields: [secretRef], references: [id])
   deliveries WebhookDelivery[]
 
+  @@unique([id, merchantId, livemode])
   @@index([merchantId])
+  @@map("webhook_endpoints")
 }
+
+model GasPolicy {
+  id               String   @id
+  merchantId       String   @map("merchant_id")
+  livemode         Boolean
+  enabled          Boolean  @default(false)
+  perPaymentCapUsd Decimal  @map("per_payment_cap_usd") @db.Decimal(18, 6)
+  monthlyBudgetUsd Decimal  @map("monthly_budget_usd") @db.Decimal(18, 6)
+  minOrderUsd      Decimal  @map("min_order_usd") @db.Decimal(18, 6)
+  chains           String[]
+  tokens           String[]
+  firstTimeOnly    Boolean  @default(false) @map("first_time_only")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@index([merchantId])
+  @@map("gas_policies")
+}
+
+// ─── Payments core ──────────────────────────────────────────────────────────
+
+model PaymentLink {
+  id             String            @id
+  merchantId     String            @map("merchant_id")
+  livemode       Boolean
+  themeId        String?           @map("theme_id")
+  slug           String
+  title          String
+  amount         Decimal?          @db.Decimal(38, 18)
+  amountCurrency String            @map("amount_currency")
+  openAmount     Boolean           @default(false) @map("open_amount")
+  destAsset      String            @map("dest_asset")
+  destChain      String            @map("dest_chain")
+  gasSponsor     GasSponsor        @default(default) @map("gas_sponsor")
+  gasMaxUsd      Decimal?          @map("gas_max_usd") @db.Decimal(18, 6)
+  maxUses        Int?              @map("max_uses")
+  useCount       Int               @default(0) @map("use_count")
+  expiresAt      DateTime?         @map("expires_at")
+  status         PaymentLinkStatus @default(active)
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  merchant Merchant       @relation(fields: [merchantId], references: [id])
+  theme    CheckoutTheme? @relation(fields: [themeId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
+  sessions Session[]
+
+  @@unique([id, merchantId, livemode])
+  @@unique([merchantId, livemode, slug])
+  @@map("payment_links")
+}
+
+model Session {
+  id               String             @id
+  merchantId       String             @map("merchant_id")
+  livemode         Boolean
+  themeId          String?            @map("theme_id")
+  paymentLinkId    String?            @map("payment_link_id")
+  externalRef      String?            @map("external_ref")
+  amountMode       AmountMode         @map("amount_mode")
+  amount           Decimal            @db.Decimal(38, 18)
+  amountCurrency   String             @map("amount_currency")
+  destAsset        String             @map("dest_asset")
+  destChain        String             @map("dest_chain")
+  recipient        String
+  beneficiary      String?
+  delivery         Delivery
+  hookData         Json?              @map("hook_data")
+  metadata         Json               @default("{}")
+  feeBps           Int                @map("fee_bps")
+  feePayer         FeePayer           @map("fee_payer")
+  gasSponsor       ResolvedGasSponsor @map("gas_sponsor")
+  gasMaxUsd        Decimal?           @map("gas_max_usd") @db.Decimal(18, 6)
+  status           SessionStatus      @default(PENDING_DEPOSIT)
+  expiresAt        DateTime           @map("expires_at")
+  clientSecretHash String             @unique @map("client_secret_hash")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  merchant          Merchant          @relation(fields: [merchantId], references: [id])
+  theme             CheckoutTheme?    @relation(fields: [themeId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
+  paymentLink       PaymentLink?      @relation(fields: [paymentLinkId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  quotes            Quote[]
+  payments          Payment[]
+  webhookDeliveries WebhookDelivery[]
+  hookCalls         HookCall[]
+  gasSponsorships   GasSponsorship[]
+  screeningResults  ScreeningResult[]
+
+  @@unique([id, merchantId, livemode])
+  @@unique([merchantId, livemode, externalRef])
+  @@index([status, expiresAt])
+  @@map("sessions")
+}
+
+model Quote {
+  id               String   @id
+  merchantId       String   @map("merchant_id")
+  livemode         Boolean
+  sessionId        String   @map("session_id")
+  originAssetId    String   @map("origin_asset_id")
+  depositAddress   String   @map("deposit_address")
+  amountIn         Decimal  @map("amount_in") @db.Decimal(78, 0)
+  amountOut        Decimal  @map("amount_out") @db.Decimal(78, 0)
+  refundTo         String   @map("refund_to")
+  deadline         DateTime
+  oneclickQuoteRef String?  @map("oneclick_quote_ref")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  merchant Merchant  @relation(fields: [merchantId], references: [id])
+  session  Session   @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  payments Payment[]
+
+  @@unique([id, merchantId, livemode])
+  @@unique([livemode, depositAddress])
+  @@index([merchantId])
+  @@index([sessionId])
+  @@map("quotes")
+}
+
+model Payment {
+  id             String        @id
+  merchantId     String        @map("merchant_id")
+  livemode       Boolean
+  sessionId      String        @map("session_id")
+  quoteId        String        @map("quote_id")
+  originTxHash   String?       @map("origin_tx_hash")
+  amountReceived Decimal       @map("amount_received") @db.Decimal(78, 0)
+  settleTx       String?       @map("settle_tx")
+  payoutTx       String?       @map("payout_tx")
+  feeAmount      Decimal?      @map("fee_amount") @db.Decimal(78, 0)
+  networkFee     Decimal?      @map("network_fee") @db.Decimal(78, 0)
+  gasSponsored   Boolean       @default(false) @map("gas_sponsored")
+  status         PaymentStatus @default(DETECTED)
+  isLate         Boolean       @default(false) @map("is_late")
+  settledAt      DateTime?     @map("settled_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  merchant                 Merchant         @relation(fields: [merchantId], references: [id])
+  session                  Session          @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  quote                    Quote            @relation(fields: [quoteId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  refunds                  Refund[]
+  revenueEntries           RevenueEntry[]
+  recoveredGasSponsorships GasSponsorship[]
+
+  @@unique([id, merchantId, livemode])
+  @@index([merchantId])
+  @@index([sessionId])
+  @@map("payments")
+}
+
+model Refund {
+  id           String           @id
+  merchantId   String           @map("merchant_id")
+  livemode     Boolean
+  paymentId    String           @map("payment_id")
+  reason       RefundReason
+  refundTxHash String?          @map("refund_tx_hash")
+  status       ExternalTxStatus @default(pending)
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+  payment  Payment  @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([merchantId])
+  @@index([paymentId])
+  @@map("refunds")
+}
+
+// ─── Delivery, gas & audit ──────────────────────────────────────────────────
 
 model WebhookDelivery {
-  id         String    @id @default(cuid())
-  endpointId String
-  eventId    String
-  eventType  String
-  payload    Json
-  status     String
-  attempts   Int       @default(0)
-  nextRetryAt DateTime?
-  lastError  String?
-  deliveredAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id             String    @id
+  merchantId     String    @map("merchant_id")
+  livemode       Boolean
+  endpointId     String    @map("endpoint_id")
+  sessionId      String?   @map("session_id")
+  eventId        String    @map("event_id")
+  eventType      String    @map("event_type")
+  idempotencyKey String    @unique @map("idempotency_key")
+  attempt        Int       @default(0)
+  statusCode     Int?      @map("status_code")
+  nextRetryAt    DateTime? @map("next_retry_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id])
+  merchant Merchant        @relation(fields: [merchantId], references: [id])
+  endpoint WebhookEndpoint @relation(fields: [endpointId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  session  Session?        @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  event    Event           @relation(fields: [eventId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
 
-  @@unique([endpointId, eventId])
-  @@index([status, nextRetryAt])
+  @@index([merchantId])
+  @@index([endpointId])
+  @@index([eventId])
+  @@map("webhook_deliveries")
 }
+
+model HookCall {
+  id             String           @id
+  merchantId     String           @map("merchant_id")
+  livemode       Boolean
+  sessionId      String           @map("session_id")
+  chain          String
+  targetContract String           @map("target_contract")
+  txHash         String?          @map("tx_hash")
+  attempt        Int              @default(0)
+  status         ExternalTxStatus @default(pending)
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+  session  Session  @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([merchantId])
+  @@index([sessionId])
+  @@map("hook_calls")
+}
+
+model GasSponsorship {
+  id                     String            @id
+  merchantId             String            @map("merchant_id")
+  livemode               Boolean
+  sessionId              String            @map("session_id")
+  chain                  String
+  txHash                 String?           @map("tx_hash")
+  method                 SponsorshipMethod
+  provider               String
+  userOpHash             String?           @map("user_op_hash")
+  sponsor                Sponsor
+  gasUsed                Decimal?          @map("gas_used") @db.Decimal(78, 0)
+  costUsd                Decimal?          @map("cost_usd") @db.Decimal(18, 6)
+  recoveredFromPaymentId String?           @map("recovered_from_payment_id")
+  status                 ExternalTxStatus  @default(pending)
+  createdAt              DateTime          @default(now()) @map("created_at")
+  updatedAt              DateTime          @updatedAt @map("updated_at")
+
+  merchant             Merchant @relation(fields: [merchantId], references: [id])
+  session              Session  @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  recoveredFromPayment Payment? @relation(fields: [recoveredFromPaymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([merchantId])
+  @@index([sessionId])
+  @@map("gas_sponsorships")
+}
+
+model ScreeningResult {
+  id         String            @id
+  merchantId String            @map("merchant_id")
+  livemode   Boolean
+  sessionId  String            @map("session_id")
+  address    String
+  chain      String
+  provider   String
+  riskScore  Decimal           @map("risk_score") @db.Decimal(5, 2)
+  decision   ScreeningDecision
+  createdAt  DateTime          @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+  session  Session  @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([merchantId])
+  @@index([sessionId])
+  @@map("screening_results")
+}
+
+/// Append-only (trigger `events_no_update`). merchant_id / livemode are null for system events.
+model Event {
+  id            String   @id
+  merchantId    String?  @map("merchant_id")
+  livemode      Boolean?
+  aggregateType String   @map("aggregate_type")
+  aggregateId   String   @map("aggregate_id")
+  type          String
+  payload       Json
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  merchant   Merchant?         @relation(fields: [merchantId], references: [id], onDelete: Restrict)
+  deliveries WebhookDelivery[]
+  outbox     EventOutbox?
+
+  @@unique([id, merchantId, livemode])
+  @@index([merchantId])
+  @@index([aggregateType, aggregateId])
+  @@index([createdAt])
+  @@map("events")
+}
+
+// ─── Revenue & branding ─────────────────────────────────────────────────────
+
+model FeePlan {
+  id              String   @id
+  merchantId      String   @map("merchant_id")
+  feeBps          Int      @map("fee_bps")
+  defaultFeePayer FeePayer @map("default_fee_payer")
+  volumeTiers     Json     @map("volume_tiers")
+  effectiveFrom   DateTime @map("effective_from")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@index([merchantId])
+  @@map("fee_plans")
+}
+
+model RevenueEntry {
+  id         String        @id
+  merchantId String        @map("merchant_id")
+  livemode   Boolean
+  paymentId  String        @map("payment_id")
+  source     RevenueSource
+  assetId    String        @map("asset_id")
+  amount     Decimal       @db.Decimal(78, 0)
+  txHash     String?       @map("tx_hash")
+  createdAt  DateTime      @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+  payment  Payment  @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([merchantId])
+  @@index([paymentId])
+  @@map("revenue_entries")
+}
+
+model CheckoutTheme {
+  id               String      @id
+  merchantId       String      @map("merchant_id")
+  name             String
+  isDefault        Boolean     @default(false) @map("is_default")
+  version          Int         @default(1)
+  status           ThemeStatus @default(draft)
+  displayName      String      @map("display_name")
+  logoUrl          String?     @map("logo_url")
+  accent           String
+  background       String
+  text             String
+  mode             ThemeMode   @default(auto)
+  font             String
+  cornerRadius     Int         @map("corner_radius")
+  layout           ThemeLayout
+  blocks           Json
+  schemaVersion    Int         @map("schema_version")
+  customCss        String?     @map("custom_css")
+  cssHash          String?     @map("css_hash")
+  cssValidation    Json?       @map("css_validation")
+  buttonLabel      String?     @map("button_label")
+  successMessage   String?     @map("success_message")
+  supportUrl       String?     @map("support_url")
+  termsUrl         String?     @map("terms_url")
+  tokenPreferences Json        @map("token_preferences")
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
+
+  merchant     Merchant      @relation(fields: [merchantId], references: [id])
+  assets       ThemeAsset[]
+  paymentLinks PaymentLink[]
+  sessions     Session[]
+
+  @@unique([id, merchantId])
+  @@index([merchantId])
+  @@map("checkout_themes")
+}
+
+model ThemeAsset {
+  id         String         @id
+  merchantId String         @map("merchant_id")
+  themeId    String         @map("theme_id")
+  kind       ThemeAssetKind
+  url        String
+  mime       String
+  sizeBytes  Int            @map("size_bytes")
+  checksum   String
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  merchant Merchant      @relation(fields: [merchantId], references: [id])
+  theme    CheckoutTheme @relation(fields: [themeId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([merchantId])
+  @@index([themeId])
+  @@map("theme_assets")
+}
+
+// ─── Infrastructure ─────────────────────────────────────────────────────────
 
 model IdempotencyKey {
-  id           String   @id @default(cuid())
-  merchantId   String
+  id           String            @id
+  merchantId   String            @map("merchant_id")
+  livemode     Boolean
   key          String
-  requestHash  String
-  responseCode Int
-  responseBody Json
-  createdAt    DateTime @default(now())
+  requestHash  String            @map("request_hash")
+  status       IdempotencyStatus @default(in_progress)
+  lockedAt     DateTime          @map("locked_at")
+  responseCode Int?              @map("response_code")
+  responseBody Json?             @map("response_body")
+  expiresAt    DateTime          @map("expires_at")
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
 
-  @@unique([merchantId, key])
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@unique([merchantId, livemode, key])
+  @@map("idempotency_keys")
 }
 
-model AuditEvent {
-  id         String   @id @default(cuid())
-  merchantId String?
-  entityType String
-  entityId   String
-  action     String
-  fromStatus String?
-  toStatus   String?
-  metadata   Json     @default("{}")
-  createdAt  DateTime @default(now())
+/// KMS-envelope-encrypted secret (spec §5). `ciphertext` is the envelope JSON.
+model Secret {
+  id         String   @id
+  purpose    String
+  ciphertext String
+  kek        String
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
-  merchant Merchant? @relation(fields: [merchantId], references: [id])
+  apiKeys          ApiKey[]
+  webhookEndpoints WebhookEndpoint[]
 
-  @@index([entityType, entityId])
-  @@index([createdAt])
+  @@map("secrets")
+}
+
+model EventOutbox {
+  id        String   @id
+  eventId   String   @unique @map("event_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("event_outbox")
 }
