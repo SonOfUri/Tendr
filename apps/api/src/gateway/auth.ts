@@ -5,7 +5,8 @@
 // allowed principal kinds and scope, and attaches a client scoped to the principal's
 // merchant + mode as `req.db`.
 //
-// Credential lookups are infrastructure work and use the unscoped `prisma`.
+// Credential lookups are infrastructure work and use the unscoped `prisma`. A credential of a
+// merchant that is not `active` (suspended or closed) is treated exactly like an invalid one.
 import { ScopeValues, type Scope } from '@tendr/contracts';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
@@ -64,8 +65,11 @@ type Resolved = { principal: Principal; signing?: SigningConfig };
 async function resolveApiKey(raw: string): Promise<Resolved | null> {
   const expected = KEY_PREFIXES.find((p) => raw.startsWith(p.prefix));
   if (!expected) return null;
-  const key = await prisma.apiKey.findUnique({ where: { keyHash: sha256(raw) } });
-  if (!key || key.revokedAt) return null;
+  const key = await prisma.apiKey.findUnique({
+    where: { keyHash: sha256(raw) },
+    include: { merchant: { select: { status: true } } },
+  });
+  if (!key || key.revokedAt || key.merchant.status !== 'active') return null;
   // The prefix states kind and mode; both must agree with the stored row.
   if (key.kind !== expected.kind || key.livemode !== expected.livemode) return null;
 
@@ -84,9 +88,16 @@ async function resolveSessionSecret(raw: string): Promise<Resolved | null> {
   if (!match) return null;
   const session = await prisma.session.findUnique({
     where: { id: match[1] },
-    select: { id: true, merchantId: true, livemode: true, clientSecretHash: true },
+    select: {
+      id: true,
+      merchantId: true,
+      livemode: true,
+      clientSecretHash: true,
+      merchant: { select: { status: true } },
+    },
   });
   if (!session || !safeEqualHex(sha256(raw), session.clientSecretHash)) return null;
+  if (session.merchant.status !== 'active') return null;
   return {
     principal: {
       kind: 'session_client',

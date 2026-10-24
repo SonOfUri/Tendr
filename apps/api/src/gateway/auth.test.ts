@@ -223,6 +223,32 @@ describe('gateway auth', () => {
     }
   });
 
+  it.each(['suspended', 'closed'] as const)(
+    'credentials of a %s merchant are 401 like an invalid key',
+    async (status) => {
+      const secret = (await createApiKey(m.id, { livemode: false })).raw;
+      const publishable = (await createApiKey(m.id, { livemode: true, kind: 'publishable' })).raw;
+      const session = (await createSessionWithSecret(m.id, false)).raw;
+      const invalid = await get('/v1/ping', `tdr_test_${randomBytes(24).toString('hex')}`);
+      // Sanity: every credential works while the merchant is active.
+      expect((await get('/v1/ping', secret)).statusCode).toBe(200);
+      expect((await get('/v1/ping', publishable)).statusCode).toBe(200);
+      expect((await get('/v1/test/session-client', session)).statusCode).toBe(200);
+
+      await prisma.merchant.update({ where: { id: m.id }, data: { status } });
+      for (const res of [
+        await get('/v1/ping', secret),
+        await get('/v1/ping', publishable),
+        await get('/v1/test/session-client', session),
+      ]) {
+        expect(res.statusCode).toBe(401);
+        const { requestId: _r, ...error } = res.json().error;
+        const { requestId: _i, ...invalidError } = invalid.json().error;
+        expect(error).toEqual(invalidError);
+      }
+    },
+  );
+
   it('expired sessions still authenticate their client secret', async () => {
     const own = await createSessionWithSecret(m.id, false);
     await prisma.session.update({
