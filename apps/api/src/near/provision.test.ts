@@ -286,3 +286,28 @@ describe('CappedNearClient reservation release', () => {
     expect(await fundingSpentLast24h(prisma, false)).toBe(NEAR);
   });
 });
+
+describe('CappedNearClient.callAsTestnetAdmin', () => {
+  it('is refused for livemode=true before reaching the inner client', async () => {
+    const liveScope = {
+      livemode: true,
+      parentAccountId: 'tendr.near',
+      intentsContractId: 'intents.near',
+    };
+    const inner = new FakeNearClient(liveScope);
+    const capped = new CappedNearClient(inner, liveScope, {
+      perAccountYocto: NEAR,
+      dailyYocto: NEAR,
+    });
+    await expect(
+      capped.callAsTestnetAdmin('shop.tendr.near', 'admin_sync_signers', {}),
+    ).rejects.toThrow(/testnet/);
+    expect(inner.calls).toHaveLength(0);
+  });
+
+  it('delegates on testnet', async () => {
+    const { inner, capped } = setup();
+    await capped.callAsTestnetAdmin('shop.tendr.testnet', 'admin_sync_signers', {});
+    expect(inner.callsTo('admin_sync_signers')).toHaveLength(1);
+  });
+});

@@ -441,3 +441,40 @@ describe('RpcNearClient nonces under concurrency', () => {
     expect(new Set(nonces).size).toBe(nonces.length);
   });
 });
+
+describe('RpcNearClient.callAsTestnetAdmin', () => {
+  it('signs with funding-near from the test parent account', async () => {
+    const t = new ScriptedTransport();
+    const res = await client(t).callAsTestnetAdmin('shop.tendr.testnet', 'admin_sync_signers', {
+      signers: [],
+      threshold: 1,
+    });
+    expect(res.status).toBe('success');
+    const tx = signedFrom(t);
+    const fundingPk = (await kv.publicKey('funding-near')).raw;
+    expect(tx.signerId).toBe('tendr.testnet');
+    expect(tx.receiverId).toBe('shop.tendr.testnet');
+    expect(Buffer.from(tx.publicKey)).toEqual(Buffer.from(fundingPk));
+    expect(tx.actions).toHaveLength(1);
+    expect(tx.actions[0]).toMatchObject({
+      kind: 'functionCall',
+      fields: { methodName: 'admin_sync_signers', deposit: 0n },
+    });
+  });
+
+  it('is never allowed on a live client', async () => {
+    const t = new ScriptedTransport();
+    await expect(
+      client(t, true).callAsTestnetAdmin('shop.tendr.near', 'admin_sync_signers', {}),
+    ).rejects.toThrow(/testnet/);
+    expect(t.requests).toHaveLength(0);
+  });
+
+  it('only targets direct sub-accounts of the test parent', async () => {
+    const t = new ScriptedTransport();
+    await expect(
+      client(t).callAsTestnetAdmin('intents-mock.other.testnet', 'admin_sync_signers', {}),
+    ).rejects.toThrow(/sub-account/);
+    expect(t.sent).toHaveLength(0);
+  });
+});

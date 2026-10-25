@@ -9,6 +9,7 @@ import { createRateLimiters, type RateLimitKind } from './gateway/rate-limit.js'
 import { closeClient, closeRedis, createRedis, getRedis, whenReady } from './lib/redis.js';
 import { AppError } from './lib/errors.js';
 import { log } from './lib/logger.js';
+import { accountRoutes } from './routes/accounts.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
 import { merchantRoutes } from './routes/merchants.js';
@@ -198,6 +199,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(merchantRoutes);
   await app.register(teamRoutes);
   await app.register(proposalRoutes);
+  await app.register(accountRoutes);
   opts.extraRoutes?.(app);
 
   return app;

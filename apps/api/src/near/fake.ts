@@ -10,13 +10,14 @@ import type {
   ProvisionParams,
   TxResult,
 } from './client.js';
-import { assertProvisionable, type ProvisionScope } from './provision.js';
+import { assertProvisionable, assertTestnetAdminCall, type ProvisionScope } from './provision.js';
 import { DEFAULT_CALL_GAS } from './tx.js';
 
 export type FakeCall =
   | {
       kind: 'call';
-      signer: 'relayer-accounts';
+      /** `funding-near` only for `callAsTestnetAdmin` (testnet). */
+      signer: 'relayer-accounts' | 'funding-near';
       contractId: string;
       method: string;
       args: object;
@@ -35,6 +36,11 @@ const key = (contractId: string, method: string): string => `${contractId}#${met
 export class FakeNearClient implements NearClient {
   readonly calls: FakeCall[] = [];
   readonly accounts = new Map<string, { init: InitConfigJson; balanceYocto: bigint }>();
+  /** The signer set of each provisioned account, as `get_config` reports it. */
+  private readonly signerState = new Map<
+    string,
+    { signers: InitConfigJson['signers']; threshold: number; epoch: bigint }
+  >();
   private readonly logs = new Map<string, Scripted<string[]>>();
   private readonly views = new Map<string, (args: object) => unknown>();
   private readonly keys = new Map<string, string[]>();
@@ -105,6 +111,36 @@ export class FakeNearClient implements NearClient {
     if (signer !== 'relayer-accounts') {
       throw new Error(`call() signs with relayer-accounts only, not ${String(signer)}`);
     }
+    return this.recordCall(signer, contractId, method, args, opts);
+  }
+
+  async callAsTestnetAdmin(
+    contractId: string,
+    method: string,
+    args: object,
+    opts: CallOptions = {},
+  ): Promise<TxResult> {
+    assertTestnetAdminCall(this.scope, contractId);
+    const result = await this.recordCall('funding-near', contractId, method, args, opts);
+    const state = this.signerState.get(contractId);
+    if (method === 'admin_sync_signers' && result.topLevelStatus === 'success' && state) {
+      const a = args as { signers: InitConfigJson['signers']; threshold: number };
+      this.signerState.set(contractId, {
+        signers: structuredClone(a.signers),
+        threshold: a.threshold,
+        epoch: state.epoch + 1n,
+      });
+    }
+    return result;
+  }
+
+  private async recordCall(
+    signer: 'relayer-accounts' | 'funding-near',
+    contractId: string,
+    method: string,
+    args: object,
+    opts: CallOptions,
+  ): Promise<TxResult> {
     this.calls.push({
       kind: 'call',
       signer,
@@ -153,6 +189,9 @@ export class FakeNearClient implements NearClient {
     this.maybeThrow('view');
     const k = key(contractId, method);
     const answer = this.views.get(k);
+    if (!answer && method === 'get_config' && this.accounts.has(contractId)) {
+      return this.configOf(contractId) as T;
+    }
     if (!answer) throw new Error(`FakeNearClient: no view scripted for ${k}`);
     return answer(args) as T;
   }
@@ -187,6 +226,11 @@ export class FakeNearClient implements NearClient {
       init: structuredClone(p.init),
       balanceYocto: p.initialBalanceYocto,
     });
+    this.signerState.set(p.accountId, {
+      signers: structuredClone(p.init.signers),
+      threshold: p.init.threshold,
+      epoch: 0n,
+    });
     return {
       txHash: fakeHash(),
       logs: [],
@@ -203,6 +247,23 @@ export class FakeNearClient implements NearClient {
       throw new Error(`FakeNearClient: account ${accountId} does not exist`);
     }
     return [];
+  }
+
+  /** The contract's `ConfigView` JSON for an account provisioned here. */
+  private configOf(accountId: string): object {
+    const { init } = this.accounts.get(accountId)!;
+    const state = this.signerState.get(accountId)!;
+    return {
+      signers: structuredClone(state.signers),
+      threshold: state.threshold,
+      signer_epoch: state.epoch.toString(),
+      origins: [...init.origins],
+      rp_id: init.rp_id,
+      recovery_key_set: init.recovery_key !== null,
+      recovery_key_epoch: '0',
+      intents_contract: init.intents_contract,
+      poa_suffix: init.poa_suffix ?? 'omft.near',
+    };
   }
 
   private maybeThrow(kind: Kind): void {

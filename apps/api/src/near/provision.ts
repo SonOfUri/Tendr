@@ -42,6 +42,23 @@ export function assertProvisionable(p: ProvisionParams, scope: ProvisionScope): 
   }
 }
 
+/**
+ * Guards `callAsTestnetAdmin`: only on a testnet client, and only to a direct sub-account of the
+ * test parent (a merchant test account, whose `testnet_admin` is that parent).
+ */
+export function assertTestnetAdminCall(scope: ProvisionScope, contractId: string): void {
+  if (scope.livemode) {
+    throw new Error('testnet admin calls are testnet only; a live client never makes them');
+  }
+  const suffix = `.${scope.parentAccountId}`;
+  const label = contractId.endsWith(suffix) ? contractId.slice(0, -suffix.length) : '';
+  if (!LABEL.test(label) || contractId.length > 64) {
+    throw new Error(
+      `account ${contractId} is not a direct sub-account of ${scope.parentAccountId}`,
+    );
+  }
+}
+
 export interface FundingCaps {
   perAccountYocto: bigint;
   dailyYocto: bigint;
@@ -114,6 +131,13 @@ export class CappedNearClient implements NearClient {
   call: NearClient['call'] = (...args) => this.inner.call(...args);
   view: NearClient['view'] = (...args) => this.inner.view(...args);
   accessKeys: NearClient['accessKeys'] = (...args) => this.inner.accessKeys(...args);
+
+  async callAsTestnetAdmin(
+    ...args: Parameters<NearClient['callAsTestnetAdmin']>
+  ): Promise<TxResult> {
+    assertTestnetAdminCall(this.scope, args[0]);
+    return this.inner.callAsTestnetAdmin(...args);
+  }
 
   async provisionAccount(p: ProvisionParams): Promise<TxResult> {
     // Validate before reserving, so a malformed request never consumes cap.

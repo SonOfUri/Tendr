@@ -147,3 +147,56 @@ describe('FakeNearClient', () => {
     });
   });
 });
+
+describe('FakeNearClient testnet admin calls', () => {
+  it('records admin calls signed by funding-near', async () => {
+    const f = fake();
+    const res = await f.callAsTestnetAdmin('shop.tendr.testnet', 'admin_sync_signers', {
+      threshold: 1,
+    });
+    expect(res.status).toBe('success');
+    expect(f.callsTo('admin_sync_signers')).toEqual([
+      expect.objectContaining({ signer: 'funding-near', contractId: 'shop.tendr.testnet' }),
+    ]);
+  });
+
+  it('refuses admin calls on a live fake', async () => {
+    const live = new FakeNearClient({
+      livemode: true,
+      parentAccountId: 'tendr.near',
+      intentsContractId: 'intents.near',
+    });
+    await expect(
+      live.callAsTestnetAdmin('shop.tendr.near', 'admin_sync_signers', {}),
+    ).rejects.toThrow(/testnet/);
+    expect(live.calls).toHaveLength(0);
+  });
+
+  it('answers get_config for an account it provisioned, and admin syncs update it', async () => {
+    const f = fake();
+    await f.provisionAccount({
+      merchantId: 'mer_x',
+      livemode: false,
+      accountId: 'shop.tendr.testnet',
+      init,
+      initialBalanceYocto: 1n,
+    });
+    await expect(f.view('shop.tendr.testnet', 'get_config', {})).resolves.toMatchObject({
+      signers: init.signers,
+      threshold: 1,
+      signer_epoch: '0',
+      rp_id: 'localhost',
+      recovery_key_set: false,
+      intents_contract: 'intents-mock.tendr.testnet',
+    });
+    await f.callAsTestnetAdmin('shop.tendr.testnet', 'admin_sync_signers', {
+      signers: [],
+      threshold: 2,
+    });
+    await expect(f.view('shop.tendr.testnet', 'get_config', {})).resolves.toMatchObject({
+      signers: [],
+      threshold: 2,
+      signer_epoch: '1',
+    });
+  });
+});

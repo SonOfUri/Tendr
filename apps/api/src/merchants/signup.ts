@@ -3,7 +3,8 @@
 //
 // The slug becomes the NEAR account label (`<slug>.tendr.near` / `<slug>.tendr.testnet`), so it is
 // lower-case `[a-z0-9-]`, 3–32 characters, with no leading, trailing or doubled `-`.
-import { Prisma, type Merchant, type MerchantUser } from '@prisma/client';
+import { Prisma, type Merchant, type MerchantAccount, type MerchantUser } from '@prisma/client';
+import { createTestAccount } from '../accounts/accounts.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { conflict } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
@@ -13,6 +14,8 @@ import { prisma } from '../lib/prisma.js';
 const MAX_BASE = 28;
 const MAX_SLUG = 32;
 const ATTEMPTS = 10;
+/** Most stores one person may own: each store costs a funded testnet account. */
+export const MAX_OWNED_STORES = 5;
 
 /** The slug a store name maps to before collision suffixes. */
 export function slugBase(name: string): string {
@@ -52,12 +55,14 @@ const isSlugConflict = (err: unknown) =>
 
 /**
  * Creates a store owned by `userId`. The person must hold at least one active passkey: an owner
- * is a signer, and a signer without a key could never approve anything.
+ * is a signer, and a signer without a key could never approve anything. A person owns at most
+ * `MAX_OWNED_STORES` stores. The store's test account row is created `provisioning` and its
+ * provisioning queued (a job; see accounts/accounts.ts) in the same transaction.
  */
 export async function createStore(
   userId: string,
   name: string,
-): Promise<{ merchant: Merchant; membership: MerchantUser }> {
+): Promise<{ merchant: Merchant; membership: MerchantUser; testAccount: MerchantAccount }> {
   const passkeys = await prisma.webauthnCredential.count({ where: { userId, revokedAt: null } });
   if (passkeys === 0) throw conflict('Register a passkey before creating a store');
 
@@ -67,6 +72,12 @@ export async function createStore(
     const merchantId = newId('mer');
     try {
       return await tenantTransaction({ merchantId, livemode: false }, async (tx, ctx) => {
+        // Serialise this person's store creations so concurrent requests cannot pass the cap.
+        await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`;
+        const owned = await tx.merchantUser.count({ where: { userId, role: 'owner' } });
+        if (owned >= MAX_OWNED_STORES) {
+          throw conflict(`A person can own at most ${MAX_OWNED_STORES} stores`);
+        }
         const merchant = await tx.merchant.create({ data: { id: ctx.merchantId, name, slug } });
         const membership = await tx.merchantUser.create({
           data: {
@@ -77,7 +88,8 @@ export async function createStore(
             isSigner: true,
           },
         });
-        return { merchant, membership };
+        const testAccount = await createTestAccount(tx, ctx, slug);
+        return { merchant, membership, testAccount };
       });
     } catch (err) {
       // Another store took the slug between the lookup and the insert: pick the next one.

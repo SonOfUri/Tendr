@@ -9,7 +9,12 @@ import { nearPublicKey } from '../keyvault/keys.js';
 import type { KeyVault } from '../keyvault/types.js';
 import { providerNotConfigured } from '../lib/errors.js';
 import { FakeNearClient } from './fake.js';
-import { CappedNearClient, assertProvisionable, type ProvisionScope } from './provision.js';
+import {
+  CappedNearClient,
+  assertProvisionable,
+  assertTestnetAdminCall,
+  type ProvisionScope,
+} from './provision.js';
 import {
   JsonRpcTransport,
   NearRpc,
@@ -101,6 +106,18 @@ export interface NearClient {
   /** Public keys (`ed25519:…`) of the account's access keys. */
   accessKeys(accountId: string): Promise<string[]>;
   /**
+   * TESTNET ONLY. Calls `method` on a test merchant account as its `testnet_admin` — the test
+   * parent account, signed by its `funding-near` key — e.g. `admin_sync_signers` to mirror the
+   * live signer set. Throws on a live client: live accounts have no admin, and the live funding
+   * key never calls contracts.
+   */
+  callAsTestnetAdmin(
+    contractId: string,
+    method: string,
+    args: object,
+    opts?: CallOptions,
+  ): Promise<TxResult>;
+  /**
    * Optional: throws if `provisionAccount(p)` cannot even be attempted (bad request, missing
    * configuration, key vault unavailable). Called before any funding is reserved.
    */
@@ -143,6 +160,19 @@ export class RpcNearClient implements NearClient {
 
   view<T>(contractId: string, method: string, args: object): Promise<T> {
     return this.rpc.viewFunction<T>(contractId, method, args);
+  }
+
+  async callAsTestnetAdmin(
+    contractId: string,
+    method: string,
+    args: object,
+    opts: CallOptions = {},
+  ): Promise<TxResult> {
+    assertTestnetAdminCall(this.config, contractId);
+    const pk = await this.ed25519PublicKey('funding-near');
+    return this.signAndSend('funding-near', this.config.parentAccountId, pk, contractId, [
+      functionCallAction(method, args, opts.gas ?? DEFAULT_CALL_GAS, opts.deposit ?? 0n),
+    ]);
   }
 
   accessKeys(accountId: string): Promise<string[]> {

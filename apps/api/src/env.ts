@@ -60,6 +60,8 @@ const EnvSchema = z
     FUNDING_DAILY_CAP_YOCTO: yocto.default('50000000000000000000000000'), // 50 NEAR
     /** Max yoctoNEAR one provisioned account may be seeded with. */
     FUNDING_PER_ACCOUNT_YOCTO: yocto.default('1000000000000000000000000'), // 1 NEAR
+    /** yoctoNEAR each new merchant account is seeded with (storage); within the per-account cap. */
+    MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO: yocto.default('500000000000000000000000'), // 0.5 NEAR
     // Dashboard auth. Production must set the RP ID and origins explicitly (no localhost defaults).
     WEBAUTHN_RP_ID: optionalString,
     WEBAUTHN_RP_NAME: z.string().min(1).default('Tendr'),
