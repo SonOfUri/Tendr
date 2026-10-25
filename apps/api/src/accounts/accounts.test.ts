@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { ed25519 } from '@noble/curves/ed25519';
 import type { Merchant, User, WebauthnCredential } from '@prisma/client';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getEventHandler } from '../jobs/handlers.js';
+import { getEventHandler, handlerJobOptions } from '../jobs/handlers.js';
 import '../jobs/register-handlers.js';
 import { providerNotConfigured } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
@@ -21,7 +21,9 @@ import {
   mirrorTestSigners,
   provisionMerchantAccount,
   provisionTestAccount,
+  ProvisioningInProgressError,
   PROVISION_HANDLER,
+  PROVISION_JOB_OPTIONS,
   PROVISION_LEASE_MS,
   PROVISION_REQUESTED,
   registerRecoveryKey,
@@ -494,13 +496,18 @@ describe('merchant accounts', () => {
 
     it('concurrent attempts: only the claimant provisions and activates', async () => {
       const { merchant } = await owner();
-      const [a, b] = await Promise.all([
+      const results = await Promise.allSettled([
         provisionTestAccount(merchant.id),
         provisionTestAccount(merchant.id),
       ]);
-      // The loser returns the row as the winner left it (claimed, or already active).
-      expect([a.status, b.status]).toContain('active');
-      for (const r of [a, b]) expect(['active', 'provisioning']).toContain(r.status);
+      // The winner activates; the loser either finds the row active or, while the winner still
+      // holds its claim, throws a retryable ProvisioningInProgressError.
+      const won = results.filter((r) => r.status === 'fulfilled' && r.value.status === 'active');
+      expect(won.length).toBeGreaterThanOrEqual(1);
+      for (const r of results) {
+        if (r.status === 'rejected') expect(r.reason).toBeInstanceOf(ProvisioningInProgressError);
+        else expect(r.value.status).toBe('active');
+      }
       expect(test.calls.filter((c) => c.kind === 'provision')).toHaveLength(1);
       expect(await prisma.event.count({ where: { type: 'merchant_account.activated' } })).toBe(1);
       // A late attempt on the active row changes nothing.
@@ -520,7 +527,9 @@ describe('merchant accounts', () => {
         where: { merchantId: merchant.id, livemode: false },
         data: { status: 'failed', provisionAttemptId: 'other', provisionClaimedAt: new Date() },
       });
-      expect((await provisionTestAccount(merchant.id)).status).toBe('failed');
+      await expect(provisionTestAccount(merchant.id)).rejects.toBeInstanceOf(
+        ProvisioningInProgressError,
+      );
       expect(test.calls).toHaveLength(0);
       await expect(
         retryProvisioning({ merchantId: merchant.id, livemode: false }),
@@ -531,6 +540,96 @@ describe('merchant accounts', () => {
         data: { provisionClaimedAt: new Date(Date.now() - PROVISION_LEASE_MS - 1000) },
       });
       expect((await provisionTestAccount(merchant.id)).status).toBe('active');
+    });
+
+    it('a crashed attempt (claim held, never released) is recovered by the job after the lease', async () => {
+      const { merchant } = await owner();
+      const event = await prisma.event.findFirstOrThrow({ where: { type: PROVISION_REQUESTED } });
+      const handler = getEventHandler(PROVISION_REQUESTED, PROVISION_HANDLER)!;
+      // A worker claimed the row, then died before activating or marking it failed.
+      await prisma.merchantAccount.updateMany({
+        where: { merchantId: merchant.id, livemode: false },
+        data: { provisionAttemptId: 'dead', provisionClaimedAt: new Date() },
+      });
+      // BullMQ's stalled-job recovery re-runs the job within the lease: it must throw (retry),
+      // not complete quietly.
+      await expect(handler(event)).rejects.toBeInstanceOf(ProvisioningInProgressError);
+      expect((await accountRow(merchant.id, false))!.status).toBe('provisioning');
+      // The job's backoff outlasts the lease: 11 exponential retries from 1 s ≈ 34 min.
+      expect(PROVISION_JOB_OPTIONS.attempts).toBe(12);
+      const totalBackoffMs = (2 ** (PROVISION_JOB_OPTIONS.attempts - 1) - 1) * 1000;
+      expect(totalBackoffMs).toBeGreaterThan(PROVISION_LEASE_MS);
+      expect(handlerJobOptions(PROVISION_REQUESTED, PROVISION_HANDLER)).toEqual(
+        PROVISION_JOB_OPTIONS,
+      );
+      // Once the lease has expired, the next retry claims the row and provisions it.
+      await prisma.merchantAccount.updateMany({
+        where: { merchantId: merchant.id, livemode: false },
+        data: { provisionClaimedAt: new Date(Date.now() - PROVISION_LEASE_MS - 1000) },
+      });
+      await handler(event);
+      expect((await accountRow(merchant.id, false))!.status).toBe('active');
+    });
+
+    it('a crashed attempt is recoverable by the owner retry once the lease expires', async () => {
+      const { merchant } = await owner();
+      const ctx = { merchantId: merchant.id, livemode: false };
+      await prisma.merchantAccount.updateMany({
+        where: { merchantId: merchant.id, livemode: false },
+        data: { provisionAttemptId: 'dead', provisionClaimedAt: new Date() },
+      });
+      // Inside the lease the attempt may still be alive: no retry.
+      await expect(retryProvisioning(ctx)).rejects.toMatchObject({ status: 409 });
+      // A queued, never-claimed row is not retried either (its job is pending).
+      await prisma.merchantAccount.updateMany({
+        where: { merchantId: merchant.id, livemode: false },
+        data: { provisionAttemptId: null, provisionClaimedAt: null },
+      });
+      await expect(retryProvisioning(ctx)).rejects.toMatchObject({ status: 409 });
+      // Stuck in provisioning under an expired claim: the owner retry re-queues it.
+      await prisma.merchantAccount.updateMany({
+        where: { merchantId: merchant.id, livemode: false },
+        data: {
+          provisionAttemptId: 'dead',
+          provisionClaimedAt: new Date(Date.now() - PROVISION_LEASE_MS - 1000),
+        },
+      });
+      const requeued = await retryProvisioning(ctx);
+      expect(requeued).toMatchObject({
+        status: 'provisioning',
+        provisionAttemptId: null,
+        provisionClaimedAt: null,
+      });
+      expect(await prisma.event.count({ where: { type: PROVISION_REQUESTED } })).toBe(2);
+      expect((await provisionTestAccount(merchant.id)).status).toBe('active');
+    });
+
+    it('a retry finds an account that already landed before spending (no funding cap in the way)', async () => {
+      const { merchant, user, cred } = await owner();
+      // The first attempt timed out but landed; its funding reservation is still held.
+      await test.provisionAccount({
+        merchantId: merchant.id,
+        livemode: false,
+        accountId: 'acme-coffee.tendr.testnet',
+        initialBalanceYocto: 1n,
+        init: {
+          signers: [{ id: user.id, keys: [cred.publicKey as { p256: string }] }],
+          threshold: 1,
+          recovery_key: null,
+          rp_id: 'localhost',
+          origins: ['http://localhost:3000'],
+          intents_contract: 'intents-mock.tendr.testnet',
+          poa_suffix: null,
+          testnet_admin: 'tendr.testnet',
+        },
+      });
+      const before = test.calls.filter((c) => c.kind === 'provision').length;
+      // Were the retry to provision again, the (full) daily cap would refuse it.
+      test.throwNext('provision', new FundingCapError('daily', 'funding daily cap reached'));
+      const row = await provisionTestAccount(merchant.id);
+      expect(row.status).toBe('active');
+      expect(test.calls.filter((c) => c.kind === 'provision')).toHaveLength(before);
+      expect(await prisma.event.count({ where: { type: 'funding.spent' } })).toBe(0);
     });
 
     it('deterministic errors fail the row without a retry', async () => {

@@ -237,6 +237,17 @@ describe('event dispatch', () => {
       removeOnFail: false,
     });
   });
+
+  it("applies a handler's own retry overrides over the defaults", async () => {
+    registerEventHandler('session.created', 'patient', async () => {}, {
+      attempts: 12,
+      backoff: { type: 'exponential', delay: 1000 },
+    });
+    const id = await record('session.created');
+    await dispatchOnce({ queue });
+    const job = await queue.getJob(`${id}__patient`);
+    expect(job?.opts).toMatchObject({ attempts: 12, removeOnFail: false });
+  });
 });
 
 describe('dispatch with Redis down', () => {

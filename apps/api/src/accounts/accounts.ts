@@ -267,6 +267,21 @@ function isDeterministic(err: unknown): boolean {
   );
 }
 
+/** Another provisioning attempt holds the row's (unexpired) claim; retry after the lease. */
+export class ProvisioningInProgressError extends Error {
+  constructor(accountId: string) {
+    super(`account ${accountId} is claimed by another provisioning attempt`);
+    this.name = 'ProvisioningInProgressError';
+  }
+}
+
+/** Job options for the provisioning job: enough backoff to outlast `PROVISION_LEASE_MS`. */
+export const PROVISION_JOB_OPTIONS = {
+  // Exponential from 1 s: 11 retries span ~34 minutes, well past the 5-minute lease.
+  attempts: 12,
+  backoff: { type: 'exponential' as const, delay: 1000 },
+};
+
 /** A claimed provisioning attempt on one row. */
 interface Attempt {
   account: MerchantAccount;
@@ -322,7 +337,13 @@ export async function provisionMerchantAccount(
   if (row.status === 'active') return row;
   const attempt = await claim(row);
   if (!attempt) {
-    return prisma.merchantAccount.findFirstOrThrow({ where: { id: row.id } });
+    const current = await prisma.merchantAccount.findFirstOrThrow({ where: { id: row.id } });
+    // Another attempt holds an unexpired claim. It may have died (a crashed worker never releases
+    // its claim), so throw: the job backs off and claims the row once the lease has expired.
+    if (current.status !== 'active' && current.provisionClaimedAt !== null) {
+      throw new ProvisioningInProgressError(current.id);
+    }
+    return current;
   }
   const { account } = attempt;
 
@@ -336,6 +357,12 @@ export async function provisionMerchantAccount(
   }
 
   const client = nearClient(livemode);
+  // An earlier attempt (timed out, or crashed) may have created the account already: look on
+  // chain before spending again. This also keeps a retry from being refused by a funding cap that
+  // the earlier attempt's still-held reservation fills. For a fresh row this is one cheap read.
+  const existing = await onChainConfig(client, account);
+  if (existing) return activateFromChain(attempt, existing);
+
   let result: TxResult;
   try {
     result = await client.provisionAccount({
@@ -570,8 +597,9 @@ async function markFailed(
 }
 
 /**
- * Re-queues a `failed` account's provisioning (409 for any other status, or while an attempt
- * still holds it).
+ * Re-queues an account's provisioning when it is `failed` and unclaimed, or stuck: `failed` or
+ * `provisioning` under a claim whose lease has expired (the attempt holding it died). 409 for an
+ * active account, a queued one (never claimed), or one an attempt is working on now.
  */
 export async function retryProvisioning(ctx: ScopeContext): Promise<MerchantAccount> {
   return tenantTransaction(ctx, async (tx) => {
@@ -583,16 +611,21 @@ export async function retryProvisioning(ctx: ScopeContext): Promise<MerchantAcco
       where: {
         id: account.id,
         merchantId: ctx.merchantId,
-        status: 'failed',
         OR: [
-          { provisionClaimedAt: null },
-          { provisionClaimedAt: { lt: new Date(Date.now() - PROVISION_LEASE_MS) } },
+          { status: 'failed', provisionClaimedAt: null },
+          {
+            status: { in: ['failed', 'provisioning'] },
+            provisionClaimedAt: { lt: new Date(Date.now() - PROVISION_LEASE_MS) },
+          },
         ],
       },
-      data: { status: 'provisioning' },
+      // The dead attempt's claim is dropped so the new job can claim at once.
+      data: { status: 'provisioning', provisionAttemptId: null, provisionClaimedAt: null },
     });
     if (updated.count !== 1) {
-      throw conflict(`The account is ${account.status}; only a failed one is retried`);
+      throw conflict(
+        `The account is ${account.status}; only a failed or stalled provisioning is retried`,
+      );
     }
     const row = await tx.merchantAccount.findFirstOrThrow({ where: { id: account.id } });
     await requestProvisioning(tx, ctx, row);
@@ -633,7 +666,6 @@ export async function goLiveCheck(
   return goLiveRule(signers.length, recovery !== null, threshold);
 }
 
-/** What the go-live checklist shows. */
 /**
  * The go-live checklist, readable by every member in either mode: the rule's result and counts,
  * and only the live account's status and id (never its internals: threshold, epoch, tx).

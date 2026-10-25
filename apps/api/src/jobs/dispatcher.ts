@@ -1,7 +1,12 @@
 import type { JobsOptions, Queue } from 'bullmq';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
-import { handledEventTypes, handlerNamesFor, JOB_ID_SEPARATOR } from './handlers.js';
+import {
+  handledEventTypes,
+  handlerJobOptions,
+  handlerNamesFor,
+  JOB_ID_SEPARATOR,
+} from './handlers.js';
 import { EVENT_JOB_OPTIONS, getEventsQueue, type EventJobData } from './queue.js';
 
 export const DISPATCH_BATCH_SIZE = 100;
@@ -67,6 +72,7 @@ export async function dispatchOnce(opts: DispatchOptions = {}): Promise<number> 
           data: { eventId: e.id },
           opts: {
             ...EVENT_JOB_OPTIONS,
+            ...handlerJobOptions(e.type, name),
             ...opts.jobOptions,
             jobId: `${e.id}${JOB_ID_SEPARATOR}${name}`,
           },
