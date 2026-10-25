@@ -61,7 +61,11 @@ describe('account proposals', () => {
   async function member(role: MerchantUserRole, isSigner: boolean): Promise<Member> {
     const user = await createUser({ emailVerifiedAt: new Date() });
     const auth = new SoftAuthenticator();
-    const cred = await verifyRegistration(user, auth.create(await registrationOptions(user)), null);
+    const { credential: cred } = await verifyRegistration(
+      user,
+      auth.create(await registrationOptions(user)),
+      null,
+    );
     const m = await createRow('MerchantUser', merchant.id, false, {
       userId: user.id,
       role,

@@ -20,7 +20,7 @@ import {
 
 async function register(user: { id: string; email: string }, auth: SoftAuthenticator) {
   const options = await registrationOptions(user);
-  return verifyRegistration(user, auth.create(options), 'Laptop');
+  return (await verifyRegistration(user, auth.create(options), 'Laptop')).credential;
 }
 
 describe('webauthn', () => {
@@ -82,6 +82,44 @@ describe('webauthn', () => {
     await expect(
       verifyRegistration(alice, new SoftAuthenticator().create(options), null),
     ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('serialises the first-passkey check: two racing registrations cannot both be first', async () => {
+    const user = await createUser();
+    const [a, b] = [new SoftAuthenticator(), new SoftAuthenticator()];
+    const ra = a.create(await registrationOptions(user));
+    const rb = b.create(await registrationOptions(user));
+    // Hold inserts into webauthn_credentials (reads still pass) until both registrations are
+    // parked, so without the per-person row lock both would count zero passkeys.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const blocker = prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRawUnsafe('LOCK TABLE webauthn_credentials IN SHARE MODE');
+        await held;
+      },
+      { timeout: 20_000 },
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    const session = (id: string) => ({ sessionId: id, steppedUp: false });
+    const results = Promise.allSettled([
+      verifyRegistration(user, ra, null, session('dss_a')),
+      verifyRegistration(user, rb, null, session('dss_b')),
+    ]);
+    for (let i = 0; i < 200; i++) {
+      const [row] = await prisma.$queryRaw<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM pg_stat_activity
+        WHERE wait_event_type = 'Lock' AND datname = current_database()`;
+      if ((row?.n ?? 0) >= 2) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    release();
+    await blocker;
+    const settled = await results;
+    expect(settled.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const failed = settled.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(failed.reason).toMatchObject({ code: 'STEP_UP_REQUIRED' });
+    expect(await prisma.webauthnCredential.count({ where: { userId: user.id } })).toBe(1);
   });
 
   it('logs in with a registered passkey and records its use', async () => {

@@ -7,6 +7,7 @@ import { consumeEmailLink, EmailSchema, startEmailSignIn } from '../auth/magic-l
 import {
   clearedSessionCookies,
   createDashboardSession,
+  isSteppedUp,
   markPasskeyVerified,
   revokeDashboardSession,
   sessionCookies,
@@ -92,14 +93,20 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       })
       .strict()
       .parse(req.body);
-    const first = (await activeCredentials(userId)).length === 0;
-    if (!first) requireStepUp(req);
-    const credential = await verifyRegistration(
+    // Fast path; the authoritative first-passkey check runs inside `verifyRegistration`, under a
+    // row lock on the person, so two passkey-less sessions cannot both register a "first" one.
+    if ((await activeCredentials(userId)).length > 0) requireStepUp(req);
+    const p = requirePrincipal(req);
+    const passkeyVerifiedAt =
+      p.kind === 'user_session' || p.kind === 'dashboard_user' ? p.passkeyVerifiedAt : null;
+    const { credential, first } = await verifyRegistration(
       { id: userId },
       body.response as unknown as RegistrationResponseJSON,
       body.deviceLabel ?? null,
+      { sessionId: sessionOf(req), steppedUp: isSteppedUp(passkeyVerifiedAt) },
     );
-    // Registering the first passkey is itself a fresh passkey assertion (user-verified).
+    // Registering the first passkey is itself a fresh passkey assertion (user-verified); it also
+    // ended the person's other sessions.
     if (first) await markPasskeyVerified(sessionOf(req));
     return { credential: publicPasskey(credential) };
   });

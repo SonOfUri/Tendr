@@ -12,7 +12,7 @@ async function personWithPasskey() {
   const user = await createUser({ emailVerifiedAt: new Date() });
   const auth = new SoftAuthenticator();
   const options = await registrationOptions(user);
-  const cred = await verifyRegistration(user, auth.create(options), 'Phone');
+  const { credential: cred } = await verifyRegistration(user, auth.create(options), 'Phone');
   return { user, auth, cred };
 }
 
@@ -134,6 +134,51 @@ describe('dashboard step-up and hardening', () => {
       response: second.create(o2.json()),
     });
     expect(r2.statusCode).toBe(200);
+  });
+
+  it("registering a person's first passkey ends their other sessions", async () => {
+    const user = await createUser({ emailVerifiedAt: new Date() });
+    const here: Login = await loginAs(user.id, { stepUp: false });
+    const elsewhere: Login = await loginAs(user.id, { stepUp: false });
+    const auth = new SoftAuthenticator();
+    const options = await post('/v1/auth/passkeys/register/options', dashHeaders(here));
+    const res = await post('/v1/auth/passkeys/register/verify', dashHeaders(here), {
+      response: auth.create(options.json()),
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await app.inject({ url: '/v1/me', headers: dashHeaders(here) })).statusCode).toBe(200);
+    expect((await app.inject({ url: '/v1/me', headers: dashHeaders(elsewhere) })).statusCode).toBe(
+      401,
+    );
+    const live = await prisma.dashboardSession.findMany({
+      where: { userId: user.id, revokedAt: null },
+    });
+    expect(live).toHaveLength(1);
+  });
+
+  it('two passkey-less sessions racing to register cannot both count as the first', async () => {
+    const user = await createUser({ emailVerifiedAt: new Date() });
+    const one: Login = await loginAs(user.id, { stepUp: false });
+    const two: Login = await loginAs(user.id, { stepUp: false });
+    const [a, b] = [new SoftAuthenticator(), new SoftAuthenticator()];
+    const oa = await post('/v1/auth/passkeys/register/options', dashHeaders(one));
+    const ob = await post('/v1/auth/passkeys/register/options', dashHeaders(two));
+    const results = await Promise.all([
+      post('/v1/auth/passkeys/register/verify', dashHeaders(one), {
+        response: a.create(oa.json()),
+      }),
+      post('/v1/auth/passkeys/register/verify', dashHeaders(two), {
+        response: b.create(ob.json()),
+      }),
+    ]);
+    expect(results.map((r) => r.statusCode).sort()).toEqual([200, 401]);
+    expect(await prisma.webauthnCredential.count({ where: { userId: user.id } })).toBe(1);
+    // Only the winner's session is stepped up (and alive).
+    const live = await prisma.dashboardSession.findMany({
+      where: { userId: user.id, revokedAt: null },
+    });
+    expect(live).toHaveLength(1);
+    expect(live[0]!.passkeyVerifiedAt).not.toBeNull();
   });
 
   it('a person with a passkey cannot get an email login, and the answer looks the same', async () => {

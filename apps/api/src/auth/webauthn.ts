@@ -33,6 +33,7 @@ import { decodeClientDataJSON, isoCBOR } from '@simplewebauthn/server/helpers';
 import { Prisma, type WebauthnCredential } from '@prisma/client';
 import { SignerKeySchema, type SignerKey } from '@tendr/contracts';
 import { env } from '../env.js';
+import { stepUpRequired } from '../gateway/principal.js';
 import { sha256 } from '../lib/crypto.js';
 import { AppError, conflict, notFound, unauthorized } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
@@ -196,11 +197,29 @@ export async function registrationOptions(user: {
 const registrationFailed = () =>
   new AppError('VALIDATION_ERROR', 'Passkey registration could not be verified', 400);
 
+/**
+ * The dashboard session registering a passkey: kept alive when this is the person's first passkey
+ * (every other session of theirs ends), and whether it holds a recent assertion (needed for any
+ * passkey after the first).
+ */
+export type RegisteringSession = { sessionId: string; steppedUp: boolean };
+
+/**
+ * Verifies a registration and stores the passkey. The person's first-passkey check and the insert
+ * are serialised on their `users` row (`SELECT … FOR UPDATE`), so two passkey-less sessions racing
+ * cannot both register a "first" passkey: the loser sees one exists and, unless its session is
+ * stepped up, gets STEP_UP_REQUIRED. Registering the first passkey ends the person's other
+ * dashboard sessions (an email-link session elsewhere must not outlive the switch to passkeys).
+ *
+ * Without `session` (internal callers and tests) no step-up is enforced and, for a first passkey,
+ * every session of the person ends.
+ */
 export async function verifyRegistration(
   user: { id: string },
   response: RegistrationResponseJSON,
   deviceLabel: string | null,
-): Promise<WebauthnCredential> {
+  session?: RegisteringSession,
+): Promise<{ credential: WebauthnCredential; first: boolean }> {
   const challenge = claimedChallenge(response?.response?.clientDataJSON);
   if (!challenge || !(await consumeChallenge(challenge, 'registration', user.id))) {
     throw registrationFailed();
@@ -224,16 +243,35 @@ export async function verifyRegistration(
   const { credential } = verified.registrationInfo;
   const publicKey = SignerKeySchema.parse(coseToSignerKey(credential.publicKey));
   try {
-    return await prisma.webauthnCredential.create({
-      data: {
-        id: newId('cred'),
-        userId: user.id,
-        credentialId: credential.id,
-        publicKey,
-        signCount: BigInt(credential.counter),
-        transports: credential.transports ?? response.response.transports ?? [],
-        deviceLabel,
-      },
+    return await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id} FOR UPDATE`;
+      const existing = await tx.webauthnCredential.count({
+        where: { userId: user.id, revokedAt: null },
+      });
+      const first = existing === 0;
+      if (!first && session && !session.steppedUp) throw stepUpRequired();
+      const created = await tx.webauthnCredential.create({
+        data: {
+          id: newId('cred'),
+          userId: user.id,
+          credentialId: credential.id,
+          publicKey,
+          signCount: BigInt(credential.counter),
+          transports: credential.transports ?? response.response.transports ?? [],
+          deviceLabel,
+        },
+      });
+      if (first) {
+        await tx.dashboardSession.updateMany({
+          where: {
+            userId: user.id,
+            revokedAt: null,
+            ...(session ? { id: { not: session.sessionId } } : {}),
+          },
+          data: { revokedAt: new Date() },
+        });
+      }
+      return { credential: created, first };
     });
   } catch (err) {
     // The credential id, or the active public key, is already registered (to anyone).
