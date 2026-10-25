@@ -48,10 +48,23 @@ export interface InitConfigJson {
   testnet_admin: string | null;
 }
 
+/**
+ * A final transaction outcome.
+ *
+ * - `status` is `'failure'` if ANY receipt failed, including downstream promises the contract
+ *   started and settles in its own callback (a verifier transfer that bounced, say).
+ * - `topLevelStatus` is the transaction's own result (`FinalExecutionOutcome.status`): the called
+ *   method, plus any promise it *returned*. For a method that returns a plain value (the account
+ *   contract's `propose` / `approve` / `cancel`), a downstream failure leaves it `'success'`.
+ *
+ * So judge whether a contract call took effect by `topLevelStatus` and by the contract's own
+ * NEP-297 events in `logs`, never by `status` alone.
+ */
 export interface TxResult {
   txHash: string;
   logs: string[];
   status: 'success' | 'failure';
+  topLevelStatus: 'success' | 'failure';
   failure?: string;
 }
 

@@ -36,6 +36,12 @@ export type NearSigningKey = 'funding-near' | 'relayer-accounts';
 const TGAS = 1_000_000_000_000n;
 /** Gas for a relayed contract call when the caller does not set one. */
 export const DEFAULT_CALL_GAS = 100n * TGAS;
+/**
+ * Gas for relayed `propose` / `approve` / `cancel`: the maximum, since the approval that reaches
+ * the threshold executes the proposal in the same call (transfers start promises with their own
+ * gas, upgrades call `migrate`).
+ */
+export const RELAY_GAS = 300n * TGAS;
 /** Gas for the `new` call that initialises a freshly provisioned merchant account. */
 export const INIT_GAS = 100n * TGAS;
 

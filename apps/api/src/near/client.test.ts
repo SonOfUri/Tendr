@@ -7,7 +7,13 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { nearPublicKey } from '../keyvault/keys.js';
 import { LocalKeyVault } from '../keyvault/local.js';
 import { RpcNearClient, type InitConfigJson } from './client.js';
-import { NearRpc, NearRpcError, NotBroadcastError, type RpcTransport } from './rpc.js';
+import {
+  NearRpc,
+  NearRpcError,
+  NotBroadcastError,
+  toTxResult,
+  type RpcTransport,
+} from './rpc.js';
 import { decodeSigned, implicitAccountId } from './tx.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'tendr-near-client-'));
@@ -199,6 +205,30 @@ describe('RpcNearClient.provisionAccount', () => {
     });
     expect(res.status).toBe('failure');
     expect(res.failure).toMatch(/AccountAlreadyExists/);
+  });
+});
+
+describe('toTxResult', () => {
+  it('keeps the top-level status apart from a failed downstream receipt', () => {
+    const o = {
+      ...okOutcome(['EVENT_JSON:{"event":"proposal_approved"}']),
+      receipts_outcome: [
+        { id: 'R1', outcome: { logs: ['EVENT_JSON:{"event":"proposal_approved"}'], status: { SuccessValue: '' } } },
+        { id: 'R2', outcome: { logs: [], status: { Failure: { ActionError: { kind: 'x' } } } } },
+      ],
+    };
+    const res = toTxResult(o as never, 'H');
+    expect(res.status).toBe('failure');
+    expect(res.topLevelStatus).toBe('success');
+    expect(res.logs).toEqual(['EVENT_JSON:{"event":"proposal_approved"}']);
+  });
+
+  it('reports a failed transaction as failed at the top level', () => {
+    const res = toTxResult(
+      { ...okOutcome(), status: { Failure: { ActionError: { kind: 'x' } } } } as never,
+      'H',
+    );
+    expect(res).toMatchObject({ status: 'failure', topLevelStatus: 'failure' });
   });
 });
 

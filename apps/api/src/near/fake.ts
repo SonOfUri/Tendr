@@ -39,6 +39,7 @@ export class FakeNearClient implements NearClient {
   private readonly views = new Map<string, (args: object) => unknown>();
   private readonly keys = new Map<string, string[]>();
   private readonly failures = new Map<string, string[]>();
+  private readonly downstreamFailures = new Map<string, string[]>();
   private readonly provisionFailures: string[] = [];
   private readonly throws: Record<Kind, unknown[]> = { call: [], view: [], provision: [] };
 
@@ -62,6 +63,17 @@ export class FakeNearClient implements NearClient {
   /** The next `call` to `method` (any contract) returns a failure with `failure`. */
   failNext(method: string, failure: string): void {
     this.failures.set(method, [...(this.failures.get(method) ?? []), failure]);
+  }
+
+  /**
+   * The next `call` to `method` lands (top-level success, scripted logs) but a downstream receipt
+   * fails, so the result's `status` is `'failure'` while `topLevelStatus` is `'success'`.
+   */
+  failDownstreamNext(method: string, failure: string): void {
+    this.downstreamFailures.set(method, [
+      ...(this.downstreamFailures.get(method) ?? []),
+      failure,
+    ]);
   }
 
   /** The next `provisionAccount` returns an on-chain failure and creates no account. */
@@ -99,10 +111,28 @@ export class FakeNearClient implements NearClient {
     });
     this.maybeThrow('call');
     const failure = this.failures.get(method)?.shift();
-    if (failure !== undefined) return { txHash: fakeHash(), logs: [], status: 'failure', failure };
+    if (failure !== undefined) {
+      return {
+        txHash: fakeHash(),
+        logs: [],
+        status: 'failure',
+        topLevelStatus: 'failure',
+        failure,
+      };
+    }
     const scripted = this.logs.get(key(contractId, method));
     const logs = typeof scripted === 'function' ? scripted(args) : (scripted ?? []);
-    return { txHash: fakeHash(), logs, status: 'success' };
+    const downstream = this.downstreamFailures.get(method)?.shift();
+    if (downstream !== undefined) {
+      return {
+        txHash: fakeHash(),
+        logs,
+        status: 'failure',
+        topLevelStatus: 'success',
+        failure: downstream,
+      };
+    }
+    return { txHash: fakeHash(), logs, status: 'success', topLevelStatus: 'success' };
   }
 
   async view<T>(contractId: string, method: string, args: object): Promise<T> {
@@ -130,12 +160,14 @@ export class FakeNearClient implements NearClient {
     const failure =
       this.provisionFailures.shift() ??
       (this.accounts.has(p.accountId) ? `account ${p.accountId} already exists` : undefined);
-    if (failure !== undefined) return { txHash: fakeHash(), logs: [], status: 'failure', failure };
+    if (failure !== undefined) {
+      return { txHash: fakeHash(), logs: [], status: 'failure', topLevelStatus: 'failure', failure };
+    }
     this.accounts.set(p.accountId, {
       init: structuredClone(p.init),
       balanceYocto: p.initialBalanceYocto,
     });
-    return { txHash: fakeHash(), logs: [], status: 'success' };
+    return { txHash: fakeHash(), logs: [], status: 'success', topLevelStatus: 'success' };
   }
 
   async accessKeys(accountId: string): Promise<string[]> {

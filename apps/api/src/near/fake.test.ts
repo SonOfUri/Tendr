@@ -125,8 +125,24 @@ describe('FakeNearClient', () => {
     f.failNext('m', 'Smart contract panicked: nope');
     expect(await f.call('relayer-accounts', 'a.tendr.testnet', 'm', {})).toMatchObject({
       status: 'failure',
+      topLevelStatus: 'failure',
       failure: 'Smart contract panicked: nope',
     });
-    expect((await f.call('relayer-accounts', 'a.tendr.testnet', 'm', {})).status).toBe('success');
+    expect(await f.call('relayer-accounts', 'a.tendr.testnet', 'm', {})).toMatchObject({
+      status: 'success',
+      topLevelStatus: 'success',
+    });
+  });
+
+  it('can script a downstream failure: the call lands, a later receipt fails', async () => {
+    const f = fake();
+    f.scriptLogs('a.tendr.testnet', 'approve', ['EVENT_JSON:{}']);
+    f.failDownstreamNext('approve', 'ft_withdraw failed');
+    expect(await f.call('relayer-accounts', 'a.tendr.testnet', 'approve', {})).toMatchObject({
+      status: 'failure',
+      topLevelStatus: 'success',
+      logs: ['EVENT_JSON:{}'],
+      failure: 'ft_withdraw failed',
+    });
   });
 });
