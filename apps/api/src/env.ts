@@ -1,6 +1,24 @@
+import bs58 from 'bs58';
 import { z } from 'zod';
 
 const optionalString = z.string().min(1).optional();
+
+/** A non-negative integer amount in yoctoNEAR, given as a decimal string. */
+const yocto = z
+  .string()
+  .regex(/^\d{1,39}$/, 'must be a non-negative integer (yoctoNEAR)')
+  .transform((s) => BigInt(s));
+
+const codeHash = z
+  .string()
+  .refine((s) => {
+    try {
+      return bs58.decode(s).length === 32;
+    } catch {
+      return false;
+    }
+  }, 'must be a base58-encoded 32-byte hash')
+  .optional();
 
 const EnvSchema = z
   .object({
@@ -26,6 +44,22 @@ const EnvSchema = z
     GCP_KMS_KEK: z.string().min(1).default('tendr-kek'),
     /** Service-account JSON key, as a string. */
     GCP_CREDENTIALS_JSON: optionalString,
+    // NEAR. Each mode has its own RPC, parent account, intents contract and global code hash.
+    /** `fake` (in-memory, no network) by default outside production; refused in production. */
+    NEAR_CLIENT_DRIVER: z.enum(['rpc', 'fake']).optional(),
+    NEAR_RPC_URL_LIVE: z.string().url().default('https://rpc.mainnet.near.org'),
+    NEAR_RPC_URL_TEST: z.string().url().default('https://rpc.testnet.near.org'),
+    NEAR_PARENT_ACCOUNT_LIVE: z.string().min(1).default('tendr.near'),
+    NEAR_PARENT_ACCOUNT_TEST: z.string().min(1).default('tendr.testnet'),
+    INTENTS_CONTRACT_LIVE: z.string().min(1).default('intents.near'),
+    INTENTS_CONTRACT_TEST: z.string().min(1).default('intents-mock.tendr.testnet'),
+    /** base58 sha256 of the published global merchant-account wasm (NEP-591 code hash). */
+    MERCHANT_ACCOUNT_CODE_HASH_LIVE: codeHash,
+    MERCHANT_ACCOUNT_CODE_HASH_TEST: codeHash,
+    /** Max yoctoNEAR `funding-near` may spend on account creation per rolling 24 h, per mode. */
+    FUNDING_DAILY_CAP_YOCTO: yocto.default('50000000000000000000000000'), // 50 NEAR
+    /** Max yoctoNEAR one provisioned account may be seeded with. */
+    FUNDING_PER_ACCOUNT_YOCTO: yocto.default('1000000000000000000000000'), // 1 NEAR
   })
   .superRefine((e, ctx) => {
     if (e.NODE_ENV === 'production' && e.KEYVAULT_DRIVER === 'local') {
@@ -33,6 +67,13 @@ const EnvSchema = z
         code: z.ZodIssueCode.custom,
         path: ['KEYVAULT_DRIVER'],
         message: 'local is not allowed in production (set KEYVAULT_DRIVER=gcp)',
+      });
+    }
+    if (e.NODE_ENV === 'production' && e.NEAR_CLIENT_DRIVER === 'fake') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['NEAR_CLIENT_DRIVER'],
+        message: 'fake is not allowed in production (set NEAR_CLIENT_DRIVER=rpc)',
       });
     }
     if (e.KEYVAULT_DRIVER !== 'gcp') return;
@@ -63,6 +104,7 @@ const EnvSchema = z
     API_HOST: e.API_HOST ?? (e.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
     WORKER_HEALTH_HOST:
       e.WORKER_HEALTH_HOST ?? (e.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
+    NEAR_CLIENT_DRIVER: e.NEAR_CLIENT_DRIVER ?? (e.NODE_ENV === 'production' ? 'rpc' : 'fake'),
   }));
 
 function isJsonObject(text: string): boolean {

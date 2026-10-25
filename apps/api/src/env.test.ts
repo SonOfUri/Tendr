@@ -56,3 +56,49 @@ describe('loadEnv api host', () => {
     expect(loadEnv({ ...base, API_HOST: '::' }).API_HOST).toBe('::');
   });
 });
+
+describe('loadEnv NEAR settings', () => {
+  it('defaults the NEAR client to fake outside production and rpc in production', () => {
+    expect(loadEnv({ ...base, NODE_ENV: 'test' }).NEAR_CLIENT_DRIVER).toBe('fake');
+    expect(loadEnv({ ...base, NODE_ENV: 'development' }).NEAR_CLIENT_DRIVER).toBe('fake');
+    const prod = loadEnv({ ...base, ...gcp, NODE_ENV: 'production', KEYVAULT_DRIVER: 'gcp' });
+    expect(prod.NEAR_CLIENT_DRIVER).toBe('rpc');
+  });
+
+  it('rejects the fake NEAR client in production', () => {
+    expect(() =>
+      loadEnv({
+        ...base,
+        ...gcp,
+        NODE_ENV: 'production',
+        KEYVAULT_DRIVER: 'gcp',
+        NEAR_CLIENT_DRIVER: 'fake',
+      }),
+    ).toThrow(/NEAR_CLIENT_DRIVER/);
+  });
+
+  it('defaults the per-mode accounts and parses caps as yocto bigints', () => {
+    const e = loadEnv({ ...base, FUNDING_DAILY_CAP_YOCTO: '7000000000000000000000000' });
+    expect(e).toMatchObject({
+      NEAR_PARENT_ACCOUNT_LIVE: 'tendr.near',
+      NEAR_PARENT_ACCOUNT_TEST: 'tendr.testnet',
+      INTENTS_CONTRACT_LIVE: 'intents.near',
+      INTENTS_CONTRACT_TEST: 'intents-mock.tendr.testnet',
+      FUNDING_DAILY_CAP_YOCTO: 7n * 10n ** 24n,
+      FUNDING_PER_ACCOUNT_YOCTO: 10n ** 24n,
+    });
+    expect(() => loadEnv({ ...base, FUNDING_PER_ACCOUNT_YOCTO: '1.5' })).toThrow(
+      /FUNDING_PER_ACCOUNT_YOCTO/,
+    );
+  });
+
+  it('requires code hashes to be base58 32-byte hashes', () => {
+    const hash = '4GJwVp4E5Rr6JqDnENmZwbDwYxx5d7KtLBBrnLqkdbzh';
+    expect(
+      loadEnv({ ...base, MERCHANT_ACCOUNT_CODE_HASH_TEST: hash }).MERCHANT_ACCOUNT_CODE_HASH_TEST,
+    ).toBe(hash);
+    expect(() => loadEnv({ ...base, MERCHANT_ACCOUNT_CODE_HASH_LIVE: 'abc' })).toThrow(
+      /MERCHANT_ACCOUNT_CODE_HASH_LIVE/,
+    );
+  });
+});
