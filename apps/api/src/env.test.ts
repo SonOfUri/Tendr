@@ -250,6 +250,22 @@ describe('loadEnv 1Click and fee accounts', () => {
   });
 });
 
+describe('loadEnv checkout base url', () => {
+  it('defaults to http://localhost:3000 and treats blank as unset', () => {
+    expect(loadEnv(base).CHECKOUT_BASE_URL).toBe('http://localhost:3000');
+    expect(loadEnv({ ...base, CHECKOUT_BASE_URL: ' ' }).CHECKOUT_BASE_URL).toBe(
+      'http://localhost:3000',
+    );
+    expect(loadEnv({ ...base, CHECKOUT_BASE_URL: 'https://pay.tendr.xyz' }).CHECKOUT_BASE_URL).toBe(
+      'https://pay.tendr.xyz',
+    );
+  });
+
+  it('rejects a non-URL', () => {
+    expect(() => loadEnv({ ...base, CHECKOUT_BASE_URL: 'not a url' })).toThrow(/CHECKOUT_BASE_URL/);
+  });
+});
+
 describe('loadEnv checkout pricing', () => {
   it('defaults slippage to 100 bps and the gas cap to $2', () => {
     const e = loadEnv(base);

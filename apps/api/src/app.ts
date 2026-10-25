@@ -11,6 +11,7 @@ import { AppError } from './lib/errors.js';
 import { log } from './lib/logger.js';
 import { accountRoutes } from './routes/accounts.js';
 import { authRoutes } from './routes/auth.js';
+import { checkoutSessionRoutes } from './routes/checkout-sessions.js';
 import { healthRoutes } from './routes/health.js';
 import { merchantRoutes } from './routes/merchants.js';
 import { pingRoutes } from './routes/ping.js';
@@ -202,6 +203,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(proposalRoutes);
   await app.register(accountRoutes);
   await app.register(recoveryRoutes);
+  await app.register(checkoutSessionRoutes);
   opts.extraRoutes?.(app);
 
   return app;

@@ -26,6 +26,10 @@ export const ErrorCodes = [
   'QUOTE_TOO_SMALL',
   /** The real quote drifted from the dry-quote target past the tolerance; request a new quote. */
   'QUOTE_PRICE_MOVED',
+  /** A checkout `amount_currency` that is neither `USD` nor the merchant's settlement asset. */
+  'UNSUPPORTED_CURRENCY',
+  /** The store cannot take payments in this mode yet: no active merchant account or settlement config. */
+  'ACCOUNT_NOT_READY',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

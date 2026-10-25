@@ -116,6 +116,14 @@ const EnvSchema = z
         .regex(/^\d+(\.\d+)?$/, 'must be a non-negative decimal')
         .default(String(DEFAULT_GAS_MAX_USD)),
     ),
+    /**
+     * Base URL of the hosted checkout page; a session's `url` is
+     * `${CHECKOUT_BASE_URL}/pay/{id}#cs={client_secret}`. No trailing slash needed.
+     */
+    CHECKOUT_BASE_URL: z.preprocess(
+      blankAsUnset,
+      z.string().url().default('http://localhost:3000'),
+    ),
   })
   .superRefine((e, ctx) => {
     if (e.MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO > e.FUNDING_PER_ACCOUNT_YOCTO) {
