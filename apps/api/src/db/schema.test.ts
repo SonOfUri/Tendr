@@ -2,16 +2,23 @@ import { Prisma } from '@prisma/client';
 import {
   AccountKeyKindValues,
   EmailTokenPurposeValues,
+  HeldReasonValues,
   MerchantAccountStatusValues,
   MerchantUserRoleValues,
+  PaymentStatusValues,
   ProposalKindValues,
   ProposalStatusValues,
   RecoveryStatusValues,
+  RefundReasonValues,
+  SessionExpiredReasonValues,
+  SessionStatusValues,
+  type SessionStatus,
 } from '@tendr/contracts';
 import { ulid } from 'ulid';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import { IDENTITY_MODELS, PER_MODE_MODELS, SHARED_MODELS } from './models.js';
+import { scopedDb } from './scoped.js';
 import {
   MERCHANT_OWNED_MODELS,
   createApiKey,
@@ -336,6 +343,131 @@ describe('foundation schema', () => {
       await expect(
         createRow('AccountKey', m.id, true, { userId: bob.id, credentialId: bobKey.id }),
       ).resolves.toMatchObject({ credentialId: bobKey.id });
+    });
+  });
+
+  describe('checkout core', () => {
+    it('Postgres enums match the @tendr/contracts value lists', () => {
+      const values = (name: string) =>
+        Prisma.dmmf.datamodel.enums.find((e) => e.name === name)?.values.map((v) => v.name);
+      expect(values('SessionStatus')).toEqual([...SessionStatusValues]);
+      expect(values('PaymentStatus')).toEqual([...PaymentStatusValues]);
+      expect(values('RefundReason')).toEqual([...RefundReasonValues]);
+      expect(values('HeldReason')).toEqual([...HeldReasonValues]);
+      expect(values('SessionExpiredReason')).toEqual([...SessionExpiredReasonValues]);
+    });
+
+    it('external_ref is unique only among pending, processing, screening and settled sessions', async () => {
+      const m = await createMerchant();
+      const session = (status: SessionStatus, livemode = false) =>
+        prisma.session.create({
+          data: minimalSession({ merchantId: m.id, livemode, externalRef: 'order-9', status }),
+        });
+      for (const status of ['EXPIRED', 'LATE_DEPOSIT', 'HELD', 'REFUNDED'] as const) {
+        await expect(session(status)).resolves.toMatchObject({ status });
+      }
+      const live = await session('PENDING_DEPOSIT');
+      for (const status of [
+        'PENDING_DEPOSIT',
+        'PROCESSING',
+        'SCREENING_PENDING',
+        'SETTLED',
+      ] as const) {
+        await expect(session(status), status).rejects.toSatisfy(isUniqueViolation);
+      }
+      // The other mode has its own namespace.
+      await expect(session('PENDING_DEPOSIT', true)).resolves.toMatchObject({ livemode: true });
+      // Once the active session expires, the reference is free again.
+      await prisma.session.update({ where: { id: live.id }, data: { status: 'EXPIRED' } });
+      await expect(session('PROCESSING')).resolves.toMatchObject({ status: 'PROCESSING' });
+    });
+
+    it('sessions.customer_email is stored lower-cased', async () => {
+      const m = await createMerchant();
+      await expect(
+        prisma.session.create({
+          data: minimalSession({ merchantId: m.id, livemode: false, customerEmail: 'Ada@X.com' }),
+        }),
+      ).rejects.toThrow(/sessions_customer_email_lowercase/);
+      await expect(
+        prisma.session.create({
+          data: minimalSession({ merchantId: m.id, livemode: false, customerEmail: 'ada@x.com' }),
+        }),
+      ).resolves.toMatchObject({ customerEmail: 'ada@x.com' });
+    });
+
+    it('new checkout columns stay within their mode', async () => {
+      const m = await createMerchant();
+      const testSession = await createRow('Session', m.id, false, {
+        successUrl: 'https://shop.test/ok',
+        cancelUrl: 'https://shop.test/cancel',
+        customerEmail: 'ada@x.com',
+        expiredReason: 'canceled',
+      });
+      const testPayment = await createRow('Payment', m.id, false, {
+        senderAddress: '0xabc',
+        senderChain: 'eth',
+        overpaidAmount: '5',
+        heldReason: 'sanctions',
+        keptSmallOverpayment: true,
+      });
+      const testRefund = await createRow('Refund', m.id, false, { needsAddress: true });
+      const live = scopedDb({ merchantId: m.id, livemode: true });
+      const test = scopedDb({ merchantId: m.id, livemode: false });
+      expect(await live.session.findFirst({ where: { id: testSession.id } })).toBeNull();
+      expect(await live.payment.findFirst({ where: { id: testPayment.id } })).toBeNull();
+      expect(await live.refund.findFirst({ where: { id: testRefund.id } })).toBeNull();
+      expect(await live.session.findMany({ where: { customerEmail: 'ada@x.com' } })).toEqual([]);
+      expect(await live.payment.findMany({ where: { heldReason: 'sanctions' } })).toEqual([]);
+      await expect(
+        test.session.findFirst({ where: { id: testSession.id } }),
+      ).resolves.toMatchObject({ successUrl: 'https://shop.test/ok', expiredReason: 'canceled' });
+      await expect(
+        test.payment.findFirst({ where: { id: testPayment.id } }),
+      ).resolves.toMatchObject({ senderAddress: '0xabc', keptSmallOverpayment: true });
+    });
+
+    it('merchant checkout defaults', async () => {
+      const m = await createMerchant();
+      const row = await prisma.merchant.findUniqueOrThrow({ where: { id: m.id } });
+      expect(row.checkoutDomains).toEqual([]);
+      expect(row.defaultFeePayer).toBe('merchant');
+      expect(row.defaultGasPayer).toBe('buyer');
+    });
+
+    it("a refund cannot reference another merchant's or the other mode's proposal", async () => {
+      const a = await createMerchant();
+      const b = await createMerchant();
+      const proposalB = await createRow('AccountProposal', b.id, false);
+      const liveProposalA = await createRow('AccountProposal', a.id, true);
+      const testProposalA = await createRow('AccountProposal', a.id, false);
+      await expect(createRow('Refund', a.id, false, { proposalId: proposalB.id })).rejects.toThrow(
+        /Foreign key constraint/,
+      );
+      await expect(
+        createRow('Refund', a.id, false, { proposalId: liveProposalA.id }),
+      ).rejects.toThrow(/Foreign key constraint/);
+      await expect(
+        createRow('Refund', a.id, false, { proposalId: testProposalA.id }),
+      ).resolves.toMatchObject({ proposalId: testProposalA.id, needsAddress: false });
+    });
+
+    it('amounts on payments, refunds and quotes are non-negative', async () => {
+      const m = await createMerchant();
+      await expect(createRow('Payment', m.id, false, { overpaidAmount: '-1' })).rejects.toThrow(
+        /payments_checkout_amounts_nonnegative/,
+      );
+      await expect(createRow('Refund', m.id, false, { amount: '-1' })).rejects.toThrow(
+        /refunds_amount_nonnegative/,
+      );
+    });
+
+    it('quotes record supersession and a USD value', async () => {
+      const m = await createMerchant();
+      const at = new Date();
+      await expect(
+        createRow('Quote', m.id, false, { supersededAt: at, amountInUsd: '49.123456' }),
+      ).resolves.toMatchObject({ supersededAt: at });
     });
   });
 

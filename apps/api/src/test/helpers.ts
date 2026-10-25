@@ -291,6 +291,8 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         livemode,
         paymentId: (await builders.Payment(merchantId, livemode, {})).id,
         reason: 'expired',
+        assetId: 'nep141:eth.test',
+        amount: '1000000',
         ...o,
       },
     }),

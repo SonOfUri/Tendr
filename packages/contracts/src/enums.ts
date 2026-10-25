@@ -48,19 +48,45 @@ export const DeliveryValues = ['WEBHOOK', 'HOOK'] as const;
 export type Delivery = (typeof DeliveryValues)[number];
 export const DeliverySchema = z.enum(DeliveryValues);
 
-export const FeePayerValues = ['merchant', 'payer'] as const;
-export type FeePayer = (typeof FeePayerValues)[number];
-export const FeePayerSchema = z.enum(FeePayerValues);
+/** The `fee_payer` Postgres enum (storage values). The API speaks `FeePayer` from checkout.ts. */
+export const StoredFeePayerValues = ['merchant', 'payer'] as const;
+export type StoredFeePayer = (typeof StoredFeePayerValues)[number];
+export const StoredFeePayerSchema = z.enum(StoredFeePayerValues);
 
-export const RefundReasonValues = ['expired', 'late', 'underpaid', 'failed'] as const;
+export const RefundReasonValues = [
+  'expired',
+  'late',
+  'underpaid',
+  'failed',
+  'overpaid',
+  'sanctions',
+] as const;
 export type RefundReason = (typeof RefundReasonValues)[number];
 export const RefundReasonSchema = z.enum(RefundReasonValues);
+
+/** Why a payment is `HELD`. */
+export const HeldReasonValues = ['sanctions', 'screening_unavailable'] as const;
+export type HeldReason = (typeof HeldReasonValues)[number];
+export const HeldReasonSchema = z.enum(HeldReasonValues);
+
+/** Why a session is `EXPIRED`: its lifetime ran out, or the store canceled it (`/expire`). */
+export const SessionExpiredReasonValues = ['timeout', 'canceled'] as const;
+export type SessionExpiredReason = (typeof SessionExpiredReasonValues)[number];
+export const SessionExpiredReasonSchema = z.enum(SessionExpiredReasonValues);
 
 export const ExternalTxStatusValues = ['pending', 'submitted', 'confirmed', 'failed'] as const;
 export type ExternalTxStatus = (typeof ExternalTxStatusValues)[number];
 export const ExternalTxStatusSchema = z.enum(ExternalTxStatusValues);
 
-export const SponsorshipMethodValues = ['eip3009', 'permit', 'paymaster', 'paymaster_verifying', 'paymaster_erc20', 'energy', 'fee_payer'] as const;
+export const SponsorshipMethodValues = [
+  'eip3009',
+  'permit',
+  'paymaster',
+  'paymaster_verifying',
+  'paymaster_erc20',
+  'energy',
+  'fee_payer',
+] as const;
 export type SponsorshipMethod = (typeof SponsorshipMethodValues)[number];
 export const SponsorshipMethodSchema = z.enum(SponsorshipMethodValues);
 

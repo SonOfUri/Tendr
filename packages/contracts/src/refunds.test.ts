@@ -45,4 +45,20 @@ describe('deriveRefundStatus', () => {
       refundReason: 'expired',
       lateRefundStatus: 'none',
     }));
+
+  it('held and screening-pending payments are not refunds yet', () =>
+    expect(deriveRefundStatus('HELD', [p('a', 'HELD'), p('b', 'SCREENING_PENDING')], [])).toEqual({
+      refundStatus: 'none',
+      refundReason: null,
+      lateRefundStatus: 'none',
+    }));
+
+  it('a held payment being refunded with the sanctions reason is in progress', () =>
+    expect(
+      deriveRefundStatus(
+        'HELD',
+        [p('a', 'REFUNDING')],
+        [{ paymentId: 'a', reason: 'sanctions', createdAt: new Date(1) }],
+      ),
+    ).toMatchObject({ refundStatus: 'in_progress', refundReason: 'sanctions' }));
 });

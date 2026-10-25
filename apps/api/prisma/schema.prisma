@@ -123,8 +123,18 @@ enum SessionStatus {
   REFUNDED
   EXPIRED
   LATE_DEPOSIT
+  HELD
+  SCREENING_PENDING
 
   @@map("session_status")
+}
+
+/// Why a session is EXPIRED: its lifetime ran out, or the store canceled it.
+enum SessionExpiredReason {
+  timeout
+  canceled
+
+  @@map("session_expired_reason")
 }
 
 enum PaymentStatus {
@@ -133,8 +143,18 @@ enum PaymentStatus {
   SETTLED
   REFUNDING
   REFUNDED
+  HELD
+  SCREENING_PENDING
 
   @@map("payment_status")
+}
+
+/// Why a payment is HELD.
+enum HeldReason {
+  sanctions
+  screening_unavailable
+
+  @@map("held_reason")
 }
 
 enum RefundReason {
@@ -142,6 +162,8 @@ enum RefundReason {
   late
   underpaid
   failed
+  overpaid
+  sanctions
 
   @@map("refund_reason")
 }
@@ -409,14 +431,18 @@ model WebauthnChallenge {
 // ─── Merchant domain ────────────────────────────────────────────────────────
 
 model Merchant {
-  id            String         @id
-  name          String
-  slug          String         @unique
-  kind          MerchantKind   @default(merchant)
-  aupAcceptedAt DateTime?      @map("aup_accepted_at")
-  status        MerchantStatus @default(active)
-  createdAt     DateTime       @default(now()) @map("created_at")
-  updatedAt     DateTime       @updatedAt @map("updated_at")
+  id              String             @id
+  name            String
+  slug            String             @unique
+  kind            MerchantKind       @default(merchant)
+  aupAcceptedAt   DateTime?          @map("aup_accepted_at")
+  status          MerchantStatus     @default(active)
+  /// Origins allowed to frame the checkout (CSP `frame-ancestors`); shared by both modes.
+  checkoutDomains String[]           @default([]) @map("checkout_domains")
+  defaultFeePayer FeePayer           @default(merchant) @map("default_fee_payer")
+  defaultGasPayer ResolvedGasSponsor @default(buyer) @map("default_gas_payer")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
 
   users             MerchantUser[]
   apiKeys           ApiKey[]
@@ -607,6 +633,7 @@ model AccountProposal {
   account   MerchantAccount   @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   createdBy User?             @relation(fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   approvals AccountApproval[]
+  refunds   Refund[]
 
   @@unique([accountId, onchainId])
   @@unique([id, merchantId, livemode])
@@ -809,31 +836,37 @@ model PaymentLink {
 }
 
 model Session {
-  id               String             @id
-  merchantId       String             @map("merchant_id")
+  id               String                @id
+  merchantId       String                @map("merchant_id")
   livemode         Boolean
-  themeId          String?            @map("theme_id")
-  paymentLinkId    String?            @map("payment_link_id")
-  externalRef      String?            @map("external_ref")
-  amountMode       AmountMode         @map("amount_mode")
-  amount           Decimal            @db.Decimal(38, 18)
-  amountCurrency   String             @map("amount_currency")
-  destAsset        String             @map("dest_asset")
-  destChain        String             @map("dest_chain")
+  themeId          String?               @map("theme_id")
+  paymentLinkId    String?               @map("payment_link_id")
+  externalRef      String?               @map("external_ref")
+  amountMode       AmountMode            @map("amount_mode")
+  amount           Decimal               @db.Decimal(38, 18)
+  amountCurrency   String                @map("amount_currency")
+  destAsset        String                @map("dest_asset")
+  destChain        String                @map("dest_chain")
   recipient        String
   beneficiary      String?
   delivery         Delivery
-  hookData         Json?              @map("hook_data")
-  metadata         Json               @default("{}")
-  feeBps           Int                @map("fee_bps")
-  feePayer         FeePayer           @map("fee_payer")
-  gasSponsor       ResolvedGasSponsor @map("gas_sponsor")
-  gasMaxUsd        Decimal?           @map("gas_max_usd") @db.Decimal(18, 6)
-  status           SessionStatus      @default(PENDING_DEPOSIT)
-  expiresAt        DateTime           @map("expires_at")
-  clientSecretHash String             @unique @map("client_secret_hash")
-  createdAt        DateTime           @default(now()) @map("created_at")
-  updatedAt        DateTime           @updatedAt @map("updated_at")
+  hookData         Json?                 @map("hook_data")
+  metadata         Json                  @default("{}")
+  feeBps           Int                   @map("fee_bps")
+  feePayer         FeePayer              @map("fee_payer")
+  /// The resolved gas payer (API `gas_payer`; `buyer` is the shopper).
+  gasSponsor       ResolvedGasSponsor    @map("gas_sponsor")
+  gasMaxUsd        Decimal?              @map("gas_max_usd") @db.Decimal(18, 6)
+  status           SessionStatus         @default(PENDING_DEPOSIT)
+  expiresAt        DateTime              @map("expires_at")
+  clientSecretHash String                @unique @map("client_secret_hash")
+  successUrl       String?               @map("success_url")
+  cancelUrl        String?               @map("cancel_url")
+  /// Lower-cased (CHECK in migration checkout_core); refund contact and receipts only.
+  customerEmail    String?               @map("customer_email")
+  expiredReason    SessionExpiredReason? @map("expired_reason")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
 
   merchant          Merchant          @relation(fields: [merchantId], references: [id])
   theme             CheckoutTheme?    @relation(fields: [themeId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
@@ -845,25 +878,30 @@ model Session {
   gasSponsorships   GasSponsorship[]
   screeningResults  ScreeningResult[]
 
+  // (merchant_id, livemode, external_ref) is unique only among PENDING_DEPOSIT, PROCESSING,
+  // SCREENING_PENDING and SETTLED sessions (a partial unique index in migration checkout_core):
+  // an expired, late or held order may get a new session.
   @@unique([id, merchantId, livemode])
-  @@unique([merchantId, livemode, externalRef])
   @@index([status, expiresAt])
   @@map("sessions")
 }
 
 model Quote {
-  id               String   @id
-  merchantId       String   @map("merchant_id")
+  id               String    @id
+  merchantId       String    @map("merchant_id")
   livemode         Boolean
-  sessionId        String   @map("session_id")
-  originAssetId    String   @map("origin_asset_id")
-  depositAddress   String   @map("deposit_address")
-  amountIn         Decimal  @map("amount_in") @db.Decimal(78, 0)
-  amountOut        Decimal  @map("amount_out") @db.Decimal(78, 0)
-  refundTo         String   @map("refund_to")
+  sessionId        String    @map("session_id")
+  originAssetId    String    @map("origin_asset_id")
+  depositAddress   String    @map("deposit_address")
+  amountIn         Decimal   @map("amount_in") @db.Decimal(78, 0)
+  amountOut        Decimal   @map("amount_out") @db.Decimal(78, 0)
+  refundTo         String    @map("refund_to")
   deadline         DateTime
-  oneclickQuoteRef String?  @map("oneclick_quote_ref")
-  createdAt        DateTime @default(now()) @map("created_at")
+  oneclickQuoteRef String?   @map("oneclick_quote_ref")
+  /// Set when a newer quote replaced this one for the session.
+  supersededAt     DateTime? @map("superseded_at")
+  amountInUsd      Decimal?  @map("amount_in_usd") @db.Decimal(18, 6)
+  createdAt        DateTime  @default(now()) @map("created_at")
 
   merchant Merchant  @relation(fields: [merchantId], references: [id])
   session  Session   @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
@@ -878,23 +916,34 @@ model Quote {
 }
 
 model Payment {
-  id             String        @id
-  merchantId     String        @map("merchant_id")
-  livemode       Boolean
-  sessionId      String        @map("session_id")
-  quoteId        String        @map("quote_id")
-  originTxHash   String?       @map("origin_tx_hash")
-  amountReceived Decimal       @map("amount_received") @db.Decimal(78, 0)
-  settleTx       String?       @map("settle_tx")
-  payoutTx       String?       @map("payout_tx")
-  feeAmount      Decimal?      @map("fee_amount") @db.Decimal(78, 0)
-  networkFee     Decimal?      @map("network_fee") @db.Decimal(78, 0)
-  gasSponsored   Boolean       @default(false) @map("gas_sponsored")
-  status         PaymentStatus @default(DETECTED)
-  isLate         Boolean       @default(false) @map("is_late")
-  settledAt      DateTime?     @map("settled_at")
-  createdAt      DateTime      @default(now()) @map("created_at")
-  updatedAt      DateTime      @updatedAt @map("updated_at")
+  id                   String        @id
+  merchantId           String        @map("merchant_id")
+  livemode             Boolean
+  sessionId            String        @map("session_id")
+  quoteId              String        @map("quote_id")
+  originTxHash         String?       @map("origin_tx_hash")
+  amountReceived       Decimal       @map("amount_received") @db.Decimal(78, 0)
+  settleTx             String?       @map("settle_tx")
+  payoutTx             String?       @map("payout_tx")
+  feeAmount            Decimal?      @map("fee_amount") @db.Decimal(78, 0)
+  networkFee           Decimal?      @map("network_fee") @db.Decimal(78, 0)
+  gasSponsored         Boolean       @default(false) @map("gas_sponsored")
+  status               PaymentStatus @default(DETECTED)
+  isLate               Boolean       @default(false) @map("is_late")
+  senderAddress        String?       @map("sender_address")
+  senderChain          String?       @map("sender_chain")
+  overpaidAmount       Decimal?      @map("overpaid_amount") @db.Decimal(78, 0)
+  refundedAmount       Decimal?      @map("refunded_amount") @db.Decimal(78, 0)
+  /// The last 1Click status seen for this payment's quote.
+  oneclickStatus       String?       @map("oneclick_status")
+  heldReason           HeldReason?   @map("held_reason")
+  /// The overpayment was worth less than SMALL_OVERPAY_USD and stays with the merchant.
+  keptSmallOverpayment Boolean       @default(false) @map("kept_small_overpayment")
+  amountOut            Decimal?      @map("amount_out") @db.Decimal(78, 0)
+  amountInUsd          Decimal?      @map("amount_in_usd") @db.Decimal(18, 6)
+  settledAt            DateTime?     @map("settled_at")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
 
   merchant                 Merchant         @relation(fields: [merchantId], references: [id])
   session                  Session          @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
@@ -910,21 +959,34 @@ model Payment {
 }
 
 model Refund {
-  id           String           @id
-  merchantId   String           @map("merchant_id")
-  livemode     Boolean
-  paymentId    String           @map("payment_id")
-  reason       RefundReason
-  refundTxHash String?          @map("refund_tx_hash")
-  status       ExternalTxStatus @default(pending)
-  createdAt    DateTime         @default(now()) @map("created_at")
-  updatedAt    DateTime         @updatedAt @map("updated_at")
+  id                  String           @id
+  merchantId          String           @map("merchant_id")
+  livemode            Boolean
+  paymentId           String           @map("payment_id")
+  reason              RefundReason
+  refundTxHash        String?          @map("refund_tx_hash")
+  status              ExternalTxStatus @default(pending)
+  /// The project 2 `refund` proposal that returns the money (null when 1Click refunds directly).
+  proposalId          String?          @map("proposal_id")
+  /// Where the money goes; null while `needs_address`.
+  destination         String?          @map("destination")
+  destinationChain    String?          @map("destination_chain")
+  assetId             String           @map("asset_id")
+  amount              Decimal          @db.Decimal(78, 0)
+  /// The sender is a known exchange: no return address until the shopper gives one.
+  needsAddress        Boolean          @default(false) @map("needs_address")
+  /// A signer typed the legal-clearance acknowledgement (required to refund a held payment).
+  acknowledgedLegalAt DateTime?        @map("acknowledged_legal_at")
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
 
-  merchant Merchant @relation(fields: [merchantId], references: [id])
-  payment  Payment  @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  merchant Merchant         @relation(fields: [merchantId], references: [id])
+  payment  Payment          @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  proposal AccountProposal? @relation(fields: [proposalId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([merchantId])
   @@index([paymentId])
+  @@index([proposalId])
   @@map("refunds")
 }
 

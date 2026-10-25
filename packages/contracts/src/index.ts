@@ -4,3 +4,4 @@ export * from './enums.js';
 export * from './refunds.js';
 export * from './auth.js';
 export * from './accounts.js';
+export * from './checkout.js';

@@ -7,15 +7,24 @@ export const SessionStatusValues = [
   'REFUNDED',
   'EXPIRED',
   'LATE_DEPOSIT',
+  'HELD',
+  'SCREENING_PENDING',
 ] as const;
 export type SessionStatus = (typeof SessionStatusValues)[number];
 export const SessionStatusSchema = z.enum(SessionStatusValues);
 
+/**
+ * Session moves. `PROCESSING → PENDING_DEPOSIT` is only for an underpay retry while the session is
+ * unexpired (the caller checks `expires_at`). `HELD` (sanctioned sender) leaves only through a
+ * signer-approved refund. `SCREENING_PENDING` waits for sanctions screening to become available.
+ */
 export const SESSION_TRANSITIONS: Record<SessionStatus, readonly SessionStatus[]> = {
   PENDING_DEPOSIT: ['PROCESSING', 'EXPIRED'],
-  PROCESSING: ['SETTLED', 'REFUNDED'],
+  PROCESSING: ['SETTLED', 'REFUNDED', 'HELD', 'PENDING_DEPOSIT', 'SCREENING_PENDING'],
+  SCREENING_PENDING: ['SETTLED', 'HELD'],
   EXPIRED: ['LATE_DEPOSIT'],
-  LATE_DEPOSIT: ['REFUNDED'],
+  LATE_DEPOSIT: ['REFUNDED', 'HELD'],
+  HELD: ['REFUNDED'],
   SETTLED: [],
   REFUNDED: [],
 };
@@ -34,13 +43,21 @@ export const PaymentStatusValues = [
   'SETTLED',
   'REFUNDING',
   'REFUNDED',
+  'HELD',
+  'SCREENING_PENDING',
 ] as const;
 export type PaymentStatus = (typeof PaymentStatusValues)[number];
 export const PaymentStatusSchema = z.enum(PaymentStatusValues);
 
+/**
+ * Payment moves. A `HELD` payment (sanctioned sender) is never settled; it leaves only through a
+ * signer-approved refund proposal. `SCREENING_PENDING` settles on `allow` or holds on `block`.
+ */
 export const PAYMENT_TRANSITIONS: Record<PaymentStatus, readonly PaymentStatus[]> = {
-  DETECTED: ['PROCESSING', 'REFUNDING'],
-  PROCESSING: ['SETTLED', 'REFUNDING'],
+  DETECTED: ['PROCESSING', 'REFUNDING', 'HELD', 'SCREENING_PENDING'],
+  PROCESSING: ['SETTLED', 'REFUNDING', 'HELD', 'SCREENING_PENDING'],
+  SCREENING_PENDING: ['SETTLED', 'HELD'],
+  HELD: ['REFUNDING'],
   REFUNDING: ['REFUNDED'],
   SETTLED: [],
   REFUNDED: [],
