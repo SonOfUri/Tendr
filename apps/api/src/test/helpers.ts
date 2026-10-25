@@ -472,6 +472,17 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         ...o,
       },
     }),
+  AccountLimit: async (merchantId, livemode, o) =>
+    prisma.accountLimit.create({
+      data: {
+        id: newId('alim'),
+        merchantId,
+        livemode,
+        accountId: (await accountFor(merchantId, livemode)).id,
+        asset: unique('nep141:asset'),
+        ...o,
+      },
+    }),
   IdempotencyKey: (merchantId, livemode, o) =>
     prisma.idempotencyKey.create({
       data: {

@@ -2,8 +2,17 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Worker, type Job } from 'bullmq';
+import { Queue, Worker, type Job } from 'bullmq';
 import { env, loadEnv } from './env.js';
+import {
+  ACCOUNT_JOB_EVERY_MS,
+  ACCOUNTS_QUEUE,
+  EXECUTE_RECOVERY_JOB,
+  EXECUTE_TIMELOCKS_JOB,
+  processAccountJob,
+  RECONCILE_JOB,
+  setDelayedJobs,
+} from './jobs/account-notices.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
 // Registers every event handler; must load before the dispatcher runs (see dispatchOnce).
@@ -116,8 +125,9 @@ export interface WorkerOptions {
 }
 
 /**
- * Starts the worker process: event-job and maintenance workers, the hourly
- * `purge-idempotency` schedule, the outbox dispatcher and the health server.
+ * Starts the worker process: event-job, maintenance and merchant-account workers, the hourly
+ * `purge-idempotency` schedule, the per-minute account jobs (reconciliation, ready timelocks,
+ * ready recoveries), the outbox dispatcher and the health server.
  */
 export async function startWorker(
   opts: WorkerOptions = {},
@@ -132,7 +142,15 @@ export async function startWorker(
     concurrency: 5,
   });
   const maintenanceWorker = new Worker(MAINTENANCE_QUEUE, processMaintenanceJob, setup);
-  for (const w of [eventsWorker, maintenanceWorker] as Worker[]) {
+  const accountsQueue = new Queue(ACCOUNTS_QUEUE, setup);
+  // Delayed account jobs (the recovery reminder) go on this process's accounts queue.
+  setDelayedJobs(accountsQueue);
+  const accountsWorker = new Worker(
+    ACCOUNTS_QUEUE,
+    (job: Job) => processAccountJob(job.name, job.data),
+    setup,
+  );
+  for (const w of [eventsWorker, maintenanceWorker, accountsWorker] as Worker[]) {
     w.on('failed', (job, err) =>
       log('warn', 'job failed', {
         queue: w.name,
@@ -151,6 +169,10 @@ export async function startWorker(
     { name: PURGE_IDEMPOTENCY_JOB },
   );
 
+  for (const name of [RECONCILE_JOB, EXECUTE_TIMELOCKS_JOB, EXECUTE_RECOVERY_JOB]) {
+    await accountsQueue.upsertJobScheduler(name, { every: ACCOUNT_JOB_EVERY_MS }, { name });
+  }
+
   const stopDispatcher =
     opts.dispatcher === false
       ? async () => {}
@@ -166,8 +188,9 @@ export async function startWorker(
     healthPort: health.port,
     stop: async () => {
       await stopDispatcher();
-      await Promise.all([eventsWorker.close(), maintenanceWorker.close()]);
-      await Promise.all([eventsQueue.close(), maintenanceQueue.close()]);
+      await Promise.all([eventsWorker.close(), maintenanceWorker.close(), accountsWorker.close()]);
+      await Promise.all([eventsQueue.close(), maintenanceQueue.close(), accountsQueue.close()]);
+      setDelayedJobs(null);
       await closeConnection(connection);
       await health.close();
     },

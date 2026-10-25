@@ -51,7 +51,7 @@ const WithdrawRouteSchema = z.union([
 ]);
 export type WithdrawRoute = z.infer<typeof WithdrawRouteSchema>;
 
-const SignerSchema = z.object({ id: Str, keys: z.array(SignerKeySchema).max(64) }).strict();
+export const SignerSchema = z.object({ id: Str, keys: z.array(SignerKeySchema).max(64) }).strict();
 export type SignerJson = z.infer<typeof SignerSchema>;
 
 const variant = <K extends string, T extends z.ZodTypeAny>(key: K, value: T) =>

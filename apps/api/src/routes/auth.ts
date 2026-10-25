@@ -27,6 +27,17 @@ import { prisma } from '../lib/prisma.js';
 import { storesFor } from '../merchants/team.js';
 
 const person = { principals: ['user_session' as const] };
+/** Person routes a restricted recovery-kit session may also use. */
+const personOrRecovery = { ...person, recoverySession: true };
+
+/**
+ * Whether the request runs on a restricted recovery-kit session: its person lost every passkey
+ * and the store's recovery key vouched for them, so registering a new passkey needs no step-up.
+ */
+function isRecoverySession(req: FastifyRequest): boolean {
+  const p = requirePrincipal(req);
+  return p.kind === 'user_session' && !!p.recoveryMerchantId;
+}
 
 /** The dashboard session behind a cookie-authenticated request. */
 function sessionOf(req: FastifyRequest): string {
@@ -77,39 +88,51 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   // The first passkey is the bootstrap (an email-verified session may add it). Every further
   // passkey needs a recent assertion from an existing one, checked again at verify time.
-  app.post('/v1/auth/passkeys/register/options', { config: { auth: person } }, async (req) => {
-    const { userId } = requirePerson(req);
-    if ((await activeCredentials(userId)).length > 0) requireStepUp(req);
-    const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    return registrationOptions(user);
-  });
+  // A recovery-kit session (lost all passkeys) may register without a step-up.
+  app.post(
+    '/v1/auth/passkeys/register/options',
+    { config: { auth: personOrRecovery } },
+    async (req) => {
+      const { userId } = requirePerson(req);
+      if (!isRecoverySession(req) && (await activeCredentials(userId)).length > 0) {
+        requireStepUp(req);
+      }
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+      return registrationOptions(user);
+    },
+  );
 
-  app.post('/v1/auth/passkeys/register/verify', { config: { auth: person } }, async (req) => {
-    const { userId } = requirePerson(req);
-    const body = z
-      .object({
-        response: WebauthnResponse,
-        deviceLabel: z.string().trim().min(1).max(64).optional(),
-      })
-      .strict()
-      .parse(req.body);
-    // Fast path; the authoritative first-passkey check runs inside `verifyRegistration`, under a
-    // row lock on the person, so two passkey-less sessions cannot both register a "first" one.
-    if ((await activeCredentials(userId)).length > 0) requireStepUp(req);
-    const p = requirePrincipal(req);
-    const passkeyVerifiedAt =
-      p.kind === 'user_session' || p.kind === 'dashboard_user' ? p.passkeyVerifiedAt : null;
-    const { credential, first } = await verifyRegistration(
-      { id: userId },
-      body.response as unknown as RegistrationResponseJSON,
-      body.deviceLabel ?? null,
-      { sessionId: sessionOf(req), steppedUp: isSteppedUp(passkeyVerifiedAt) },
-    );
-    // Registering the first passkey is itself a fresh passkey assertion (user-verified); it also
-    // ended the person's other sessions.
-    if (first) await markPasskeyVerified(sessionOf(req));
-    return { credential: publicPasskey(credential) };
-  });
+  app.post(
+    '/v1/auth/passkeys/register/verify',
+    { config: { auth: personOrRecovery } },
+    async (req) => {
+      const { userId } = requirePerson(req);
+      const body = z
+        .object({
+          response: WebauthnResponse,
+          deviceLabel: z.string().trim().min(1).max(64).optional(),
+        })
+        .strict()
+        .parse(req.body);
+      // Fast path; the authoritative first-passkey check runs inside `verifyRegistration`, under a
+      // row lock on the person, so two passkey-less sessions cannot both register a "first" one.
+      const recovery = isRecoverySession(req);
+      if (!recovery && (await activeCredentials(userId)).length > 0) requireStepUp(req);
+      const p = requirePrincipal(req);
+      const passkeyVerifiedAt =
+        p.kind === 'user_session' || p.kind === 'dashboard_user' ? p.passkeyVerifiedAt : null;
+      const { credential, first } = await verifyRegistration(
+        { id: userId },
+        body.response as unknown as RegistrationResponseJSON,
+        body.deviceLabel ?? null,
+        { sessionId: sessionOf(req), steppedUp: recovery || isSteppedUp(passkeyVerifiedAt) },
+      );
+      // Registering the first passkey is itself a fresh passkey assertion (user-verified); it also
+      // ended the person's other sessions.
+      if (first) await markPasskeyVerified(sessionOf(req));
+      return { credential: publicPasskey(credential) };
+    },
+  );
 
   app.post('/v1/auth/passkeys/login/options', { config: { auth: 'public' } }, async (req) => {
     // No email parameter: always a discoverable login, so nothing about accounts is disclosed.
@@ -157,7 +180,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  app.post('/v1/auth/logout', { config: { auth: person } }, async (req, reply) => {
+  app.post('/v1/auth/logout', { config: { auth: personOrRecovery } }, async (req, reply) => {
     const p = requirePrincipal(req);
     if (p.kind === 'user_session') await revokeDashboardSession(p.sessionId);
     reply.header('set-cookie', clearedSessionCookies());

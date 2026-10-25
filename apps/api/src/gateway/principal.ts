@@ -29,7 +29,17 @@ export type Principal =
   // Resolved by the agent gateway (project 6); nothing produces it yet.
   | (Base & { kind: 'agent'; agentId: string })
   // A signed-in person with no store selected: signup, store switcher, invite acceptance.
-  | { kind: 'user_session'; userId: string; sessionId: string; passkeyVerifiedAt: Date | null };
+  | {
+      kind: 'user_session';
+      userId: string;
+      sessionId: string;
+      passkeyVerifiedAt: Date | null;
+      /**
+       * Set on a RESTRICTED recovery-kit session (lost all passkeys): the store it may recover.
+       * Only routes declaring `recoverySession: true` accept such a session.
+       */
+      recoveryMerchantId?: string | null;
+    };
 
 /** A principal pinned to a merchant + mode (every kind but `user_session`). */
 export type MerchantPrincipal = Exclude<Principal, { kind: 'user_session' }>;
@@ -42,6 +52,8 @@ export type MerchantPrincipal = Exclude<Principal, { kind: 'user_session' }>;
  * - `stepUp`: the dashboard session must have proved a passkey within the last 10 minutes
  *   (401 STEP_UP_REQUIRED). Only for cookie principals (`dashboard_user`, `user_session`).
  *   Mutations under `permission: 'team:manage'` always require it.
+ * - `recoverySession`: the route also accepts a restricted recovery-kit session (a `user_session`
+ *   with `recoveryMerchantId`). Every other route refuses one with 403.
  */
 export type RouteAuth =
   | {
@@ -49,6 +61,7 @@ export type RouteAuth =
       scope?: Scope;
       permission?: MerchantPermission;
       stepUp?: boolean;
+      recoverySession?: boolean;
     }
   | 'public';
 

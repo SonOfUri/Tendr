@@ -22,6 +22,7 @@ export const PER_MODE_MODELS = [
   'AccountProposal',
   'AccountApproval',
   'RecoveryRequest',
+  'AccountLimit',
 ] as const;
 
 /** Merchant-owned models shared by both modes (no `livemode` column): scoped by `merchantId`. */

@@ -229,6 +229,8 @@ enum IdempotencyStatus {
 enum WebauthnChallengePurpose {
   registration
   authentication
+  /// A recovery-kit sign-in (lost all passkeys): the store's recovery key signs it.
+  recovery_session
 
   @@map("webauthn_challenge_purpose")
 }
@@ -347,16 +349,20 @@ model WebauthnCredential {
 
 /// A dashboard login. Sliding expiry: each use moves `expires_at` (default 30 days).
 model DashboardSession {
-  id                String    @id
-  userId            String    @map("user_id")
-  tokenHash         String    @unique @map("token_hash")
-  expiresAt         DateTime  @map("expires_at")
-  revokedAt         DateTime? @map("revoked_at")
-  lastUsedAt        DateTime? @map("last_used_at")
+  id                 String    @id
+  userId             String    @map("user_id")
+  tokenHash          String    @unique @map("token_hash")
+  expiresAt          DateTime  @map("expires_at")
+  revokedAt          DateTime? @map("revoked_at")
+  lastUsedAt         DateTime? @map("last_used_at")
   /// When this session last proved a passkey (login, first registration, step-up). Sensitive
   /// actions need it within the last 10 minutes.
-  passkeyVerifiedAt DateTime? @map("passkey_verified_at")
-  createdAt         DateTime  @default(now()) @map("created_at")
+  passkeyVerifiedAt  DateTime? @map("passkey_verified_at")
+  /// Set on a RESTRICTED session opened with the store's recovery kit (lost all passkeys): it may
+  /// only register a passkey for its person and start a recovery of this store; every other route
+  /// refuses it. Plain column (no FK): sessions are identity rows, outside tenant scoping.
+  recoveryMerchantId String?   @map("recovery_merchant_id")
+  createdAt          DateTime  @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
@@ -436,6 +442,7 @@ model Merchant {
   accountProposals  AccountProposal[]
   accountApprovals  AccountApproval[]
   recoveryRequests  RecoveryRequest[]
+  accountLimits     AccountLimit[]
 
   @@map("merchants")
 }
@@ -544,12 +551,17 @@ model MerchantAccount {
   /// older than the lease (5 minutes) is stale and may be taken over.
   provisionAttemptId String?               @map("provision_attempt_id")
   provisionClaimedAt DateTime?             @map("provision_claimed_at")
+  /// Reconciliation cursor: how many on-chain proposals (`list_proposals`, creation order, never
+  /// removed) the watcher has read. Open ones are re-read by id.
+  proposalsSeen      Int                   @default(0) @map("proposals_seen")
+  reconciledAt       DateTime?             @map("reconciled_at")
   createdAt          DateTime              @default(now()) @map("created_at")
   updatedAt          DateTime              @updatedAt @map("updated_at")
 
   merchant         Merchant          @relation(fields: [merchantId], references: [id])
   proposals        AccountProposal[]
   recoveryRequests RecoveryRequest[]
+  limits           AccountLimit[]
 
   @@unique([merchantId, livemode])
   @@unique([id, merchantId, livemode])
@@ -618,25 +630,57 @@ model AccountApproval {
 /// A recovery started with the recovery key: replaces the signer set after 72 h unless a signer
 /// cancels. `onchain_id` is the contract's recovery id (hex) once started.
 model RecoveryRequest {
-  id            String         @id
-  merchantId    String         @map("merchant_id")
-  livemode      Boolean
-  accountId     String         @map("account_id")
-  onchainId     String?        @map("onchain_id")
-  executesAt    DateTime       @map("executes_at")
-  status        RecoveryStatus @default(pending)
-  newSignerIds  String[]       @map("new_signer_ids")
-  startTxHash   String?        @map("start_tx_hash")
-  cancelTxHash  String?        @map("cancel_tx_hash")
-  executeTxHash String?        @map("execute_tx_hash")
-  createdAt     DateTime       @default(now()) @map("created_at")
-  updatedAt     DateTime       @updatedAt @map("updated_at")
+  id               String         @id
+  merchantId       String         @map("merchant_id")
+  livemode         Boolean
+  accountId        String         @map("account_id")
+  onchainId        String?        @map("onchain_id")
+  executesAt       DateTime       @map("executes_at")
+  status           RecoveryStatus @default(pending)
+  newSignerIds     String[]       @map("new_signer_ids")
+  newThreshold     Int?           @map("new_threshold")
+  nonce            BigInt?
+  /// The recovery-key epoch the recovery was started under (part of its id).
+  recoveryKeyEpoch BigInt?        @map("recovery_key_epoch")
+  startTxHash      String?        @map("start_tx_hash")
+  cancelTxHash     String?        @map("cancel_tx_hash")
+  executeTxHash    String?        @map("execute_tx_hash")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
 
   merchant Merchant        @relation(fields: [merchantId], references: [id])
   account  MerchantAccount @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
 
+  @@unique([accountId, onchainId])
   @@index([merchantId, livemode, status])
   @@map("recovery_requests")
+}
+
+/// Mirror of the contract's per-asset limits, refund cap and auto-sweep rule (`get_limits`,
+/// `get_auto_sweep`). Amounts are the asset's smallest units. Display and fast validation only.
+model AccountLimit {
+  id                  String   @id
+  merchantId          String   @map("merchant_id")
+  livemode            Boolean
+  accountId           String   @map("account_id")
+  asset               String
+  perTx               Decimal? @map("per_tx") @db.Decimal(78, 0)
+  perDay              Decimal? @map("per_day") @db.Decimal(78, 0)
+  refundCap           Decimal? @map("refund_cap") @db.Decimal(78, 0)
+  sweepTriggerAbove   Decimal? @map("sweep_trigger_above") @db.Decimal(78, 0)
+  sweepKeep           Decimal? @map("sweep_keep") @db.Decimal(78, 0)
+  sweepSavedAddressId String?  @map("sweep_saved_address_id")
+  sweepChain          String?  @map("sweep_chain")
+  sweepAddress        String?  @map("sweep_address")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  merchant Merchant        @relation(fields: [merchantId], references: [id])
+  account  MerchantAccount @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([accountId, asset])
+  @@index([merchantId, livemode])
+  @@map("account_limits")
 }
 
 // ─── Configuration ──────────────────────────────────────────────────────────
@@ -673,7 +717,10 @@ model PayoutAllowlistEntry {
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
 
-  @@unique([merchantId, livemode, chain, address])
+  // (merchant_id, livemode, chain, address) is unique among non-revoked rows only (a partial
+  // unique index in migration 20261025220000_chain_watcher): a removed address may be re-added
+  // under a new on-chain id.
+  @@index([merchantId, livemode])
   @@map("payout_allowlist")
 }
 

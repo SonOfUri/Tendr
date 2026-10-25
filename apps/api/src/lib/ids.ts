@@ -36,7 +36,8 @@ export type IdPrefix =
   | 'macc'
   | 'prop'
   | 'appr'
-  | 'rec';
+  | 'rec'
+  | 'alim'; // account_limits (mirror of the contract's per-asset limits)
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${ulid()}`;

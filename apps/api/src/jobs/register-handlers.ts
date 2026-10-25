@@ -9,6 +9,7 @@ import {
   PROVISION_REQUESTED,
   provisionMerchantAccount,
 } from '../accounts/accounts.js';
+import { registerAccountHandlers } from './account-notices.js';
 import { registerEventHandler } from './handlers.js';
 
 // Merchant-account provisioning (test account at store creation, live account at go-live).
@@ -24,3 +25,7 @@ registerEventHandler(
   },
   PROVISION_JOB_OPTIONS,
 );
+
+// Merchant-account notices to signers (built from the on-chain action) and the live → test
+// signer mirror.
+registerAccountHandlers();

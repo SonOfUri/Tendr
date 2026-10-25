@@ -15,6 +15,7 @@ import { healthRoutes } from './routes/health.js';
 import { merchantRoutes } from './routes/merchants.js';
 import { pingRoutes } from './routes/ping.js';
 import { proposalRoutes } from './routes/proposals.js';
+import { recoveryRoutes } from './routes/recovery.js';
 import { teamRoutes } from './routes/team.js';
 import { randomUUID } from 'node:crypto';
 
@@ -200,6 +201,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(teamRoutes);
   await app.register(proposalRoutes);
   await app.register(accountRoutes);
+  await app.register(recoveryRoutes);
   opts.extraRoutes?.(app);
 
   return app;

@@ -42,6 +42,7 @@ import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { nearClient, type TxResult } from '../near/client.js';
+import { NotBroadcastError } from '../near/rpc.js';
 import { RELAY_GAS } from '../near/tx.js';
 import {
   AccountIdSchema,
@@ -55,6 +56,7 @@ import {
   type ApprovalIntent,
 } from './encoding.js';
 import { nsToDate, parseAccountEvents, u64Of, type AccountEvent } from './events.js';
+import { afterAccountEvents, applyAccountEventsTx } from './watcher.js';
 
 /** The caller: a person acting in one store and mode (a `dashboard_user` principal). */
 export interface ProposalActor extends ScopeContext {
@@ -472,7 +474,7 @@ export async function validateLocally(ctx: ScopeContext, action: ActionJson): Pr
 
 // ─── signer checks and challenges ────────────────────────────────────────────
 
-function requireSigner(actor: ProposalActor): void {
+export function requireSigner(actor: ProposalActor): void {
   if (!actor.isSigner) throw forbidden('Only signers can approve or cancel proposals');
 }
 
@@ -504,6 +506,19 @@ export async function challengeFor(
   assertCanSign(p, intent);
   const account = await activeAccount(actor);
   if (intent === 'approve') assertNotApprovedAtEpoch(p, actor.userId, account.signerEpoch);
+  return signerChallenge(actor, account, p.onchainId, intent);
+}
+
+/**
+ * A WebAuthn request over `onchainId` (a proposal or recovery id) for `intent` at the account's
+ * mirrored signer epoch, offered to the signer's active passkeys.
+ */
+export async function signerChallenge(
+  actor: ProposalActor,
+  account: { nearAccountId: string; signerEpoch: bigint },
+  onchainId: string,
+  intent: ApprovalIntent,
+) {
   const creds = await activeCredentials(actor.userId);
   if (creds.length === 0) throw forbidden('Register a passkey first');
   return {
@@ -511,7 +526,7 @@ export async function challengeFor(
     signerEpoch: account.signerEpoch.toString(),
     challengeB64u: challengeB64u({
       contractId: account.nearAccountId,
-      proposalId: p.onchainId,
+      proposalId: onchainId,
       signerEpoch: account.signerEpoch,
       intent,
     }),
@@ -681,12 +696,68 @@ function signedApproval(signerId: string, parsed: ParsedAssertion) {
   };
 }
 
+/**
+ * A signer's WebAuthn response turned into the contract's `SignedApproval` for `intent` over
+ * `onchainId` (a proposal or recovery id): the passkey must be the signer's own and active, the
+ * assertion must answer that challenge at the account's current mirrored epoch, and its signature
+ * must verify locally, all before any gas is spent.
+ */
+export async function assertedApproval(
+  actor: ProposalActor,
+  account: { nearAccountId: string; signerEpoch: bigint },
+  onchainId: string,
+  intent: ApprovalIntent,
+  response: unknown,
+) {
+  const parsed = await parseAssertion(actor.userId, response);
+  checkChallenge(parsed, {
+    contractId: account.nearAccountId,
+    proposalId: onchainId,
+    intent,
+    epoch: account.signerEpoch,
+  });
+  await verifyLocally(parsed, response);
+  return signedApproval(actor.userId, parsed);
+}
+
 // ─── relay and outcome ───────────────────────────────────────────────────────
 
-async function relay(
+/**
+ * Longest a request waits on a relay before treating its outcome as unknown. Below
+ * `RELAY_CLAIM_LEASE_MS`, so a claim is never taken over while its own relay may still answer.
+ */
+export const RELAY_TIMEOUT_MS = 90_000;
+
+/** Raised when a relay outlives `RELAY_TIMEOUT_MS`: it may still land; the watcher settles it. */
+export class RelayOutcomeUnknownError extends AppError {
+  constructor() {
+    super(
+      'INTERNAL_ERROR',
+      'The account did not confirm this in time; it will show up once the chain settles it',
+      504,
+    );
+  }
+}
+
+export function withRelayTimeout<T>(p: Promise<T>, ms = RELAY_TIMEOUT_MS): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new RelayOutcomeUnknownError()), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+export async function relay(
   livemode: boolean,
   contractId: string,
-  method: 'propose' | 'approve' | 'cancel',
+  method:
+    | 'propose'
+    | 'approve'
+    | 'cancel'
+    | 'execute'
+    | 'start_recovery'
+    | 'cancel_recovery'
+    | 'execute_recovery',
   args: object,
 ): Promise<TxResult> {
   return nearClient(livemode).call('relayer-accounts', contractId, method, args, {
@@ -694,9 +765,9 @@ async function relay(
   });
 }
 
-const landed = (r: TxResult) => r.topLevelStatus === 'success';
+export const landed = (r: TxResult) => r.topLevelStatus === 'success';
 
-const rejected = (r: TxResult) =>
+export const rejected = (r: TxResult) =>
   new AppError('CONFLICT', 'The account contract rejected this', 409, {
     failure: r.failure,
     txHash: r.txHash,
@@ -807,8 +878,13 @@ export async function applyProposalEvents(
   });
 }
 
-async function recordTxHash(ctx: ScopeContext, id: string, txHash: string): Promise<void> {
-  await prisma.accountProposal.updateMany({
+async function recordTxHash(
+  db: Prisma.TransactionClient | typeof prisma,
+  ctx: ScopeContext,
+  id: string,
+  txHash: string,
+): Promise<void> {
+  await db.accountProposal.updateMany({
     where: { id, merchantId: ctx.merchantId, livemode: ctx.livemode },
     data: { lastTxHash: txHash },
   });
@@ -821,6 +897,10 @@ const isAlreadyApproved = (r: TxResult) =>
 /** The contract's `ProposalView` JSON (`get_proposal`), the fields used here. */
 export interface ContractProposalView {
   id: string;
+  action?: unknown;
+  creator?: string;
+  created_at?: string;
+  expires_at?: string;
   status: 'pending' | 'executed' | 'failed' | 'cancelled' | 'expired' | 'executing';
   approvals: { signer_id: string; key: unknown; signer_epoch: string }[];
   valid_approvals: number;
@@ -845,8 +925,12 @@ export interface ContractProposalView {
  * lost, or the `propose` → "already exists" → `approve` fallback met our own approval), the relay
  * counts as done and the row is brought up to date from the contract's `get_proposal` view.
  *
- * If the call never returns (network), the error propagates, the claim is released and nothing is
- * stored; the chain watcher's reconciliation picks up a transaction that did land.
+ * Outcome rules for the claim (R24): it is released only when nothing reached the chain
+ * (`NotBroadcastError` before any transaction was sent) or the contract rejected the call. On an
+ * unknown outcome (a network error after sending, or the relay outliving `RELAY_TIMEOUT_MS`, which
+ * is below the claim lease) the claim is KEPT: the `propose` may have landed, and the chain
+ * watcher looks the draft up by its on-chain id once the claim goes stale, then either brings it
+ * up to date or releases it.
  */
 export async function submitApproval(
   actor: ProposalActor,
@@ -874,22 +958,31 @@ export async function submitApproval(
 
   const claim = p.status === 'draft' ? await claimDraft(actor, p.id) : null;
   let result: TxResult;
+  // Set once a relay answered: from then on the proposal may be on chain whatever happens next.
+  let reachedChain = false;
   try {
-    if (claim) {
-      result = await relay(actor.livemode, contractId, 'propose', {
-        action,
-        salt: p.salt,
-        approval,
-      });
-      // Another signer's `propose` landed first (or ours did, and its answer was lost).
-      if (!landed(result) && isAlreadyExists(result)) {
-        result = await relay(actor.livemode, contractId, 'approve', approveArgs);
-      }
-    } else {
-      result = await relay(actor.livemode, contractId, 'approve', approveArgs);
-    }
+    result = await withRelayTimeout(
+      (async () => {
+        if (claim) {
+          const proposed = await relay(actor.livemode, contractId, 'propose', {
+            action,
+            salt: p.salt,
+            approval,
+          });
+          reachedChain = true;
+          // Another signer's `propose` landed first (or ours did, and its answer was lost).
+          if (!landed(proposed) && isAlreadyExists(proposed)) {
+            return relay(actor.livemode, contractId, 'approve', approveArgs);
+          }
+          return proposed;
+        }
+        return relay(actor.livemode, contractId, 'approve', approveArgs);
+      })(),
+    );
   } catch (err) {
-    if (claim) await releaseClaim(actor, p.id, claim);
+    if (claim && !reachedChain && err instanceof NotBroadcastError) {
+      await releaseClaim(actor, p.id, claim);
+    }
     throw err;
   }
 
@@ -919,13 +1012,13 @@ export async function submitApproval(
 
   if (!landed(result)) {
     if (claim) await releaseClaim(actor, p.id, claim);
-    await recordTxHash(actor, p.id, result.txHash);
+    await recordTxHash(prisma, actor, p.id, result.txHash);
     log('info', 'approval rejected on chain', { proposalId: p.id, failure: result.failure });
     throw rejected(result);
   }
   // Only receipts that succeeded: a failed receipt's events were rolled back with it.
   const events = parseAccountEvents(result.successLogs);
-  await tenantTransaction(actor, async (tx, ctx) => {
+  const outcome = await tenantTransaction(actor, async (tx, ctx) => {
     // The call landed, so the proposal is on chain even if its events were not in the logs.
     await markOnChain(tx, ctx, p.id);
     await upsertApproval(tx, ctx, p.id, actor.userId, {
@@ -933,8 +1026,10 @@ export async function submitApproval(
       signerEpoch: account.signerEpoch,
       txHash: result.txHash,
     });
-    await applyProposalEvents(tx, ctx, p.id, events, result.txHash);
+    await recordTxHash(tx, ctx, p.id, result.txHash);
+    return applyAccountEventsTx(tx, ctx, account, events, result.txHash);
   });
+  await afterAccountEvents(account, outcome);
   return getProposal(actor, p.id);
 }
 
@@ -997,7 +1092,7 @@ async function isLocalOnlyCancel(
  * A relay landed for this proposal: a draft (or a locally cancelled draft, which the chain
  * overrides) becomes `pending`, and any relay claim is cleared.
  */
-async function markOnChain(
+export async function markOnChain(
   tx: Prisma.TransactionClient,
   ctx: ScopeContext,
   id: string,
@@ -1013,7 +1108,7 @@ async function markOnChain(
   });
 }
 
-async function upsertApproval(
+export async function upsertApproval(
   tx: Prisma.TransactionClient,
   ctx: ScopeContext,
   proposalId: string,
@@ -1039,7 +1134,7 @@ async function upsertApproval(
 }
 
 /** The person's credential row whose public key is `key` (R1: searched within the person only). */
-async function credentialForKey(userId: string, key: unknown): Promise<string | null> {
+export async function credentialForKey(userId: string, key: unknown): Promise<string | null> {
   const parsed = SignerKeySchema.safeParse(key);
   if (!parsed.success) return null;
   const want = keyId(parsed.data as SignerKey);
@@ -1120,25 +1215,22 @@ export async function cancelProposal(
   if (response === undefined)
     throw badAssertion('A passkey assertion with intent cancel is required');
   const account = await activeAccount(actor);
-  const parsed = await parseAssertion(actor.userId, response);
-  checkChallenge(parsed, {
-    contractId: account.nearAccountId,
-    proposalId: p.onchainId,
-    intent: 'cancel',
-    epoch: account.signerEpoch,
-  });
-  await verifyLocally(parsed, response);
-  const result = await relay(actor.livemode, account.nearAccountId, 'cancel', {
-    proposal_id: p.onchainId,
-    approval: signedApproval(actor.userId, parsed),
-  });
+  const approval = await assertedApproval(actor, account, p.onchainId, 'cancel', response);
+  const result = await withRelayTimeout(
+    relay(actor.livemode, account.nearAccountId, 'cancel', {
+      proposal_id: p.onchainId,
+      approval,
+    }),
+  );
   if (!landed(result)) {
-    await recordTxHash(actor, p.id, result.txHash);
+    await recordTxHash(prisma, actor, p.id, result.txHash);
     throw rejected(result);
   }
   const events = parseAccountEvents(result.successLogs);
-  await tenantTransaction(actor, (tx, ctx) =>
-    applyProposalEvents(tx, ctx, p.id, events, result.txHash),
-  );
+  const outcome = await tenantTransaction(actor, async (tx, ctx) => {
+    await recordTxHash(tx, ctx, p.id, result.txHash);
+    return applyAccountEventsTx(tx, ctx, account, events, result.txHash);
+  });
+  await afterAccountEvents(account, outcome);
   return getProposal(actor, p.id);
 }

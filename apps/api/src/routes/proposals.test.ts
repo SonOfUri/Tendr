@@ -9,13 +9,18 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { challengeB64u } from '../accounts/encoding.js';
 import { eventLog, parseAccountEvents } from '../accounts/events.js';
-import { applyProposalEvents } from '../accounts/proposals.js';
+import {
+  applyProposalEvents,
+  RELAY_CLAIM_LEASE_MS,
+  RELAY_TIMEOUT_MS,
+} from '../accounts/proposals.js';
 import { buildApp } from '../app.js';
 import { recordSignCount, registrationOptions, verifyRegistration } from '../auth/webauthn.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { prisma } from '../lib/prisma.js';
 import { fakeNearClient, resetNearClients } from '../near/client.js';
 import type { FakeNearClient } from '../near/fake.js';
+import { NotBroadcastError } from '../near/rpc.js';
 import { SoftAuthenticator } from '../test/authenticator.js';
 import { dashHeaders, loginAs, type Login } from '../test/dashboard.js';
 import { createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
@@ -739,7 +744,8 @@ describe('account proposals', () => {
       const d2 = (
         await post('/v1/account/proposals', finance, { action: withdraw(sav.id, '9') })
       ).json();
-      fake.throwNext('call', new Error('rpc down'));
+      // Nothing was broadcast: the claim is released.
+      fake.throwNext('call', new NotBroadcastError(new Error('vault down')));
       expect(
         (
           await post(`/v1/account/proposals/${d2.id}/approve`, a, {
@@ -749,6 +755,32 @@ describe('account proposals', () => {
       ).toBe(500);
       const row = await prisma.accountProposal.findUniqueOrThrow({ where: { id: d2.id } });
       expect(row).toMatchObject({ status: 'draft', relayClaimedAt: null });
+    });
+
+    it('an unknown relay outcome keeps the claim (R24): the propose may have landed', async () => {
+      const finance = await member('finance', false);
+      const a = await member('owner', true);
+      const sav = await savedAddress();
+      const d = (await post('/v1/account/proposals', finance, { action: withdraw(sav.id) })).json();
+      fake.throwNext('call', new Error('socket hang up after send'));
+      expect(
+        (
+          await post(`/v1/account/proposals/${d.id}/approve`, a, {
+            response: await signFor(a, d.id),
+          })
+        ).statusCode,
+      ).toBe(500);
+      const row = await prisma.accountProposal.findUniqueOrThrow({ where: { id: d.id } });
+      expect(row.status).toBe('draft');
+      expect(row.relayClaimedAt).not.toBeNull();
+      // A local cancel cannot race it while the claim holds.
+      expect((await post(`/v1/account/proposals/${d.id}/cancel`, finance, {})).statusCode).toBe(
+        409,
+      );
+    });
+
+    it('relays are bounded below the claim lease', () => {
+      expect(RELAY_TIMEOUT_MS).toBeLessThan(RELAY_CLAIM_LEASE_MS);
     });
 
     it('a claim past its lease no longer blocks the draft', async () => {

@@ -21,6 +21,11 @@ import { prisma } from '../lib/prisma.js';
 const SLIDE_INTERVAL_MS = 60_000;
 /** A session ends this long after creation, however often it is used. */
 export const SESSION_ABSOLUTE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+/**
+ * A restricted recovery-kit session (lost all passkeys) ends this long after creation, however
+ * often it is used.
+ */
+export const RECOVERY_SESSION_TTL_MS = 30 * 60_000;
 /** How recent a passkey assertion must be for sensitive actions. */
 export const STEP_UP_WINDOW_MS = 10 * 60_000;
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
@@ -39,14 +44,19 @@ export function csrfMatches(token: string, header: string | undefined): boolean 
 
 export type NewSession = { sessionId: string; token: string; csrf: string; expiresAt: Date };
 
-/** `passkeyVerified`: the session starts from a passkey assertion (passkey login). */
+/**
+ * `passkeyVerified`: the session starts from a passkey assertion (passkey login).
+ * `recoveryMerchantId`: a RESTRICTED session opened with that store's recovery kit; it lives
+ * `RECOVERY_SESSION_TTL_MS` at most and only routes that accept recovery sessions take it.
+ */
 export async function createDashboardSession(
   userId: string,
-  opts: { passkeyVerified?: boolean } = {},
+  opts: { passkeyVerified?: boolean; recoveryMerchantId?: string } = {},
 ): Promise<NewSession> {
   const token = randomBytes(32).toString('base64url');
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + DASHBOARD_SESSION_TTL_MS);
+  const ttl = opts.recoveryMerchantId ? RECOVERY_SESSION_TTL_MS : DASHBOARD_SESSION_TTL_MS;
+  const expiresAt = new Date(now.getTime() + ttl);
   const row = await prisma.dashboardSession.create({
     data: {
       id: newId('dss'),
@@ -56,6 +66,7 @@ export async function createDashboardSession(
       lastUsedAt: now,
       createdAt: now,
       passkeyVerifiedAt: opts.passkeyVerified ? now : null,
+      recoveryMerchantId: opts.recoveryMerchantId ?? null,
     },
   });
   return { sessionId: row.id, token, csrf: csrfFor(token), expiresAt };
@@ -66,6 +77,8 @@ export type ResolvedSession = {
   userId: string;
   expiresAt: Date;
   passkeyVerifiedAt: Date | null;
+  /** Set on a restricted recovery-kit session: the store it may recover. */
+  recoveryMerchantId: string | null;
   /** True when this use slid the expiry, so the cookies should be re-issued. */
   slid: boolean;
 };
@@ -75,12 +88,14 @@ export async function resolveDashboardSession(token: string): Promise<ResolvedSe
   if (!TOKEN.test(token)) return null;
   const now = new Date();
   const row = await prisma.dashboardSession.findUnique({ where: { tokenHash: sha256(token) } });
-  const hardEnd = row ? row.createdAt.getTime() + SESSION_ABSOLUTE_TTL_MS : 0;
+  const absolute = row?.recoveryMerchantId ? RECOVERY_SESSION_TTL_MS : SESSION_ABSOLUTE_TTL_MS;
+  const hardEnd = row ? row.createdAt.getTime() + absolute : 0;
   if (!row || row.revokedAt || row.expiresAt <= now || hardEnd <= now.getTime()) return null;
   const base = {
     sessionId: row.id,
     userId: row.userId,
     passkeyVerifiedAt: row.passkeyVerifiedAt,
+    recoveryMerchantId: row.recoveryMerchantId,
   };
   if (row.lastUsedAt && now.getTime() - row.lastUsedAt.getTime() < SLIDE_INTERVAL_MS) {
     return { ...base, expiresAt: row.expiresAt, slid: false };

@@ -211,6 +211,7 @@ async function resolveCookie(
         userId: session.userId,
         sessionId: session.sessionId,
         passkeyVerifiedAt: session.passkeyVerifiedAt,
+        recoveryMerchantId: session.recoveryMerchantId,
       },
       cookie,
     };
@@ -268,6 +269,9 @@ const authPlugin: FastifyPluginAsync = async (app) => {
       }
       if (cfg.stepUp && cfg.principals.some((k) => !COOKIE_KINDS.has(k))) {
         misconfigured.push(`${name} (stepUp needs cookie principals only)`);
+      }
+      if (cfg.recoverySession && cfg.principals.some((k) => k !== 'user_session')) {
+        misconfigured.push(`${name} (recoverySession needs principals ['user_session'] only)`);
       }
     }
   });
@@ -327,6 +331,12 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     if (denial) {
       requestLog(req, principal, { outcome: 'forbidden', statusCode: 403 });
       throw forbidden(denial);
+    }
+    // A restricted recovery-kit session works only where a route opts in (registering a passkey
+    // for its person); it never becomes a store principal.
+    if (cookie?.session.recoveryMerchantId && !auth.recoverySession) {
+      requestLog(req, principal, { outcome: 'forbidden', statusCode: 403 });
+      throw forbidden('A recovery session can only register a passkey or start a recovery');
     }
 
     // Step-up: a recent passkey assertion on the session, for routes that ask for it and for every
