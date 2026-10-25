@@ -19,6 +19,14 @@ pub const MAX_KEYS_PER_SIGNER: usize = 10;
 pub const MAX_ORIGINS: usize = 10;
 /// Longest accepted origin string.
 pub const MAX_ORIGIN_LEN: usize = 256;
+/// Longest id (signer, saved address, payment).
+pub const MAX_ID_LEN: usize = 64;
+/// Longest chain name (Task 3 narrows it to a fixed list).
+pub const MAX_CHAIN_LEN: usize = 16;
+/// Longest destination or saved address.
+pub const MAX_ADDRESS_LEN: usize = 128;
+/// Longest asset id (e.g. `nep141:…`).
+pub const MAX_ASSET_LEN: usize = 128;
 
 /// A person who can approve proposals, with one key per registered device.
 #[near(serializers = [borsh, json])]
@@ -168,18 +176,97 @@ impl Action {
         )
     }
 
-    /// Whether this action can be proposed yet. Money, upgrade and settlement
-    /// actions are enabled by later tasks.
+    /// Whether this action can be proposed yet. Only security actions execute
+    /// in this version; saved addresses (Task 3), limits, sweeps and money
+    /// (Task 4), upgrades (Task 5) and settlement (Task 3) are enabled later,
+    /// so nothing unexecutable can sit in storage.
     pub fn is_proposable(&self) -> bool {
-        !matches!(
-            self.kind(),
-            ActionKind::Money | ActionKind::Upgrade | ActionKind::Settlement
-        )
+        self.kind() == ActionKind::Security
     }
 }
 
 /// A validation failure; the message is shown in the panic or `proposal_failed`.
 pub type Invalid = &'static str;
+
+fn bounded(s: &str, max: usize, what: Invalid) -> Result<(), Invalid> {
+    if s.is_empty() || s.len() > max {
+        return Err(what);
+    }
+    Ok(())
+}
+
+/// Checks every string and list in `action` against the size bounds, so a
+/// proposal's storage cost is bounded no matter who submits it.
+pub fn validate_bounds(action: &Action) -> Result<(), Invalid> {
+    const ID: Invalid = "id must be 1 to 64 characters";
+    const CHAIN: Invalid = "chain must be 1 to 16 characters";
+    const ADDRESS: Invalid = "address must be 1 to 128 characters";
+    const ASSET: Invalid = "asset must be 1 to 128 characters";
+    match action {
+        Action::AddSigner(signer) => {
+            bounded(&signer.id, MAX_ID_LEN, ID)?;
+            if signer.keys.len() > MAX_KEYS_PER_SIGNER {
+                return Err("too many keys for one signer");
+            }
+            Ok(())
+        }
+        Action::RemoveSigner { id }
+        | Action::AddSignerKey { id, .. }
+        | Action::RemoveSignerKey { id, .. }
+        | Action::RemoveSavedAddress { id } => bounded(id, MAX_ID_LEN, ID),
+        Action::SetThreshold(_) | Action::RotateRecoveryKey(_) | Action::Upgrade { .. } => Ok(()),
+        Action::SetOrigins(origins) => {
+            if origins.len() > MAX_ORIGINS || origins.iter().any(|o| o.len() > MAX_ORIGIN_LEN) {
+                return Err("origins must list 1 to 10 entries of at most 256 characters");
+            }
+            Ok(())
+        }
+        Action::AddSavedAddress { id, chain, address } => {
+            bounded(id, MAX_ID_LEN, ID)?;
+            bounded(chain, MAX_CHAIN_LEN, CHAIN)?;
+            bounded(address, MAX_ADDRESS_LEN, ADDRESS)
+        }
+        Action::SetLimits { asset, .. }
+        | Action::SetRefundCap { asset, .. }
+        | Action::ClearAutoSweep { asset } => bounded(asset, MAX_ASSET_LEN, ASSET),
+        Action::SetAutoSweep {
+            asset,
+            saved_address_id,
+            ..
+        }
+        | Action::Withdraw {
+            asset,
+            saved_address_id,
+            ..
+        } => {
+            bounded(asset, MAX_ASSET_LEN, ASSET)?;
+            bounded(saved_address_id, MAX_ID_LEN, ID)
+        }
+        Action::Refund {
+            asset,
+            destination_chain,
+            destination,
+            payment_id,
+            ..
+        } => {
+            bounded(asset, MAX_ASSET_LEN, ASSET)?;
+            bounded(destination_chain, MAX_CHAIN_LEN, CHAIN)?;
+            bounded(destination, MAX_ADDRESS_LEN, ADDRESS)?;
+            bounded(payment_id, MAX_ID_LEN, ID)
+        }
+        Action::SetSettlement {
+            dest_asset,
+            saved_address_id,
+            ..
+        } => {
+            bounded(dest_asset, MAX_ASSET_LEN, ASSET)?;
+            match saved_address_id {
+                Some(id) => bounded(id, MAX_ID_LEN, ID),
+                None => Ok(()),
+            }
+        }
+    }
+}
 
 /// Checks a signer id has the API's `per_<ULID>` shape: `per_` followed by 26
 /// uppercase Crockford base32 characters, the first at most `7`.

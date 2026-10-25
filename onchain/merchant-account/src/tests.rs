@@ -714,6 +714,295 @@ fn proposal_id_json_is_hex_and_salt_is_base64() {
     assert_eq!(s, salt(1));
 }
 
+fn long(n: usize) -> String {
+    "x".repeat(n)
+}
+
+fn poa() -> WithdrawRoute {
+    WithdrawRoute::Poa {
+        token_contract: "usdc.tendr.testnet".parse().unwrap(),
+    }
+}
+
+/// One instance of every action that later tasks enable, with valid sizes.
+fn unsupported_actions() -> Vec<Action> {
+    let asset = || "nep141:usdc.tendr.testnet".to_string();
+    vec![
+        Action::AddSavedAddress {
+            id: "sav_1".into(),
+            chain: "base".into(),
+            address: "0x91a1b2c3d4e5f60718293a4b5c6d7e8f90a1b244".into(),
+        },
+        Action::RemoveSavedAddress { id: "sav_1".into() },
+        Action::SetLimits {
+            asset: asset(),
+            per_tx: Some(U128(1)),
+            per_day: None,
+        },
+        Action::SetRefundCap {
+            asset: asset(),
+            daily: U128(1),
+        },
+        Action::SetAutoSweep {
+            asset: asset(),
+            trigger_above: U128(2),
+            keep: U128(1),
+            saved_address_id: "sav_1".into(),
+        },
+        Action::ClearAutoSweep { asset: asset() },
+        Action::Withdraw {
+            asset: asset(),
+            amount: U128(1),
+            saved_address_id: "sav_1".into(),
+            route: poa(),
+        },
+        Action::Refund {
+            asset: asset(),
+            amount: U128(1),
+            destination_chain: "base".into(),
+            destination: "0x91a1".into(),
+            payment_id: "pay_1".into(),
+            route: poa(),
+        },
+        Action::Upgrade { code_hash: [1; 32] },
+        Action::SetSettlement {
+            dest_asset: asset(),
+            payout_mode: PayoutMode::Wallet,
+            saved_address_id: Some("sav_1".into()),
+        },
+    ]
+}
+
+#[test]
+fn unsupported_actions_rejected_at_propose() {
+    let (mut c, a, _b, _c) = three_of(1);
+    for (n, action) in unsupported_actions().into_iter().enumerate() {
+        let name = format!("{action:?}");
+        let msg = panics(|| {
+            propose(&mut c, &a, action, n as u8);
+        });
+        assert!(msg.contains("not yet supported"), "{name}: {msg}");
+    }
+    assert!(c.list_proposals(0, 100).is_empty());
+}
+
+#[test]
+fn action_field_bounds_enforced() {
+    let (mut c, a, b, _c) = three_of(2);
+    let asset = || "nep141:usdc.tendr.testnet".to_string();
+    let mut d = new_signer(4).signer();
+    d.keys = (0..=action::MAX_KEYS_PER_SIGNER as u8)
+        .map(|i| p256_signer(&p256_key(100 + i)))
+        .collect();
+    let cases: Vec<(Action, &str)> = vec![
+        // Proposable (security) variants.
+        (Action::RemoveSigner { id: long(65) }, "id must be 1 to 64"),
+        (
+            Action::AddSignerKey {
+                id: long(65),
+                key: p256_signer(&p256_key(99)),
+            },
+            "id must be 1 to 64",
+        ),
+        (
+            Action::RemoveSignerKey {
+                id: long(65),
+                key: p256_signer(&p256_key(99)),
+            },
+            "id must be 1 to 64",
+        ),
+        (Action::AddSigner(d), "too many keys"),
+        (
+            Action::SetOrigins((0..11).map(|i| format!("https://o{i}.example")).collect()),
+            "origins must list 1 to 10",
+        ),
+        (
+            Action::SetOrigins(vec![format!("https://{}", long(250))]),
+            "origins must list 1 to 10 entries of at most 256",
+        ),
+        // Not yet proposable: the size check still runs first.
+        (
+            Action::AddSavedAddress {
+                id: long(65),
+                chain: "base".into(),
+                address: "0x1".into(),
+            },
+            "id must be 1 to 64",
+        ),
+        (
+            Action::AddSavedAddress {
+                id: "sav_1".into(),
+                chain: long(17),
+                address: "0x1".into(),
+            },
+            "chain must be 1 to 16",
+        ),
+        (
+            Action::AddSavedAddress {
+                id: "sav_1".into(),
+                chain: "base".into(),
+                address: long(129),
+            },
+            "address must be 1 to 128",
+        ),
+        (
+            Action::AddSavedAddress {
+                id: "sav_1".into(),
+                chain: String::new(),
+                address: "0x1".into(),
+            },
+            "chain must be 1 to 16",
+        ),
+        (
+            Action::SetLimits {
+                asset: long(129),
+                per_tx: None,
+                per_day: None,
+            },
+            "asset must be 1 to 128",
+        ),
+        (
+            Action::SetAutoSweep {
+                asset: asset(),
+                trigger_above: U128(2),
+                keep: U128(1),
+                saved_address_id: long(65),
+            },
+            "id must be 1 to 64",
+        ),
+        (
+            Action::Refund {
+                asset: asset(),
+                amount: U128(1),
+                destination_chain: "base".into(),
+                destination: long(129),
+                payment_id: "pay_1".into(),
+                route: poa(),
+            },
+            "address must be 1 to 128",
+        ),
+        (
+            Action::Refund {
+                asset: asset(),
+                amount: U128(1),
+                destination_chain: "base".into(),
+                destination: "0x1".into(),
+                payment_id: long(65),
+                route: poa(),
+            },
+            "id must be 1 to 64",
+        ),
+        (
+            Action::SetSettlement {
+                dest_asset: long(129),
+                payout_mode: PayoutMode::Intents,
+                saved_address_id: None,
+            },
+            "asset must be 1 to 128",
+        ),
+    ];
+    for (n, (action, expected)) in cases.into_iter().enumerate() {
+        let name = format!("{action:?}");
+        let msg = panics(|| {
+            propose(&mut c, &a, action, n as u8);
+        });
+        assert!(msg.contains(expected), "{name}: {msg}");
+    }
+    assert!(c.list_proposals(0, 100).is_empty());
+
+    // At the limit is fine (64-char saved-address id, 16-char chain, 128-char address).
+    assert_eq!(
+        action::validate_bounds(&Action::AddSavedAddress {
+            id: long(64),
+            chain: long(16),
+            address: long(128),
+        }),
+        Ok(())
+    );
+    // Ten origins of up to 256 characters are accepted end to end.
+    let origins: Vec<String> = (0..10)
+        .map(|i| format!("https://o{i}{}", long(256 - 10)))
+        .collect();
+    let id = propose(&mut c, &a, Action::SetOrigins(origins), 200);
+    c.approve(id, b.approve(&id, 0));
+    assert_eq!(status(&c, &id), ProposalStatus::Executed);
+}
+
+#[test]
+fn signer_count_bounded_at_init() {
+    ctx(T0);
+    let people: Vec<Person> = (1..=action::MAX_SIGNERS as u8 + 1)
+        .map(|n| person(n, 1))
+        .collect();
+    let refs: Vec<&Person> = people.iter().collect();
+    let msg = panics(|| {
+        MerchantAccount::new(config(&refs, 1));
+    });
+    assert!(msg.contains("too many signers"), "{msg}");
+    MerchantAccount::new(config(&refs[..action::MAX_SIGNERS], 1));
+}
+
+#[test]
+fn pending_proposals_capped_per_signer() {
+    let (mut c, a, b, cc) = three_of(2);
+    let max = MAX_PENDING_PER_SIGNER;
+    let ids: Vec<_> = (1..=max)
+        .map(|n| propose(&mut c, &a, Action::SetThreshold(3), n))
+        .collect();
+    let msg = panics(|| {
+        propose(&mut c, &a, Action::SetThreshold(3), max + 1);
+    });
+    assert!(msg.contains("too many pending proposals"), "{msg}");
+    assert_eq!(c.list_proposals(0, 100).len(), usize::from(max));
+    // The cap is per creator: B still has room.
+    propose(&mut c, &b, Action::SetThreshold(3), 50);
+
+    // Cancelling one of A's frees a slot, whoever cancels.
+    c.cancel(ids[0], cc.cancel(&ids[0], 0));
+    propose(&mut c, &a, Action::SetThreshold(3), max + 1);
+    let msg = panics(|| {
+        propose(&mut c, &a, Action::SetThreshold(3), max + 2);
+    });
+    assert!(msg.contains("too many pending proposals"), "{msg}");
+
+    // Executing one frees a slot (it also bumps the epoch).
+    c.approve(ids[1], b.approve(&ids[1], 0));
+    assert_eq!(status(&c, &ids[1]), ProposalStatus::Executed);
+    let p = propose(&mut c, &a, Action::SetThreshold(2), max + 2);
+
+    // Expiry frees slots too, once marked by `execute` or `cancel`.
+    ctx(T0 + PROPOSAL_TTL);
+    let msg = panics(|| {
+        propose(&mut c, &a, Action::SetThreshold(1), 1);
+    });
+    assert!(msg.contains("too many pending proposals"), "{msg}");
+    c.execute(ids[2]);
+    c.cancel(p, b.cancel(&p, 1));
+    assert_eq!(status(&c, &ids[2]), ProposalStatus::Expired);
+    assert_eq!(status(&c, &p), ProposalStatus::Expired);
+    propose(&mut c, &a, Action::SetThreshold(1), 1);
+    propose(&mut c, &a, Action::SetThreshold(1), 2);
+    let msg = panics(|| {
+        propose(&mut c, &a, Action::SetThreshold(1), 3);
+    });
+    assert!(msg.contains("too many pending proposals"), "{msg}");
+}
+
+#[test]
+fn cancel_after_expiry_marks_expired() {
+    let (mut c, a, b, _c) = three_of(2);
+    let id = propose(&mut c, &a, Action::SetThreshold(3), 1);
+    ctx(T0 + PROPOSAL_TTL);
+    c.cancel(id, b.cancel(&id, 0));
+    assert_eq!(status(&c, &id), ProposalStatus::Expired);
+    let evs = events(&get_logs());
+    let names: Vec<_> = evs.iter().map(|e| e["event"].as_str().unwrap()).collect();
+    assert_eq!(names, ["proposal_failed"]);
+    assert_eq!(evs[0]["data"]["reason"], "expired");
+    let msg = panics(|| c.cancel(id, b.cancel(&id, 0)));
+    assert!(msg.contains("not pending"), "{msg}");
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

@@ -17,7 +17,7 @@ use near_sdk::json_types::U64;
 #[allow(unused_imports)]
 use near_sdk::serde;
 use near_sdk::serde_with::base64::Base64;
-use near_sdk::store::IterableMap;
+use near_sdk::store::{IterableMap, LookupMap};
 use near_sdk::{env, near, require, AccountId, PanicOnDefault};
 
 use crate::action::{Action, ActionKind, Invalid, Signer};
@@ -33,6 +33,10 @@ pub const PROPOSAL_TTL: u64 = 7 * 24 * HOUR;
 pub const MAX_LIST_LIMIT: u32 = 100;
 /// Longest accepted RP ID (a DNS name).
 pub const MAX_RP_ID_LEN: usize = 253;
+/// Most pending (including timelocked) proposals one signer may have created.
+/// With the per-field size bounds this caps the storage any one signer can
+/// make the account pay for.
+pub const MAX_PENDING_PER_SIGNER: u8 = 10;
 
 /// Arguments to [`MerchantAccount::new`].
 #[near(serializers = [json])]
@@ -76,6 +80,8 @@ pub struct RecordedApproval {
 #[derive(Clone, Debug)]
 pub struct Proposal {
     pub action: Action,
+    /// The signer who proposed it; counts toward their pending cap.
+    pub creator: String,
     pub created_at: u64,
     /// At most one entry per signer: re-approving at a new epoch replaces it.
     pub approvals: Vec<RecordedApproval>,
@@ -97,6 +103,7 @@ pub struct ApprovalView {
 pub struct ProposalView {
     pub id: ProposalId,
     pub action: Action,
+    pub creator: String,
     pub created_at: U64,
     pub expires_at: U64,
     pub approvals: Vec<ApprovalView>,
@@ -134,6 +141,8 @@ pub struct MerchantAccount {
     intents_contract: AccountId,
     testnet_admin: Option<AccountId>,
     proposals: IterableMap<ProposalId, Proposal>,
+    /// Pending proposals per creating signer, for `MAX_PENDING_PER_SIGNER`.
+    pending_per_signer: LookupMap<String, u8>,
 }
 
 #[near]
@@ -170,6 +179,7 @@ impl MerchantAccount {
             intents_contract,
             testnet_admin,
             proposals: IterableMap::new(StorageKey::Proposals),
+            pending_per_signer: LookupMap::new(StorageKey::PendingPerSigner),
         };
         require!(!signers.is_empty(), "at least one signer is required");
         for signer in signers {
@@ -187,6 +197,7 @@ impl MerchantAccount {
     /// Creates a proposal and records the proposer's approval. Only a current
     /// signer can create one, so nobody else can fill storage with proposals.
     pub fn propose(&mut self, action: Action, salt: Salt, approval: SignedApproval) -> ProposalId {
+        or_panic(action::validate_bounds(&action));
         if !action.is_proposable() {
             env::panic_str("not yet supported");
         }
@@ -194,6 +205,17 @@ impl MerchantAccount {
         let id = ProposalId::new(&action, &salt.0);
         require!(self.proposals.get(&id).is_none(), "proposal already exists");
         self.verify_approval(&id, ApprovalIntent::Approve, &approval);
+        let pending = self
+            .pending_per_signer
+            .get(&approval.signer_id)
+            .copied()
+            .unwrap_or(0);
+        require!(
+            pending < MAX_PENDING_PER_SIGNER,
+            "too many pending proposals for this signer"
+        );
+        self.pending_per_signer
+            .insert(approval.signer_id.clone(), pending + 1);
 
         let created_at = env::block_timestamp();
         Event::ProposalCreated {
@@ -207,6 +229,7 @@ impl MerchantAccount {
             id,
             Proposal {
                 action,
+                creator: approval.signer_id.clone(),
                 created_at,
                 approvals: Vec::new(),
                 ready_at: None,
@@ -234,12 +257,7 @@ impl MerchantAccount {
         let proposal = self.open_proposal(&proposal_id);
         let now = env::block_timestamp();
         if now >= proposal.created_at + PROPOSAL_TTL {
-            self.finish(&proposal_id, ProposalStatus::Expired);
-            Event::ProposalFailed {
-                proposal_id,
-                reason: "expired",
-            }
-            .emit();
+            self.expire(proposal_id);
             return;
         }
         require!(
@@ -254,10 +272,15 @@ impl MerchantAccount {
         self.execute_now(proposal_id);
     }
 
-    /// Any one current signer may cancel a pending proposal.
+    /// Any one current signer may cancel a pending proposal. A proposal past
+    /// its TTL is marked expired instead, so the record shows why it ended.
     pub fn cancel(&mut self, proposal_id: ProposalId, approval: SignedApproval) {
-        self.open_proposal(&proposal_id);
+        let proposal = self.open_proposal(&proposal_id);
         self.verify_approval(&proposal_id, ApprovalIntent::Cancel, &approval);
+        if env::block_timestamp() >= proposal.created_at + PROPOSAL_TTL {
+            self.expire(proposal_id);
+            return;
+        }
         self.finish(&proposal_id, ProposalStatus::Cancelled);
         Event::ProposalCancelled {
             proposal_id,
@@ -297,6 +320,7 @@ impl MerchantAccount {
 #[near(serializers = [borsh])]
 enum StorageKey {
     Proposals,
+    PendingPerSigner,
 }
 
 fn or_panic(r: Result<(), Invalid>) {
@@ -327,9 +351,30 @@ impl MerchantAccount {
         p.clone()
     }
 
+    /// Moves a pending proposal to a final status and releases its slot in
+    /// the creator's pending cap.
     fn finish(&mut self, id: &ProposalId, status: ProposalStatus) {
         let p = self.proposals.get_mut(id).expect("proposal exists");
+        debug_assert_eq!(p.status, ProposalStatus::Pending);
         p.status = status;
+        let creator = p.creator.clone();
+        match self.pending_per_signer.get(&creator).copied() {
+            Some(n) if n > 1 => {
+                self.pending_per_signer.insert(creator, n - 1);
+            }
+            _ => {
+                self.pending_per_signer.remove(&creator);
+            }
+        }
+    }
+
+    fn expire(&mut self, proposal_id: ProposalId) {
+        self.finish(&proposal_id, ProposalStatus::Expired);
+        Event::ProposalFailed {
+            proposal_id,
+            reason: "expired",
+        }
+        .emit();
     }
 
     /// Panics unless `approval` is a valid assertion by a current signer's
@@ -488,6 +533,7 @@ impl MerchantAccount {
 
     /// Validates `action` against current state; mutates nothing.
     fn check_action(&self, action: &Action) -> Result<(), Invalid> {
+        action::validate_bounds(action)?;
         match action {
             Action::AddSigner(signer) => self.check_add_signer(signer),
             Action::RemoveSigner { id } => {
@@ -518,9 +564,8 @@ impl MerchantAccount {
             Action::SetOrigins(origins) => action::validate_origins(origins),
             Action::RotateRecoveryKey(Some(pk)) => self.check_recovery_key(pk),
             Action::RotateRecoveryKey(None) => Ok(()),
-            // Saved addresses, limits and sweeps are validated and executed by
-            // Tasks 3 and 4; money, upgrade and settlement are not proposable yet.
-            _ => Ok(()),
+            // Not proposable until Tasks 3-5 implement them.
+            _ => Err("not yet supported"),
         }
     }
 
@@ -539,7 +584,7 @@ impl MerchantAccount {
             Action::SetThreshold(t) => self.threshold = *t,
             Action::SetOrigins(origins) => self.origins = origins.clone(),
             Action::RotateRecoveryKey(pk) => self.recovery_key = *pk,
-            _ => env::panic_str("not yet supported"),
+            _ => return Err("not yet supported"),
         }
         Ok(())
     }
@@ -599,6 +644,7 @@ impl MerchantAccount {
         ProposalView {
             id,
             action: p.action.clone(),
+            creator: p.creator.clone(),
             created_at: U64(p.created_at),
             expires_at: U64(expires_at),
             approvals: p
