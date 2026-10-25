@@ -5,6 +5,7 @@ import { recordEvent } from '../events/record.js';
 import { AppError } from '../lib/errors.js';
 import { prisma as defaultPrisma } from '../lib/prisma.js';
 import type { NearClient, ProvisionParams, TxResult } from './client.js';
+import { NotBroadcastError } from './rpc.js';
 
 /** The per-mode facts a provisioning request is checked against. */
 export interface ProvisionScope {
@@ -51,14 +52,29 @@ const FUNDING_LOCK = { live: 0x74656e6472_01n, test: 0x74656e6472_00n } as const
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-/** yoctoNEAR recorded as `funding.spent` in `livemode` during the last 24 hours. */
+/**
+ * Net yoctoNEAR reserved in `livemode` during the last 24 hours: `funding.spent` rows in the
+ * window, minus the `funding.released` rows that cancel one of those reservations (matched by
+ * `reservationId`, so a release never outlives the reservation it cancels).
+ */
 export async function fundingSpentLast24h(db: Db, livemode: boolean): Promise<bigint> {
   const [row] = await db.$queryRaw<{ total: string }[]>`
-    SELECT COALESCE(SUM((payload->>'amountYocto')::numeric), 0)::text AS total
-    FROM events
-    WHERE type = 'funding.spent'
-      AND livemode = ${livemode}
-      AND created_at > now() - interval '24 hours'`;
+    WITH spent AS (
+      SELECT id, (payload->>'amountYocto')::numeric AS amount
+      FROM events
+      WHERE type = 'funding.spent'
+        AND livemode = ${livemode}
+        AND created_at > now() - interval '24 hours'
+    )
+    SELECT (
+      COALESCE((SELECT SUM(amount) FROM spent), 0)
+      - COALESCE((
+          SELECT SUM((payload->>'amountYocto')::numeric)
+          FROM events
+          WHERE type = 'funding.released'
+            AND payload->>'reservationId' IN (SELECT id FROM spent)
+        ), 0)
+    )::text AS total`;
   return BigInt(row?.total ?? '0');
 }
 
@@ -75,11 +91,17 @@ export class FundingCapError extends AppError {
 }
 
 /**
- * Wraps a NearClient so `provisionAccount` spends within the caps. The spend is reserved — a
- * `funding.spent` event on the provisioned merchant — in a transaction holding the mode's
- * advisory lock before anything is signed, so concurrent provisionings cannot both pass the
- * daily cap. A provisioning that later fails keeps its reservation: the cap errs on the side
- * of spending less.
+ * Wraps a NearClient so `provisionAccount` spends within the caps.
+ *
+ * 1. Preflight (request shape, caps, inner `preflightProvision`: config + key vault) — nothing is
+ *    reserved if any of it fails.
+ * 2. Reserve: a `funding.spent` event on the provisioned merchant, written in a transaction
+ *    holding the mode's advisory lock, so concurrent provisionings cannot both pass the cap.
+ * 3. Send. The reservation is cancelled by a `funding.released` event (same amount,
+ *    `reservationId` = the spent event) when the spend certainly did not happen: the inner client
+ *    threw NotBroadcastError (failed before broadcast, or rejected as an invalid tx), or the
+ *    batch failed on chain (one receipt, so the whole batch — transfer included — reverted).
+ *    Timeouts and other unknown outcomes keep the reservation: the cap errs toward spending less.
  */
 export class CappedNearClient implements NearClient {
   constructor(
@@ -104,7 +126,9 @@ export class CappedNearClient implements NearClient {
         `initial balance ${amount} yocto exceeds the per-account cap ${this.caps.perAccountYocto}`,
       );
     }
-    await this.db.$transaction(async (tx) => {
+    await this.inner.preflightProvision?.(p);
+
+    const reservationId = await this.db.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${
         p.livemode ? FUNDING_LOCK.live : FUNDING_LOCK.test
       })`;
@@ -115,7 +139,7 @@ export class CappedNearClient implements NearClient {
           `funding daily cap reached: ${spent} + ${amount} > ${this.caps.dailyYocto} yocto`,
         );
       }
-      await recordEvent(
+      return recordEvent(
         tx,
         { merchantId: p.merchantId, livemode: p.livemode },
         {
@@ -126,6 +150,45 @@ export class CappedNearClient implements NearClient {
         },
       );
     });
-    return this.inner.provisionAccount(p);
+
+    let result: TxResult;
+    try {
+      result = await this.inner.provisionAccount(p);
+    } catch (err) {
+      if (err instanceof NotBroadcastError) {
+        await this.release(p, reservationId, 'not_broadcast');
+      }
+      throw err;
+    }
+    if (result.status === 'failure') {
+      await this.release(p, reservationId, 'failed_on_chain', result.txHash);
+    }
+    return result;
+  }
+
+  private async release(
+    p: ProvisionParams,
+    reservationId: string,
+    reason: 'not_broadcast' | 'failed_on_chain',
+    txHash?: string,
+  ): Promise<void> {
+    await this.db.$transaction((tx) =>
+      recordEvent(
+        tx,
+        { merchantId: p.merchantId, livemode: p.livemode },
+        {
+          aggregateType: 'near_account',
+          aggregateId: p.accountId,
+          type: 'funding.released',
+          payload: {
+            accountId: p.accountId,
+            amountYocto: p.initialBalanceYocto.toString(),
+            reservationId,
+            reason,
+            ...(txHash ? { txHash } : {}),
+          },
+        },
+      ),
+    );
   }
 }

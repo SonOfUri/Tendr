@@ -10,7 +10,13 @@ import type { KeyVault } from '../keyvault/types.js';
 import { providerNotConfigured } from '../lib/errors.js';
 import { FakeNearClient } from './fake.js';
 import { CappedNearClient, assertProvisionable, type ProvisionScope } from './provision.js';
-import { JsonRpcTransport, NearRpc, isInvalidNonce } from './rpc.js';
+import {
+  JsonRpcTransport,
+  NearRpc,
+  NotBroadcastError,
+  isInvalidNonce,
+  isInvalidTransaction,
+} from './rpc.js';
 import {
   DEFAULT_CALL_GAS,
   buildTransaction,
@@ -20,6 +26,7 @@ import {
   provisionActions,
   signTransaction,
   type NearSigningKey,
+  type SignedTx,
 } from './tx.js';
 import type { Action } from '@near-js/transactions';
 
@@ -74,6 +81,11 @@ export interface NearClient {
   provisionAccount(p: ProvisionParams): Promise<TxResult>;
   /** Public keys (`ed25519:…`) of the account's access keys. */
   accessKeys(accountId: string): Promise<string[]>;
+  /**
+   * Optional: throws if `provisionAccount(p)` cannot even be attempted (bad request, missing
+   * configuration, key vault unavailable). Called before any funding is reserved.
+   */
+  preflightProvision?(p: ProvisionParams): Promise<void>;
 }
 
 export interface NearModeConfig extends ProvisionScope {
@@ -118,25 +130,44 @@ export class RpcNearClient implements NearClient {
     return this.rpc.accessKeyList(accountId);
   }
 
+  /**
+   * Everything provisioning needs before any funding is reserved: a valid request, the mode's code
+   * hash, and a reachable ed25519 `funding-near` key in the vault.
+   */
+  async preflightProvision(p: ProvisionParams): Promise<void> {
+    await this.provisionInputs(p);
+  }
+
   async provisionAccount(p: ProvisionParams): Promise<TxResult> {
+    let inputs: { pk: Uint8Array; codeHash: Uint8Array };
+    try {
+      inputs = await this.provisionInputs(p);
+    } catch (err) {
+      throw new NotBroadcastError(err);
+    }
+    return this.signAndSend(
+      'funding-near',
+      this.config.parentAccountId,
+      inputs.pk,
+      p.accountId,
+      provisionActions({
+        initialBalanceYocto: p.initialBalanceYocto,
+        codeHash: inputs.codeHash,
+        init: p.init,
+      }),
+    );
+  }
+
+  private async provisionInputs(
+    p: ProvisionParams,
+  ): Promise<{ pk: Uint8Array; codeHash: Uint8Array }> {
     assertProvisionable(p, this.config);
     if (!this.config.codeHash) {
       throw providerNotConfigured(
         `MERCHANT_ACCOUNT_CODE_HASH_${this.config.livemode ? 'LIVE' : 'TEST'} is not set`,
       );
     }
-    const pk = await this.ed25519PublicKey('funding-near');
-    return this.signAndSend(
-      'funding-near',
-      this.config.parentAccountId,
-      pk,
-      p.accountId,
-      provisionActions({
-        initialBalanceYocto: p.initialBalanceYocto,
-        codeHash: this.config.codeHash,
-        init: p.init,
-      }),
-    );
+    return { pk: await this.ed25519PublicKey('funding-near'), codeHash: this.config.codeHash };
   }
 
   private async ed25519PublicKey(key: NearSigningKey): Promise<Uint8Array> {
@@ -145,7 +176,19 @@ export class RpcNearClient implements NearClient {
     return raw;
   }
 
-  /** Builds, vault-signs and sends one transaction; on InvalidNonce refetches and retries once. */
+  /**
+   * Builds, vault-signs and sends one transaction; on InvalidNonce refetches and retries once.
+   *
+   * Throws NotBroadcastError when nothing reached the chain: a failure before `send_tx` (vault,
+   * nonce or block lookup, signing) or the node rejecting the transaction itself
+   * (InvalidTxError). Any other send error (timeout, network) is rethrown as is: the outcome is
+   * unknown.
+   *
+   * Nonces: next = max(node nonce, last nonce this process handed out) + 1 and the counter is
+   * never reset, so a retry never reuses a nonce already given to a concurrent in-flight call.
+   * The counter is per process: several API/worker instances signing with one key can still
+   * collide (each then retries once).
+   */
   private async signAndSend(
     key: NearSigningKey,
     signerId: string,
@@ -155,26 +198,29 @@ export class RpcNearClient implements NearClient {
   ): Promise<TxResult> {
     const nonceKey = `${signerId}/${key}`;
     for (let attempt = 0; ; attempt++) {
-      const fetched = await this.rpc.accessKeyNonce(signerId, nearPublicKey(publicKey));
-      const last = this.lastNonce.get(nonceKey) ?? 0n;
-      const nonce = (fetched > last ? fetched : last) + 1n;
-      this.lastNonce.set(nonceKey, nonce);
-      const tx = buildTransaction({
-        signerId,
-        publicKey,
-        nonce,
-        receiverId,
-        blockHash: await this.rpc.finalBlockHash(),
-        actions,
-      });
-      const signed = await signTransaction(this.kv, key, tx);
+      let signed: SignedTx;
+      try {
+        const fetched = await this.rpc.accessKeyNonce(signerId, nearPublicKey(publicKey));
+        const last = this.lastNonce.get(nonceKey) ?? 0n;
+        const nonce = (fetched > last ? fetched : last) + 1n;
+        this.lastNonce.set(nonceKey, nonce);
+        const tx = buildTransaction({
+          signerId,
+          publicKey,
+          nonce,
+          receiverId,
+          blockHash: await this.rpc.finalBlockHash(),
+          actions,
+        });
+        signed = await signTransaction(this.kv, key, tx);
+      } catch (err) {
+        throw new NotBroadcastError(err);
+      }
       try {
         return await this.rpc.sendTx(signed.bytes, signed.hash);
       } catch (err) {
-        if (attempt === 0 && isInvalidNonce(err)) {
-          this.lastNonce.delete(nonceKey);
-          continue;
-        }
+        if (attempt === 0 && isInvalidNonce(err)) continue;
+        if (isInvalidTransaction(err)) throw new NotBroadcastError(err);
         throw err;
       }
     }

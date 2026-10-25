@@ -85,6 +85,41 @@ describe('FakeNearClient', () => {
     ).rejects.toThrow(/account/);
   });
 
+  it('records a deep copy of args, so later mutation does not rewrite history', async () => {
+    const f = fake();
+    const args = { nested: { n: 1 } };
+    await f.call('relayer-accounts', 'a.tendr.testnet', 'm', args);
+    args.nested.n = 2;
+    expect(f.calls[0]).toMatchObject({ args: { nested: { n: 1 } } });
+  });
+
+  it('failNextProvision, throwNext and scriptAccessKeys', async () => {
+    const f = fake();
+    const p = {
+      merchantId: 'mer_x',
+      livemode: false,
+      accountId: 'shop.tendr.testnet',
+      init,
+      initialBalanceYocto: 1n,
+    };
+    f.failNextProvision('boom');
+    expect(await f.provisionAccount(p)).toMatchObject({ status: 'failure', failure: 'boom' });
+    expect(f.accounts.size).toBe(0);
+
+    const err = new Error('rpc down');
+    f.throwNext('provision', err);
+    await expect(f.provisionAccount(p)).rejects.toBe(err);
+    f.throwNext('call', err);
+    await expect(f.call('relayer-accounts', 'a.tendr.testnet', 'm', {})).rejects.toBe(err);
+    f.throwNext('view', err);
+    await expect(f.view('a.tendr.testnet', 'v', {})).rejects.toBe(err);
+    expect(f.calls.map((c) => c.kind)).toEqual(['provision', 'provision', 'call', 'view']);
+
+    expect((await f.provisionAccount(p)).status).toBe('success');
+    f.scriptAccessKeys('shop.tendr.testnet', ['ed25519:abc']);
+    expect(await f.accessKeys('shop.tendr.testnet')).toEqual(['ed25519:abc']);
+  });
+
   it('can script a failure for the next call', async () => {
     const f = fake();
     f.failNext('m', 'Smart contract panicked: nope');

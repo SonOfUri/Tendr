@@ -1,8 +1,13 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { recordEvent } from '../events/record.js';
+import { LocalKeyVault } from '../keyvault/local.js';
 import { prisma } from '../lib/prisma.js';
 import { createMerchant, resetDb } from '../test/helpers.js';
 import {
+  RpcNearClient,
   fakeNearClient,
   nearClient,
   resetNearClients,
@@ -11,6 +16,7 @@ import {
 } from './client.js';
 import { FakeNearClient } from './fake.js';
 import { CappedNearClient, fundingSpentLast24h } from './provision.js';
+import { NearRpc, NotBroadcastError } from './rpc.js';
 
 beforeEach(resetDb);
 
@@ -173,5 +179,110 @@ describe('CappedNearClient.provisionAccount', () => {
       'success',
     );
     expect(inner.calls.map((c) => c.kind)).toEqual(['view', 'call']);
+  });
+});
+
+describe('CappedNearClient reservation release', () => {
+  const eventsOf = async (type: string) =>
+    prisma.event.findMany({ where: { type }, orderBy: { createdAt: 'asc' } });
+
+  it('a preflight failure (config / key vault) reserves nothing', async () => {
+    const m = await createMerchant();
+    class KmsDown extends FakeNearClient {
+      override async preflightProvision(): Promise<void> {
+        throw new Error('KMS unavailable');
+      }
+    }
+    const inner = new KmsDown(scope);
+    const capped = new CappedNearClient(inner, scope, { perAccountYocto: NEAR, dailyYocto: NEAR });
+    await expect(capped.provisionAccount(params(m.id, 'shop', NEAR))).rejects.toThrow(/KMS/);
+    expect(await prisma.event.count()).toBe(0);
+    expect(inner.calls).toHaveLength(0);
+  });
+
+  it('the real RPC client without a code hash fails preflight before reserving', async () => {
+    const m = await createMerchant();
+    const dir = mkdtempSync(join(tmpdir(), 'tendr-near-prov-'));
+    try {
+      const transport = { request: () => Promise.reject(new Error('no network in tests')) };
+      const inner = new RpcNearClient({
+        rpc: new NearRpc(transport),
+        kv: new LocalKeyVault(join(dir, 'kv.json')),
+        config: scope,
+      });
+      const capped = new CappedNearClient(inner, scope, {
+        perAccountYocto: NEAR,
+        dailyYocto: NEAR,
+      });
+      await expect(capped.provisionAccount(params(m.id, 'shop', NEAR))).rejects.toMatchObject({
+        code: 'PROVIDER_NOT_CONFIGURED',
+      });
+      expect(await prisma.event.count()).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a pre-broadcast failure leaves no net spend', async () => {
+    const m = await createMerchant();
+    const { inner, capped } = setup({ perAccountYocto: NEAR, dailyYocto: NEAR });
+    inner.throwNext('provision', new NotBroadcastError(new Error('RPC down')));
+    await expect(capped.provisionAccount(params(m.id, 'shop', NEAR))).rejects.toBeInstanceOf(
+      NotBroadcastError,
+    );
+    const [reservation] = await eventsOf('funding.spent');
+    const [released] = await eventsOf('funding.released');
+    expect(released).toMatchObject({
+      merchantId: m.id,
+      livemode: false,
+      aggregateId: 'shop.tendr.testnet',
+      payload: {
+        amountYocto: NEAR.toString(),
+        reservationId: reservation!.id,
+        reason: 'not_broadcast',
+      },
+    });
+    expect(await fundingSpentLast24h(prisma, false)).toBe(0n);
+    // The full cap is available again: a retry succeeds.
+    expect((await capped.provisionAccount(params(m.id, 'shop', NEAR))).status).toBe('success');
+  });
+
+  it('an on-chain batch failure releases the reservation', async () => {
+    const m = await createMerchant();
+    const { inner, capped } = setup({ perAccountYocto: NEAR, dailyYocto: NEAR });
+    inner.failNextProvision('Smart contract panicked: threshold');
+    const res = await capped.provisionAccount(params(m.id, 'shop', NEAR));
+    expect(res).toMatchObject({ status: 'failure', failure: expect.stringMatching(/threshold/) });
+    expect(inner.accounts.size).toBe(0);
+    const [released] = await eventsOf('funding.released');
+    expect(released!.payload).toMatchObject({ reason: 'failed_on_chain', txHash: res.txHash });
+    expect(await fundingSpentLast24h(prisma, false)).toBe(0n);
+  });
+
+  it('a timeout / unknown outcome keeps the reservation', async () => {
+    const m = await createMerchant();
+    const { inner, capped } = setup({ perAccountYocto: NEAR, dailyYocto: NEAR });
+    inner.throwNext('provision', Object.assign(new Error('Timeout'), { type: 'TimeoutError' }));
+    await expect(capped.provisionAccount(params(m.id, 'shop', NEAR))).rejects.toThrow(/Timeout/);
+    expect(await eventsOf('funding.released')).toHaveLength(0);
+    expect(await fundingSpentLast24h(prisma, false)).toBe(NEAR);
+    await expect(capped.provisionAccount(params(m.id, 'shop2', 1n))).rejects.toMatchObject({
+      details: { cap: 'daily' },
+    });
+  });
+
+  it('a release does not outlive its reservation in the 24 h window', async () => {
+    const m = await createMerchant();
+    const { inner, capped } = setup({ perAccountYocto: NEAR, dailyYocto: 3n * NEAR });
+    inner.failNextProvision();
+    await capped.provisionAccount(params(m.id, 'shop', NEAR));
+    const [reservation] = await eventsOf('funding.spent');
+    // Age the reservation out of the window; its (newer) release must not go negative.
+    await prisma.$transaction([
+      prisma.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`),
+      prisma.$executeRaw`UPDATE events SET created_at = now() - interval '25 hours' WHERE id = ${reservation!.id}`,
+    ]);
+    await spent(m.id, false, NEAR);
+    expect(await fundingSpentLast24h(prisma, false)).toBe(NEAR);
   });
 });

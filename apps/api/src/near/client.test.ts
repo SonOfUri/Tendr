@@ -7,7 +7,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { nearPublicKey } from '../keyvault/keys.js';
 import { LocalKeyVault } from '../keyvault/local.js';
 import { RpcNearClient, type InitConfigJson } from './client.js';
-import { NearRpc, type RpcTransport } from './rpc.js';
+import { NearRpc, NearRpcError, NotBroadcastError, type RpcTransport } from './rpc.js';
 import { decodeSigned, implicitAccountId } from './tx.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'tendr-near-client-'));
@@ -41,10 +41,15 @@ class ScriptedTransport implements RpcTransport {
   requests: { method: string; params: Record<string, unknown> }[] = [];
   nonce = 100;
   sendResults: (() => unknown)[] = [];
+  /** Throw this from the next `block` request (RPC down before broadcast). */
+  blockError: Error | null = null;
+  /** Answer queries with a JSON-RPC-level `result.error` string. */
+  queryError: string | null = null;
 
   async request<T>(method: string, params: object): Promise<T> {
     const p = params as Record<string, unknown>;
     this.requests.push({ method, params: p });
+    if (method === 'query' && this.queryError) return { error: this.queryError } as T;
     if (method === 'query' && p.request_type === 'view_access_key') {
       return { nonce: this.nonce, block_hash: bs58.encode(BLOCK_HASH) } as T;
     }
@@ -55,12 +60,13 @@ class ScriptedTransport implements RpcTransport {
       return { result: Array.from(Buffer.from(JSON.stringify({ ok: 1 }))), logs: [] } as T;
     }
     if (method === 'block') {
+      if (this.blockError) throw this.blockError;
       return { header: { hash: bs58.encode(BLOCK_HASH) } } as T;
     }
     if (method === 'send_tx') {
       this.sent.push({ method, params: p });
       const next = this.sendResults.shift();
-      return (next ? next() : okOutcome()) as T;
+      return (next ? await next() : okOutcome()) as T;
     }
     throw new Error(`unexpected rpc ${method}`);
   }
@@ -273,5 +279,121 @@ describe('RpcNearClient views', () => {
       finality: 'final',
     });
     expect(await client(t).accessKeys('s.tendr.testnet')).toEqual([]);
+  });
+
+  it('throws NearRpcError when a query answers with result.error', async () => {
+    const t = new ScriptedTransport();
+    t.queryError = 'wasm execution failed with error: MethodNotFound';
+    await expect(client(t).view('s.tendr.testnet', 'nope', {})).rejects.toBeInstanceOf(
+      NearRpcError,
+    );
+    await expect(client(t).accessKeys('s.tendr.testnet')).rejects.toThrow(/MethodNotFound/);
+    await expect(client(t).call('relayer-accounts', 's.tendr.testnet', 'm', {})).rejects.toThrow(
+      /MethodNotFound/,
+    );
+    expect(t.sent).toHaveLength(0);
+  });
+});
+
+const provisionParams = {
+  merchantId: 'mer_x',
+  livemode: false,
+  accountId: 'shop.tendr.testnet',
+  init,
+  initialBalanceYocto: 1n,
+};
+
+describe('RpcNearClient broadcast classification', () => {
+  it('preflight fails without a code hash; provisioning then fails as NotBroadcastError', async () => {
+    const t = new ScriptedTransport();
+    const c = new RpcNearClient({
+      rpc: new NearRpc(t),
+      kv,
+      config: {
+        livemode: false,
+        parentAccountId: 'tendr.testnet',
+        intentsContractId: 'intents-mock.tendr.testnet',
+      },
+    });
+    await expect(c.preflightProvision(provisionParams)).rejects.toMatchObject({
+      code: 'PROVIDER_NOT_CONFIGURED',
+    });
+    await expect(c.provisionAccount(provisionParams)).rejects.toBeInstanceOf(NotBroadcastError);
+    expect(t.requests).toHaveLength(0);
+  });
+
+  it('an RPC failure before send_tx is NotBroadcastError', async () => {
+    const t = new ScriptedTransport();
+    t.blockError = new Error('fetch failed');
+    const err = await client(t)
+      .provisionAccount(provisionParams)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotBroadcastError);
+    expect((err as Error).cause).toBe(t.blockError);
+    expect(t.sent).toHaveLength(0);
+  });
+
+  it('a node rejection of the tx (InvalidTxError) is NotBroadcastError', async () => {
+    const t = new ScriptedTransport();
+    t.sendResults.push(() => {
+      throw Object.assign(new Error('Sender does not have enough balance'), {
+        type: 'NotEnoughBalance',
+      });
+    });
+    await expect(client(t).provisionAccount(provisionParams)).rejects.toBeInstanceOf(
+      NotBroadcastError,
+    );
+  });
+
+  it('a timeout after broadcast is rethrown as is (outcome unknown)', async () => {
+    const t = new ScriptedTransport();
+    const timeout = Object.assign(new Error('Timeout'), { type: 'TimeoutError' });
+    t.sendResults.push(() => {
+      throw timeout;
+    });
+    const err = await client(t)
+      .provisionAccount(provisionParams)
+      .catch((e: unknown) => e);
+    expect(err).toBe(timeout);
+    expect(err).not.toBeInstanceOf(NotBroadcastError);
+  });
+});
+
+describe('RpcNearClient nonces under concurrency', () => {
+  it('a retry after InvalidNonce never reuses a nonce handed to an in-flight call', async () => {
+    const t = new ScriptedTransport(); // the node keeps reporting nonce 100 throughout
+    const gate = () => {
+      let open!: () => void;
+      const p = new Promise<void>((r) => (open = r));
+      return { p, open };
+    };
+    const gateA = gate();
+    const gateB = gate();
+    t.sendResults.push(
+      async () => {
+        await gateA.p;
+        throw Object.assign(new Error('InvalidNonce'), { type: 'InvalidNonce' });
+      },
+      async () => {
+        await gateB.p;
+        return okOutcome();
+      },
+    );
+    const waitSent = async (n: number) => {
+      while (t.sent.length < n) await new Promise((r) => setImmediate(r));
+    };
+    const c = client(t);
+    const a = c.call('relayer-accounts', 's.tendr.testnet', 'a', {});
+    await waitSent(1);
+    const b = c.call('relayer-accounts', 's.tendr.testnet', 'b', {}); // in flight
+    await waitSent(2);
+    gateA.open(); // A is rejected, retries while B is still in flight
+    await a;
+    await c.call('relayer-accounts', 's.tendr.testnet', 'c', {});
+    gateB.open();
+    await b;
+    const nonces = t.sent.map((_, i) => signedFrom(t, i).nonce);
+    expect(nonces).toEqual([101n, 102n, 103n, 104n]);
+    expect(new Set(nonces).size).toBe(nonces.length);
   });
 });
