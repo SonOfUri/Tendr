@@ -22,6 +22,8 @@ export const ErrorCodes = [
   'EXPIRED',
   /** A recent passkey assertion is required (`POST /v1/auth/passkeys/step-up/*`). */
   'STEP_UP_REQUIRED',
+  /** A checkout quote is worth less than the minimum (USD 0.50) 1Click and Tendr will route. */
+  'QUOTE_TOO_SMALL',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];
