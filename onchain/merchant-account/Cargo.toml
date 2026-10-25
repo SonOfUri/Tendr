@@ -27,6 +27,17 @@ near-sdk = { workspace = true, features = ["unit-testing"] }
 # `p256_verify` / `ed25519_verify` host functions.
 p256 = { workspace = true, features = ["ecdsa", "std"] }
 ed25519-dalek.workspace = true
+# Sandbox integration tests (tests/sandbox.rs). near-workspaces has no helper
+# for global contracts, so those transactions are built with the same
+# near-primitives / near-crypto / near-jsonrpc-client versions it uses.
+near-workspaces = "0.23.0"
+near-sandbox = "0.3.16"
+serde_json = "1"
+near-primitives = "0.37"
+near-crypto = "0.37"
+near-jsonrpc-client = "0.22"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1"
 
 [package.metadata.near.reproducible_build]
 image = "sourcescan/cargo-near:0.21.1-rust-1.93.0"

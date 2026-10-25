@@ -100,5 +100,14 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Test
-        run: cargo test --all-features
+      - name: Unit tests
+        # The sandbox tests need the Wasm builds; they run below.
+        run: cargo test --all-features --lib
+      # Docker is available on GitHub's ubuntu runners; build.sh runs the
+      # pinned cargo-near image, the same way release builds are made.
+      - name: Build Wasm
+        run: |
+          scripts/build.sh
+          scripts/build.sh --features testnet-admin merchant-account
+      - name: Sandbox tests
+        run: cargo test -p merchant-account --test sandbox
