@@ -60,6 +60,16 @@ const EnvSchema = z
     FUNDING_DAILY_CAP_YOCTO: yocto.default('50000000000000000000000000'), // 50 NEAR
     /** Max yoctoNEAR one provisioned account may be seeded with. */
     FUNDING_PER_ACCOUNT_YOCTO: yocto.default('1000000000000000000000000'), // 1 NEAR
+    // Dashboard auth. Production must set the RP ID and origins explicitly (no localhost defaults).
+    WEBAUTHN_RP_ID: optionalString,
+    WEBAUTHN_RP_NAME: z.string().min(1).default('Tendr'),
+    /** Comma-separated origins allowed in WebAuthn client data (the dashboard's). */
+    WEBAUTHN_ORIGINS: optionalString,
+    /**
+     * `log` (dev: logger + `apps/api/.mail/*.json`), `memory` (tests), `unconfigured` (sending
+     * fails loudly; production's default until a real provider is wired). Defaults per NODE_ENV.
+     */
+    MAIL_DRIVER: z.enum(['log', 'memory', 'unconfigured']).optional(),
   })
   .superRefine((e, ctx) => {
     if (e.NODE_ENV === 'production' && e.KEYVAULT_DRIVER === 'local') {
@@ -75,6 +85,39 @@ const EnvSchema = z
         path: ['NEAR_CLIENT_DRIVER'],
         message: 'fake is not allowed in production (set NEAR_CLIENT_DRIVER=rpc)',
       });
+    }
+    if (e.NODE_ENV === 'production') {
+      if (!e.WEBAUTHN_RP_ID || e.WEBAUTHN_RP_ID === 'localhost') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['WEBAUTHN_RP_ID'],
+          message: 'required in production and must not be localhost',
+        });
+      }
+      const origins = splitList(e.WEBAUTHN_ORIGINS);
+      if (origins.length === 0 || origins.some((o) => !o.startsWith('https://'))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['WEBAUTHN_ORIGINS'],
+          message: 'required in production; every origin must be https',
+        });
+      }
+      if (e.MAIL_DRIVER === 'memory' || e.MAIL_DRIVER === 'log') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['MAIL_DRIVER'],
+          message: `${e.MAIL_DRIVER} is not allowed in production`,
+        });
+      }
+    }
+    for (const origin of splitList(e.WEBAUTHN_ORIGINS)) {
+      if (!z.string().url().safeParse(origin).success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['WEBAUTHN_ORIGINS'],
+          message: `not a URL: ${origin}`,
+        });
+      }
     }
     if (e.KEYVAULT_DRIVER !== 'gcp') return;
     for (const key of [
@@ -105,7 +148,21 @@ const EnvSchema = z
     WORKER_HEALTH_HOST:
       e.WORKER_HEALTH_HOST ?? (e.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
     NEAR_CLIENT_DRIVER: e.NEAR_CLIENT_DRIVER ?? (e.NODE_ENV === 'production' ? 'rpc' : 'fake'),
+    WEBAUTHN_RP_ID: e.WEBAUTHN_RP_ID ?? 'localhost',
+    WEBAUTHN_ORIGINS: e.WEBAUTHN_ORIGINS
+      ? splitList(e.WEBAUTHN_ORIGINS)
+      : ['http://localhost:3000'],
+    MAIL_DRIVER:
+      e.MAIL_DRIVER ??
+      ({ development: 'log', test: 'memory', production: 'unconfigured' } as const)[e.NODE_ENV],
   }));
+
+function splitList(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 function isJsonObject(text: string): boolean {
   try {

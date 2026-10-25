@@ -108,12 +108,22 @@ const base64Of = (bytes: number) =>
     message: `must be standard padded base64 of ${bytes} bytes`,
   });
 
+/** A compressed SEC1 P-256 point: 33 bytes, first byte 0x02 or 0x03. */
+const compressedP256 = z.string().refine(
+  (s) => {
+    if (!BASE64.test(s)) return false;
+    const raw = atob(s);
+    return raw.length === 33 && (raw.charCodeAt(0) === 0x02 || raw.charCodeAt(0) === 0x03);
+  },
+  { message: 'must be standard padded base64 of a 33-byte compressed SEC1 point (0x02/0x03)' },
+);
+
 /**
- * A signer's public key, in the contract's serde shape (standard padded base64):
- * `{ "P256": <33-byte compressed SEC1> }` or `{ "Ed25519": <32 bytes> }`.
+ * A signer's public key, in the contract's serde shape (`rename_all = "snake_case"`, standard
+ * padded base64): `{ "p256": <33-byte compressed SEC1> }` or `{ "ed25519": <32 bytes> }`.
  */
 export const SignerKeySchema = z.union([
-  z.object({ P256: base64Of(33) }).strict(),
-  z.object({ Ed25519: base64Of(32) }).strict(),
+  z.object({ p256: compressedP256 }).strict(),
+  z.object({ ed25519: base64Of(32) }).strict(),
 ]);
 export type SignerKey = z.infer<typeof SignerKeySchema>;

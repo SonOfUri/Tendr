@@ -160,6 +160,8 @@ function payloadText(payload: unknown): string | null {
 const idempotencyPlugin: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', async (req: FastifyRequest, reply: FastifyReply) => {
     if (req.method !== 'POST' || !isV1(req.routeOptions.url) || !req.principal) return;
+    // Keys are stored per merchant + mode; a person with no store selected has neither.
+    if (req.principal.kind === 'user_session') return;
     const header = req.headers[IDEMPOTENCY_HEADER];
     if (header === undefined) return;
     if (typeof header !== 'string' || header.length < 1 || header.length > MAX_KEY_LENGTH) {

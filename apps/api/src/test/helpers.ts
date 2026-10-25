@@ -60,7 +60,9 @@ export async function createCredential(
       id: newId('cred'),
       userId,
       credentialId: unique('cred'),
-      publicKey: { P256: randomBytes(33).toString('base64') },
+      publicKey: {
+        p256: Buffer.concat([Buffer.from([2]), randomBytes(32)]).toString('base64'),
+      },
       transports: ['internal'],
       ...overrides,
     },

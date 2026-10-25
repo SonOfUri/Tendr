@@ -4,6 +4,8 @@
 //   secret_key     1000 / key
 //   publishable_key  60 / (key, IP)   one key is shared by every browser on a merchant's site
 //   session_client  120 / session
+//   dashboard_user  600 / membership (person per store)
+//   user_session    120 / person    (signed in, no store selected)
 //   public           60 / IP          routes declared `auth: 'public'`
 //
 // Counters are keyed by ids (principalRef) and IPs, never by raw credentials. Fails open:
@@ -23,6 +25,8 @@ export type RateLimitKind =
   | 'secret_key'
   | 'publishable_key'
   | 'session_client'
+  | 'dashboard_user'
+  | 'user_session'
   | 'public';
 
 export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
@@ -30,6 +34,8 @@ export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   secret_key: 1000,
   publishable_key: 60,
   session_client: 120,
+  dashboard_user: 600,
+  user_session: 120,
   public: 60,
 };
 
@@ -80,6 +86,8 @@ export async function createRateLimiters(
     secret_key: make('secret_key'),
     publishable_key: make('publishable_key'),
     session_client: make('session_client'),
+    dashboard_user: make('dashboard_user'),
+    user_session: make('user_session'),
     public: make('public'),
   };
 
@@ -130,9 +138,11 @@ function principalKind(p: Principal): Exclude<RateLimitKind, 'ip_global' | 'publ
     case 'secret_key':
     case 'publishable_key':
     case 'session_client':
+    case 'dashboard_user':
+    case 'user_session':
       return p.kind;
-    default:
-      // dashboard users and agents are not produced yet; give them the session-sized budget.
+    case 'agent':
+      // Agents are not produced yet; give them the session-sized budget.
       return 'session_client';
   }
 }

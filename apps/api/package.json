@@ -30,6 +30,7 @@
     "@noble/curves": "^1.9.7",
     "@noble/hashes": "^1.8.0",
     "@prisma/client": "^6.7.0",
+    "@simplewebauthn/server": "^13.3.3",
     "@tendr/contracts": "*",
     "bs58": "^6.0.0",
     "bullmq": "^6.3.12",

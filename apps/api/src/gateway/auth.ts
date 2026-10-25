@@ -1,14 +1,32 @@
 // Authentication and authorization for `/v1` routes.
 //
 // Every `/v1/*` route must declare `config.auth`; a missing declaration fails startup.
-// An `onRequest` hook resolves the Bearer credential to a principal, checks the route's
-// allowed principal kinds and scope, and attaches a client scoped to the principal's
-// merchant + mode as `req.db`.
+// An `onRequest` hook resolves the caller to a principal, checks the route's allowed principal
+// kinds, scope (API keys) and permission (dashboard users), and attaches a client scoped to the
+// principal's merchant + mode as `req.db`.
+//
+// Credentials:
+// - `Authorization: Bearer …` — API keys and checkout session secrets. Always wins when present.
+// - The `tendr_session` cookie — dashboard sessions, only on routes that allow `dashboard_user`
+//   or `user_session`. With `Tendr-Merchant: mer_…` and `Tendr-Livemode: true|false` (and a route
+//   allowing `dashboard_user`) the person's membership in that store becomes a `dashboard_user`
+//   principal; no membership → 403. Without a store header, routes allowing `user_session` get
+//   one (no merchant, no `req.db`). Cookie-authenticated mutations must send `Tendr-CSRF`
+//   matching the session's CSRF value (double-submit cookie, bound to the session token).
 //
 // Credential lookups are infrastructure work and use the unscoped `prisma`. A credential of a
 // merchant that is not `active` (suspended or closed) is treated exactly like an invalid one.
-import { ScopeValues, type Scope } from '@tendr/contracts';
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import {
+  CSRF_HEADER,
+  LIVEMODE_HEADER,
+  MERCHANT_HEADER,
+  ROLE_PERMISSIONS,
+  ScopeValues,
+  SESSION_COOKIE,
+  type PrincipalKind,
+  type Scope,
+} from '@tendr/contracts';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { scopedDb } from '../db/scoped.js';
 import { safeEqualHex, sha256 } from '../lib/crypto.js';
@@ -16,6 +34,13 @@ import { AppError, forbidden, unauthorized } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { getSecret } from '../secrets/secrets.js';
+import {
+  csrfMatches,
+  parseCookies,
+  resolveDashboardSession,
+  sessionCookies,
+  type ResolvedSession,
+} from '../auth/session.js';
 import type { Principal, RouteAuth } from './principal.js';
 import { verifyRequestSignature } from './signing.js';
 
@@ -60,7 +85,12 @@ export function routeAuth(url: string | undefined, auth: RouteAuth | undefined):
 type SigningConfig = { signingSecretRef: string | null; signingRequired: boolean };
 const signingConfigs = new WeakMap<FastifyRequest, SigningConfig>();
 
-type Resolved = { principal: Principal; signing?: SigningConfig };
+type Resolved = {
+  principal: Principal;
+  signing?: SigningConfig;
+  /** Set when the principal came from the dashboard session cookie. */
+  cookie?: { token: string; session: ResolvedSession };
+};
 
 async function resolveApiKey(raw: string): Promise<Resolved | null> {
   const expected = KEY_PREFIXES.find((p) => raw.startsWith(p.prefix));
@@ -144,6 +174,71 @@ async function resolvePrincipal(raw: string): Promise<Resolved | null> {
   return raw.startsWith('ses_') ? resolveSessionSecret(raw) : resolveApiKey(raw);
 }
 
+const COOKIE_KINDS: ReadonlySet<PrincipalKind> = new Set(['dashboard_user', 'user_session']);
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const MERCHANT_ID = /^mer_[0-9A-HJKMNP-TV-Z]{26}$/;
+
+function header(req: FastifyRequest, name: string): string | undefined {
+  const v = req.headers[name];
+  return Array.isArray(v) ? v[0] : v;
+}
+
+const badHeader = (message: string) => new AppError('VALIDATION_ERROR', message, 400);
+
+/**
+ * Resolves the dashboard session cookie. With a store header on a route allowing
+ * `dashboard_user`, the person's membership in that store; otherwise a `user_session` (when the
+ * route allows it). Returns null when there is no live session.
+ */
+async function resolveCookie(
+  req: FastifyRequest,
+  allowed: PrincipalKind[],
+): Promise<Resolved | null> {
+  const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  if (!token) return null;
+  const session = await resolveDashboardSession(token);
+  if (!session) return null;
+  const cookie = { token, session };
+
+  const merchantId = header(req, MERCHANT_HEADER);
+  const allowsStore = allowed.includes('dashboard_user');
+  const allowsPerson = allowed.includes('user_session');
+  if (!allowsStore || (merchantId === undefined && allowsPerson)) {
+    return {
+      principal: { kind: 'user_session', userId: session.userId, sessionId: session.sessionId },
+      cookie,
+    };
+  }
+  if (merchantId === undefined || !MERCHANT_ID.test(merchantId)) {
+    throw badHeader('Tendr-Merchant header (mer_…) is required');
+  }
+  const mode = header(req, LIVEMODE_HEADER);
+  if (mode !== 'true' && mode !== 'false') {
+    throw badHeader('Tendr-Livemode header must be true or false');
+  }
+  const membership = await prisma.merchantUser.findUnique({
+    where: { merchantId_userId: { merchantId, userId: session.userId } },
+    include: { merchant: { select: { status: true } } },
+  });
+  // A store the person is not in, or one that is not active, looks the same.
+  if (!membership || membership.merchant.status !== 'active') {
+    throw forbidden('You are not a member of this store');
+  }
+  return {
+    principal: {
+      kind: 'dashboard_user',
+      merchantId,
+      livemode: mode === 'true',
+      userId: session.userId,
+      membershipId: membership.id,
+      role: membership.role,
+      isSigner: membership.isSigner,
+      permissions: [...ROLE_PERMISSIONS[membership.role]],
+    },
+    cookie,
+  };
+}
+
 const authPlugin: FastifyPluginAsync = async (app) => {
   // Routes are collected as they are added and rejected in `onReady`, so `ready()` /
   // `listen()` fail; a throw in `onRoute` would surface wherever the route was added.
@@ -168,22 +263,27 @@ const authPlugin: FastifyPluginAsync = async (app) => {
       requestId: req.id,
       method: req.method,
       route: req.routeOptions.url,
-      merchantId: p.merchantId,
-      livemode: p.livemode,
+      ...(p.kind === 'user_session'
+        ? { userId: p.userId }
+        : { merchantId: p.merchantId, livemode: p.livemode }),
       principal: p.kind,
       ...fields,
     });
 
   // `onRequest`, so unauthenticated callers are refused before any body is read or validated.
   // Request signing (which needs the raw body) runs later, in `preValidation`.
-  app.addHook('onRequest', async (req) => {
+  app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     const auth = routeAuth(req.routeOptions.url, req.routeOptions.config.auth);
     if (auth === null || auth === 'public') return;
 
     const raw = bearerToken(req);
-    const resolved = raw ? await resolvePrincipal(raw) : null;
+    const resolved = raw
+      ? await resolvePrincipal(raw)
+      : auth.principals.some((k) => COOKIE_KINDS.has(k))
+        ? await resolveCookie(req, auth.principals)
+        : null;
     if (!resolved) throw unauthorized('Invalid or missing credentials');
-    const { principal, signing } = resolved;
+    const { principal, signing, cookie } = resolved;
 
     const denial = !auth.principals.includes(principal.kind)
       ? `This endpoint is not available to ${principal.kind} credentials`
@@ -191,7 +291,16 @@ const authPlugin: FastifyPluginAsync = async (app) => {
         // the kind allowlist alone.
         auth.scope && 'scopes' in principal && !principal.scopes.includes(auth.scope)
         ? `Missing scope ${auth.scope}`
-        : null;
+        : // Dashboard users carry their role's permissions.
+          auth.permission &&
+            principal.kind === 'dashboard_user' &&
+            !principal.permissions.includes(auth.permission)
+          ? `Missing permission ${auth.permission}`
+          : cookie &&
+              !SAFE_METHODS.has(req.method) &&
+              !csrfMatches(cookie.token, header(req, CSRF_HEADER))
+            ? 'Missing or invalid Tendr-CSRF header'
+            : null;
     if (denial) {
       requestLog(req, principal, { outcome: 'forbidden', statusCode: 403 });
       throw forbidden(denial);
@@ -199,7 +308,13 @@ const authPlugin: FastifyPluginAsync = async (app) => {
 
     req.principal = principal;
     if (signing) signingConfigs.set(req, signing);
-    req.db = scopedDb({ merchantId: principal.merchantId, livemode: principal.livemode });
+    if (principal.kind !== 'user_session') {
+      req.db = scopedDb({ merchantId: principal.merchantId, livemode: principal.livemode });
+    }
+    // A slid session gets fresh cookies, so the browser's copy expires with the server's.
+    if (cookie?.session.slid) {
+      reply.header('set-cookie', sessionCookies(cookie.token, cookie.session.expiresAt));
+    }
   });
 
   // Needs the raw body, so it runs after parsing. Secret keys only.

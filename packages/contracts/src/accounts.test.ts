@@ -78,18 +78,31 @@ describe('proposals', () => {
 });
 
 describe('SignerKeySchema', () => {
-  const b64 = (n: number) => btoa(String.fromCharCode(...new Array<number>(n).fill(2)));
+  const b64 = (n: number, fill = 2) =>
+    btoa(String.fromCharCode(...new Array<number>(n).fill(fill)));
 
-  it('accepts the contract serde shapes', () => {
-    expect(SignerKeySchema.parse({ P256: b64(33) })).toEqual({ P256: b64(33) });
-    expect(SignerKeySchema.parse({ Ed25519: b64(32) })).toEqual({ Ed25519: b64(32) });
+  it("accepts the contract's lowercase serde shapes", () => {
+    expect(SignerKeySchema.parse({ p256: b64(33) })).toEqual({ p256: b64(33) });
+    expect(SignerKeySchema.parse({ p256: b64(33, 3) })).toEqual({ p256: b64(33, 3) });
+    expect(SignerKeySchema.parse({ ed25519: b64(32) })).toEqual({ ed25519: b64(32) });
+  });
+
+  it('rejects the capitalised variant names', () => {
+    expect(SignerKeySchema.safeParse({ P256: b64(33) }).success).toBe(false);
+    expect(SignerKeySchema.safeParse({ Ed25519: b64(32) }).success).toBe(false);
+  });
+
+  it('rejects uncompressed or malformed P-256 points', () => {
+    // A compressed SEC1 point starts with 0x02 or 0x03.
+    expect(SignerKeySchema.safeParse({ p256: b64(33, 4) }).success).toBe(false);
+    expect(SignerKeySchema.safeParse({ p256: b64(65, 4) }).success).toBe(false);
   });
 
   it('rejects wrong lengths, unpadded base64 and unknown variants', () => {
-    expect(SignerKeySchema.safeParse({ P256: b64(32) }).success).toBe(false);
-    expect(SignerKeySchema.safeParse({ Ed25519: b64(32).replace(/=+$/, '') }).success).toBe(false);
-    expect(SignerKeySchema.safeParse({ P256: '!'.repeat(44) }).success).toBe(false);
-    expect(SignerKeySchema.safeParse({ Secp256k1: b64(33) }).success).toBe(false);
-    expect(SignerKeySchema.safeParse({ P256: b64(33), Ed25519: b64(32) }).success).toBe(false);
+    expect(SignerKeySchema.safeParse({ p256: b64(32) }).success).toBe(false);
+    expect(SignerKeySchema.safeParse({ ed25519: b64(32).replace(/=+$/, '') }).success).toBe(false);
+    expect(SignerKeySchema.safeParse({ p256: '!'.repeat(44) }).success).toBe(false);
+    expect(SignerKeySchema.safeParse({ secp256k1: b64(33) }).success).toBe(false);
+    expect(SignerKeySchema.safeParse({ p256: b64(33), ed25519: b64(32) }).success).toBe(false);
   });
 });

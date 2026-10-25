@@ -226,6 +226,13 @@ enum IdempotencyStatus {
   @@map("idempotency_status")
 }
 
+enum WebauthnChallengePurpose {
+  registration
+  authentication
+
+  @@map("webauthn_challenge_purpose")
+}
+
 enum EmailTokenPurpose {
   verify
   login
@@ -301,6 +308,7 @@ model User {
   memberships       MerchantUser[]
   credentials       WebauthnCredential[]
   dashboardSessions DashboardSession[]
+  challenges        WebauthnChallenge[]
   accountKeys       AccountKey[]
   proposals         AccountProposal[]
   approvals         AccountApproval[]
@@ -309,7 +317,7 @@ model User {
 }
 
 /// A passkey. `public_key` is the contract's `SignerKey` JSON:
-/// `{ "P256": "<base64 33 bytes>" }` or `{ "Ed25519": "<base64 32 bytes>" }`.
+/// `{ "p256": "<base64 33-byte compressed SEC1>" }` or `{ "ed25519": "<base64 32 bytes>" }`.
 model WebauthnCredential {
   id           String    @id
   userId       String    @map("user_id")
@@ -319,6 +327,9 @@ model WebauthnCredential {
   transports   String[]
   deviceLabel  String?   @map("device_label")
   lastUsedAt   DateTime? @map("last_used_at")
+  /// Set when the person removes the passkey. A revoked credential never logs in, is never offered
+  /// in `allowCredentials` and never approves. Rows are kept: approvals reference them.
+  revokedAt    DateTime? @map("revoked_at")
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
@@ -360,6 +371,25 @@ model EmailToken {
 
   @@index([email, purpose])
   @@map("email_tokens")
+}
+
+/// Server-issued WebAuthn ceremony challenges (passkey registration and login): random, single-use,
+/// valid 5 minutes. Only `sha256(challenge)` is stored. Proposal approvals never use these: their
+/// challenge is the 32-byte payload hash, while these carry a fixed tag and are longer.
+model WebauthnChallenge {
+  id            String                   @id
+  purpose       WebauthnChallengePurpose
+  challengeHash String                   @unique @map("challenge_hash")
+  /// The person registering (registration only); login challenges are not bound to a person.
+  userId        String?                  @map("user_id")
+  expiresAt     DateTime                 @map("expires_at")
+  consumedAt    DateTime?                @map("consumed_at")
+  createdAt     DateTime                 @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([expiresAt])
+  @@map("webauthn_challenges")
 }
 
 // ─── Merchant domain ────────────────────────────────────────────────────────

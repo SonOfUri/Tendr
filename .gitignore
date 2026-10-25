@@ -17,6 +17,8 @@ apps/api/prisma/*.db
 apps/api/prisma/*.db-journal
 .mintlify
 .keyvault/
+# Dev mail driver output (magic links)
+apps/api/.mail/
 
 # Terraform (provider lock files are committed)
 .terraform/

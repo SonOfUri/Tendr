@@ -202,6 +202,7 @@ describe('foundation schema', () => {
         'WebauthnCredential',
         'DashboardSession',
         'EmailToken',
+        'WebauthnChallenge',
       ]);
     });
 
@@ -309,8 +310,8 @@ describe('foundation schema', () => {
     it('stores a passkey public key as the contract SignerKey JSON', async () => {
       const user = await createUser();
       const p256 = Buffer.alloc(33, 2).toString('base64');
-      const cred = await createCredential(user.id, { publicKey: { P256: p256 } });
-      expect(cred.publicKey).toEqual({ P256: p256 });
+      const cred = await createCredential(user.id, { publicKey: { p256 } });
+      expect(cred.publicKey).toEqual({ p256 });
       expect(cred.signCount).toBe(0n);
     });
 

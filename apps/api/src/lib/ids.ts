@@ -31,6 +31,7 @@ export type IdPrefix =
   | 'cred'
   | 'dss'
   | 'etok'
+  | 'wch' // webauthn ceremony challenge
   | 'inv'
   | 'macc'
   | 'prop'

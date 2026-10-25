@@ -9,7 +9,7 @@ import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { createApiKey, createMerchant, minimalSession, resetDb } from '../test/helpers.js';
 import { flushLastUsed, routeAuth } from './auth.js';
-import { principalRef, requirePrincipal } from './principal.js';
+import { principalRef, requireMerchantPrincipal, requirePrincipal } from './principal.js';
 
 /** Throwaway routes exercising principal kinds and scopes. */
 function testRoutes(app: FastifyInstance) {
@@ -23,11 +23,9 @@ function testRoutes(app: FastifyInstance) {
     { config: { auth: { principals: ['secret_key'], scope: 'sessions:write' } } },
     async () => ({ ok: true }),
   );
-  app.post(
-    '/v1/test/echo',
-    { config: { auth: { principals: ['secret_key'] } } },
-    async (req) => ({ body: req.body }),
-  );
+  app.post('/v1/test/echo', { config: { auth: { principals: ['secret_key'] } } }, async (req) => ({
+    body: req.body,
+  }));
   app.get(
     '/v1/test/pk-sessions-write',
     { config: { auth: { principals: ['publishable_key'], scope: 'sessions:write' } } },
@@ -37,7 +35,7 @@ function testRoutes(app: FastifyInstance) {
     '/v1/test/session-client',
     { config: { auth: { principals: ['session_client'] } } },
     async (req) => {
-      const p = requirePrincipal(req);
+      const p = requireMerchantPrincipal(req);
       // The scoped client sees only the principal's merchant + mode.
       const visible = await req.db!.session.findMany({ select: { id: true } });
       return { kind: p.kind, ref: principalRef(p), merchantId: p.merchantId, visible };
@@ -117,14 +115,20 @@ describe('gateway auth', () => {
       await get('/v1/ping', raw),
     ]) {
       expect(res.statusCode).toBe(401);
-      expect(res.json().error).toMatchObject({ code: 'UNAUTHORIZED', requestId: expect.any(String) });
+      expect(res.json().error).toMatchObject({
+        code: 'UNAUTHORIZED',
+        requestId: expect.any(String),
+      });
     }
   });
 
   it('accepts the auth scheme case-insensitively', async () => {
     const { raw } = await createApiKey(m.id, { livemode: false });
     for (const scheme of ['bearer', 'BEARER']) {
-      const res = await app.inject({ url: '/v1/ping', headers: { authorization: `${scheme} ${raw}` } });
+      const res = await app.inject({
+        url: '/v1/ping',
+        headers: { authorization: `${scheme} ${raw}` },
+      });
       expect(res.statusCode).toBe(200);
     }
   });

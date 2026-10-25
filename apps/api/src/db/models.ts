@@ -57,6 +57,7 @@ export const IDENTITY_MODELS = [
   'WebauthnCredential',
   'DashboardSession',
   'EmailToken',
+  'WebauthnChallenge',
 ] as const;
 
 export type PerModeModel = (typeof PER_MODE_MODELS)[number];
