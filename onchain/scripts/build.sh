@@ -9,15 +9,25 @@
 # forbid host installs. It only starts this same container with the same
 # command, so running the container ourselves gives the same artifact.
 #
-# Output: onchain/target/near/<crate>/<crate>.wasm
+# Output: onchain/target/near/<crate>/<crate>.wasm, or
+#         onchain/target/near/<crate>/<crate>-<features>.wasm with --features
+#         (commas in <features> become dashes).
 #
-# Usage: onchain/scripts/build.sh [crate ...]   (default: all contract crates)
+# Usage: onchain/scripts/build.sh [--features <list>] [crate ...]
+#        (default: all contract crates, default features)
+#   e.g. onchain/scripts/build.sh --features testnet-admin merchant-account
 set -euo pipefail
 
 ONCHAIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ONCHAIN_DIR"
 
 DEFAULT_CRATES=(merchant-account mock-intents)
+FEATURES=""
+if [ "${1:-}" = "--features" ]; then
+  [ -n "${2:-}" ] || { echo "build.sh: --features needs a value" >&2; exit 1; }
+  FEATURES="$2"
+  shift 2
+fi
 CRATES=("$@")
 if [ ${#CRATES[@]} -eq 0 ]; then
   CRATES=("${DEFAULT_CRATES[@]}")
@@ -64,7 +74,7 @@ for crate in "${CRATES[@]}"; do
   built="$DOCKER_TARGET/near/$lib_name/$lib_name.wasm"
   rm -f "$built"
 
-  echo "==> $crate ($image_ref, rust $toolchain)"
+  echo "==> $crate${FEATURES:+ [features: $FEATURES]} ($image_ref, rust $toolchain)"
   # --user keeps output files owned by the host user. The image's CARGO_HOME
   # belongs to its `near` user, so the registry cache lives under target/docker.
   docker run --rm \
@@ -76,11 +86,12 @@ for crate in "${CRATES[@]}"; do
     -e CARGO_TARGET_DIR=/host/target/docker \
     -e CARGO_HOME=/host/target/docker/cargo-home \
     "$image_ref" \
-    cargo near build non-reproducible-wasm --locked
+    cargo near build non-reproducible-wasm --locked ${FEATURES:+--features "$FEATURES"}
 
   [ -f "$built" ] || { echo "build.sh: expected $built was not produced" >&2; exit 1; }
   out_dir="target/near/$crate"
   mkdir -p "$out_dir"
-  cp "$built" "$out_dir/$crate.wasm"
-  echo "    -> onchain/$out_dir/$crate.wasm ($(wc -c <"$out_dir/$crate.wasm" | tr -d ' ') bytes)"
+  out_name="$crate${FEATURES:+-${FEATURES//,/-}}.wasm"
+  cp "$built" "$out_dir/$out_name"
+  echo "    -> onchain/$out_dir/$out_name ($(wc -c <"$out_dir/$out_name" | tr -d ' ') bytes)"
 done

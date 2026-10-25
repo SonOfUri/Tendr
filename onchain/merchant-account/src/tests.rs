@@ -701,22 +701,11 @@ fn poa() -> WithdrawRoute {
     }
 }
 
-/// One instance of every action that a later task (5) enables.
-fn unsupported_actions() -> Vec<Action> {
-    vec![Action::Upgrade { code_hash: [1; 32] }]
-}
-
 #[test]
-fn unsupported_actions_rejected_at_propose() {
-    let (mut c, a, _b, _c) = three_of(1);
-    for (n, action) in unsupported_actions().into_iter().enumerate() {
-        let name = format!("{action:?}");
-        let msg = panics(|| {
-            propose(&mut c, &a, action, n as u8);
-        });
-        assert!(msg.contains("not yet supported"), "{name}: {msg}");
-    }
-    assert!(c.list_proposals(0, 100).is_empty());
+fn every_action_is_proposable() {
+    let (mut c, a, _b, _c) = three_of(2);
+    propose(&mut c, &a, Action::Upgrade { code_hash: [1; 32] }, 1);
+    assert_eq!(c.list_proposals(0, 100).len(), 1);
 }
 
 #[test]
@@ -1304,3 +1293,4 @@ fn write_test_vectors() {
 }
 
 mod money;
+mod recovery;

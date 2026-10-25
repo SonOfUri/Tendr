@@ -175,13 +175,6 @@ impl Action {
                 | Action::RotateRecoveryKey(_)
         )
     }
-
-    /// Whether this action can be proposed yet. Everything but upgrades
-    /// (Task 5) executes in this version, so nothing unexecutable can sit in
-    /// storage.
-    pub fn is_proposable(&self) -> bool {
-        self.kind() != ActionKind::Upgrade
-    }
 }
 
 /// A validation failure; the message is shown in the panic or `proposal_failed`.

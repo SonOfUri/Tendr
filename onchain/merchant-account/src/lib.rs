@@ -10,6 +10,7 @@ pub mod action;
 pub mod approval;
 pub mod events;
 pub mod money;
+pub mod recovery;
 pub mod saved;
 pub mod webauthn;
 
@@ -20,12 +21,13 @@ use near_sdk::json_types::U64;
 use near_sdk::serde;
 use near_sdk::serde_with::base64::Base64;
 use near_sdk::store::{IterableMap, LookupMap, LookupSet};
-use near_sdk::{env, near, require, AccountId, PanicOnDefault};
+use near_sdk::{env, near, require, AccountId, Gas, NearToken, PanicOnDefault, Promise};
 
 use crate::action::{Action, ActionKind, Invalid, PayoutMode, Signer};
 use crate::approval::{ApprovalIntent, ApprovalPayload, ProposalId, Salt, SignedApproval};
 use crate::events::Event;
 use crate::money::AssetState;
+use crate::recovery::PendingRecovery;
 use crate::saved::{SavedAddress, SavedAddressView, Settlement};
 use crate::webauthn::SignerKey;
 
@@ -41,6 +43,12 @@ pub const MAX_RP_ID_LEN: usize = 253;
 /// With the per-field size bounds this caps the storage any one signer can
 /// make the account pay for.
 pub const MAX_PENDING_PER_SIGNER: u8 = 10;
+/// Layout version of the contract state, written by `new` and `migrate`.
+pub const STATE_VERSION: u32 = 1;
+/// Gas for the `migrate` call that follows an upgrade.
+const MIGRATE_GAS: Gas = Gas::from_tgas(50);
+/// Gas for `on_upgrade_done`.
+const UPGRADE_CALLBACK_GAS: Gas = Gas::from_tgas(10);
 
 /// Arguments to [`MerchantAccount::new`].
 #[near(serializers = [json])]
@@ -72,8 +80,8 @@ pub enum ProposalStatus {
     Failed,
     Cancelled,
     Expired,
-    /// A withdrawal or refund was sent; its callback moves it to `Executed`
-    /// or `Failed`.
+    /// A withdrawal, refund or upgrade was sent; its callback moves it to
+    /// `Executed` or `Failed`.
     Executing,
 }
 
@@ -170,6 +178,12 @@ pub struct MerchantAccount {
     /// `sha256(id)` of every removed saved address. An id is never reused,
     /// so a pending withdrawal naming it cannot follow a new address.
     removed_saved_ids: LookupSet<[u8; 32]>,
+    /// The started recovery, if any; at most one at a time.
+    recovery: Option<PendingRecovery>,
+    /// The last nonce a `start_recovery` used, cancelled ones included.
+    recovery_nonce: u64,
+    /// [`STATE_VERSION`] of the code that last wrote the state.
+    state_version: u32,
 }
 
 #[near]
@@ -219,6 +233,9 @@ impl MerchantAccount {
             assets: LookupMap::new(StorageKey::Assets),
             timelocked: Vec::new(),
             removed_saved_ids: LookupSet::new(StorageKey::RemovedSavedIds),
+            recovery: None,
+            recovery_nonce: 0,
+            state_version: STATE_VERSION,
         };
         require!(!signers.is_empty(), "at least one signer is required");
         for signer in signers {
@@ -236,10 +253,6 @@ impl MerchantAccount {
     /// Creates a proposal and records the proposer's approval. Only a current
     /// signer can create one, so nobody else can fill storage with proposals.
     pub fn propose(&mut self, action: Action, salt: Salt, approval: SignedApproval) -> ProposalId {
-        or_panic(action::validate_bounds(&action));
-        if !action.is_proposable() {
-            env::panic_str("not yet supported");
-        }
         or_panic(self.check_action(&action));
         let id = ProposalId::new(&action, &salt.0);
         require!(self.proposals.get(&id).is_none(), "proposal already exists");
@@ -326,6 +339,61 @@ impl MerchantAccount {
             signer_id: &approval.signer_id,
         }
         .emit();
+    }
+
+    /// Runs on the new code right after an upgrade switches the account to
+    /// it, in the same receipt: if it panics the switch is undone. Today the
+    /// layout is unchanged, so it only rewrites the version marker; a later
+    /// version that changes the layout converts the old state here.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate() -> Self {
+        let mut this: Self =
+            env::state_read().unwrap_or_else(|| env::panic_str("no state to migrate"));
+        this.state_version = STATE_VERSION;
+        this
+    }
+
+    /// Settles an upgrade: `Executed` when the code switch and `migrate`
+    /// succeeded, `Failed` otherwise (the account keeps its old code). Every
+    /// later version must keep this method, since it runs on the new code.
+    #[private]
+    pub fn on_upgrade_done(&mut self, proposal_id: ProposalId) -> bool {
+        let proposal = self
+            .proposals
+            .get_mut(&proposal_id)
+            .unwrap_or_else(|| env::panic_str("unknown proposal"));
+        require!(
+            proposal.status == ProposalStatus::Executing
+                && proposal.action.kind() == ActionKind::Upgrade,
+            "proposal is not an executing upgrade"
+        );
+        // Only a failed receipt means the switch did not happen; a result
+        // too long to read still came from a successful `migrate`.
+        let ok = !matches!(
+            env::promise_result_checked(0, 0),
+            Err(near_sdk::PromiseError::Failed)
+        );
+        proposal.status = if ok {
+            ProposalStatus::Executed
+        } else {
+            ProposalStatus::Failed
+        };
+        let action = proposal.action.clone();
+        if ok {
+            Event::ProposalExecuted {
+                proposal_id,
+                action: &action,
+            }
+            .emit();
+        } else {
+            Event::ProposalFailed {
+                proposal_id,
+                reason: "upgrade failed",
+            }
+            .emit();
+        }
+        ok
     }
 
     pub fn get_config(&self) -> ConfigView {
@@ -533,11 +601,15 @@ impl MerchantAccount {
     }
 
     /// Whether `action`, reaching the threshold now, must wait
-    /// [`money::TIMELOCK_DELAY`]: swap withdrawals, refunds crossing the
-    /// refund cap, and raises of a limit or the refund cap.
+    /// [`money::TIMELOCK_DELAY`]: upgrades (new code could do anything with
+    /// the funds), swap withdrawals, refunds crossing the refund cap, and
+    /// raises of a limit or the refund cap.
     fn needs_timelock(&self, action: &Action, now: u64) -> bool {
-        matches!(action.kind(), ActionKind::Money | ActionKind::Limits)
-            && self.money_needs_timelock(action, now)
+        match action.kind() {
+            ActionKind::Upgrade => true,
+            ActionKind::Money | ActionKind::Limits => self.money_needs_timelock(action, now),
+            _ => false,
+        }
     }
 
     /// Starts (or restarts, at a new epoch) the proposal's timelock.
@@ -576,8 +648,28 @@ impl MerchantAccount {
             }
             return;
         }
+        if let Action::Upgrade { code_hash } = action {
+            self.start_upgrade(id, code_hash);
+            return;
+        }
+        let drops_recovery =
+            matches!(action, Action::RotateRecoveryKey(_)) && self.recovery.is_some();
         match self.apply(&action) {
             Ok(()) => {
+                if drops_recovery {
+                    // A recovery signed by the replaced key no longer stands.
+                    self.recovery = None;
+                    let creator = self
+                        .proposals
+                        .get(&id)
+                        .expect("proposal exists")
+                        .creator
+                        .clone();
+                    Event::RecoveryCancelled {
+                        signer_id: &creator,
+                    }
+                    .emit();
+                }
                 self.finish(&id, ProposalStatus::Executed);
                 Event::ProposalExecuted {
                     proposal_id: id,
@@ -611,6 +703,28 @@ impl MerchantAccount {
             }
             Err(reason) => self.fail(id, reason),
         }
+    }
+
+    /// Switches this account to the published global contract `code_hash`
+    /// (NEP-591) and calls `migrate` on the new code, in one receipt; the
+    /// proposal waits in `Executing` until `on_upgrade_done`.
+    fn start_upgrade(&mut self, id: ProposalId, code_hash: [u8; 32]) {
+        self.finish(&id, ProposalStatus::Executing);
+        let me = env::current_account_id();
+        Promise::new(me.clone())
+            .use_global_contract(code_hash)
+            .function_call(
+                "migrate",
+                Vec::new(),
+                NearToken::from_yoctonear(0),
+                MIGRATE_GAS,
+            )
+            .then(
+                Self::ext(me)
+                    .with_static_gas(UPGRADE_CALLBACK_GAS)
+                    .on_upgrade_done(id),
+            )
+            .detach();
     }
 
     fn fail(&mut self, id: ProposalId, reason: &str) {
@@ -727,8 +841,8 @@ impl MerchantAccount {
             | Action::ClearAutoSweep { .. }
             | Action::Withdraw { .. }
             | Action::Refund { .. } => self.check_money(action, env::block_timestamp()),
-            // Not proposable until Task 5 implements it.
-            Action::Upgrade { .. } => Err("not yet supported"),
+            // Any published code hash; a wrong one fails at execution.
+            Action::Upgrade { .. } => Ok(()),
         }
     }
 
@@ -779,7 +893,8 @@ impl MerchantAccount {
             Action::Withdraw { .. } | Action::Refund { .. } => {
                 return Err("money actions execute as transfers")
             }
-            Action::Upgrade { .. } => return Err("not yet supported"),
+            // Sent by `execute_now` through `start_upgrade`, never applied here.
+            Action::Upgrade { .. } => return Err("upgrades execute as deployments"),
         }
         Ok(())
     }
