@@ -238,6 +238,8 @@ The project 2 dashboard gains:
 3. `appFees` on 1Click accrues to Tendr's fee account as expected, with authenticated pricing (JWT API key).
 4. Reown AppKit, TronLink and NEAR Wallet Selector all work inside a cross-origin iframe (wallet popups and deep links from iframes are sometimes blocked). If not, the modal and widget fall back to opening the hosted page in a popup for the wallet step.
 5. Chainalysis sanctions API terms allow this use; otherwise pick another screening provider.
+6. 1Click accumulates a top-up deposit to the same address after `INCOMPLETE_DEPOSIT` before the deadline.
+7. NEAR receipts of the 1Click settlement transaction contain an identifiable NEP-245/NEP-141 transfer event to the recipient with the amount.
 
 ## Decided by the user after the builder check (2026-10-25)
 
@@ -253,6 +255,28 @@ The project 2 dashboard gains:
 - **Funds held from a sanctioned sender:** they stay frozen. The dashboard offers no "release to merchant" action. A refund is possible only through a signer-approved proposal with a typed acknowledgement that legal clearance was obtained. Every action is recorded in the event log.
 - **Tendr's fee account:** one per mode, `fees.tendr.near` / `fees.tendr.testnet`. It is itself a project 2 threshold-contract account with Tendr's operators as passkey signers, so Tendr's revenue gets the same protection as merchants' money. Test mode credits simulated fees to the testnet account through the mock verifier.
 - **Checkout domains:** registered once per merchant and shared by test and live.
+
+## Changes after external plan review (2026-10-25)
+
+These supersede the earlier text where they differ.
+
+1. **Settlement is verified per transfer.** The watcher takes 1Click's `destinationChainTxHashes`, fetches that NEAR transaction's receipts, and requires a transfer event of the settlement asset, for at least `amount_out`, to the merchant account. In `wallet` mode it checks the destination chain's transfer the same way. Balance deltas are never used, because other payments, withdrawals and sweeps move the balance.
+2. **`screening_pending`.** When screening is unavailable, the payment waits in `SCREENING_PENDING` (not `HELD`). Screening is retried with backoff for up to 6 hours. `allow` settles normally; `block` → `HELD`. If screening is still unavailable after 6 hours, the merchant gets a review item; it is not a legal hold.
+3. **What a hold does (user's decision: stay non-custodial).** Tendr cannot freeze money in a merchant account. A hold:
+   - keeps the order unpaid;
+   - sends `payment.held` instead of a paid webhook;
+   - alerts all signers with a clear notice: "These funds came from a sanctioned address. Tendr cannot freeze them; you are responsible for not using them; get legal advice."
+
+   The dashboard, the email and the docs say this plainly. Refunds still need the typed legal acknowledgement.
+4. **Order references after expiry.** `external_ref` is unique only among sessions in `PENDING_DEPOSIT`, `PROCESSING`, `SCREENING_PENDING` and `SETTLED`. An expired, late or held order can get a new session.
+5. **Hosted URL.** The session `url` includes the client secret in the fragment: `…/pay/{id}#cs=<client_secret>`.
+6. **Optional refund address for manual sends.** The quote screen asks "Your address on <network>, in case we need to send money back" (optional, with an address-format check).
+   - When it is given, it becomes 1Click's `refundTo` (`ORIGIN_CHAIN`), and underpay, overpay and late refunds happen directly without merchant approval.
+   - When it is empty, refunds use the merchant-approval path.
+   - The provided address is screened at quote time.
+7. **Every detected sender is screened** on detection, including connected-wallet flows, because the sender may differ from the connected wallet.
+8. **Underpay top-up.** While the quote is still live and 1Click reports `INCOMPLETE_DEPOSIT`, the checkout first offers "Send the remaining X to the same address". The refund-and-reopen path only applies after the quote deadline. Whether 1Click accumulates deposits is added to "Assumptions to verify early"; if it does not, the top-up option is turned off by a flag.
+9. **Gas reimbursement is deliberate** for the pilot. Pimlico sponsorship arrives with the gas service in project 5. The checkout discloses before payment that leftovers under $1 are not returned.
 
 ## Carried decisions from earlier projects
 
