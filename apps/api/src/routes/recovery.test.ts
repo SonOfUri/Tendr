@@ -284,6 +284,28 @@ describe('recovery API', () => {
     expect(res.json().recovery).toMatchObject({ status: 'cancelled' });
   });
 
+  it('recovery params come from the contract: account id, key epoch and last nonce', async () => {
+    const m = await signerMember(false);
+    fake.scriptView(account.nearAccountId, 'get_recovery_nonce', () => '41');
+    const h = dashHeaders(m.login, { merchantId: merchant.id, livemode: true });
+    const res = await app.inject({ method: 'GET', url: '/v1/account/recovery/params', headers: h });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({
+      accountId: account.nearAccountId,
+      livemode: true,
+      recoveryKeySet: true,
+      recoveryKeyEpoch: '3',
+      lastNonce: '41',
+    });
+    // The payload the browser builds from them verifies (nonce = last + 1).
+    const body = signedBody({ nonce: '42' });
+    fake.scriptLogs(account.nearAccountId, 'start_recovery', []);
+    expect((await start(body)).statusCode).toBe(202);
+    // Signed out: no params.
+    const anon = await app.inject({ method: 'GET', url: '/v1/account/recovery/params' });
+    expect(anon.statusCode).toBe(401);
+  });
+
   it('a non-signer cannot cancel a recovery', async () => {
     const m = await signerMember(false);
     const h = dashHeaders(m.login, { merchantId: merchant.id, livemode: true });
@@ -367,6 +389,8 @@ describe('recovery API', () => {
         restricted: true,
       });
       const login = loginFrom(res, m.user.id);
+      // R31: the session's CSRF value is in the body too, for a dashboard on another subdomain.
+      expect(res.json().csrfToken).toBe(login.csrf);
       const session = await prisma.dashboardSession.findFirstOrThrow({
         where: { userId: m.user.id, recoveryMerchantId: merchant.id },
       });

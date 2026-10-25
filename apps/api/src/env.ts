@@ -47,6 +47,14 @@ const EnvSchema = z
     // NEAR. Each mode has its own RPC, parent account, intents contract and global code hash.
     /** `fake` (in-memory, no network) by default outside production; refused in production. */
     NEAR_CLIENT_DRIVER: z.enum(['rpc', 'fake']).optional(),
+    /**
+     * `1`: the fake client runs an in-memory merchant-account contract (near/fake-contract.ts) so
+     * the dashboard works end to end offline (local dev, e2e). Ignored unless the driver is fake.
+     */
+    NEAR_FAKE_SIMULATE: z
+      .enum(['0', '1'])
+      .optional()
+      .transform((v) => v === '1'),
     NEAR_RPC_URL_LIVE: z.string().url().default('https://rpc.mainnet.near.org'),
     NEAR_RPC_URL_TEST: z.string().url().default('https://rpc.testnet.near.org'),
     NEAR_PARENT_ACCOUNT_LIVE: z.string().min(1).default('tendr.near'),

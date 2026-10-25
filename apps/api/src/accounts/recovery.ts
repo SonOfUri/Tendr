@@ -249,6 +249,27 @@ async function activeAccount(ctx: ScopeContext) {
   return account;
 }
 
+/**
+ * The inputs of a recovery payload the browser cannot know: the account contract id, the
+ * contract's current recovery-key epoch, and the last recovery nonce used under it. Read from the
+ * contract (not the mirror), since a stale epoch or nonce makes the kit's signature useless.
+ */
+export async function recoveryParams(ctx: ScopeContext) {
+  const account = await activeAccount(ctx);
+  const client = nearClient(account.livemode);
+  const [config, lastNonce] = await Promise.all([
+    client.view<ConfigView>(account.nearAccountId, 'get_config', {}),
+    client.view<string>(account.nearAccountId, 'get_recovery_nonce', {}),
+  ]);
+  return {
+    accountId: account.nearAccountId,
+    livemode: account.livemode,
+    recoveryKeySet: config.recovery_key_set,
+    recoveryKeyEpoch: String(config.recovery_key_epoch),
+    lastNonce: String(lastNonce),
+  };
+}
+
 async function pendingOnChain(account: { livemode: boolean; nearAccountId: string }) {
   const r = await nearClient(account.livemode).view<RecoveryView | null>(
     account.nearAccountId,

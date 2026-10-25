@@ -10,6 +10,7 @@ import type {
   ProvisionParams,
   TxResult,
 } from './client.js';
+import { FakeMerchantContracts, SimulatedPanic } from './fake-contract.js';
 import { assertProvisionable, assertTestnetAdminCall, type ProvisionScope } from './provision.js';
 import { DEFAULT_CALL_GAS } from './tx.js';
 
@@ -52,7 +53,20 @@ export class FakeNearClient implements NearClient {
   private readonly provisionFailures: string[] = [];
   private readonly throws: Record<Kind, unknown[]> = { call: [], view: [], provision: [] };
 
-  constructor(readonly scope: ProvisionScope) {}
+  /**
+   * With `simulateContracts`, provisioned accounts run an in-memory merchant-account contract
+   * (fake-contract.ts) that answers unscripted calls and views with the contract's events; the
+   * intents verifier answers `mt_batch_balance_of` with zeros. Local dev and end-to-end tests
+   * only. Scripted logs, views and failures still take precedence.
+   */
+  readonly contracts: FakeMerchantContracts | null;
+
+  constructor(
+    readonly scope: ProvisionScope,
+    opts: { simulateContracts?: boolean } = {},
+  ) {
+    this.contracts = opts.simulateContracts ? new FakeMerchantContracts() : null;
+  }
 
   /** Logs returned by `call(contractId, method)` (e.g. NEP-297 `EVENT_JSON:` lines). */
   scriptLogs(contractId: string, method: string, logs: Scripted<string[]>): void {
@@ -125,6 +139,7 @@ export class FakeNearClient implements NearClient {
     const state = this.signerState.get(contractId);
     if (method === 'admin_sync_signers' && result.topLevelStatus === 'success' && state) {
       const a = args as { signers: InitConfigJson['signers']; threshold: number };
+      this.contracts?.syncSigners(contractId, a.signers, a.threshold);
       this.signerState.set(contractId, {
         signers: structuredClone(a.signers),
         threshold: a.threshold,
@@ -163,7 +178,26 @@ export class FakeNearClient implements NearClient {
       };
     }
     const scripted = this.logs.get(key(contractId, method));
-    const logs = typeof scripted === 'function' ? scripted(args) : (scripted ?? []);
+    let logs = typeof scripted === 'function' ? scripted(args) : (scripted ?? []);
+    if (
+      scripted === undefined &&
+      signer === 'relayer-accounts' &&
+      this.contracts?.has(contractId)
+    ) {
+      try {
+        logs = this.contracts.call(contractId, method, args as Record<string, unknown>);
+      } catch (err) {
+        if (!(err instanceof SimulatedPanic)) throw err;
+        return {
+          txHash: fakeHash(),
+          logs: [],
+          successLogs: [],
+          status: 'failure',
+          topLevelStatus: 'failure',
+          failure: err.message,
+        };
+      }
+    }
     const downstream = this.downstreamFailures.get(method)?.shift();
     if (downstream !== undefined) {
       return {
@@ -191,6 +225,13 @@ export class FakeNearClient implements NearClient {
     const answer = this.views.get(k);
     if (!answer && method === 'get_config' && this.accounts.has(contractId)) {
       return this.configOf(contractId) as T;
+    }
+    if (!answer && this.contracts) {
+      const simulated = this.contracts.view(contractId, method, args as Record<string, unknown>);
+      if (simulated !== undefined) return simulated as T;
+      if (contractId === this.scope.intentsContractId && method === 'mt_batch_balance_of') {
+        return (args as { token_ids: string[] }).token_ids.map(() => '0') as T;
+      }
     }
     if (!answer) throw new Error(`FakeNearClient: no view scripted for ${k}`);
     return answer(args) as T;
@@ -231,6 +272,7 @@ export class FakeNearClient implements NearClient {
       threshold: p.init.threshold,
       epoch: 0n,
     });
+    this.contracts?.init(p.accountId, p.init);
     return {
       txHash: fakeHash(),
       logs: [],
@@ -253,6 +295,16 @@ export class FakeNearClient implements NearClient {
   private configOf(accountId: string): object {
     const { init } = this.accounts.get(accountId)!;
     const state = this.signerState.get(accountId)!;
+    const simulated = this.contracts?.config(accountId);
+    if (simulated) {
+      return {
+        ...simulated,
+        origins: [...init.origins],
+        rp_id: init.rp_id,
+        intents_contract: init.intents_contract,
+        poa_suffix: init.poa_suffix ?? 'omft.near',
+      };
+    }
     return {
       signers: structuredClone(state.signers),
       threshold: state.threshold,

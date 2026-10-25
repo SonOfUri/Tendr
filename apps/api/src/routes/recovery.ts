@@ -10,6 +10,7 @@ import { z } from 'zod';
 import {
   cancelRecovery,
   recoveryCancelChallenge,
+  recoveryParams,
   recoverySessionOptions,
   recoveryStatus,
   StartRecoverySchema,
@@ -81,6 +82,12 @@ export const recoveryRoutes: FastifyPluginAsync = async (app) => {
     return recoveryStatus({ merchantId: p.merchantId, livemode: p.livemode });
   });
 
+  // What a recovery kit signs over besides the new signers: the account id, the contract's
+  // recovery-key epoch and the last nonce it used (read from chain; the browser signs nonce+1).
+  app.get('/v1/account/recovery/params', { config: { auth: read } }, async (req) =>
+    recoveryParams(requireDashboardUser(req)),
+  );
+
   // Signer checks (is_signer, an active passkey) are in the service.
   app.post('/v1/account/recovery/challenge', { config: { auth: read } }, async (req) =>
     recoveryCancelChallenge(requireDashboardUser(req)),
@@ -129,6 +136,7 @@ export const recoveryRoutes: FastifyPluginAsync = async (app) => {
         merchantId,
         restricted: true,
         expiresAt: session.expiresAt,
+        csrfToken: session.csrf,
         // Registering also needs the single-use link just emailed to the person (R28).
         allowed: [
           'register your first passkey (with the emailed link)',

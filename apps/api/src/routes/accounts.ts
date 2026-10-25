@@ -12,6 +12,7 @@ import {
   retryProvisioning,
 } from '../accounts/accounts.js';
 import { requireDashboardUser } from '../gateway/principal.js';
+import { prisma } from '../lib/prisma.js';
 
 const read = { principals: ['dashboard_user' as const], permission: 'account:read' as const };
 /** Owner only (`security:propose`), with a fresh passkey assertion. */
@@ -33,6 +34,55 @@ export const accountRoutes: FastifyPluginAsync = async (app) => {
   app.get('/v1/account/balances', { config: { auth: read } }, async (req) => {
     const p = requireDashboardUser(req);
     return getBalances(p.merchantId, p.livemode);
+  });
+
+  // Saved addresses (the `payout_allowlist` mirror): `pending` until `activeFrom`, then usable
+  // for withdrawals; `revoked` once removed on chain. Display only; the contract decides.
+  app.get('/v1/account/saved-addresses', { config: { auth: read } }, async (req) => {
+    const p = requireDashboardUser(req);
+    const rows = await prisma.payoutAllowlistEntry.findMany({
+      where: { merchantId: p.merchantId, livemode: p.livemode },
+      orderBy: { createdAt: 'asc' },
+    });
+    const now = new Date();
+    return {
+      savedAddresses: rows.map((r) => ({
+        id: r.id,
+        chain: r.chain,
+        address: r.address,
+        status: r.status === 'revoked' ? 'revoked' : r.activeFrom > now ? 'pending' : 'active',
+        activeFrom: r.activeFrom,
+        createdAt: r.createdAt,
+      })),
+    };
+  });
+
+  // Per-asset limits, refund cap and auto-sweep (the `account_limits` mirror of the contract).
+  app.get('/v1/account/limits', { config: { auth: read } }, async (req) => {
+    const p = requireDashboardUser(req);
+    const rows = await prisma.accountLimit.findMany({
+      where: { merchantId: p.merchantId, livemode: p.livemode },
+      orderBy: { asset: 'asc' },
+    });
+    const n = (d: { toFixed(dp: number): string } | null) => (d === null ? null : d.toFixed(0));
+    return {
+      limits: rows.map((r) => ({
+        asset: r.asset,
+        perTx: n(r.perTx),
+        perDay: n(r.perDay),
+        refundCap: n(r.refundCap),
+        autoSweep:
+          r.sweepTriggerAbove === null
+            ? null
+            : {
+                triggerAbove: n(r.sweepTriggerAbove),
+                keep: n(r.sweepKeep),
+                savedAddressId: r.sweepSavedAddressId,
+                chain: r.sweepChain,
+                address: r.sweepAddress,
+              },
+      })),
+    };
   });
 
   app.get('/v1/account/go-live', { config: { auth: read } }, async (req) => {

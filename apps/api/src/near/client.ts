@@ -296,7 +296,7 @@ function build(livemode: boolean): { client: NearClient; fake?: FakeNearClient }
     dailyYocto: e.FUNDING_DAILY_CAP_YOCTO,
   };
   if (e.NEAR_CLIENT_DRIVER === 'fake') {
-    const fake = new FakeNearClient(config);
+    const fake = new FakeNearClient(config, { simulateContracts: e.NEAR_FAKE_SIMULATE });
     return { client: new CappedNearClient(fake, config, caps), fake };
   }
   const rpc = new NearRpc(

@@ -1,14 +1,17 @@
 // Dashboard sign-in: email magic links, passkeys, logout and the signed-in person.
 import type { WebauthnCredential } from '@prisma/client';
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server';
+import { SESSION_COOKIE } from '@tendr/contracts';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { consumeEmailLink, EmailSchema, startEmailSignIn } from '../auth/magic-link.js';
 import {
   clearedSessionCookies,
   createDashboardSession,
+  csrfFor,
   isSteppedUp,
   markPasskeyVerified,
+  parseCookies,
   revokeDashboardSession,
   sessionCookies,
 } from '../auth/session.js';
@@ -63,6 +66,17 @@ function sessionOf(req: FastifyRequest): string {
   return p.sessionId;
 }
 
+/**
+ * The CSRF value of the session this request is authenticated by (R31). Returned in the body of
+ * session responses so a dashboard on another subdomain, which cannot read the API's
+ * `tendr_csrf` cookie, can still send `Tendr-CSRF`. Not a secret beyond the session: it is
+ * derived from the HttpOnly token, which a cross-site page cannot read.
+ */
+function csrfOfRequest(req: FastifyRequest): string | null {
+  const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  return token ? csrfFor(token) : null;
+}
+
 /** A WebAuthn response object from the browser; its contents are checked by the verifier. */
 const WebauthnResponse = z.object({ id: z.string().min(1).max(1024) }).passthrough();
 
@@ -82,6 +96,7 @@ async function startSession(reply: FastifyReply, userId: string, passkeyVerified
   return {
     user: { id: user.id, email: user.email, emailVerifiedAt: user.emailVerifiedAt },
     hasPasskey: passkeys.length > 0,
+    csrfToken: session.csrf,
   };
 }
 
@@ -158,7 +173,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       // Registering the first passkey is itself a fresh passkey assertion (user-verified); it also
       // ended the person's other sessions.
       if (first) await markPasskeyVerified(sessionOf(req));
-      return { credential: publicPasskey(credential) };
+      return { credential: publicPasskey(credential), csrfToken: csrfOfRequest(req) };
     },
   );
 
@@ -189,7 +204,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const result = await verifyAuthentication(response as unknown as AuthenticationResponseJSON);
     if (result.userId !== userId) throw unauthorized('That passkey belongs to someone else');
     await markPasskeyVerified(sessionOf(req));
-    return { ok: true };
+    return { ok: true, csrfToken: csrfOfRequest(req) };
   });
 
   app.get('/v1/auth/passkeys', { config: { auth: person } }, async (req) => {
@@ -222,6 +237,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       user: { id: user.id, email: user.email, emailVerifiedAt: user.emailVerifiedAt },
       stores: await storesFor(userId),
       passkeys: (await activeCredentials(userId)).map(publicPasskey),
+      csrfToken: csrfOfRequest(req),
     };
   });
 };
