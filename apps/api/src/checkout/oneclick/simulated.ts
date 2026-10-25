@@ -5,21 +5,21 @@
 // account) through the mock intents verifier's test-only `deposit(account_id, token_id, amount)`,
 // via the test-mode NEAR client (the in-memory fake in tests and local dev).
 //
-// State is per instance, in memory: one process. `providerFor(false)` shares one instance per
-// process.
+// State lives in a SimStore: Redis by default (`sim1click:<depositAddress>`, 48 h TTL), so the
+// API process (the test-mode `simulate` route) and the worker (status polls) see the same
+// deposits. Unit tests may pass a MemorySimStore.
 import { createHash } from 'node:crypto';
 import bs58 from 'bs58';
 import { env } from '../../env.js';
 import { nearClient, type NearClient } from '../../near/client.js';
+import { RedisSimStore, type SimDeposit, type SimStore } from './sim-store.js';
 import {
   OneClickError,
   type OneClickProvider,
-  type OneClickStatus,
   type QuoteRequest,
   type QuoteResponse,
   type StatusResponse,
   type TokenInfo,
-  type TxHashRef,
 } from './types.js';
 
 export const SIMULATE_SCENARIOS = [
@@ -174,39 +174,28 @@ function formatUsd(micro: bigint): string {
   return frac ? `${whole}.${frac}` : whole.toString();
 }
 
-interface SimDeposit {
-  req: QuoteRequest;
-  amountIn: bigint;
-  amountOut: bigint;
-  deadline: Date;
-  status: OneClickStatus;
-  deposited: bigint;
-  refunded: bigint;
-  refundReason?: string;
-  origin: TxHashRef[];
-  senderAddress?: string;
-  settled: boolean;
-}
-
 export interface SimulatedOneClickOptions {
   now?: () => Date;
   /** Test-mode NEAR client; defaults to `nearClient(false)`, resolved on each use. */
   near?: () => NearClient;
   /** Mock intents verifier; defaults to `INTENTS_CONTRACT_TEST`. */
   intentsContract?: string;
+  /** Defaults to Redis (shared across processes). */
+  store?: SimStore;
 }
 
 export class SimulatedOneClick implements OneClickProvider {
   private readonly now: () => Date;
   private readonly near: () => NearClient;
   private readonly intentsContract: () => string;
-  private readonly deposits = new Map<string, SimDeposit>();
+  private readonly store: SimStore;
 
   constructor(opts: SimulatedOneClickOptions = {}) {
     this.now = opts.now ?? (() => new Date());
     this.near = opts.near ?? (() => nearClient(false));
     const intents = opts.intentsContract;
     this.intentsContract = () => intents ?? env().INTENTS_CONTRACT_TEST;
+    this.store = opts.store ?? new RedisSimStore();
   }
 
   async tokens(): Promise<TokenInfo[]> {
@@ -255,8 +244,8 @@ export class SimulatedOneClick implements OneClickProvider {
         : hex(`sim-deposit:${fingerprint}`, 32);
     // The address is a hash of the request, so an identical request gets the same address; it
     // keeps whatever state its deposit already reached.
-    if (depositAddress && !this.deposits.has(depositAddress)) {
-      this.deposits.set(depositAddress, {
+    if (depositAddress) {
+      await this.store.create(depositAddress, {
         req: structuredClone(req),
         amountIn,
         amountOut,
@@ -283,16 +272,20 @@ export class SimulatedOneClick implements OneClickProvider {
     };
   }
 
+  /** Read-only: an incomplete deposit past its deadline reads as REFUNDED without a write. */
   async status(depositAddress: string): Promise<StatusResponse> {
-    const d = this.get(depositAddress);
+    const d = await this.get(depositAddress);
     this.expire(d);
     return view(depositAddress, d);
   }
 
   async submitDeposit(txHash: string, depositAddress: string): Promise<void> {
-    const d = this.get(depositAddress);
-    if (!d.origin.some((h) => h.hash === txHash)) d.origin.push({ hash: txHash });
-    if (d.status === 'PENDING_DEPOSIT') d.status = 'KNOWN_DEPOSIT_TX';
+    await this.store.withLock(depositAddress, async () => {
+      const d = await this.get(depositAddress);
+      if (!d.origin.some((h) => h.hash === txHash)) d.origin.push({ hash: txHash });
+      if (d.status === 'PENDING_DEPOSIT') d.status = 'KNOWN_DEPOSIT_TX';
+      await this.store.put(depositAddress, d);
+    });
   }
 
   /**
@@ -305,13 +298,25 @@ export class SimulatedOneClick implements OneClickProvider {
    * SUCCESS credits the recipient (`recipientType INTENTS`) and each `appFees` recipient through
    * the mock verifier's `deposit` first; if that fails, the deposit stays as it was and this
    * throws. `senderAddress` overrides the simulated sender (e.g. a sanctioned address).
+   * Holds the address's store lock throughout, so concurrent calls (any process) cannot settle
+   * twice; a concurrent call fails with 409 `BUSY`.
    */
   async simulate(
     depositAddress: string,
     scenario: SimulateScenario,
     opts: { senderAddress?: string } = {},
   ): Promise<StatusResponse> {
-    const d = this.get(depositAddress);
+    return this.store.withLock(depositAddress, () =>
+      this.simulateLocked(depositAddress, scenario, opts),
+    );
+  }
+
+  private async simulateLocked(
+    depositAddress: string,
+    scenario: SimulateScenario,
+    opts: { senderAddress?: string },
+  ): Promise<StatusResponse> {
+    const d = await this.get(depositAddress);
     this.expire(d);
     if (scenario === 'topup') {
       if (d.status !== 'INCOMPLETE_DEPOSIT') {
@@ -352,7 +357,7 @@ export class SimulatedOneClick implements OneClickProvider {
       next.settled = true;
       next.refunded = next.deposited - d.amountIn;
     }
-    this.deposits.set(depositAddress, next);
+    await this.store.put(depositAddress, next);
     return view(depositAddress, next);
   }
 
@@ -390,8 +395,8 @@ export class SimulatedOneClick implements OneClickProvider {
     }
   }
 
-  private get(depositAddress: string): SimDeposit {
-    const d = this.deposits.get(depositAddress);
+  private async get(depositAddress: string): Promise<SimDeposit> {
+    const d = await this.store.get(depositAddress);
     if (!d) throw new OneClickError('deposit address not found', 404, 'NOT_FOUND');
     return d;
   }

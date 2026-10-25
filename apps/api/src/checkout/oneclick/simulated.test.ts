@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { env } from '../../env.js';
+import { closeRedis, getRedis, whenReady } from '../../lib/redis.js';
 import { fakeNearClient, resetNearClients } from '../../near/client.js';
 import type { FakeNearClient } from '../../near/fake.js';
+import { MemorySimStore, SIM_KEY_PREFIX, SIM_TTL_MS } from './sim-store.js';
 import { SimulatedOneClick, simulatedDestinationTxHash } from './simulated.js';
 import { OneClickError, type QuoteRequest } from './types.js';
 
@@ -41,11 +43,26 @@ function depositsTo(accountId: string) {
     );
 }
 
-beforeEach(() => {
+/** Deletes every simulated deposit (deposit addresses are deterministic across tests). */
+async function clearSimKeys(): Promise<void> {
+  const redis = getRedis();
+  await whenReady(redis);
+  const keys = await redis.keys(`${SIM_KEY_PREFIX}*`);
+  if (keys.length > 0) await redis.del(...keys);
+}
+
+beforeEach(async () => {
+  await clearSimKeys();
   resetNearClients();
   fake = fakeNearClient(false);
   clock = T0;
+  // Default store: Redis, as in the API and the worker.
   sim = new SimulatedOneClick({ now: () => clock });
+});
+
+afterAll(async () => {
+  await clearSimKeys();
+  await closeRedis();
 });
 
 describe('SimulatedOneClick quotes', () => {
@@ -261,5 +278,61 @@ describe('SimulatedOneClick status and scenarios', () => {
     expect(res.status).toBe('KNOWN_DEPOSIT_TX');
     expect(res.swapDetails.originChainTxHashes).toEqual([{ hash: '0xtx' }]);
     await expect(sim.submitDeposit('0xtx', '0xnope')).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('SimulatedOneClick shared state (Redis)', () => {
+  it('two provider instances (API and worker processes) see the same deposits', async () => {
+    const api = new SimulatedOneClick({ now: () => clock });
+    const worker = new SimulatedOneClick({ now: () => clock });
+    const { quote } = await api.quote(request());
+    const addr = quote.depositAddress!;
+
+    expect((await worker.status(addr)).status).toBe('PENDING_DEPOSIT');
+    await api.simulate(addr, 'underpay');
+    expect((await worker.status(addr)).status).toBe('INCOMPLETE_DEPOSIT');
+    await worker.simulate(addr, 'topup');
+    expect(await api.status(addr)).toEqual(await worker.status(addr));
+    expect((await api.status(addr)).status).toBe('SUCCESS');
+    expect(depositsTo('shop.tendr.testnet')).toHaveLength(1);
+  });
+
+  it('stores each deposit as JSON under sim1click:<address> with a 48 h TTL', async () => {
+    const { quote } = await sim.quote(request());
+    const redis = getRedis();
+    const key = `${SIM_KEY_PREFIX}${quote.depositAddress!}`;
+    const stored = JSON.parse((await redis.get(key))!) as Record<string, unknown>;
+    expect(stored).toMatchObject({
+      status: 'PENDING_DEPOSIT',
+      amountIn: quote.amountIn,
+      amountOut: '25000000',
+      deadline: DEADLINE.toISOString(),
+      req: request(),
+    });
+    const ttl = await redis.pttl(key);
+    expect(ttl).toBeGreaterThan(SIM_TTL_MS - 60_000);
+    expect(ttl).toBeLessThanOrEqual(SIM_TTL_MS);
+  });
+
+  it('a concurrent simulate on the same address is refused, so it settles once', async () => {
+    const a = new SimulatedOneClick({ now: () => clock });
+    const b = new SimulatedOneClick({ now: () => clock });
+    const { quote } = await a.quote(request());
+    const results = await Promise.allSettled([
+      a.simulate(quote.depositAddress!, 'exact'),
+      b.simulate(quote.depositAddress!, 'exact'),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((r) => r.status === 'rejected')).toEqual([
+      expect.objectContaining({ reason: expect.objectContaining({ status: 409 }) }),
+    ]);
+    expect(depositsTo('shop.tendr.testnet')).toHaveLength(1);
+  });
+
+  it('the in-memory store (unit tests only) keeps state per instance', async () => {
+    const mem = new SimulatedOneClick({ now: () => clock, store: new MemorySimStore() });
+    const { quote } = await mem.quote(request({ recipient: 'mem.tendr.testnet' }));
+    expect((await mem.simulate(quote.depositAddress!, 'exact')).status).toBe('SUCCESS');
+    await expect(sim.status(quote.depositAddress!)).rejects.toMatchObject({ status: 404 });
   });
 });

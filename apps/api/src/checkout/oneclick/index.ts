@@ -3,6 +3,7 @@
 import { env } from '../../env.js';
 import { HttpOneClick } from './http.js';
 import { SimulatedOneClick } from './simulated.js';
+export { MemorySimStore, RedisSimStore, type SimStore } from './sim-store.js';
 import type { OneClickProvider } from './types.js';
 
 export * from './types.js';
