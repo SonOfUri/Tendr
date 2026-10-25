@@ -7,7 +7,7 @@ use near_sdk::{test_vm_config, PromiseResult, RuntimeFeesConfig};
 
 use super::*;
 use crate::money::TIMELOCK_DELAY;
-use crate::recovery::{recovery_id, RecoveryPayload, RECOVERY_DELAY};
+use crate::recovery::{recovery_id, RecoveryPayload, MAX_RECOVERY_VALIDITY, RECOVERY_DELAY};
 
 /// The recovery kit's Ed25519 key.
 fn kit() -> ed25519_dalek::SigningKey {
@@ -27,21 +27,60 @@ fn with_kit(threshold: u8) -> (MerchantAccount, Person, Person, Person) {
     (MerchantAccount::new(cfg), a, b, cc)
 }
 
-fn kit_sign(contract: &str, signers: &[Signer], threshold: u8, nonce: u64) -> Base64VecU8 {
-    let payload = RecoveryPayload::new(contract, signers, threshold, nonce);
-    let sig = ed25519_dalek::Signer::sign(&kit(), &payload.hash());
+/// `valid_until` the helpers sign: inside the 30-day window for every
+/// start time these tests use.
+const VALID_UNTIL: u64 = T0 + 20 * DAY;
+
+/// A recovery signature by `key` over a full payload.
+#[allow(clippy::too_many_arguments)]
+fn sign_with(
+    key: &ed25519_dalek::SigningKey,
+    contract: &str,
+    signers: &[Signer],
+    threshold: u8,
+    nonce: u64,
+    key_epoch: u64,
+    valid_until: u64,
+) -> Base64VecU8 {
+    let payload = RecoveryPayload::new(contract, signers, threshold, nonce, key_epoch, valid_until);
+    let sig = ed25519_dalek::Signer::sign(key, &payload.hash());
     Base64VecU8(sig.to_bytes().to_vec())
 }
 
-/// Starts a recovery signed by the kit for this contract.
-fn start(c: &mut MerchantAccount, signers: &[Signer], threshold: u8, nonce: u64) {
-    let sig = kit_sign(CONTRACT, signers, threshold, nonce);
-    c.start_recovery(signers.to_vec(), threshold, U64(nonce), sig);
+/// The kit's signature at recovery-key epoch 0, valid until [`VALID_UNTIL`].
+fn kit_sign(contract: &str, signers: &[Signer], threshold: u8, nonce: u64) -> Base64VecU8 {
+    sign_with(&kit(), contract, signers, threshold, nonce, 0, VALID_UNTIL)
 }
 
-/// The recovery id of the recovery started with `nonce` on [`CONTRACT`].
+fn key_epoch(c: &MerchantAccount) -> u64 {
+    c.get_config().recovery_key_epoch.0
+}
+
+/// Starts a recovery signed by the kit for this contract at its current
+/// recovery-key epoch.
+fn start(c: &mut MerchantAccount, signers: &[Signer], threshold: u8, nonce: u64) {
+    let sig = sign_with(
+        &kit(),
+        CONTRACT,
+        signers,
+        threshold,
+        nonce,
+        key_epoch(c),
+        VALID_UNTIL,
+    );
+    c.start_recovery(
+        signers.to_vec(),
+        threshold,
+        U64(nonce),
+        U64(VALID_UNTIL),
+        sig,
+    );
+}
+
+/// The recovery id of the recovery started with `nonce` on [`CONTRACT`] at
+/// recovery-key epoch 0.
 fn rid(nonce: u64) -> ProposalId {
-    ProposalId(recovery_id(CONTRACT, nonce))
+    ProposalId(recovery_id(CONTRACT, 0, nonce))
 }
 
 /// A signer's cancel of the recovery started with `nonce`.
@@ -209,7 +248,7 @@ fn cancel_for_another_contracts_recovery_rejected() {
     let (mut c, _a, b, _c) = with_kit(2);
     let d = new_signer(4);
     start(&mut c, &[d.signer()], 1, 1);
-    let other = ProposalId(recovery_id("b.tendr.testnet", 1));
+    let other = ProposalId(recovery_id("b.tendr.testnet", 0, 1));
     assert_ne!(other, rid(1));
     // Signed over the other contract's recovery id, for this contract.
     let here = b.approval_for(CONTRACT, 0, &other, 0, ApprovalIntent::Cancel);
@@ -306,7 +345,7 @@ fn recovery_nonce_replay_rejected() {
     let d = new_signer(4);
     let signers = [d.signer()];
     let sig = kit_sign(CONTRACT, &signers, 1, 5);
-    c.start_recovery(signers.to_vec(), 1, U64(5), sig.clone());
+    c.start_recovery(signers.to_vec(), 1, U64(5), U64(VALID_UNTIL), sig.clone());
 
     // Only one recovery at a time.
     let msg = panics(|| start(&mut c, &signers, 1, 6));
@@ -314,24 +353,102 @@ fn recovery_nonce_replay_rejected() {
 
     c.cancel_recovery(recovery_cancel(&a, 0, 5));
     // The cancelled recovery's signature cannot start it again.
-    let msg = panics(|| c.start_recovery(signers.to_vec(), 1, U64(5), sig.clone()));
+    let msg =
+        panics(|| c.start_recovery(signers.to_vec(), 1, U64(5), U64(VALID_UNTIL), sig.clone()));
     assert!(msg.contains("nonce"), "{msg}");
     let msg = panics(|| start(&mut c, &signers, 1, 4));
     assert!(msg.contains("nonce"), "{msg}");
     assert_eq!(c.get_recovery_nonce(), U64(5));
 
     // The signature binds every field and this contract.
-    let msg = panics(|| c.start_recovery(signers.to_vec(), 1, U64(6), sig.clone()));
+    let msg =
+        panics(|| c.start_recovery(signers.to_vec(), 1, U64(6), U64(VALID_UNTIL), sig.clone()));
     assert!(msg.contains("invalid recovery signature"), "{msg}");
     let other = kit_sign("b.tendr.testnet", &signers, 1, 6);
-    let msg = panics(|| c.start_recovery(signers.to_vec(), 1, U64(6), other));
+    let msg = panics(|| c.start_recovery(signers.to_vec(), 1, U64(6), U64(VALID_UNTIL), other));
     assert!(msg.contains("invalid recovery signature"), "{msg}");
     let short = Base64VecU8(vec![0; 63]);
-    let msg = panics(|| c.start_recovery(signers.to_vec(), 1, U64(6), short));
+    let msg = panics(|| c.start_recovery(signers.to_vec(), 1, U64(6), U64(VALID_UNTIL), short));
     assert!(msg.contains("invalid recovery signature"), "{msg}");
 
     start(&mut c, &signers, 1, 6);
     assert!(c.get_recovery().is_some());
+}
+
+#[test]
+fn rotation_recovers_from_a_max_nonce_and_voids_old_key_epochs() {
+    let (mut c, a, b, _c) = with_kit(2);
+    let d = new_signer(4);
+    let signers = [d.signer()];
+
+    // A kit thief burns the nonce space; the signers cancel.
+    start(&mut c, &signers, 1, u64::MAX);
+    let ev = last_event("recovery_started");
+    assert_eq!(ev["data"]["nonce"], u64::MAX.to_string());
+    assert_eq!(ev["data"]["recovery_key_epoch"], "0");
+    assert_eq!(ev["data"]["recovery_id"], hex(&rid(u64::MAX).0));
+    c.cancel_recovery(recovery_cancel(&a, 0, u64::MAX));
+    let msg = panics(|| start(&mut c, &signers, 1, u64::MAX));
+    assert!(msg.contains("nonce"), "{msg}");
+    let old_payload = sign_with(&kit(), CONTRACT, &signers, 1, 1, 0, VALID_UNTIL);
+
+    // Rotating to a new kit starts recovery-key epoch 1 with a fresh nonce.
+    let kit2 = ed25519_key(10);
+    let pk2 = kit2.verifying_key().to_bytes();
+    let rot = propose(&mut c, &a, Action::RotateRecoveryKey(Some(pk2)), 1);
+    c.approve(rot, b.approve(&rot, 0));
+    assert_eq!(key_epoch(&c), 1);
+    assert_eq!(c.get_recovery_nonce(), U64(0));
+    let sig = sign_with(&kit2, CONTRACT, &signers, 1, 1, 1, VALID_UNTIL);
+    c.start_recovery(signers.to_vec(), 1, U64(1), U64(VALID_UNTIL), sig);
+    let r = c.get_recovery().unwrap();
+    assert_eq!((r.nonce, r.recovery_key_epoch), (U64(1), U64(1)));
+    // Its id differs from nonce 1 under epoch 0, so old cancels do not fit.
+    assert_eq!(r.recovery_id, ProposalId(recovery_id(CONTRACT, 1, 1)));
+    let epoch = c.get_config().signer_epoch.0;
+    let msg = panics(|| c.cancel_recovery(recovery_cancel(&a, epoch, 1)));
+    assert!(msg.contains("invalid approval"), "{msg}");
+    let cancel = a.approval_for(CONTRACT, 0, &r.recovery_id, epoch, ApprovalIntent::Cancel);
+    c.cancel_recovery(cancel);
+
+    // Rotating back to the first kit: epoch 2. Its epoch-0 payload is dead.
+    let back = propose(&mut c, &a, Action::RotateRecoveryKey(Some(kit_pk())), 2);
+    c.approve(back, b.approve(&back, epoch));
+    assert_eq!(key_epoch(&c), 2);
+    let msg = panics(|| {
+        c.start_recovery(
+            signers.to_vec(),
+            1,
+            U64(1),
+            U64(VALID_UNTIL),
+            old_payload.clone(),
+        )
+    });
+    assert!(msg.contains("invalid recovery signature"), "{msg}");
+    start(&mut c, &signers, 1, 1);
+    assert!(c.get_recovery().is_some());
+}
+
+#[test]
+fn recovery_payload_valid_until_enforced() {
+    let (mut c, _a, _b, _c) = with_kit(2);
+    let signers = [new_signer(4).signer()];
+    let start_until = |c: &mut MerchantAccount, valid_until: u64| {
+        let sig = sign_with(&kit(), CONTRACT, &signers, 1, 1, 0, valid_until);
+        c.start_recovery(signers.to_vec(), 1, U64(1), U64(valid_until), sig);
+    };
+    let msg = panics(|| start_until(&mut c, T0 - 1));
+    assert!(msg.contains("expired"), "{msg}");
+    let msg = panics(|| start_until(&mut c, T0 + MAX_RECOVERY_VALIDITY + 1));
+    assert!(msg.contains("30 days"), "{msg}");
+    // A payload signed for one valid_until cannot claim another.
+    let sig = sign_with(&kit(), CONTRACT, &signers, 1, 1, 0, T0 + DAY);
+    let msg = panics(|| c.start_recovery(signers.to_vec(), 1, U64(1), U64(T0 + 2 * DAY), sig));
+    assert!(msg.contains("invalid recovery signature"), "{msg}");
+    assert!(c.get_recovery().is_none());
+    // Both bounds are inclusive.
+    start_until(&mut c, T0 + MAX_RECOVERY_VALIDITY);
+    assert_eq!(MAX_RECOVERY_VALIDITY, 30 * DAY);
 }
 
 #[test]
@@ -406,7 +523,10 @@ fn rotating_the_recovery_key_drops_a_pending_recovery() {
     c.approve(id, b.approve(&id, 0));
     assert_eq!(status(&c, &id), ProposalStatus::Executed);
     assert!(c.get_recovery().is_none());
-    assert_eq!(last_event("recovery_cancelled")["data"]["signer_id"], a.id);
+    let ev = last_event("recovery_cancelled");
+    assert_eq!(ev["data"]["reason"], "recovery_key_rotated");
+    assert!(ev["data"].get("signer_id").is_none(), "{ev}");
+    assert_eq!(key_epoch(&c), 1);
     ctx(T0 + RECOVERY_DELAY);
     let msg = panics(|| c.execute_recovery());
     assert!(msg.contains("no recovery"), "{msg}");
@@ -614,7 +734,15 @@ fn write_recovery_vectors() {
         },
     ];
     let (threshold, nonce) = (2u8, 1_761_350_400_000u64);
-    let payload = RecoveryPayload::new(contract_id, &signers, threshold, nonce);
+    let (key_epoch, valid_until) = (1u64, 1_761_955_200_000_000_000u64);
+    let payload = RecoveryPayload::new(
+        contract_id,
+        &signers,
+        threshold,
+        nonce,
+        key_epoch,
+        valid_until,
+    );
     let hash = payload.hash();
     let sig = ed25519_dalek::Signer::sign(&kit(), &hash);
     let doc = serde_json::json!({
@@ -624,6 +752,8 @@ fn write_recovery_vectors() {
         "new_signers": signers,
         "new_threshold": threshold,
         "nonce": nonce.to_string(),
+        "recovery_key_epoch": key_epoch.to_string(),
+        "valid_until": valid_until.to_string(),
         "recovery_public_key_b64": b64(&kit_pk()),
         "payload_borsh_hex": hex(&near_sdk::borsh::to_vec(&payload).unwrap()),
         "message_hex": hex(&hash),

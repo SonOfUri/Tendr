@@ -56,12 +56,20 @@ pub enum Event<'a> {
         recovery_key_set: bool,
     },
     RecoveryStarted {
+        recovery_id: ProposalId,
+        nonce: U64,
+        recovery_key_epoch: U64,
         new_signer_ids: Vec<&'a str>,
         new_threshold: u8,
         executes_at: U64,
     },
+    /// `signer_id` when a signer cancelled; `reason` (and no signer) when
+    /// the contract dropped it, e.g. `recovery_key_rotated`.
     RecoveryCancelled {
-        signer_id: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signer_id: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<&'a str>,
     },
     RecoveryExecuted {
         new_signer_ids: Vec<&'a str>,

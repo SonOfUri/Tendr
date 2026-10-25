@@ -104,20 +104,31 @@
   ],
   "recovery_ids": [
     {
-      "note": "recovery_id = sha256(borsh((\"tendr-merchant-account-recovery-id-v1\", contract_id, nonce u64))); a recovery cancel is a Cancel approval with proposal_id = recovery_id at the current signer epoch (3 here).",
+      "note": "recovery_id = sha256(borsh((\"tendr-merchant-account-recovery-id-v1\", contract_id, recovery_key_epoch u64, nonce u64))); a recovery cancel is a Cancel approval with proposal_id = recovery_id at the current signer epoch (3 here).",
       "contract_id": "mystore.tendr.testnet",
+      "recovery_key_epoch": "0",
       "nonce": "1",
-      "preimage_borsh_hex": "2500000074656e64722d6d65726368616e742d6163636f756e742d7265636f766572792d69642d7631150000006d7973746f72652e74656e64722e746573746e65740100000000000000",
-      "recovery_id_hex": "e6542f577619479f313dd823506946a16ed91e83465e599eb43b4b8049f0cd32",
-      "cancel_challenge_hex": "ba65daba61cfe67a76062c146bb806134abd58231ff41eb3b86ad1eb1d5d7c4f"
+      "preimage_borsh_hex": "2500000074656e64722d6d65726368616e742d6163636f756e742d7265636f766572792d69642d7631150000006d7973746f72652e74656e64722e746573746e657400000000000000000100000000000000",
+      "recovery_id_hex": "8563e1796da4e26062bb091e81bd7fdb530cbff84b3d4e44000b2608d5bc32b5",
+      "cancel_challenge_hex": "4e3d824c7143ab58027f070b9945e8108e5e3b5fd2c0c3ee9d7d1d29573fdedd"
     },
     {
-      "note": "recovery_id = sha256(borsh((\"tendr-merchant-account-recovery-id-v1\", contract_id, nonce u64))); a recovery cancel is a Cancel approval with proposal_id = recovery_id at the current signer epoch (3 here).",
+      "note": "recovery_id = sha256(borsh((\"tendr-merchant-account-recovery-id-v1\", contract_id, recovery_key_epoch u64, nonce u64))); a recovery cancel is a Cancel approval with proposal_id = recovery_id at the current signer epoch (3 here).",
       "contract_id": "mystore.tendr.testnet",
+      "recovery_key_epoch": "1",
+      "nonce": "1",
+      "preimage_borsh_hex": "2500000074656e64722d6d65726368616e742d6163636f756e742d7265636f766572792d69642d7631150000006d7973746f72652e74656e64722e746573746e657401000000000000000100000000000000",
+      "recovery_id_hex": "028a1a4fec479d509253fa955fbd8324de172def699d71b22347056c17902683",
+      "cancel_challenge_hex": "7a90e8739817008c0d5a75d803e2d50519fafb169a44693e17fdb482a5bcad99"
+    },
+    {
+      "note": "recovery_id = sha256(borsh((\"tendr-merchant-account-recovery-id-v1\", contract_id, recovery_key_epoch u64, nonce u64))); a recovery cancel is a Cancel approval with proposal_id = recovery_id at the current signer epoch (3 here).",
+      "contract_id": "mystore.tendr.testnet",
+      "recovery_key_epoch": "2",
       "nonce": "1761350400000",
-      "preimage_borsh_hex": "2500000074656e64722d6d65726368616e742d6163636f756e742d7265636f766572792d69642d7631150000006d7973746f72652e74656e64722e746573746e65740038aa189a010000",
-      "recovery_id_hex": "59f4601d99c8165311ccb0e5915dac9fe086ea132eb5d1eb490f56efec03291a",
-      "cancel_challenge_hex": "ad19e29dc426d461331367aa43a24df71e8097698eb477889fc63134762e2983"
+      "preimage_borsh_hex": "2500000074656e64722d6d65726368616e742d6163636f756e742d7265636f766572792d69642d7631150000006d7973746f72652e74656e64722e746573746e657402000000000000000038aa189a010000",
+      "recovery_id_hex": "927f1f5f2bc0f3cda95b40f152143b1b4a92d694170b3cf616a1b868831e3e5b",
+      "cancel_challenge_hex": "1aac6ca7b677243e7c4364d357349de7d904a1f96180faa4f991412b53b708f1"
     }
   ]
 }

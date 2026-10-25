@@ -146,6 +146,8 @@ pub struct ConfigView {
     pub origins: Vec<String>,
     pub rp_id: String,
     pub recovery_key_set: bool,
+    /// Bumped by every recovery-key rotation; recovery payloads sign it.
+    pub recovery_key_epoch: U64,
     pub intents_contract: AccountId,
     pub poa_suffix: String,
 }
@@ -180,8 +182,13 @@ pub struct MerchantAccount {
     removed_saved_ids: LookupSet<[u8; 32]>,
     /// The started recovery, if any; at most one at a time.
     recovery: Option<PendingRecovery>,
-    /// The last nonce a `start_recovery` used, cancelled ones included.
+    /// The last nonce a `start_recovery` used under the current recovery-key
+    /// epoch, cancelled ones included. Reset when the key rotates.
     recovery_nonce: u64,
+    /// Bumped by every executed `RotateRecoveryKey`. Recovery payloads and
+    /// recovery ids include it, so nothing signed for an older key (even the
+    /// same key rotated back) works again.
+    recovery_key_epoch: u64,
     /// [`STATE_VERSION`] of the code that last wrote the state.
     state_version: u32,
 }
@@ -235,6 +242,7 @@ impl MerchantAccount {
             removed_saved_ids: LookupSet::new(StorageKey::RemovedSavedIds),
             recovery: None,
             recovery_nonce: 0,
+            recovery_key_epoch: 0,
             state_version: STATE_VERSION,
         };
         require!(!signers.is_empty(), "at least one signer is required");
@@ -404,6 +412,7 @@ impl MerchantAccount {
             origins: self.origins.clone(),
             rp_id: self.rp_id.clone(),
             recovery_key_set: self.recovery_key.is_some(),
+            recovery_key_epoch: U64(self.recovery_key_epoch),
             intents_contract: self.intents_contract.clone(),
             poa_suffix: self.poa_suffix.clone(),
         }
@@ -652,23 +661,10 @@ impl MerchantAccount {
             self.start_upgrade(id, code_hash);
             return;
         }
-        let drops_recovery =
-            matches!(action, Action::RotateRecoveryKey(_)) && self.recovery.is_some();
         match self.apply(&action) {
             Ok(()) => {
-                if drops_recovery {
-                    // A recovery signed by the replaced key no longer stands.
-                    self.recovery = None;
-                    let creator = self
-                        .proposals
-                        .get(&id)
-                        .expect("proposal exists")
-                        .creator
-                        .clone();
-                    Event::RecoveryCancelled {
-                        signer_id: &creator,
-                    }
-                    .emit();
+                if matches!(action, Action::RotateRecoveryKey(_)) {
+                    self.on_recovery_key_rotated();
                 }
                 self.finish(&id, ProposalStatus::Executed);
                 Event::ProposalExecuted {
@@ -725,6 +721,21 @@ impl MerchantAccount {
                     .on_upgrade_done(id),
             )
             .detach();
+    }
+
+    /// A new recovery-key epoch: the nonce sequence restarts (so a payload
+    /// that burned `u64::MAX` cannot disable recovery for good) and a pending
+    /// recovery signed by the replaced key is dropped.
+    fn on_recovery_key_rotated(&mut self) {
+        self.recovery_key_epoch += 1;
+        self.recovery_nonce = 0;
+        if self.recovery.take().is_some() {
+            Event::RecoveryCancelled {
+                signer_id: None,
+                reason: Some("recovery_key_rotated"),
+            }
+            .emit();
+        }
     }
 
     fn fail(&mut self, id: ProposalId, reason: &str) {

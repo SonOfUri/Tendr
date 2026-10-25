@@ -1190,21 +1190,23 @@ fn cannot_remove_address_current_settlement_points_to() {
     assert!(c.list_saved_addresses().is_empty());
 }
 
-/// `recovery_id(contract_id, nonce)` cases for the shared vectors, with the
+/// `recovery_id(contract_id, recovery_key_epoch, nonce)` cases for the shared vectors, with the
 /// Cancel-intent challenge a signer signs to cancel that recovery.
 fn recovery_id_vectors(contract_id: &str) -> Vec<serde_json::Value> {
-    [1u64, 1_761_350_400_000]
+    [(0u64, 1u64), (1, 1), (2, 1_761_350_400_000)]
         .into_iter()
-        .map(|nonce| {
-            let id = ProposalId(crate::recovery::recovery_id(contract_id, nonce));
+        .map(|(key_epoch, nonce)| {
+            let id = ProposalId(crate::recovery::recovery_id(contract_id, key_epoch, nonce));
             let payload = ApprovalPayload::new(contract_id, &id, 3, ApprovalIntent::Cancel);
             serde_json::json!({
-                "note": "recovery_id = sha256(borsh((\"tendr-merchant-account-recovery-id-v1\", contract_id, nonce u64))); a recovery cancel is a Cancel approval with proposal_id = recovery_id at the current signer epoch (3 here).",
+                "note": "recovery_id = sha256(borsh((\"tendr-merchant-account-recovery-id-v1\", contract_id, recovery_key_epoch u64, nonce u64))); a recovery cancel is a Cancel approval with proposal_id = recovery_id at the current signer epoch (3 here).",
                 "contract_id": contract_id,
+                "recovery_key_epoch": key_epoch.to_string(),
                 "nonce": nonce.to_string(),
                 "preimage_borsh_hex": hex(&near_sdk::borsh::to_vec(&(
                     crate::recovery::RECOVERY_ID_DOMAIN.to_string(),
                     contract_id.to_string(),
+                    key_epoch,
                     nonce,
                 )).unwrap()),
                 "recovery_id_hex": hex(&id.0),

@@ -23,18 +23,24 @@ pub const RECOVERY_DELAY: u64 = 72 * HOUR;
 /// Domain separator for recovery payloads.
 pub const RECOVERY_DOMAIN: &str = "tendr-merchant-account-recovery-v1";
 
+/// Longest a recovery signature may stay usable: `valid_until` may be at
+/// most this far past the block time when the recovery starts.
+pub const MAX_RECOVERY_VALIDITY: u64 = 30 * 24 * HOUR;
+
 /// Domain separator for [`recovery_id`].
 pub const RECOVERY_ID_DOMAIN: &str = "tendr-merchant-account-recovery-id-v1";
 
-/// The id of the recovery started with `nonce` on `contract_id`:
-/// `sha256(borsh((RECOVERY_ID_DOMAIN, contract_id, nonce)))`. A signer's
-/// cancel is an approval with intent `Cancel` over this id, so it cancels
-/// that one recovery on that one contract and cannot be replayed against a
-/// later one.
-pub fn recovery_id(contract_id: &str, nonce: u64) -> [u8; 32] {
+/// The id of the recovery started with `nonce` under recovery-key epoch
+/// `recovery_key_epoch` on `contract_id`:
+/// `sha256(borsh((RECOVERY_ID_DOMAIN, contract_id, recovery_key_epoch, nonce)))`.
+/// A signer's cancel is an approval with intent `Cancel` over this id, so it
+/// cancels that one recovery on that one contract and cannot be replayed
+/// against a later one, even after a key rotation resets the nonce.
+pub fn recovery_id(contract_id: &str, recovery_key_epoch: u64, nonce: u64) -> [u8; 32] {
     let bytes = near_sdk::borsh::to_vec(&(
         RECOVERY_ID_DOMAIN.to_string(),
         contract_id.to_string(),
+        recovery_key_epoch,
         nonce,
     ))
     .expect("borsh");
@@ -50,16 +56,29 @@ pub struct RecoveryPayload {
     pub new_signers: Vec<Signer>,
     pub new_threshold: u8,
     pub nonce: u64,
+    /// The account's recovery-key epoch; a rotation voids older payloads.
+    pub recovery_key_epoch: u64,
+    /// Block time (ns) after which the payload can no longer start a recovery.
+    pub valid_until: u64,
 }
 
 impl RecoveryPayload {
-    pub fn new(contract_id: &str, new_signers: &[Signer], new_threshold: u8, nonce: u64) -> Self {
+    pub fn new(
+        contract_id: &str,
+        new_signers: &[Signer],
+        new_threshold: u8,
+        nonce: u64,
+        recovery_key_epoch: u64,
+        valid_until: u64,
+    ) -> Self {
         Self {
             domain: RECOVERY_DOMAIN.to_string(),
             contract_id: contract_id.to_string(),
             new_signers: new_signers.to_vec(),
             new_threshold,
             nonce,
+            recovery_key_epoch,
+            valid_until,
         }
     }
 
@@ -76,6 +95,7 @@ pub struct PendingRecovery {
     pub new_signers: Vec<Signer>,
     pub new_threshold: u8,
     pub nonce: u64,
+    pub recovery_key_epoch: u64,
     pub started_at: u64,
     pub executes_at: u64,
 }
@@ -85,6 +105,8 @@ pub struct PendingRecovery {
 pub struct RecoveryView {
     /// What a signer's cancel approval is made over (hex).
     pub recovery_id: ProposalId,
+    pub nonce: U64,
+    pub recovery_key_epoch: U64,
     pub new_signer_ids: Vec<String>,
     pub new_threshold: u8,
     pub executes_at: U64,
@@ -130,12 +152,16 @@ pub fn validate_signer_set(
 impl MerchantAccount {
     /// Starts a recovery authorised by the recovery key. Anyone may submit
     /// it (the relayer pays gas); the signature carries the authority.
-    /// `nonce` must exceed every nonce used before on this account.
+    /// `nonce` must exceed every nonce used before under the current
+    /// recovery-key epoch (a key rotation starts a new epoch and resets it),
+    /// and the block time must not be past `valid_until`, which may be at most
+    /// [`MAX_RECOVERY_VALIDITY`] ahead.
     pub fn start_recovery(
         &mut self,
         new_signers: Vec<Signer>,
         new_threshold: u8,
         nonce: U64,
+        valid_until: U64,
         signature: Base64VecU8,
     ) {
         let recovery_key = self
@@ -145,6 +171,12 @@ impl MerchantAccount {
         require!(
             nonce.0 > self.recovery_nonce,
             "recovery nonce must exceed the last one used"
+        );
+        let now = env::block_timestamp();
+        require!(now <= valid_until.0, "recovery signature expired");
+        require!(
+            valid_until.0 <= now.saturating_add(MAX_RECOVERY_VALIDITY),
+            "valid_until is more than 30 days ahead"
         );
         or_panic(validate_signer_set(
             &new_signers,
@@ -161,6 +193,8 @@ impl MerchantAccount {
             &new_signers,
             new_threshold,
             nonce.0,
+            self.recovery_key_epoch,
+            valid_until.0,
         )
         .hash();
         require!(
@@ -168,10 +202,17 @@ impl MerchantAccount {
             "invalid recovery signature"
         );
 
-        let now = env::block_timestamp();
         let executes_at = now + RECOVERY_DELAY;
         self.recovery_nonce = nonce.0;
+        let key_epoch = self.recovery_key_epoch;
         Event::RecoveryStarted {
+            recovery_id: ProposalId(recovery_id(
+                env::current_account_id().as_str(),
+                key_epoch,
+                nonce.0,
+            )),
+            nonce,
+            recovery_key_epoch: U64(key_epoch),
             new_signer_ids: new_signers.iter().map(|s| s.id.as_str()).collect(),
             new_threshold,
             executes_at: U64(executes_at),
@@ -181,6 +222,7 @@ impl MerchantAccount {
             new_signers,
             new_threshold,
             nonce: nonce.0,
+            recovery_key_epoch: key_epoch,
             started_at: now,
             executes_at,
         });
@@ -189,16 +231,20 @@ impl MerchantAccount {
     /// Any one current signer cancels the pending recovery, with a `Cancel`
     /// approval over its [`recovery_id`] at the current epoch.
     pub fn cancel_recovery(&mut self, approval: SignedApproval) {
-        let nonce = self
+        let r = self
             .recovery
             .as_ref()
-            .unwrap_or_else(|| env::panic_str("no recovery is pending"))
-            .nonce;
-        let id = ProposalId(recovery_id(env::current_account_id().as_str(), nonce));
+            .unwrap_or_else(|| env::panic_str("no recovery is pending"));
+        let id = ProposalId(recovery_id(
+            env::current_account_id().as_str(),
+            r.recovery_key_epoch,
+            r.nonce,
+        ));
         self.verify_approval(&id, ApprovalIntent::Cancel, &approval);
         self.recovery = None;
         Event::RecoveryCancelled {
-            signer_id: &approval.signer_id,
+            signer_id: Some(&approval.signer_id),
+            reason: None,
         }
         .emit();
     }
@@ -228,14 +274,21 @@ impl MerchantAccount {
 
     pub fn get_recovery(&self) -> Option<RecoveryView> {
         self.recovery.as_ref().map(|r| RecoveryView {
-            recovery_id: ProposalId(recovery_id(env::current_account_id().as_str(), r.nonce)),
+            recovery_id: ProposalId(recovery_id(
+                env::current_account_id().as_str(),
+                r.recovery_key_epoch,
+                r.nonce,
+            )),
+            nonce: U64(r.nonce),
+            recovery_key_epoch: U64(r.recovery_key_epoch),
             new_signer_ids: r.new_signers.iter().map(|s| s.id.clone()).collect(),
             new_threshold: r.new_threshold,
             executes_at: U64(r.executes_at),
         })
     }
 
-    /// The last recovery nonce used; the next `start_recovery` must exceed it.
+    /// The last recovery nonce used under the current recovery-key epoch;
+    /// the next `start_recovery` must exceed it.
     pub fn get_recovery_nonce(&self) -> U64 {
         U64(self.recovery_nonce)
     }
