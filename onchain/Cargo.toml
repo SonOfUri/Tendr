@@ -11,7 +11,7 @@ publish = false
 [workspace.dependencies]
 # near-sdk pinned to the 5.29 minor (MSRV 1.93).
 near-sdk = "~5.29.1"
-p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+p256 = { version = "0.13", default-features = false }
 ed25519-dalek = { version = "2.2", default-features = false, features = ["std"] }
 
 # near/intents rev d340060afe1debb8c8f2f2fc6b6c999d48c886b0

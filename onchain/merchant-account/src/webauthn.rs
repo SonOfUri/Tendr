@@ -209,57 +209,57 @@ fn check_client_data(
     Ok(())
 }
 
+/// Assertion builders shared by this module's tests and the contract tests.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
     use ed25519_dalek::Signer as _;
     use p256::ecdsa::signature::hazmat::PrehashSigner;
-    use p256::elliptic_curve::scalar::IsHigh;
 
-    const ORIGIN: &str = "http://localhost:3000";
-    const CHALLENGE: [u8; 32] = [7u8; 32];
+    pub(crate) const ORIGIN: &str = "http://localhost:3000";
+    pub(crate) const CHALLENGE: [u8; 32] = [7u8; 32];
     /// UP (0x01) | UV (0x04).
-    const FLAGS_UP_UV: u8 = 0x05;
+    pub(crate) const FLAGS_UP_UV: u8 = 0x05;
 
-    fn rp_id_hash() -> [u8; 32] {
+    pub(crate) fn rp_id_hash() -> [u8; 32] {
         near_sdk::env::sha256_array(b"localhost")
     }
 
-    fn origins() -> Vec<String> {
+    pub(crate) fn origins() -> Vec<String> {
         vec![ORIGIN.to_string()]
     }
 
-    fn auth_data(rp_id_hash: [u8; 32], flags: u8) -> Vec<u8> {
+    pub(crate) fn auth_data(rp_id_hash: [u8; 32], flags: u8) -> Vec<u8> {
         let mut data = rp_id_hash.to_vec();
         data.push(flags);
         data.extend_from_slice(&[0, 0, 0, 1]); // signCount
         data
     }
 
-    fn client_data(typ: &str, challenge: &[u8], origin: &str) -> String {
+    pub(crate) fn client_data(typ: &str, challenge: &[u8], origin: &str) -> String {
         format!(
             r#"{{"type":"{typ}","challenge":"{}","origin":"{origin}","crossOrigin":false}}"#,
             URL_SAFE_NO_PAD.encode(challenge)
         )
     }
 
-    fn signed_message(authenticator_data: &[u8], client_data_json: &str) -> Vec<u8> {
+    pub(crate) fn signed_message(authenticator_data: &[u8], client_data_json: &str) -> Vec<u8> {
         let mut msg = authenticator_data.to_vec();
         msg.extend_from_slice(&near_sdk::env::sha256_array(client_data_json.as_bytes()));
         msg
     }
 
-    fn p256_key(seed: u8) -> p256::ecdsa::SigningKey {
+    pub(crate) fn p256_key(seed: u8) -> p256::ecdsa::SigningKey {
         p256::ecdsa::SigningKey::from_bytes(&[seed; 32].into()).unwrap()
     }
 
-    fn p256_signer(sk: &p256::ecdsa::SigningKey) -> SignerKey {
+    pub(crate) fn p256_signer(sk: &p256::ecdsa::SigningKey) -> SignerKey {
         let point = sk.verifying_key().to_encoded_point(true);
         SignerKey::P256(point.as_bytes().try_into().unwrap())
     }
 
     /// Low-s P-256 signature (raw `r‖s`) over `authenticator_data ‖ sha256(client_data_json)`.
-    fn p256_sign(
+    pub(crate) fn p256_sign(
         sk: &p256::ecdsa::SigningKey,
         authenticator_data: &[u8],
         client_data_json: &str,
@@ -271,7 +271,7 @@ mod tests {
         sig.to_bytes().to_vec()
     }
 
-    fn p256_assertion(
+    pub(crate) fn p256_assertion(
         sk: &p256::ecdsa::SigningKey,
         authenticator_data: Vec<u8>,
         client_data_json: String,
@@ -284,7 +284,7 @@ mod tests {
         }
     }
 
-    fn valid_p256() -> (SignerKey, Assertion) {
+    pub(crate) fn valid_p256() -> (SignerKey, Assertion) {
         let sk = p256_key(1);
         let a = p256_assertion(
             &sk,
@@ -294,21 +294,11 @@ mod tests {
         (p256_signer(&sk), a)
     }
 
-    fn verify(key: &SignerKey, a: &Assertion) -> Result<(), WebauthnError> {
-        verify_assertion(key, a, &CHALLENGE, &rp_id_hash(), &origins())
-    }
-
-    #[test]
-    fn accepts_valid_p256_assertion() {
-        let (key, a) = valid_p256();
-        assert_eq!(verify(&key, &a), Ok(()));
-    }
-
-    fn ed25519_key(seed: u8) -> ed25519_dalek::SigningKey {
+    pub(crate) fn ed25519_key(seed: u8) -> ed25519_dalek::SigningKey {
         ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
     }
 
-    fn valid_ed25519() -> (SignerKey, Assertion) {
+    pub(crate) fn valid_ed25519() -> (SignerKey, Assertion) {
         let sk = ed25519_key(2);
         let authenticator_data = auth_data(rp_id_hash(), FLAGS_UP_UV);
         let client_data_json = client_data("webauthn.get", &CHALLENGE, ORIGIN);
@@ -326,7 +316,7 @@ mod tests {
     }
 
     /// Valid P-256 assertion whose clientDataJSON is `client_data_json`.
-    fn p256_with_client_data(client_data_json: &str) -> (SignerKey, Assertion) {
+    pub(crate) fn p256_with_client_data(client_data_json: &str) -> (SignerKey, Assertion) {
         let sk = p256_key(1);
         let a = p256_assertion(
             &sk,
@@ -334,6 +324,53 @@ mod tests {
             client_data_json.to_string(),
         );
         (p256_signer(&sk), a)
+    }
+
+    /// A valid assertion by `sk` over `challenge` (RP ID `localhost`, origin `ORIGIN`).
+    pub(crate) fn sign_p256_challenge(
+        sk: &p256::ecdsa::SigningKey,
+        challenge: &[u8; 32],
+    ) -> Assertion {
+        p256_assertion(
+            sk,
+            auth_data(rp_id_hash(), FLAGS_UP_UV),
+            client_data("webauthn.get", challenge, ORIGIN),
+        )
+    }
+
+    /// A valid Ed25519 assertion by `sk` over `challenge`.
+    pub(crate) fn sign_ed25519_challenge(
+        sk: &ed25519_dalek::SigningKey,
+        challenge: &[u8; 32],
+    ) -> Assertion {
+        let authenticator_data = auth_data(rp_id_hash(), FLAGS_UP_UV);
+        let client_data_json = client_data("webauthn.get", challenge, ORIGIN);
+        let signature = sk
+            .sign(&signed_message(&authenticator_data, &client_data_json))
+            .to_bytes()
+            .to_vec();
+        Assertion {
+            authenticator_data,
+            client_data_json,
+            signature,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::*;
+    use super::*;
+    use p256::elliptic_curve::scalar::IsHigh;
+
+    fn verify(key: &SignerKey, a: &Assertion) -> Result<(), WebauthnError> {
+        verify_assertion(key, a, &CHALLENGE, &rp_id_hash(), &origins())
+    }
+
+    #[test]
+    fn accepts_valid_p256_assertion() {
+        let (key, a) = valid_p256();
+        assert_eq!(verify(&key, &a), Ok(()));
     }
 
     #[test]
