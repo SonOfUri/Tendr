@@ -173,3 +173,313 @@ main {
   color: var(--tendr-muted);
   font-size: 0.9rem;
 }
+
+/* ─── Sign-in and dashboard ─────────────────────────────────────────────── */
+
+.auth-shell {
+  display: grid;
+  place-items: start center;
+  padding: 3rem 0 4rem;
+}
+
+.auth-shell .card {
+  width: min(480px, 100%);
+}
+
+.card {
+  display: grid;
+  gap: 1rem;
+  padding: 1.5rem;
+  border: 1px solid var(--tendr-border);
+  border-radius: calc(var(--tendr-radius) + 4px);
+  background: rgba(15, 22, 41, 0.9);
+}
+
+.card h1,
+.card h2,
+.stack h1 {
+  font-family: var(--tendr-font-display);
+  margin: 0;
+}
+
+.card h1,
+.stack h1 {
+  font-size: 1.6rem;
+}
+
+.card h2 {
+  font-size: 1.15rem;
+}
+
+.card p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.step-label {
+  color: var(--tendr-cyan);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.small {
+  font-size: 0.85rem;
+}
+
+.lead {
+  max-width: 42rem;
+  line-height: 1.55;
+}
+
+.form {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  color: var(--tendr-lavender);
+}
+
+.field input,
+.field select,
+.inline-field select {
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--tendr-radius);
+  border: 1px solid var(--tendr-border);
+  background: var(--tendr-surface);
+  color: var(--tendr-white);
+  font: inherit;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.grow {
+  flex: 1 1 14rem;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--tendr-cyan);
+  font: inherit;
+  cursor: pointer;
+}
+
+.auth-shell a,
+.dash a {
+  color: var(--tendr-cyan);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1rem;
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--tendr-muted);
+}
+
+.facts dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  color: var(--tendr-lavender);
+}
+
+.dash {
+  display: grid;
+  gap: 1.5rem;
+  padding: 1.5rem 0 4rem;
+}
+
+.dash-loading {
+  place-items: center;
+  min-height: 40vh;
+}
+
+.dash-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--tendr-border);
+  border-bottom: 1px solid var(--tendr-border);
+}
+
+.dash-header-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.mode-switch {
+  display: inline-flex;
+  border: 1px solid var(--tendr-border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.mode-switch button {
+  padding: 0.4rem 0.9rem;
+  border: none;
+  background: transparent;
+  color: var(--tendr-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.mode-switch button[aria-pressed='true'] {
+  background: var(--tendr-indigo);
+  color: var(--tendr-white);
+}
+
+.test-banner {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--tendr-warning);
+  font-size: 0.85rem;
+}
+
+.stack {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.grid-2 {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.checklist li {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.checklist li.done > span {
+  color: var(--tendr-success);
+}
+
+.checklist li.todo > span {
+  color: var(--tendr-warning);
+}
+
+.balances {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.balances th,
+.balances td {
+  text-align: left;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--tendr-border);
+}
+
+.kit-code {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.15rem;
+  letter-spacing: 0.08em;
+}
+
+.kit-group {
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--tendr-border);
+  border-radius: 6px;
+}
+
+.kit-group-confirm {
+  border-color: var(--tendr-cyan);
+}
+
+.print-kit {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  border: 1px dashed var(--tendr-border);
+  border-radius: var(--tendr-radius);
+}
+
+.print-kit h3 {
+  margin: 0;
+}
+
+.qr {
+  background: #fff;
+  border-radius: 8px;
+}
+
+.qr-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Printing the recovery kit: only the kit sheet, black on white. */
+@media print {
+  body {
+    background: #fff !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  .print-kit,
+  .print-kit * {
+    visibility: visible;
+    color: #000 !important;
+  }
+  .print-kit {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    border: none;
+  }
+}

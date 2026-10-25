@@ -1,14 +1,13 @@
-function requiredPublic(name: string, fallback?: string): string {
-  const value = process.env[name] ?? fallback;
-  if (!value) {
-    throw new Error(`Missing environment variable: ${name}`);
-  }
-  return value;
-}
-
-/** Public/client-safe config only. Never put secrets in NEXT_PUBLIC_*. */
+/**
+ * Public/client-safe config only. Never put secrets in NEXT_PUBLIC_*.
+ *
+ * Each variable is read with a literal `process.env.NEXT_PUBLIC_…` so Next inlines it into the
+ * browser bundle (a computed `process.env[name]` is not inlined and is undefined client-side).
+ */
 export const publicEnv = {
-  apiBaseUrl: requiredPublic('NEXT_PUBLIC_API_BASE_URL', 'http://localhost:4000'),
+  apiBaseUrl: (process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000').replace(/\/+$/, ''),
+  /** WebAuthn RP ID for signing ceremonies; unset means the page's own host (local dev). */
+  webauthnRpId: process.env.NEXT_PUBLIC_WEBAUTHN_RP_ID || undefined,
 };
 
 /** Server-only config. */

@@ -26,7 +26,19 @@ loadRootEnv();
 
 const nextConfig: NextConfig = {
   transpilePackages: ['@tendr/ui', '@tendr/contracts', '@tendr/sdk'],
+  // The strict CSP for the dashboard and sign-in pages needs a per-request nonce, so it is set in
+  // src/middleware.ts (see src/lib/csp.ts). Framing is refused here for every dashboard route.
   headers: async () => [
+    ...['/dashboard', '/dashboard/:path*', '/signup', '/login', '/verify', '/invite/:path*'].map(
+      (source) => ({
+        source,
+        headers: [
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+        ],
+      }),
+    ),
     {
       source: '/sw.js',
       headers: [
