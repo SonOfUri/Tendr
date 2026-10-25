@@ -82,3 +82,23 @@ jobs:
         run: |
           npm run build --workspace=@tendr/api
           npm run build --workspace=@tendr/web
+
+  onchain:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: onchain
+    steps:
+      - uses: actions/checkout@v4
+      # rustup installs the toolchain and components pinned in onchain/rust-toolchain.toml.
+      - name: Install toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: onchain
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --all-features

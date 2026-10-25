@@ -1,0 +1,6 @@
+# Native toolchain for `cargo test` / clippy / fmt (host and CI).
+# Wasm artifacts are built in Docker by scripts/build.sh with the toolchain
+# baked into the pinned cargo-near image, so no wasm target is listed here.
+[toolchain]
+channel = "1.94.1"
+components = ["clippy", "rustfmt"]

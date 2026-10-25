@@ -24,3 +24,9 @@ apps/api/prisma/*.db-journal
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+
+# Rust (onchain/ Cargo workspace)
+onchain/target/
+
+# Local agent workspace
+.superpowers/
