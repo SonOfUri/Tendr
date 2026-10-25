@@ -257,6 +257,12 @@ describe('loadEnv checkout pricing', () => {
     expect(e.CHECKOUT_GAS_MAX_USD).toBe('2');
   });
 
+  it('treats an empty or blank override as unset, not 0', () => {
+    expect(loadEnv({ ...base, CHECKOUT_SLIPPAGE_BPS: '' }).CHECKOUT_SLIPPAGE_BPS).toBe(100);
+    expect(loadEnv({ ...base, CHECKOUT_SLIPPAGE_BPS: '  ' }).CHECKOUT_SLIPPAGE_BPS).toBe(100);
+    expect(loadEnv({ ...base, CHECKOUT_GAS_MAX_USD: '' }).CHECKOUT_GAS_MAX_USD).toBe('2');
+  });
+
   it('accepts overrides', () => {
     const e = loadEnv({ ...base, CHECKOUT_SLIPPAGE_BPS: '50', CHECKOUT_GAS_MAX_USD: '1.5' });
     expect(e.CHECKOUT_SLIPPAGE_BPS).toBe(50);

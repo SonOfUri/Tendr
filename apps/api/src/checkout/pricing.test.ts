@@ -2,9 +2,10 @@ import { QUOTE_TTL_MS } from '@tendr/contracts';
 import { describe, expect, it } from 'vitest';
 import { env } from '../env.js';
 import { AppError } from '../lib/errors.js';
-import type { QuoteResponse } from './oneclick/types.js';
+import { OneClickError, type QuoteResponse } from './oneclick/types.js';
 import {
   assertWithinMinimum,
+  assertWithinTarget,
   buildQuoteRequests,
   DEFAULT_GAS_MAX_USD,
   DEFAULT_SLIPPAGE_BPS,
@@ -260,6 +261,46 @@ describe('buildQuoteRequests', () => {
     }
   });
 
+  it('merchant pays: sizes an exact amountIn', () => {
+    const { real, targetUsd } = buildQuoteRequests(input({ feePayer: 'merchant' }));
+    expect(targetUsd).toBe('25.000000');
+    // ceil(1e18 × 25 / 2513.27)
+    expect(real(quote('1000000000000000000', '2513.27')).amount).toBe('9947200261014535');
+  });
+
+  it('merchant pays: accepts exponent notation in the dry USD value, expanded exactly', () => {
+    const { real } = buildQuoteRequests(input({ feePayer: 'merchant', orderAmount: '1' }));
+    // 1 base unit = $1.5e-7 → $1 needs ceil(1 / 1.5e-7) = 6666667 base units.
+    expect(real(quote('1', '1.5e-7')).amount).toBe('6666667');
+    expect(real(quote('+10', '+1.5E-6')).amount).toBe('6666667');
+    expect(real(quote('1', '2.5e1')).amount).toBe('1'); // $25 per unit → ceil(0.04)
+  });
+
+  it('merchant pays: unparseable dry values are OneClickError BAD_RESPONSE', () => {
+    const { real } = buildQuoteRequests(input({ feePayer: 'merchant' }));
+    const bad: Array<[string, string]> = [
+      ['1000', '-1'],
+      ['1000', 'abc'],
+      ['1000', 'NaN'],
+      ['1000', ''],
+      ['1000', '1e999999'],
+      ['-5', '2500'],
+      ['1.5', '2500'],
+      ['1e18', '2500'],
+      ['abc', '2500'],
+    ];
+    for (const [amountIn, usd] of bad) {
+      let caught: unknown;
+      try {
+        real(quote(amountIn, usd));
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught, `${amountIn} / ${usd}`).toBeInstanceOf(OneClickError);
+      expect((caught as OneClickError).code).toBe('BAD_RESPONSE');
+    }
+  });
+
   it('merchant pays fees and gas: targets order − reimbursement', () => {
     const { real } = buildQuoteRequests(
       input({ feePayer: 'merchant', gasPayer: 'merchant', gasEstimateUsd: '1.00' }),
@@ -312,6 +353,26 @@ describe('buildQuoteRequests', () => {
   });
 });
 
+describe('assertWithinTarget', () => {
+  it('passes within the tolerance either side', () => {
+    expect(() => assertWithinTarget(quote('1', '25.00'), '25')).not.toThrow();
+    expect(() => assertWithinTarget(quote('1', '25.125'), '25')).not.toThrow(); // +50 bps
+    expect(() => assertWithinTarget(quote('1', '24.875'), '25.000000')).not.toThrow(); // −50 bps
+    expect(() => assertWithinTarget(quote('1', '2.5e1'), '25')).not.toThrow();
+  });
+
+  it('throws QUOTE_PRICE_MOVED past the tolerance', () => {
+    expectCode(() => assertWithinTarget(quote('1', '25.126'), '25'), 'QUOTE_PRICE_MOVED');
+    expectCode(() => assertWithinTarget(quote('1', '24.874'), '25'), 'QUOTE_PRICE_MOVED');
+    expectCode(() => assertWithinTarget(quote('1', '25.01'), '25', 0), 'QUOTE_PRICE_MOVED');
+    expect(() => assertWithinTarget(quote('1', '25.3'), '25', 200)).not.toThrow();
+  });
+
+  it('rejects an unparseable amountInUsd as BAD_RESPONSE', () => {
+    expect(() => assertWithinTarget(quote('1', 'abc'), '25')).toThrow(OneClickError);
+  });
+});
+
 describe('assertWithinMinimum', () => {
   it('passes a quote at or above the minimum', () => {
     expect(() => assertWithinMinimum(quote('1', '0.50'))).not.toThrow();
@@ -325,6 +386,15 @@ describe('assertWithinMinimum', () => {
 
   it('throws when what the merchant receives is under the minimum', () => {
     expectCode(() => assertWithinMinimum(quote('1', '0.60', '0.40')), 'QUOTE_TOO_SMALL');
+  });
+
+  it('accepts exponent notation and rejects garbage as BAD_RESPONSE', () => {
+    expectCode(() => assertWithinMinimum(quote('1', '1.5e-7')), 'QUOTE_TOO_SMALL');
+    expect(() => assertWithinMinimum(quote('1', '5e0'))).not.toThrow();
+    for (const v of ['-1', 'abc', 'NaN']) {
+      expect(() => assertWithinMinimum(quote('1', v))).toThrow(OneClickError);
+      expect(() => assertWithinMinimum(quote('1', '5', v))).toThrow(OneClickError);
+    }
   });
 
   it('honours a custom minimum', () => {

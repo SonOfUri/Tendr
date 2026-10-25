@@ -53,13 +53,52 @@ function parseExact(d: DecimalLike): Exact {
   return { digits: BigInt(m[1] + frac), scale: frac.length };
 }
 
+// 1Click response values are parsed more leniently than our own inputs: an optional `+` and
+// exponent notation ("1.5e-7") are expanded exactly. Anything unparseable is the provider's fault
+// and surfaces as OneClickError BAD_RESPONSE (not a bare TypeError → 500).
+const RESPONSE_DECIMAL_RE = /^\+?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/;
+const RESPONSE_INT_RE = /^\+?(\d+)$/;
+/** Bounds the exponent so a hostile "1e999999999" cannot allocate a huge bigint. */
+const MAX_RESPONSE_EXPONENT = 100;
+
+function badResponse(field: string, value: unknown): OneClickError {
+  return new OneClickError(`1Click returned an unparseable ${field}`, null, 'BAD_RESPONSE', {
+    field,
+    value,
+  });
+}
+
+/** Parses a non-negative decimal from a 1Click response, exactly. */
+function parseResponseDecimal(field: string, value: unknown): Exact {
+  const m = typeof value === 'string' ? RESPONSE_DECIMAL_RE.exec(value.trim()) : null;
+  if (!m) throw badResponse(field, value);
+  const frac = m[2] ?? '';
+  const exp = m[3] === undefined ? 0 : Number(m[3]);
+  if (!Number.isSafeInteger(exp) || Math.abs(exp) > MAX_RESPONSE_EXPONENT) {
+    throw badResponse(field, value);
+  }
+  const digits = BigInt(m[1] + frac);
+  const scale = frac.length - exp;
+  return scale >= 0 ? { digits, scale } : { digits: digits * 10n ** BigInt(-scale), scale: 0 };
+}
+
+/** Parses a non-negative integer (base units) from a 1Click response. */
+function parseResponseInt(field: string, value: unknown): bigint {
+  const m = typeof value === 'string' ? RESPONSE_INT_RE.exec(value.trim()) : null;
+  if (!m) throw badResponse(field, value);
+  return BigInt(m[1]!);
+}
+
 function ceilDiv(a: bigint, b: bigint): bigint {
   return (a + b - 1n) / b;
 }
 
 /** Scales an exact decimal to `scale` fixed digits, rounding as told. */
 function toScaled(d: DecimalLike, scale: number, rounding: 'up' | 'down'): bigint {
-  const { digits, scale: s } = parseExact(d);
+  return scaleExact(parseExact(d), scale, rounding);
+}
+
+function scaleExact({ digits, scale: s }: Exact, scale: number, rounding: 'up' | 'down'): bigint {
   if (s <= scale) return digits * 10n ** BigInt(scale - s);
   const div = 10n ** BigInt(s - scale);
   return rounding === 'up' ? ceilDiv(digits, div) : digits / div;
@@ -200,6 +239,11 @@ export interface QuoteRequests {
   dry: QuoteRequest;
   /** The real (deposit-allocating) request, sized from the dry result where needed. */
   real: (dryResult: QuoteResponse) => QuoteRequest;
+  /**
+   * USD the shopper's send should be worth (order − gas reimbursement), a 6-decimal string. For
+   * merchant-pays quotes, pass it to `assertWithinTarget` after the real quote.
+   */
+  targetUsd: string;
 }
 
 function tooSmall(message: string, details?: unknown): AppError {
@@ -273,14 +317,15 @@ export function buildQuoteRequests(input: PricingInput): QuoteRequests {
       ...base,
       amount: amount.toString(),
     };
-    return { dry, real: () => real };
+    return { dry, real: () => real, targetUsd: microToDecimal(targetMicro) };
   }
 
   return {
     dry,
+    targetUsd: microToDecimal(targetMicro),
     real: (dryResult) => {
-      const dryIn = BigInt(dryResult.quote.amountIn);
-      const dryUsd = parseExact(dryResult.quote.amountInUsd);
+      const dryIn = parseResponseInt('amountIn', dryResult.quote.amountIn);
+      const dryUsd = parseResponseDecimal('amountInUsd', dryResult.quote.amountInUsd);
       if (dryIn <= 0n || dryUsd.digits <= 0n) {
         throw new OneClickError('Dry quote has no usable price', null, 'BAD_RESPONSE', {
           amountIn: dryResult.quote.amountIn,
@@ -309,13 +354,54 @@ export function buildQuoteRequests(input: PricingInput): QuoteRequests {
 export function assertWithinMinimum(quote: QuoteResponse, minUsd: number = MIN_QUOTE_USD): void {
   // minUsd is a small configured constant; render it to micro-USD exactly via its decimal string.
   const minMicro = toScaled(minUsd.toFixed(USD_SCALE), USD_SCALE, 'up');
-  const inMicro = toScaled(quote.quote.amountInUsd, USD_SCALE, 'down');
-  const outMicro = toScaled(quote.quote.amountOutUsd, USD_SCALE, 'down');
+  const inMicro = scaleExact(
+    parseResponseDecimal('amountInUsd', quote.quote.amountInUsd),
+    USD_SCALE,
+    'down',
+  );
+  const outMicro = scaleExact(
+    parseResponseDecimal('amountOutUsd', quote.quote.amountOutUsd),
+    USD_SCALE,
+    'down',
+  );
   if (inMicro < minMicro || outMicro < minMicro) {
     throw tooSmall(`Payments under $${minUsd.toFixed(2)} are not supported`, {
       min_usd: minUsd,
       amount_in_usd: quote.quote.amountInUsd,
       amount_out_usd: quote.quote.amountOutUsd,
+    });
+  }
+}
+
+/** Default tolerance for `assertWithinTarget`, in basis points of the target. */
+export const DEFAULT_TARGET_TOLERANCE_BPS = 50;
+
+/**
+ * Post-check for the merchant-pays (EXACT_INPUT) real quote: its `amountInUsd` must be within
+ * `toleranceBps` of `targetUsd` (the `targetUsd` returned by `buildQuoteRequests`), in either
+ * direction. The price can move between the dry and the real quote; past the tolerance the
+ * shopper would be over- or under-charged, so the caller requotes. Compared exactly.
+ * Throws QUOTE_PRICE_MOVED (409).
+ */
+export function assertWithinTarget(
+  realResult: QuoteResponse,
+  targetUsd: DecimalLike,
+  toleranceBps: number = DEFAULT_TARGET_TOLERANCE_BPS,
+): void {
+  if (!Number.isInteger(toleranceBps) || toleranceBps < 0) {
+    throw new RangeError(`toleranceBps must be a non-negative integer, got ${toleranceBps}`);
+  }
+  const target = parseExact(targetUsd);
+  const actual = parseResponseDecimal('amountInUsd', realResult.quote.amountInUsd);
+  // Bring both to a common scale: value × 10^(sa + st).
+  const t = target.digits * 10n ** BigInt(actual.scale);
+  const a = actual.digits * 10n ** BigInt(target.scale);
+  const diff = a > t ? a - t : t - a;
+  if (diff * 10_000n > t * BigInt(toleranceBps)) {
+    throw new AppError('QUOTE_PRICE_MOVED', 'The price moved; request a new quote', 409, {
+      target_usd: toPlainString(targetUsd),
+      amount_in_usd: realResult.quote.amountInUsd,
+      tolerance_bps: toleranceBps,
     });
   }
 }

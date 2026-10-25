@@ -24,6 +24,8 @@ export const ErrorCodes = [
   'STEP_UP_REQUIRED',
   /** A checkout quote is worth less than the minimum (USD 0.50) 1Click and Tendr will route. */
   'QUOTE_TOO_SMALL',
+  /** The real quote drifted from the dry-quote target past the tolerance; request a new quote. */
+  'QUOTE_PRICE_MOVED',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];
