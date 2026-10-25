@@ -137,11 +137,12 @@ describe('FakeNearClient', () => {
   it('can script a downstream failure: the call lands, a later receipt fails', async () => {
     const f = fake();
     f.scriptLogs('a.tendr.testnet', 'approve', ['EVENT_JSON:{}']);
-    f.failDownstreamNext('approve', 'ft_withdraw failed');
+    f.failDownstreamNext('approve', 'ft_withdraw failed', ['failed receipt log']);
     expect(await f.call('relayer-accounts', 'a.tendr.testnet', 'approve', {})).toMatchObject({
       status: 'failure',
       topLevelStatus: 'success',
-      logs: ['EVENT_JSON:{}'],
+      logs: ['EVENT_JSON:{}', 'failed receipt log'],
+      successLogs: ['EVENT_JSON:{}'],
       failure: 'ft_withdraw failed',
     });
   });

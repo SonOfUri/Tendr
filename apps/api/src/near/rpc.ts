@@ -106,13 +106,16 @@ export function toTxResult(o: FinalExecutionOutcome, fallbackHash: string): TxRe
     ...(o.receipts_outcome ?? []),
   ];
   const logs = outcomes.flatMap((r) => r.outcome.logs);
+  const successLogs = outcomes
+    .filter((r) => !failureOf(r.outcome.status))
+    .flatMap((r) => r.outcome.logs);
   const failure =
     failureOf(o.status) ?? outcomes.map((r) => failureOf(r.outcome.status)).find(Boolean);
   const txHash = o.transaction?.hash ?? o.transaction_outcome?.id ?? fallbackHash;
   const topLevelStatus = failureOf(o.status) ? 'failure' : 'success';
   return failure
-    ? { txHash, logs, status: 'failure', topLevelStatus, failure }
-    : { txHash, logs, status: 'success', topLevelStatus };
+    ? { txHash, logs, successLogs, status: 'failure', topLevelStatus, failure }
+    : { txHash, logs, successLogs, status: 'success', topLevelStatus };
 }
 
 export class NearRpc {

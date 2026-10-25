@@ -567,11 +567,15 @@ model AccountProposal {
   readyAt         DateTime?      @map("ready_at")
   executedAt      DateTime?      @map("executed_at")
   lastTxHash      String?        @map("last_tx_hash")
+  /// Set while a signer's first approval of a draft is being relayed (`propose`): a claim that
+  /// stops a local draft cancel from racing the relay. Cleared when the relay ends; a claim older
+  /// than the lease (2 minutes) is stale and may be taken over.
+  relayClaimedAt  DateTime?      @map("relay_claimed_at")
   createdAt       DateTime       @default(now()) @map("created_at")
   updatedAt       DateTime       @updatedAt @map("updated_at")
 
   merchant  Merchant          @relation(fields: [merchantId], references: [id])
-  account   MerchantAccount   @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  account   MerchantAccount  @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   createdBy User              @relation(fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   approvals AccountApproval[]
 

@@ -7,13 +7,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { nearPublicKey } from '../keyvault/keys.js';
 import { LocalKeyVault } from '../keyvault/local.js';
 import { RpcNearClient, type InitConfigJson } from './client.js';
-import {
-  NearRpc,
-  NearRpcError,
-  NotBroadcastError,
-  toTxResult,
-  type RpcTransport,
-} from './rpc.js';
+import { NearRpc, NearRpcError, NotBroadcastError, toTxResult, type RpcTransport } from './rpc.js';
 import { decodeSigned, implicitAccountId } from './tx.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'tendr-near-client-'));
@@ -213,7 +207,13 @@ describe('toTxResult', () => {
     const o = {
       ...okOutcome(['EVENT_JSON:{"event":"proposal_approved"}']),
       receipts_outcome: [
-        { id: 'R1', outcome: { logs: ['EVENT_JSON:{"event":"proposal_approved"}'], status: { SuccessValue: '' } } },
+        {
+          id: 'R1',
+          outcome: {
+            logs: ['EVENT_JSON:{"event":"proposal_approved"}'],
+            status: { SuccessValue: '' },
+          },
+        },
         { id: 'R2', outcome: { logs: [], status: { Failure: { ActionError: { kind: 'x' } } } } },
       ],
     };
@@ -221,6 +221,20 @@ describe('toTxResult', () => {
     expect(res.status).toBe('failure');
     expect(res.topLevelStatus).toBe('success');
     expect(res.logs).toEqual(['EVENT_JSON:{"event":"proposal_approved"}']);
+    expect(res.successLogs).toEqual(['EVENT_JSON:{"event":"proposal_approved"}']);
+  });
+
+  it("keeps a failed receipt's logs out of successLogs", () => {
+    const o = {
+      ...okOutcome(),
+      receipts_outcome: [
+        { id: 'R1', outcome: { logs: ['ok'], status: { SuccessValue: '' } } },
+        { id: 'R2', outcome: { logs: ['before panic'], status: { Failure: { x: 1 } } } },
+      ],
+    };
+    const res = toTxResult(o as never, 'H');
+    expect(res.logs).toEqual(['ok', 'before panic']);
+    expect(res.successLogs).toEqual(['ok']);
   });
 
   it('reports a failed transaction as failed at the top level', () => {

@@ -8,9 +8,11 @@ import type { MerchantUserRole } from '@tendr/contracts';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { challengeB64u } from '../accounts/encoding.js';
-import { eventLog } from '../accounts/events.js';
+import { eventLog, parseAccountEvents } from '../accounts/events.js';
+import { applyProposalEvents } from '../accounts/proposals.js';
 import { buildApp } from '../app.js';
-import { registrationOptions, verifyRegistration } from '../auth/webauthn.js';
+import { recordSignCount, registrationOptions, verifyRegistration } from '../auth/webauthn.js';
+import { tenantTransaction } from '../db/tenant-transaction.js';
 import { prisma } from '../lib/prisma.js';
 import { fakeNearClient, resetNearClients } from '../near/client.js';
 import type { FakeNearClient } from '../near/fake.js';
@@ -634,6 +636,274 @@ describe('account proposals', () => {
     expect((await post(`/v1/account/proposals/${theirs.id}/challenge`, a, {})).statusCode).toBe(
       404,
     );
+  });
+
+  describe('fix round 1', () => {
+    /** Runs `during` while the next relay of `method` is in flight, before the fake answers. */
+    function duringRelay(method: string, during: () => Promise<void>) {
+      const original = fake.call.bind(fake);
+      const spy = vi.spyOn(fake, 'call');
+      spy.mockImplementation(async (...args: Parameters<FakeNearClient['call']>) => {
+        if (args[2] === method) {
+          spy.mockRestore();
+          await during();
+        }
+        return original(...args);
+      });
+    }
+
+    const executedLogs = (onchainId: string, signerId: string, action: unknown) => [
+      eventLog('proposal_created', { proposal_id: onchainId, signer_id: signerId }),
+      eventLog('proposal_approved', {
+        proposal_id: onchainId,
+        signer_id: signerId,
+        signer_epoch: '0',
+        approvals: 1,
+        threshold: 1,
+      }),
+      eventLog('proposal_executed', { proposal_id: onchainId, action }),
+    ];
+
+    it('a draft cancel racing the first approval is refused while the relay is in flight', async () => {
+      const finance = await member('finance', false);
+      const a = await member('owner', true);
+      await prisma.merchantAccount.update({ where: { id: account.id }, data: { threshold: 1 } });
+      const sav = await savedAddress();
+      const draft = (
+        await post('/v1/account/proposals', finance, { action: withdraw(sav.id) })
+      ).json();
+      const signed = await signFor(a, draft.id);
+      fake.scriptLogs(
+        account.nearAccountId,
+        'propose',
+        executedLogs(draft.onchainId, a.userId, withdraw(sav.id)),
+      );
+      let midRelay: { statusCode: number; body: string } | undefined;
+      let claimSeen: Date | null = null;
+      duringRelay('propose', async () => {
+        claimSeen = (await prisma.accountProposal.findUniqueOrThrow({ where: { id: draft.id } }))
+          .relayClaimedAt;
+        midRelay = await post(`/v1/account/proposals/${draft.id}/cancel`, finance, {});
+      });
+      const res = await post(`/v1/account/proposals/${draft.id}/approve`, a, { response: signed });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(claimSeen).not.toBeNull();
+      expect(midRelay?.statusCode).toBe(409);
+      // The mirror matches the chain: the withdrawal executed.
+      const row = await prisma.accountProposal.findUniqueOrThrow({ where: { id: draft.id } });
+      expect(row.status).toBe('executed');
+      expect(row.relayClaimedAt).toBeNull();
+    });
+
+    it('a second signer cannot relay a claimed draft at the same time', async () => {
+      const a = await member('owner', true);
+      const b = await member('admin', true);
+      const sav = await savedAddress();
+      const draft = (await post('/v1/account/proposals', a, { action: withdraw(sav.id) })).json();
+      const signedA = await signFor(a, draft.id);
+      const signedB = await signFor(b, draft.id);
+      scriptCreated(draft.onchainId, a.userId, 1);
+      let second: { statusCode: number } | undefined;
+      duringRelay('propose', async () => {
+        second = await post(`/v1/account/proposals/${draft.id}/approve`, b, {
+          response: signedB,
+        });
+      });
+      const first = await post(`/v1/account/proposals/${draft.id}/approve`, a, {
+        response: signedA,
+      });
+      expect(first.statusCode, first.body).toBe(200);
+      expect(second?.statusCode).toBe(409);
+      expect(fake.callsTo('propose')).toHaveLength(1);
+    });
+
+    it('a failed or thrown relay releases the claim, so the draft can be cancelled', async () => {
+      const finance = await member('finance', false);
+      const a = await member('owner', true);
+      const sav = await savedAddress();
+      const d1 = (
+        await post('/v1/account/proposals', finance, { action: withdraw(sav.id) })
+      ).json();
+      fake.failNext('propose', 'Smart contract panicked: nope');
+      expect(
+        (
+          await post(`/v1/account/proposals/${d1.id}/approve`, a, {
+            response: await signFor(a, d1.id),
+          })
+        ).statusCode,
+      ).toBe(409);
+      expect((await post(`/v1/account/proposals/${d1.id}/cancel`, finance, {})).statusCode).toBe(
+        200,
+      );
+
+      const d2 = (
+        await post('/v1/account/proposals', finance, { action: withdraw(sav.id, '9') })
+      ).json();
+      fake.throwNext('call', new Error('rpc down'));
+      expect(
+        (
+          await post(`/v1/account/proposals/${d2.id}/approve`, a, {
+            response: await signFor(a, d2.id),
+          })
+        ).statusCode,
+      ).toBe(500);
+      const row = await prisma.accountProposal.findUniqueOrThrow({ where: { id: d2.id } });
+      expect(row).toMatchObject({ status: 'draft', relayClaimedAt: null });
+    });
+
+    it('a claim past its lease no longer blocks the draft', async () => {
+      const finance = await member('finance', false);
+      const sav = await savedAddress();
+      const d = (await post('/v1/account/proposals', finance, { action: withdraw(sav.id) })).json();
+      await prisma.accountProposal.update({
+        where: { id: d.id },
+        data: { relayClaimedAt: new Date(Date.now() - 60_000) },
+      });
+      expect((await post(`/v1/account/proposals/${d.id}/cancel`, finance, {})).statusCode).toBe(
+        409,
+      );
+      await prisma.accountProposal.update({
+        where: { id: d.id },
+        data: { relayClaimedAt: new Date(Date.now() - 3 * 60_000) },
+      });
+      expect((await post(`/v1/account/proposals/${d.id}/cancel`, finance, {})).statusCode).toBe(
+        200,
+      );
+    });
+
+    it('on-chain events override a local-only cancel, but not a cancel of a relayed proposal', async () => {
+      const finance = await member('finance', false);
+      const a = await member('owner', true);
+      const sav = await savedAddress();
+      // A draft cancelled in Postgres only, whose propose landed after all (e.g. a crashed relay
+      // whose claim lapsed): the watcher's events win.
+      const d1 = (
+        await post('/v1/account/proposals', finance, { action: withdraw(sav.id) })
+      ).json();
+      await post(`/v1/account/proposals/${d1.id}/cancel`, finance, {});
+      const ctx = { merchantId: merchant.id, livemode: false };
+      const events = parseAccountEvents(executedLogs(d1.onchainId, a.userId, withdraw(sav.id)));
+      const after = await tenantTransaction(ctx, (tx) =>
+        applyProposalEvents(tx, ctx, d1.id, events, 'TX1'),
+      );
+      expect(after.status).toBe('executed');
+
+      // A relayed proposal cancelled on chain stays cancelled whatever arrives later.
+      const d2 = (await post('/v1/account/proposals', a, { action: withdraw(sav.id, '3') })).json();
+      scriptCreated(d2.onchainId, a.userId, 1);
+      await post(`/v1/account/proposals/${d2.id}/approve`, a, {
+        response: await signFor(a, d2.id),
+      });
+      fake.scriptLogs(account.nearAccountId, 'cancel', [
+        eventLog('proposal_cancelled', { proposal_id: d2.onchainId, signer_id: a.userId }),
+      ]);
+      await post(`/v1/account/proposals/${d2.id}/cancel`, a, {
+        response: await signFor(a, d2.id, 'cancel'),
+      });
+      const late = await tenantTransaction(ctx, (tx) =>
+        applyProposalEvents(
+          tx,
+          ctx,
+          d2.id,
+          parseAccountEvents(executedLogs(d2.onchainId, a.userId, withdraw(sav.id, '3'))),
+          'TX2',
+        ),
+      );
+      expect(late.status).toBe('cancelled');
+    });
+
+    it('an approval does not fail on a sign-counter regression; stored counters only rise', async () => {
+      const a = await member('owner', true);
+      const sav = await savedAddress();
+      await prisma.webauthnCredential.update({
+        where: { id: a.credentialRowId },
+        data: { signCount: 1000n },
+      });
+      const draft = (await post('/v1/account/proposals', a, { action: withdraw(sav.id) })).json();
+      scriptCreated(draft.onchainId, a.userId, 1);
+      const res = await post(`/v1/account/proposals/${draft.id}/approve`, a, {
+        response: await signFor(a, draft.id),
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const cred = await prisma.webauthnCredential.findUniqueOrThrow({
+        where: { id: a.credentialRowId },
+      });
+      expect(cred.signCount).toBe(1000n);
+      await recordSignCount(a.credentialRowId, 5);
+      expect(
+        (await prisma.webauthnCredential.findUniqueOrThrow({ where: { id: a.credentialRowId } }))
+          .signCount,
+      ).toBe(1000n);
+      await recordSignCount(a.credentialRowId, 1001);
+      expect(
+        (await prisma.webauthnCredential.findUniqueOrThrow({ where: { id: a.credentialRowId } }))
+          .signCount,
+      ).toBe(1001n);
+    });
+
+    it('ignores events logged by a receipt that failed', async () => {
+      const a = await member('owner', true);
+      const sav = await savedAddress();
+      await prisma.merchantAccount.update({ where: { id: account.id }, data: { threshold: 1 } });
+      const draft = (await post('/v1/account/proposals', a, { action: withdraw(sav.id) })).json();
+      fake.scriptLogs(account.nearAccountId, 'propose', [
+        eventLog('proposal_created', { proposal_id: draft.onchainId, signer_id: a.userId }),
+        eventLog('proposal_approved', {
+          proposal_id: draft.onchainId,
+          signer_id: a.userId,
+          signer_epoch: '0',
+          approvals: 1,
+          threshold: 1,
+        }),
+      ]);
+      // A later receipt logged `proposal_executed`, then panicked: rolled back, never happened.
+      fake.failDownstreamNext('propose', 'callback panicked', [
+        eventLog('proposal_executed', { proposal_id: draft.onchainId, action: withdraw(sav.id) }),
+      ]);
+      const res = await post(`/v1/account/proposals/${draft.id}/approve`, a, {
+        response: await signFor(a, draft.id),
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().status).toBe('executing');
+    });
+
+    it('treats "already approved" after the propose fallback as done, from the contract view', async () => {
+      const a = await member('owner', true);
+      const sav = await savedAddress();
+      const draft = (await post('/v1/account/proposals', a, { action: withdraw(sav.id) })).json();
+      const stored = await prisma.webauthnCredential.findUniqueOrThrow({
+        where: { id: a.credentialRowId },
+      });
+      fake.failNext('propose', 'Smart contract panicked: proposal already exists');
+      fake.failNext('approve', 'Smart contract panicked: signer already approved this proposal');
+      const readyNs = BigInt(Date.now() + 24 * HOUR) * 1_000_000n;
+      fake.scriptView(account.nearAccountId, 'get_proposal', (args) => {
+        expect(args).toEqual({ id: draft.onchainId });
+        return {
+          id: draft.onchainId,
+          action: withdraw(sav.id),
+          creator: a.userId,
+          created_at: '0',
+          expires_at: '0',
+          approvals: [{ signer_id: a.userId, key: stored.publicKey, signer_epoch: '0' }],
+          valid_approvals: 1,
+          ready_at: String(readyNs),
+          status: 'pending',
+        };
+      });
+      const res = await post(`/v1/account/proposals/${draft.id}/approve`, a, {
+        response: await signFor(a, draft.id),
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().status).toBe('timelocked');
+      const row = await prisma.accountProposal.findUniqueOrThrow({ where: { id: draft.id } });
+      expect(row.relayClaimedAt).toBeNull();
+      expect(row.readyAt).not.toBeNull();
+      const approvals = await prisma.accountApproval.findMany({ where: { proposalId: draft.id } });
+      expect(approvals).toMatchObject([
+        { userId: a.userId, credentialId: a.credentialRowId, signerEpoch: 0n },
+      ]);
+    });
   });
 
   it('settlement_change_is_a_proposal_not_a_patch', async () => {

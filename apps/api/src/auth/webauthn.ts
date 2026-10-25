@@ -354,10 +354,22 @@ export async function verifyAuthentication(
   }
   const { count } = await prisma.webauthnCredential.updateMany({
     where: { id: cred.id, revokedAt: null },
-    data: { signCount: BigInt(newCounter), lastUsedAt: new Date() },
+    data: { lastUsedAt: new Date() },
   });
   if (count === 0) throw loginFailed();
+  await recordSignCount(cred.id, newCounter);
   return { userId: cred.userId, credentialId: cred.id };
+}
+
+/**
+ * Raises a credential's stored signature counter to `counter`. Monotonic: a concurrent or late
+ * write with a lower counter never moves it back.
+ */
+export async function recordSignCount(credentialRowId: string, counter: number): Promise<void> {
+  await prisma.webauthnCredential.updateMany({
+    where: { id: credentialRowId, signCount: { lt: BigInt(counter) } },
+    data: { signCount: BigInt(counter) },
+  });
 }
 
 /**

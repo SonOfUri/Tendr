@@ -33,7 +33,7 @@ import {
   type SignerKey,
 } from '@tendr/contracts';
 import { randomBytes } from 'node:crypto';
-import { activeCredentials, signerKeyToCose } from '../auth/webauthn.js';
+import { activeCredentials, recordSignCount, signerKeyToCose } from '../auth/webauthn.js';
 import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
@@ -635,7 +635,11 @@ async function verifyLocally(parsed: ParsedAssertion, response: unknown): Promis
       credential: {
         id: c.credentialId,
         publicKey: signerKeyToCose(parsed.key),
-        counter: Number(c.signCount),
+        // Approvals never fail on a counter regression: the contract ignores counters and an
+        // approval cannot be replayed on chain (bound to proposal, epoch and intent, one per
+        // signer per epoch). A counter can legitimately go "back", e.g. an approval signed
+        // before, and submitted after, a newer login from the same authenticator.
+        counter: 0,
         transports: c.transports as AuthenticatorTransportFuture[],
       },
     });
@@ -647,8 +651,9 @@ async function verifyLocally(parsed: ParsedAssertion, response: unknown): Promis
   }
   await prisma.webauthnCredential.updateMany({
     where: { id: c.id, revokedAt: null },
-    data: { signCount: BigInt(newCounter), lastUsedAt: new Date() },
+    data: { lastUsedAt: new Date() },
   });
+  await recordSignCount(c.id, newCounter);
 }
 
 /** The contract's `SignedApproval` JSON: byte fields standard padded base64, P-256 raw low-s. */
@@ -729,6 +734,10 @@ export async function applyProposalEvents(
   });
   if (!p) throw notFound('Proposal not found');
   let status = p.status as ProposalStatus;
+  // A draft cancelled only in Postgres does not outrank the chain: if the contract reports on it,
+  // the proposal exists on chain after all, so the events decide.
+  const aboutIt = events.some((e) => e.data.proposal_id === p.onchainId);
+  if (aboutIt && (await isLocalOnlyCancel(tx, ctx, p))) status = 'draft';
   let readyAt = p.readyAt;
   let executedAt = p.executedAt;
   let reached = false;
@@ -806,6 +815,17 @@ async function recordTxHash(ctx: ScopeContext, id: string, txHash: string): Prom
 }
 
 const isAlreadyExists = (r: TxResult) => /proposal already exists/.test(r.failure ?? '');
+const isAlreadyApproved = (r: TxResult) =>
+  /signer already approved this proposal/.test(r.failure ?? '');
+
+/** The contract's `ProposalView` JSON (`get_proposal`), the fields used here. */
+export interface ContractProposalView {
+  id: string;
+  status: 'pending' | 'executed' | 'failed' | 'cancelled' | 'expired' | 'executing';
+  approvals: { signer_id: string; key: unknown; signer_epoch: string }[];
+  valid_approvals: number;
+  ready_at: string | null;
+}
 
 /**
  * Relays a signer's approval: `propose` for a draft (the first approval puts it on chain),
@@ -813,8 +833,20 @@ const isAlreadyExists = (r: TxResult) => /proposal already exists/.test(r.failur
  * theirs and active, the assertion answers this proposal's approve challenge at the current
  * mirrored epoch, its signature verifies, and the action still passes local validation.
  *
- * If the call never returns (network), the error propagates and nothing is stored; if it did land,
- * the chain watcher's reconciliation picks it up, and a retry fails on chain as a duplicate.
+ * A draft is CLAIMED (`relay_claimed_at`, set by a conditional update) before its `propose` is
+ * relayed, and the draft-cancel path refuses a claimed draft. Without the claim a requester could
+ * cancel the row mid-relay while `propose` landed, leaving the mirror "cancelled" for a live (or,
+ * at threshold 1, already executed) proposal. The claim is released when the relay fails and
+ * cleared when it lands; one older than `RELAY_CLAIM_LEASE_MS` (a crashed relay) may be taken
+ * over. A claim rather than a row lock held across the relay, which would pin a pooled connection
+ * and an open transaction for the seconds a NEAR round-trip takes.
+ *
+ * If the contract answers "signer already approved" (an earlier approval landed and its answer was
+ * lost, or the `propose` → "already exists" → `approve` fallback met our own approval), the relay
+ * counts as done and the row is brought up to date from the contract's `get_proposal` view.
+ *
+ * If the call never returns (network), the error propagates, the claim is released and nothing is
+ * stored; the chain watcher's reconciliation picks up a transaction that did land.
  */
 export async function submitApproval(
   actor: ProposalActor,
@@ -837,62 +869,217 @@ export async function submitApproval(
   const action = ActionSchema.parse(p.action);
   await validateLocally(actor, action);
   const approval = signedApproval(actor.userId, parsed);
+  const contractId = account.nearAccountId;
+  const approveArgs = { proposal_id: p.onchainId, approval };
 
+  const claim = p.status === 'draft' ? await claimDraft(actor, p.id) : null;
   let result: TxResult;
-  if (p.status === 'draft') {
-    result = await relay(actor.livemode, account.nearAccountId, 'propose', {
-      action,
-      salt: p.salt,
-      approval,
-    });
-    // Another signer's `propose` landed first (or ours did, and its answer was lost).
-    if (!landed(result) && isAlreadyExists(result)) {
-      result = await relay(actor.livemode, account.nearAccountId, 'approve', {
-        proposal_id: p.onchainId,
+  try {
+    if (claim) {
+      result = await relay(actor.livemode, contractId, 'propose', {
+        action,
+        salt: p.salt,
         approval,
       });
+      // Another signer's `propose` landed first (or ours did, and its answer was lost).
+      if (!landed(result) && isAlreadyExists(result)) {
+        result = await relay(actor.livemode, contractId, 'approve', approveArgs);
+      }
+    } else {
+      result = await relay(actor.livemode, contractId, 'approve', approveArgs);
     }
-  } else {
-    result = await relay(actor.livemode, account.nearAccountId, 'approve', {
-      proposal_id: p.onchainId,
-      approval,
-    });
+  } catch (err) {
+    if (claim) await releaseClaim(actor, p.id, claim);
+    throw err;
   }
+
+  if (!landed(result) && isAlreadyApproved(result)) {
+    const onChain = await nearClient(actor.livemode).view<ContractProposalView | null>(
+      contractId,
+      'get_proposal',
+      { id: p.onchainId },
+    );
+    if (!onChain) {
+      if (claim) await releaseClaim(actor, p.id, claim);
+      throw rejected(result);
+    }
+    const mine = onChain.approvals.find((a) => a.signer_id === actor.userId);
+    const credentialId = (await credentialForKey(actor.userId, mine?.key)) ?? parsed.credential.id;
+    await tenantTransaction(actor, async (tx, ctx) => {
+      await markOnChain(tx, ctx, p.id);
+      await upsertApproval(tx, ctx, p.id, actor.userId, {
+        credentialId,
+        signerEpoch: u64Of(mine?.signer_epoch) ?? account.signerEpoch,
+        txHash: null,
+      });
+      await applyProposalView(tx, ctx, p.id, onChain);
+    });
+    return getProposal(actor, p.id);
+  }
+
   if (!landed(result)) {
+    if (claim) await releaseClaim(actor, p.id, claim);
     await recordTxHash(actor, p.id, result.txHash);
     log('info', 'approval rejected on chain', { proposalId: p.id, failure: result.failure });
     throw rejected(result);
   }
-  const events = parseAccountEvents(result.logs);
+  // Only receipts that succeeded: a failed receipt's events were rolled back with it.
+  const events = parseAccountEvents(result.successLogs);
   await tenantTransaction(actor, async (tx, ctx) => {
-    await tx.accountApproval.upsert({
-      where: { proposalId_userId: { proposalId: p.id, userId: actor.userId } },
-      create: {
-        id: newId('appr'),
-        merchantId: ctx.merchantId,
-        livemode: ctx.livemode,
-        proposalId: p.id,
-        userId: actor.userId,
-        credentialId: parsed.credential.id,
-        signerEpoch: account.signerEpoch,
-        txHash: result.txHash,
-      },
-      update: {
-        credentialId: parsed.credential.id,
-        signerEpoch: account.signerEpoch,
-        txHash: result.txHash,
-      },
-    });
     // The call landed, so the proposal is on chain even if its events were not in the logs.
-    if (p.status === 'draft') {
-      await tx.accountProposal.updateMany({
-        where: { id: p.id, merchantId: ctx.merchantId, livemode: ctx.livemode, status: 'draft' },
-        data: { status: 'pending' },
-      });
-    }
+    await markOnChain(tx, ctx, p.id);
+    await upsertApproval(tx, ctx, p.id, actor.userId, {
+      credentialId: parsed.credential.id,
+      signerEpoch: account.signerEpoch,
+      txHash: result.txHash,
+    });
     await applyProposalEvents(tx, ctx, p.id, events, result.txHash);
   });
   return getProposal(actor, p.id);
+}
+
+/** How long a draft's relay claim holds before another approval may take it over. */
+export const RELAY_CLAIM_LEASE_MS = 2 * 60_000;
+
+/** Rows not claimed by a live relay: no claim, or a claim past its lease. */
+const claimFree = () => ({
+  OR: [
+    { relayClaimedAt: null },
+    { relayClaimedAt: { lt: new Date(Date.now() - RELAY_CLAIM_LEASE_MS) } },
+  ],
+});
+
+/** Claims a draft for relaying its `propose`; 409 if it is no longer a free draft. */
+async function claimDraft(ctx: ScopeContext, id: string): Promise<Date> {
+  const claimedAt = new Date();
+  const { count } = await prisma.accountProposal.updateMany({
+    where: {
+      id,
+      merchantId: ctx.merchantId,
+      livemode: ctx.livemode,
+      status: 'draft',
+      ...claimFree(),
+    },
+    data: { relayClaimedAt: claimedAt },
+  });
+  if (count === 0) {
+    throw conflict('This proposal is being submitted or has changed; reload it and try again');
+  }
+  return claimedAt;
+}
+
+/** Releases our own claim (a later claimer's is left alone). */
+async function releaseClaim(ctx: ScopeContext, id: string, claimedAt: Date): Promise<void> {
+  await prisma.accountProposal.updateMany({
+    where: { id, merchantId: ctx.merchantId, livemode: ctx.livemode, relayClaimedAt: claimedAt },
+    data: { relayClaimedAt: null },
+  });
+}
+
+/**
+ * Whether the row's `cancelled` is local only: a draft cancelled in Postgres that never had an
+ * approval land through the relay. On-chain evidence about the proposal (events, the contract's
+ * view) overrides such a status; every other final status stays final.
+ */
+async function isLocalOnlyCancel(
+  tx: Prisma.TransactionClient,
+  ctx: ScopeContext,
+  p: AccountProposal,
+): Promise<boolean> {
+  if (p.status !== 'cancelled') return false;
+  const landedApprovals = await tx.accountApproval.count({
+    where: { proposalId: p.id, merchantId: ctx.merchantId, livemode: ctx.livemode },
+  });
+  return landedApprovals === 0;
+}
+
+/**
+ * A relay landed for this proposal: a draft (or a locally cancelled draft, which the chain
+ * overrides) becomes `pending`, and any relay claim is cleared.
+ */
+async function markOnChain(
+  tx: Prisma.TransactionClient,
+  ctx: ScopeContext,
+  id: string,
+): Promise<void> {
+  const p = await tx.accountProposal.findFirst({
+    where: { id, merchantId: ctx.merchantId, livemode: ctx.livemode },
+  });
+  if (!p) throw notFound('Proposal not found');
+  const reopen = p.status === 'draft' || (await isLocalOnlyCancel(tx, ctx, p));
+  await tx.accountProposal.update({
+    where: { id: p.id },
+    data: { relayClaimedAt: null, ...(reopen ? { status: 'pending' as const } : {}) },
+  });
+}
+
+async function upsertApproval(
+  tx: Prisma.TransactionClient,
+  ctx: ScopeContext,
+  proposalId: string,
+  userId: string,
+  v: { credentialId: string; signerEpoch: bigint; txHash: string | null },
+): Promise<void> {
+  await tx.accountApproval.upsert({
+    where: { proposalId_userId: { proposalId, userId } },
+    create: {
+      id: newId('appr'),
+      merchantId: ctx.merchantId,
+      livemode: ctx.livemode,
+      proposalId,
+      userId,
+      ...v,
+    },
+    update: {
+      credentialId: v.credentialId,
+      signerEpoch: v.signerEpoch,
+      ...(v.txHash ? { txHash: v.txHash } : {}),
+    },
+  });
+}
+
+/** The person's credential row whose public key is `key` (R1: searched within the person only). */
+async function credentialForKey(userId: string, key: unknown): Promise<string | null> {
+  const parsed = SignerKeySchema.safeParse(key);
+  if (!parsed.success) return null;
+  const want = keyId(parsed.data as SignerKey);
+  const creds = await prisma.webauthnCredential.findMany({ where: { userId } });
+  const match = creds.find((c) => {
+    const k = SignerKeySchema.safeParse(c.publicKey);
+    return k.success && keyId(k.data as SignerKey) === want;
+  });
+  return match?.id ?? null;
+}
+
+/**
+ * Brings a proposal row up to date from the contract's `get_proposal` view. Forward-only like
+ * `applyProposalEvents`, and likewise overriding a local-only `cancelled`. A pending view with a
+ * live `ready_at` is `timelocked`.
+ */
+export async function applyProposalView(
+  tx: Prisma.TransactionClient,
+  ctx: ScopeContext,
+  proposalRowId: string,
+  v: ContractProposalView,
+): Promise<AccountProposal> {
+  const p = await tx.accountProposal.findFirst({
+    where: { id: proposalRowId, merchantId: ctx.merchantId, livemode: ctx.livemode },
+  });
+  if (!p) throw notFound('Proposal not found');
+  let current = p.status as ProposalStatus;
+  if (await isLocalOnlyCancel(tx, ctx, p)) current = 'draft';
+  const readyAt = v.ready_at !== null ? nsToDate(v.ready_at) : null;
+  const target: ProposalStatus =
+    v.status === 'pending' ? (readyAt ? 'timelocked' : 'pending') : v.status;
+  const status = TERMINAL(current) || RANK[target] < RANK[current] ? current : target;
+  return tx.accountProposal.update({
+    where: { id: p.id },
+    data: {
+      status,
+      ...(readyAt ? { readyAt } : {}),
+      ...(status === 'executed' && !p.executedAt ? { executedAt: new Date() } : {}),
+    },
+  });
 }
 
 /**
@@ -910,11 +1097,22 @@ export async function cancelProposal(
     if (!actor.isSigner && p.createdByUserId !== actor.userId) {
       throw forbidden('Only the requester or a signer can cancel a draft');
     }
+    // Never while a signer's first approval is being relayed: `propose` may be landing.
     const { count } = await prisma.accountProposal.updateMany({
-      where: { id: p.id, merchantId: actor.merchantId, livemode: actor.livemode, status: 'draft' },
+      where: {
+        id: p.id,
+        merchantId: actor.merchantId,
+        livemode: actor.livemode,
+        status: 'draft',
+        ...claimFree(),
+      },
       data: { status: 'cancelled' },
     });
-    if (count === 0) throw conflict('The proposal changed; reload it');
+    if (count === 0) {
+      throw conflict(
+        'A signer is submitting this proposal to the account; reload it, then cancel it there',
+      );
+    }
     return getProposal(actor, p.id);
   }
   requireSigner(actor);
@@ -938,7 +1136,7 @@ export async function cancelProposal(
     await recordTxHash(actor, p.id, result.txHash);
     throw rejected(result);
   }
-  const events = parseAccountEvents(result.logs);
+  const events = parseAccountEvents(result.successLogs);
   await tenantTransaction(actor, (tx, ctx) =>
     applyProposalEvents(tx, ctx, p.id, events, result.txHash),
   );

@@ -51,6 +51,11 @@ export interface InitConfigJson {
 /**
  * A final transaction outcome.
  *
+ * - `logs` are the logs of every outcome (transaction and receipts), failed ones included: a
+ *   receipt that panicked may still have logged before it did. `successLogs` keeps only the logs
+ *   of outcomes that succeeded. Contract events must be read from `successLogs` (a failed
+ *   receipt's state changes were rolled back, so its events never happened).
+ *
  * - `status` is `'failure'` if ANY receipt failed, including downstream promises the contract
  *   started and settles in its own callback (a verifier transfer that bounced, say).
  * - `topLevelStatus` is the transaction's own result (`FinalExecutionOutcome.status`): the called
@@ -58,11 +63,12 @@ export interface InitConfigJson {
  *   contract's `propose` / `approve` / `cancel`), a downstream failure leaves it `'success'`.
  *
  * So judge whether a contract call took effect by `topLevelStatus` and by the contract's own
- * NEP-297 events in `logs`, never by `status` alone.
+ * NEP-297 events in `successLogs`, never by `status` alone.
  */
 export interface TxResult {
   txHash: string;
   logs: string[];
+  successLogs: string[];
   status: 'success' | 'failure';
   topLevelStatus: 'success' | 'failure';
   failure?: string;
