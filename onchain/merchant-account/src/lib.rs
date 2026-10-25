@@ -9,6 +9,7 @@
 pub mod action;
 pub mod approval;
 pub mod events;
+pub mod money;
 pub mod saved;
 pub mod webauthn;
 
@@ -24,6 +25,7 @@ use near_sdk::{env, near, require, AccountId, PanicOnDefault};
 use crate::action::{Action, ActionKind, Invalid, PayoutMode, Signer};
 use crate::approval::{ApprovalIntent, ApprovalPayload, ProposalId, Salt, SignedApproval};
 use crate::events::Event;
+use crate::money::AssetState;
 use crate::saved::{SavedAddress, SavedAddressView, Settlement};
 use crate::webauthn::SignerKey;
 
@@ -57,7 +59,8 @@ pub struct InitConfig {
     pub testnet_admin: Option<AccountId>,
 }
 
-/// Lifecycle of a proposal. A pending proposal with `ready_at` set is timelocked.
+/// Lifecycle of a proposal. A pending proposal with a live `ready_at` is
+/// timelocked; it stays pending (cancellable, counted in the creator's cap).
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -67,6 +70,9 @@ pub enum ProposalStatus {
     Failed,
     Cancelled,
     Expired,
+    /// A withdrawal or refund was sent; its callback moves it to `Executed`
+    /// or `Failed`.
+    Executing,
 }
 
 /// One signer's approval, recorded with the key and epoch it was made under.
@@ -89,6 +95,10 @@ pub struct Proposal {
     pub approvals: Vec<RecordedApproval>,
     /// Set when the threshold is reached on an action that needs a timelock.
     pub ready_at: Option<u64>,
+    /// The signer epoch at which the timelock started. A timelock only holds
+    /// while the epoch is unchanged; reaching the threshold again at a new
+    /// epoch restarts it.
+    pub timelock_epoch: Option<u64>,
     pub status: ProposalStatus,
 }
 
@@ -111,6 +121,7 @@ pub struct ProposalView {
     pub approvals: Vec<ApprovalView>,
     /// Approvals that count now: current epoch, signer and key still registered.
     pub valid_approvals: u8,
+    /// When a timelock started at the current signer epoch ends.
     pub ready_at: Option<U64>,
     /// `expired` once the TTL passes, even before anyone calls `execute`.
     pub status: ProposalStatus,
@@ -147,6 +158,10 @@ pub struct MerchantAccount {
     pending_per_signer: LookupMap<String, u8>,
     saved_addresses: Vec<SavedAddress>,
     settlement: Option<Settlement>,
+    /// Limits, rolling windows and auto-sweep per asset id.
+    assets: LookupMap<String, AssetState>,
+    /// Pending proposals with a timelock, for the limits view.
+    timelocked: Vec<ProposalId>,
 }
 
 #[near]
@@ -186,6 +201,8 @@ impl MerchantAccount {
             pending_per_signer: LookupMap::new(StorageKey::PendingPerSigner),
             saved_addresses: Vec::new(),
             settlement: None,
+            assets: LookupMap::new(StorageKey::Assets),
+            timelocked: Vec::new(),
         };
         require!(!signers.is_empty(), "at least one signer is required");
         for signer in signers {
@@ -239,6 +256,7 @@ impl MerchantAccount {
                 created_at,
                 approvals: Vec::new(),
                 ready_at: None,
+                timelock_epoch: None,
                 status: ProposalStatus::Pending,
             },
         );
@@ -270,15 +288,14 @@ impl MerchantAccount {
             self.valid_approvals(&proposal) >= self.threshold,
             "not enough approvals at the current signer epoch"
         );
-        let unlocked = match proposal.ready_at {
-            Some(ready_at) => now >= ready_at,
-            None => Self::timelock_delay(&proposal.action).is_none(),
-        };
-        require!(unlocked, "proposal is timelocked");
-        self.execute_now(proposal_id);
+        if let Some(ready_at) = self.live_ready_at(&proposal) {
+            require!(now >= ready_at, "proposal is timelocked");
+        }
+        self.on_threshold(proposal_id);
     }
 
-    /// Any one current signer may cancel a pending proposal. A proposal past
+    /// Any one current signer may cancel a pending proposal, timelocked or
+    /// not. A proposal past
     /// its TTL is marked expired instead, so the record shows why it ended.
     pub fn cancel(&mut self, proposal_id: ProposalId, approval: SignedApproval) {
         let proposal = self.open_proposal(&proposal_id);
@@ -336,6 +353,7 @@ impl MerchantAccount {
 enum StorageKey {
     Proposals,
     PendingPerSigner,
+    Assets,
 }
 
 fn or_panic(r: Result<(), Invalid>) {
@@ -366,9 +384,10 @@ impl MerchantAccount {
         p.clone()
     }
 
-    /// Moves a pending proposal to a final status and releases its slot in
-    /// the creator's pending cap.
+    /// Moves a pending proposal to a final status (or `Executing`) and
+    /// releases its slot in the creator's pending cap.
     fn finish(&mut self, id: &ProposalId, status: ProposalStatus) {
+        self.timelocked.retain(|t| t != id);
         let p = self.proposals.get_mut(id).expect("proposal exists");
         debug_assert_eq!(p.status, ProposalStatus::Pending);
         p.status = status;
@@ -467,37 +486,64 @@ impl MerchantAccount {
             threshold: self.threshold,
         }
         .emit();
-        if approvals < self.threshold {
-            return;
-        }
-        match Self::timelock_delay(&proposal.action) {
-            None => self.execute_now(id),
-            Some(_) if proposal.ready_at.is_some() => {}
-            Some(delay) => {
-                let ready_at = env::block_timestamp() + delay;
-                self.proposals
-                    .get_mut(&id)
-                    .expect("proposal exists")
-                    .ready_at = Some(ready_at);
-                Event::TimelockStarted {
-                    proposal_id: id,
-                    action: &proposal.action,
-                    ready_at: U64(ready_at),
-                }
-                .emit();
-            }
+        if approvals >= self.threshold {
+            self.on_threshold(id);
         }
     }
 
-    /// How long an approved action waits before it may execute. Timelocked
-    /// money actions arrive in Task 4.
-    fn timelock_delay(_action: &Action) -> Option<u64> {
-        None
+    /// The end of `p`'s timelock, if one was started at the current epoch.
+    /// A timelock from an older epoch no longer holds: the approvals that
+    /// started it stopped counting.
+    pub(crate) fn live_ready_at(&self, p: &Proposal) -> Option<u64> {
+        p.ready_at
+            .filter(|_| p.timelock_epoch == Some(self.signer_epoch))
+    }
+
+    /// Acts on a proposal holding `threshold` valid approvals: executes it,
+    /// starts its timelock, or waits for a running timelock to end.
+    fn on_threshold(&mut self, id: ProposalId) {
+        let proposal = self.proposals.get(&id).expect("proposal exists").clone();
+        let now = env::block_timestamp();
+        match self.live_ready_at(&proposal) {
+            Some(ready_at) if now < ready_at => {}
+            Some(_) => self.execute_now(id),
+            None if self.needs_timelock(&proposal.action, now) => {
+                self.start_timelock(id, &proposal.action, now)
+            }
+            None => self.execute_now(id),
+        }
+    }
+
+    /// Whether `action`, reaching the threshold now, must wait
+    /// [`money::TIMELOCK_DELAY`]: swap withdrawals, refunds crossing the
+    /// refund cap, and raises of a limit or the refund cap.
+    fn needs_timelock(&self, action: &Action, now: u64) -> bool {
+        matches!(action.kind(), ActionKind::Money | ActionKind::Limits)
+            && self.money_needs_timelock(action, now)
+    }
+
+    /// Starts (or restarts, at a new epoch) the proposal's timelock.
+    fn start_timelock(&mut self, id: ProposalId, action: &Action, now: u64) {
+        let ready_at = now + money::TIMELOCK_DELAY;
+        let epoch = self.signer_epoch;
+        let p = self.proposals.get_mut(&id).expect("proposal exists");
+        p.ready_at = Some(ready_at);
+        p.timelock_epoch = Some(epoch);
+        if !self.timelocked.contains(&id) {
+            self.timelocked.push(id);
+        }
+        Event::TimelockStarted {
+            proposal_id: id,
+            action,
+            ready_at: U64(ready_at),
+        }
+        .emit();
     }
 
     /// Applies an approved proposal. A proposal that is no longer valid
     /// against current state is marked failed instead of reverting, so the
-    /// final approval still lands and the outcome is on chain.
+    /// final approval still lands and the outcome is on chain. Withdrawals
+    /// and refunds are re-checked and sent; their callback settles them.
     fn execute_now(&mut self, id: ProposalId) {
         let action = self
             .proposals
@@ -505,6 +551,13 @@ impl MerchantAccount {
             .expect("proposal exists")
             .action
             .clone();
+        if action.kind() == ActionKind::Money {
+            match self.check_action(&action) {
+                Ok(()) => self.start_transfer(id, &action),
+                Err(reason) => self.fail(id, reason),
+            }
+            return;
+        }
         match self.apply(&action) {
             Ok(()) => {
                 self.finish(&id, ProposalStatus::Executed);
@@ -538,15 +591,17 @@ impl MerchantAccount {
                     self.emit_signers_changed(Some(id));
                 }
             }
-            Err(reason) => {
-                self.finish(&id, ProposalStatus::Failed);
-                Event::ProposalFailed {
-                    proposal_id: id,
-                    reason,
-                }
-                .emit();
-            }
+            Err(reason) => self.fail(id, reason),
         }
+    }
+
+    fn fail(&mut self, id: ProposalId, reason: &str) {
+        self.finish(&id, ProposalStatus::Failed);
+        Event::ProposalFailed {
+            proposal_id: id,
+            reason,
+        }
+        .emit();
     }
 
     fn emit_signers_changed(&self, proposal_id: Option<ProposalId>) {
@@ -593,12 +648,20 @@ impl MerchantAccount {
             Action::SetOrigins(origins) => action::validate_origins(origins),
             Action::RotateRecoveryKey(Some(pk)) => self.check_recovery_key(pk),
             Action::RotateRecoveryKey(None) => Ok(()),
-            Action::AddSavedAddress { id, chain, .. } => {
+            Action::AddSavedAddress { id, chain, address } => {
                 if !saved::SUPPORTED_CHAINS.contains(&chain.as_str()) {
                     return Err("unsupported chain");
                 }
                 if self.saved_addresses.iter().any(|a| &a.id == id) {
                     return Err("duplicate saved address id");
+                }
+                // Exact match, case-sensitive: no per-chain normalization.
+                if self
+                    .saved_addresses
+                    .iter()
+                    .any(|a| &a.chain == chain && &a.address == address)
+                {
+                    return Err("duplicate saved address");
                 }
                 if self.saved_addresses.len() >= saved::MAX_SAVED_ADDRESSES {
                     return Err("too many saved addresses");
@@ -631,8 +694,14 @@ impl MerchantAccount {
                     .map(|_| ())
                     .ok_or("saved address is unknown or not yet active"),
             },
-            // Not proposable until Tasks 4-5 implement them.
-            _ => Err("not yet supported"),
+            Action::SetLimits { .. }
+            | Action::SetRefundCap { .. }
+            | Action::SetAutoSweep { .. }
+            | Action::ClearAutoSweep { .. }
+            | Action::Withdraw { .. }
+            | Action::Refund { .. } => self.check_money(action, env::block_timestamp()),
+            // Not proposable until Task 5 implements it.
+            Action::Upgrade { .. } => Err("not yet supported"),
         }
     }
 
@@ -671,7 +740,15 @@ impl MerchantAccount {
                     saved_address_id: saved_address_id.clone(),
                 });
             }
-            _ => return Err("not yet supported"),
+            Action::SetLimits { .. }
+            | Action::SetRefundCap { .. }
+            | Action::SetAutoSweep { .. }
+            | Action::ClearAutoSweep { .. } => self.apply_money_setting(action),
+            // Sent by `execute_now` through `start_transfer`, never applied here.
+            Action::Withdraw { .. } | Action::Refund { .. } => {
+                return Err("money actions execute as transfers")
+            }
+            Action::Upgrade { .. } => return Err("not yet supported"),
         }
         Ok(())
     }
@@ -751,7 +828,7 @@ impl MerchantAccount {
                 })
                 .collect(),
             valid_approvals: self.valid_approvals(p),
-            ready_at: p.ready_at.map(U64),
+            ready_at: self.live_ready_at(p).map(U64),
             status,
         }
     }

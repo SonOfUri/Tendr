@@ -17,7 +17,7 @@ set -euo pipefail
 ONCHAIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ONCHAIN_DIR"
 
-DEFAULT_CRATES=(merchant-account)
+DEFAULT_CRATES=(merchant-account mock-intents)
 CRATES=("$@")
 if [ ${#CRATES[@]} -eq 0 ]; then
   CRATES=("${DEFAULT_CRATES[@]}")

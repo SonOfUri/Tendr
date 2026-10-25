@@ -176,15 +176,11 @@ impl Action {
         )
     }
 
-    /// Whether this action can be proposed yet. Security, saved-address and
-    /// settlement actions execute in this version; limits, sweeps and money
-    /// (Task 4) and upgrades (Task 5) are enabled later, so nothing
-    /// unexecutable can sit in storage.
+    /// Whether this action can be proposed yet. Everything but upgrades
+    /// (Task 5) executes in this version, so nothing unexecutable can sit in
+    /// storage.
     pub fn is_proposable(&self) -> bool {
-        matches!(
-            self.kind(),
-            ActionKind::Security | ActionKind::SavedAddress | ActionKind::Settlement
-        )
+        self.kind() != ActionKind::Upgrade
     }
 }
 

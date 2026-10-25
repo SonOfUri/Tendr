@@ -1213,6 +1213,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mock-intents"
+version = "0.1.0"
+dependencies = [
+ "near-sdk",
+]
+
+[[package]]
 name = "near-account-id"
 version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

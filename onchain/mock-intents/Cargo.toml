@@ -1,0 +1,23 @@
+[package]
+name = "mock-intents"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Test-only stand-in for the NEAR Intents verifier (intents.near). Testnet and sandbox only; never deploy to mainnet."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk.workspace = true
+
+[dev-dependencies]
+near-sdk = { workspace = true, features = ["unit-testing"] }
+
+[package.metadata.near.reproducible_build]
+image = "sourcescan/cargo-near:0.21.1-rust-1.93.0"
+image_digest = "sha256:79b789c81ba19ec30794a6b1046b02dcaf5c055994b22cc7c9af67ab5096b095"
+passed_env = []
+container_build_command = ["cargo", "near", "build", "non-reproducible-wasm", "--locked"]

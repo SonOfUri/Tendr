@@ -490,21 +490,6 @@ fn invalid_at_execute_marks_failed() {
     assert_eq!(evs.last().unwrap()["event"], "proposal_failed");
 }
 
-#[test]
-#[should_panic(expected = "not yet supported")]
-fn money_actions_not_yet_supported() {
-    let (mut c, a, _b, _c) = three_of(2);
-    let action = Action::Withdraw {
-        asset: "nep141:usdc.tendr.testnet".into(),
-        amount: U128(1),
-        saved_address_id: "sav_1".into(),
-        route: WithdrawRoute::Poa {
-            token_contract: "usdc.tendr.testnet".parse().unwrap(),
-        },
-    };
-    propose(&mut c, &a, action, 1);
-}
-
 #[cfg(not(feature = "testnet-admin"))]
 #[test]
 #[should_panic(expected = "testnet_admin requires the testnet-admin feature")]
@@ -712,42 +697,9 @@ fn poa() -> WithdrawRoute {
     }
 }
 
-/// One instance of every action that later tasks (4-5) enable, with valid sizes.
+/// One instance of every action that a later task (5) enables.
 fn unsupported_actions() -> Vec<Action> {
-    let asset = || "nep141:usdc.tendr.testnet".to_string();
-    vec![
-        Action::SetLimits {
-            asset: asset(),
-            per_tx: Some(U128(1)),
-            per_day: None,
-        },
-        Action::SetRefundCap {
-            asset: asset(),
-            daily: U128(1),
-        },
-        Action::SetAutoSweep {
-            asset: asset(),
-            trigger_above: U128(2),
-            keep: U128(1),
-            saved_address_id: "sav_1".into(),
-        },
-        Action::ClearAutoSweep { asset: asset() },
-        Action::Withdraw {
-            asset: asset(),
-            amount: U128(1),
-            saved_address_id: "sav_1".into(),
-            route: poa(),
-        },
-        Action::Refund {
-            asset: asset(),
-            amount: U128(1),
-            destination_chain: "base".into(),
-            destination: "0x91a1".into(),
-            payment_id: "pay_1".into(),
-            route: poa(),
-        },
-        Action::Upgrade { code_hash: [1; 32] },
-    ]
+    vec![Action::Upgrade { code_hash: [1; 32] }]
 }
 
 #[test]
@@ -988,8 +940,6 @@ fn b64(bytes: &[u8]) -> String {
     near_sdk::base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// Writes (with `UPDATE_VECTORS=1`) or checks the shared Rust/TypeScript
-/// approval-encoding vectors.
 const DAY: u64 = 24 * HOUR;
 const ADDR: &str = "0x91a1b2c3d4e5f60718293a4b5c6d7e8f90a1b244";
 
@@ -1077,7 +1027,12 @@ fn saved_address_count_capped() {
     let (mut c, a, _b, _c) = three_of(1);
     for i in 0..saved::MAX_SAVED_ADDRESSES {
         ctx(T0); // resets the mock log, which is capped at 16 KiB
-        run(&mut c, &a, add_saved(&format!("sav_{i}")), i as u8);
+        let add = Action::AddSavedAddress {
+            id: format!("sav_{i}"),
+            chain: "base".into(),
+            address: format!("0x{i:040x}"),
+        };
+        run(&mut c, &a, add, i as u8);
     }
     let msg = panics(|| {
         propose(&mut c, &a, add_saved("one_more"), 200);
@@ -1242,6 +1197,8 @@ fn cannot_remove_address_current_settlement_points_to() {
     assert!(c.list_saved_addresses().is_empty());
 }
 
+/// Writes (with `UPDATE_VECTORS=1`) or checks the shared Rust/TypeScript
+/// approval-encoding vectors.
 #[test]
 fn write_test_vectors() {
     ctx(T0);
@@ -1341,3 +1298,5 @@ fn write_test_vectors() {
         "approval vectors changed; regenerate with UPDATE_VECTORS=1 and update the TypeScript encoder"
     );
 }
+
+mod money;
