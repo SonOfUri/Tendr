@@ -357,6 +357,119 @@ describe('shopper checkout routes', () => {
     expect(await prisma.quote.count({ where: { sessionId: b.id } })).toBe(0);
   });
 
+  it('limits quotes per session per minute (429 RATE_LIMITED)', async () => {
+    await app.close();
+    app = await buildApp({ rateLimitOverrides: { session_quote: 2 } });
+    await app.ready();
+    const s = await newSession();
+    const other = await newSession();
+    for (const asset of [ETH, USDC]) {
+      const ok = await call('POST', 'quote', s.client_secret, { origin_asset: asset });
+      expect(ok.statusCode, ok.body).toBe(201);
+    }
+    const spy = vi.spyOn(sim, 'quote');
+    const limited = await call('POST', 'quote', s.client_secret, { origin_asset: ETH });
+    expect(limited.statusCode, limited.body).toBe(429);
+    expect(limited.json().error.code).toBe('RATE_LIMITED');
+    expect(spy).not.toHaveBeenCalled();
+    // Per session: another session still quotes.
+    const fine = await call('POST', 'quote', other.client_secret, { origin_asset: ETH });
+    expect(fine.statusCode, fine.body).toBe(201);
+  });
+
+  it('caps a session at 30 quotes in its lifetime', async () => {
+    const s = await newSession();
+    for (let i = 0; i < 30; i++) {
+      await createRow('Quote', merchant.id, false, {
+        sessionId: s.id,
+        supersededAt: new Date(),
+      });
+    }
+    const spy = vi.spyOn(sim, 'quote');
+    const res = await call('POST', 'quote', s.client_secret, { origin_asset: ETH });
+    expect(res.statusCode, res.body).toBe(429);
+    expect(res.json().error.code).toBe('RATE_LIMITED');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a new quote while a reported deposit is in flight (409 DEPOSIT_IN_PROGRESS)', async () => {
+    const s = await newSession();
+    const q = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();
+    expect((await call('POST', 'deposit', s.client_secret, { tx_hash: '0xfeed' })).statusCode).toBe(
+      202,
+    );
+    const row = await prisma.quote.findUniqueOrThrow({ where: { id: q.id } });
+    expect(row.depositTxHash).toBe('0xfeed');
+    expect(row.depositTxSubmittedAt).not.toBeNull();
+
+    const spy = vi.spyOn(sim, 'quote');
+    const res = await call('POST', 'quote', s.client_secret, { origin_asset: USDC });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error.code).toBe('DEPOSIT_IN_PROGRESS');
+    expect(spy).not.toHaveBeenCalled();
+
+    // Once the quote's deadline passed, a new quote is allowed (and the deposit report refused).
+    await prisma.quote.update({
+      where: { id: q.id },
+      data: { deadline: new Date(Date.now() - 1000) },
+    });
+    const late = await call('POST', 'deposit', s.client_secret, { tx_hash: '0xbeef' });
+    expect(late.statusCode, late.body).toBe(409);
+    const again = await call('POST', 'quote', s.client_secret, { origin_asset: USDC });
+    expect(again.statusCode, again.body).toBe(201);
+  });
+
+  it('refuses a deposit report once the session is closed', async () => {
+    const s = await newSession();
+    await call('POST', 'quote', s.client_secret, { origin_asset: ETH });
+    await prisma.session.update({ where: { id: s.id }, data: { status: 'SETTLED' } });
+    const res = await call('POST', 'deposit', s.client_secret, { tx_hash: '0xabc' });
+    expect(res.statusCode, res.body).toBe(409);
+  });
+
+  it('wallet payout mode: DESTINATION_CHAIN recipient pinned on the session', async () => {
+    const payout = '0x2222222222222222222222222222222222222222';
+    await prisma.settlementConfig.updateMany({
+      where: { merchantId: merchant.id, livemode: false },
+      data: { payoutMode: 'wallet', payoutAddress: payout },
+    });
+    const s = await newSession();
+    const row = await prisma.session.findUniqueOrThrow({ where: { id: s.id } });
+    expect(row.recipientType).toBe('DESTINATION_CHAIN');
+    expect(row.recipient).toBe(payout);
+    expect(row.intentsAccount).toBe(accountId);
+
+    const spy = vi.spyOn(sim, 'quote');
+    const res = await call('POST', 'quote', s.client_secret, { origin_asset: ETH });
+    expect(res.statusCode, res.body).toBe(201);
+    const real = spy.mock.calls.at(-1)![0];
+    expect(real.recipient).toBe(payout);
+    expect(real.recipientType).toBe('DESTINATION_CHAIN');
+    // Manual send without a refund address: back to the pinned merchant intents account.
+    expect(real.refundTo).toBe(accountId);
+    expect(real.refundType).toBe('INTENTS');
+  });
+
+  it('uses the account the session pinned; a rotated-out account gives 409 ACCOUNT_NOT_READY', async () => {
+    const s = await newSession();
+    const row = await prisma.session.findUniqueOrThrow({ where: { id: s.id } });
+    expect(row.recipientType).toBe('INTENTS');
+    expect(row.recipient).toBe(accountId);
+    // One account per mode: the store's account is now a different NEAR account.
+    await prisma.merchantAccount.updateMany({
+      where: { nearAccountId: accountId },
+      data: { nearAccountId: 'rotated.tendr.testnet' },
+    });
+    const spy = vi.spyOn(sim, 'quote');
+    const res = await call('POST', 'quote', s.client_secret, {
+      origin_asset: ETH,
+      refund_address: WALLET,
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error.code).toBe('ACCOUNT_NOT_READY');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('refuses API keys on the shopper routes', async () => {
     const res = await call('GET', 'session', testKey);
     expect(res.statusCode).toBe(403);

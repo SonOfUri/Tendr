@@ -277,6 +277,7 @@ These supersede the earlier text where they differ.
 7. **Every detected sender is screened** on detection, including connected-wallet flows, because the sender may differ from the connected wallet.
 8. **Underpay top-up.** While the quote is still live and 1Click reports `INCOMPLETE_DEPOSIT`, the checkout first offers "Send the remaining X to the same address". The refund-and-reopen path only applies after the quote deadline. Whether 1Click accumulates deposits is added to "Assumptions to verify early"; if it does not, the top-up option is turned off by a flag.
 9. **Gas reimbursement is deliberate** for the pilot. Pimlico sponsorship arrives with the gas service in project 5. The checkout discloses before payment that leftovers under $1 are not returned.
+10. **Shopper quote endpoint path.** The quote endpoint is `POST /v1/checkout/client/quote`, authenticated as `session_client` (the session's client secret), alongside the other shopper routes under `/v1/checkout/client/`. This supersedes §3's `POST /v1/checkout/sessions/:id/quote`.
 
 ## Carried decisions from earlier projects
 

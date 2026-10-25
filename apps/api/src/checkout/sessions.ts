@@ -250,6 +250,8 @@ export async function createSession(
           destAsset: settlement.destAssetId,
           destChain: settlement.destChain,
           recipient,
+          recipientType: settlement.payoutMode === 'intents' ? 'INTENTS' : 'DESTINATION_CHAIN',
+          intentsAccount: account.nearAccountId,
           delivery: 'WEBHOOK',
           metadata: input.metadata ?? {},
           feeBps: plan?.feeBps ?? DEFAULT_FEE_BPS,

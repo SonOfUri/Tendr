@@ -16,6 +16,11 @@ describe('address format', () => {
     ['eth', '0x1111111111111111111111111111111111111111', true],
     ['eth', '0x111111111111111111111111111111111111111', false],
     ['eth', 'alice.near', false],
+    // EIP-55: the checksummed form passes, a one-letter case flip fails, all-lower/upper pass.
+    ['eth', '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed', true],
+    ['eth', '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD', false],
+    ['eth', '0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed', true],
+    ['eth', '0x5AAEB6053F3E94C9B9A09F33669435E7EF1BEAED', true],
     ['sol', '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM', true],
     ['sol', '0OIl0OIl0OIl0OIl0OIl0OIl0OIl0OIl', false],
     ['tron', 'TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7', true],

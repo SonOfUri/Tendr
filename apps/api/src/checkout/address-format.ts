@@ -1,6 +1,8 @@
 // Address-format checks per chain family, for shopper-supplied refund addresses (and later the
 // return-to-sender address a shopper gives). Format only: no checksum or on-chain lookups. 1Click
 // validates again when it quotes; this catches typos before a deposit address is allocated.
+import { keccak_256 } from '@noble/hashes/sha3';
+import { bytesToHex } from '@noble/hashes/utils';
 
 /** 1Click `blockchain` ids grouped by address format. */
 export type ChainFamily = 'evm' | 'solana' | 'tron' | 'near' | 'bitcoin' | 'other';
@@ -33,6 +35,25 @@ export function chainFamily(blockchain: string): ChainFamily {
 
 const BASE58 = '[1-9A-HJ-NP-Za-km-z]';
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * An EVM address: 0x + 40 hex. All-lower or all-upper case is accepted as is; a mixed-case
+ * address must match its EIP-55 checksum (a mixed-case typo is caught, not silently accepted).
+ */
+export function isValidEvmAddress(address: string): boolean {
+  if (!EVM_RE.test(address)) return false;
+  const body = address.slice(2);
+  if (body === body.toLowerCase() || body === body.toUpperCase()) return true;
+  const lower = body.toLowerCase();
+  const hash = bytesToHex(keccak_256(lower));
+  for (let i = 0; i < 40; i++) {
+    const c = body[i]!;
+    if (!/[a-f]/i.test(c)) continue;
+    const upper = parseInt(hash[i]!, 16) >= 8;
+    if (upper !== (c === c.toUpperCase())) return false;
+  }
+  return true;
+}
 const SOLANA_RE = new RegExp(`^${BASE58}{32,44}$`);
 const TRON_RE = new RegExp(`^T${BASE58}{33}$`);
 // NEAR: a 64-hex implicit account, an 0x-EVM implicit account, or a named account: 2–64 chars,
@@ -49,7 +70,7 @@ const OTHER_RE = /^[\x21-\x7e]{8,128}$/;
 export function isValidAddress(blockchain: string, address: string): boolean {
   switch (chainFamily(blockchain)) {
     case 'evm':
-      return EVM_RE.test(address);
+      return isValidEvmAddress(address);
     case 'solana':
       return SOLANA_RE.test(address);
     case 'tron':
@@ -57,7 +78,7 @@ export function isValidAddress(blockchain: string, address: string): boolean {
     case 'near':
       return (
         NEAR_IMPLICIT_RE.test(address) ||
-        EVM_RE.test(address) ||
+        isValidEvmAddress(address) ||
         (address.length >= 2 && address.length <= 64 && NEAR_NAMED_RE.test(address))
       );
     case 'bitcoin':

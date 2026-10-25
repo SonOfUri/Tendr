@@ -2,7 +2,7 @@
 // (`Authorization: Bearer ses_…_secret_…`, the `session_client` principal). Every route acts on
 // the one session the secret opened. Called from the hosted checkout page (CORS for
 // CHECKOUT_BASE_URL, without credentials: see app.ts).
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import {
   DepositInputSchema,
   EmailInputSchema,
@@ -30,7 +30,15 @@ function ctxOf(req: FastifyRequest): ShopperCtx {
   return { merchantId: p.merchantId, livemode: p.livemode, db: req.db, sessionId: p.sessionId };
 }
 
-export const checkoutClientRoutes: FastifyPluginAsync = async (app) => {
+export type CheckoutClientRouteOptions = {
+  /** Per-session quote limiter (`createRateLimiters().sessionQuote`), run after auth. */
+  quoteRateLimit: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
+};
+
+export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions> = async (
+  app,
+  opts,
+) => {
   app.get(`${CHECKOUT_CLIENT_PREFIX}session`, shopper, async (req) =>
     shopperSessionView(ctxOf(req)),
   );
@@ -39,11 +47,16 @@ export const checkoutClientRoutes: FastifyPluginAsync = async (app) => {
     shopperTokens(ctxOf(req).livemode),
   );
 
-  app.post(`${CHECKOUT_CLIENT_PREFIX}quote`, shopper, async (req, reply) => {
-    const ctx = ctxOf(req);
-    const input = QuoteInputSchema.parse(req.body);
-    return reply.status(201).send(await createQuote(ctx, input));
-  });
+  // 8 / session / minute (gateway limiter), plus a lifetime cap of MAX_QUOTES_PER_SESSION.
+  app.post(
+    `${CHECKOUT_CLIENT_PREFIX}quote`,
+    { ...shopper, preHandler: opts.quoteRateLimit },
+    async (req, reply) => {
+      const ctx = ctxOf(req);
+      const input = QuoteInputSchema.parse(req.body);
+      return reply.status(201).send(await createQuote(ctx, input));
+    },
+  );
 
   app.post(`${CHECKOUT_CLIENT_PREFIX}deposit`, shopper, async (req, reply) => {
     const ctx = ctxOf(req);

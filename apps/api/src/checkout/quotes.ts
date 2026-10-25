@@ -80,7 +80,14 @@ function providerError(err: unknown): never {
     }
     if (err.code === 'NOT_FOUND') throw notFound('Deposit address not found');
     if (err.code === 'INVALID_STATE' || err.code === 'BUSY') throw conflict(err.message);
-    if (err.status !== null && err.status >= 400 && err.status < 500) {
+    // 401/403 are our credentials failing, not the shopper's request: the provider is unusable.
+    if (
+      err.status !== null &&
+      err.status >= 400 &&
+      err.status < 500 &&
+      err.status !== 401 &&
+      err.status !== 403
+    ) {
       throw new AppError('VALIDATION_ERROR', 'The swap provider rejected this request', 400, {
         provider_code: err.code,
       });
@@ -190,7 +197,9 @@ async function merchantDisplay(ctx: ShopperCtx, s: SessionRow) {
   const [merchant, theme] = await Promise.all([
     ctx.db.merchant.findFirstOrThrow({ select: { name: true } }),
     ctx.db.checkoutTheme.findFirst({
-      where: s.themeId ? { id: s.themeId } : { isDefault: true, status: 'published' },
+      where: s.themeId
+        ? { id: s.themeId, status: 'published' }
+        : { isDefault: true, status: 'published' },
       select: { displayName: true, logoUrl: true },
     }),
   ]);
@@ -292,6 +301,8 @@ const PRICE_MOVED_ATTEMPTS = 2;
 export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
   const s = await loadSession(ctx);
   assertOpen(s, new Date());
+  // Before any screening or 1Click call; re-checked under the session lock below.
+  await assertQuotable(ctx.db, ctx, s.id, new Date());
 
   const [origin, settlement] = await Promise.all([
     tokenInfo(ctx.livemode, input.origin_asset),
@@ -335,18 +346,25 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
     }
   }
 
-  const account = await ctx.db.merchantAccount.findFirst({
-    where: { status: 'active' },
-    select: { nearAccountId: true },
-  });
-  if (!account) {
-    throw new AppError('ACCOUNT_NOT_READY', 'The store cannot take payments right now', 409);
+  // The session pinned its recipient and recipient type at creation: the merchant account
+  // (INTENTS) or the saved payout address (DESTINATION_CHAIN, wallet mode). Without a refund
+  // address, returns go to the merchant intents account the session pinned; that account (and
+  // an INTENTS recipient) must still be the store's active account.
+  const recipientType: QuoteRequest['recipientType'] = s.recipientType;
+  const intentsAccount = s.recipientType === 'INTENTS' ? s.recipient : s.intentsAccount;
+  const needsAccount = recipientType === 'INTENTS' || refundAddress === undefined;
+  if (needsAccount) {
+    const active = intentsAccount
+      ? await ctx.db.merchantAccount.findFirst({
+          where: { nearAccountId: intentsAccount, status: 'active' },
+          select: { id: true },
+        })
+      : null;
+    if (!active) {
+      throw new AppError('ACCOUNT_NOT_READY', 'The store cannot take payments right now', 409);
+    }
   }
-  // The session pinned its recipient at creation: the merchant account (intents) or the saved
-  // payout address (wallet mode).
-  const recipientType: QuoteRequest['recipientType'] =
-    s.recipient === account.nearAccountId ? 'INTENTS' : 'DESTINATION_CHAIN';
-  const refundTo = refundAddress ?? account.nearAccountId;
+  const refundTo = refundAddress ?? intentsAccount!;
   const refundType: QuoteRequest['refundType'] = refundAddress ? 'ORIGIN_CHAIN' : 'INTENTS';
   const feePayer = feePayerFromDb(s.feePayer);
   const provider = providerFor(ctx.livemode);
@@ -403,7 +421,7 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
   const returned = real.quote.deadline ? new Date(real.quote.deadline) : requested;
   const deadline = Number.isNaN(returned.getTime()) || returned > requested ? requested : returned;
 
-  const id = newId('quo');
+  let writtenId = newId('quo');
   await tenantTransaction(ctx, async (tx, t) => {
     const tenant = { merchantId: t.merchantId, livemode: t.livemode };
     // Serialise quotes for this session and re-check it is still open.
@@ -413,9 +431,10 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
       FOR UPDATE`;
     const row = locked[0];
     if (!row) throw notFound('Session not found');
-    assertOpen({ status: row.status, expiresAt: row.expires_at }, new Date());
-
     const now = new Date();
+    assertOpen({ status: row.status, expiresAt: row.expires_at }, now);
+    await assertQuotable(tx, t, s.id, now);
+
     await tx.quote.updateMany({
       where: { ...tenant, sessionId: s.id, supersededAt: null },
       data: { supersededAt: now },
@@ -444,11 +463,12 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
           oneclickQuoteRef: real.correlationId,
         },
       });
+      writtenId = clash.id;
       return;
     }
     await tx.quote.create({
       data: {
-        id,
+        id: writtenId,
         ...tenant,
         sessionId: s.id,
         originAssetId: origin.assetId,
@@ -465,9 +485,50 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
     });
   });
 
-  const stored = await currentQuote(ctx);
-  if (!stored) throw new Error('quote vanished after insert');
+  // The row this request wrote (a concurrent quote may already have superseded it).
+  const stored = await ctx.db.quote.findFirstOrThrow({ where: { id: writtenId } });
   return quoteView(stored, feePayer);
+}
+
+/** Lifetime cap on quotes per session (each allocates a deposit address and calls 1Click). */
+export const MAX_QUOTES_PER_SESSION = 30;
+
+type QuoteReader = Pick<Prisma.TransactionClient, 'quote'> | ShopperCtx['db'];
+
+/**
+ * RATE_LIMITED (429) once the session has used its lifetime quota; DEPOSIT_IN_PROGRESS (409)
+ * while the current quote has a reported deposit and its deadline has not passed (a new quote
+ * would replace the address the money is on its way to). `db` is the scoped client or a
+ * transaction client; reads are always filtered by the tenant.
+ */
+async function assertQuotable(
+  db: QuoteReader,
+  t: { merchantId: string; livemode: boolean },
+  sessionId: string,
+  now: Date,
+): Promise<void> {
+  const where = { merchantId: t.merchantId, livemode: t.livemode, sessionId };
+  const quotes = db.quote as Prisma.TransactionClient['quote'];
+  const [count, current] = await Promise.all([
+    quotes.count({ where }),
+    quotes.findFirst({
+      where: { ...where, supersededAt: null },
+      orderBy: { createdAt: 'desc' },
+      select: { depositTxSubmittedAt: true, deadline: true },
+    }),
+  ]);
+  if (current?.depositTxSubmittedAt && current.deadline.getTime() > now.getTime()) {
+    throw new AppError(
+      'DEPOSIT_IN_PROGRESS',
+      'Your payment is on its way; wait for it before requesting a new quote',
+      409,
+    );
+  }
+  if (count >= MAX_QUOTES_PER_SESSION) {
+    throw new AppError('RATE_LIMITED', 'Too many quotes for this checkout', 429, {
+      max_quotes: MAX_QUOTES_PER_SESSION,
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -480,9 +541,31 @@ async function requireQuote(ctx: ShopperCtx) {
   return q;
 }
 
-/** Tells 1Click about the shopper's deposit transaction for the current quote. */
+/** Session statuses in which a deposit for the current quote may still be reported. */
+const DEPOSIT_OPEN_STATUSES = new Set(['PENDING_DEPOSIT', 'PROCESSING']);
+
+/**
+ * Tells 1Click about the shopper's deposit transaction for the current quote and records it on
+ * the quote (which blocks re-quoting until the quote's deadline). Refused with SESSION_EXPIRED
+ * past the session's lifetime, CONFLICT (409) when the session is past taking payments or the
+ * quote's deadline has passed.
+ */
 export async function submitDeposit(ctx: ShopperCtx, txHash: string): Promise<void> {
+  const s = await loadSession(ctx);
+  const now = new Date();
+  if (s.status === 'EXPIRED' || s.expiresAt.getTime() <= now.getTime()) throw sessionExpired();
+  if (!DEPOSIT_OPEN_STATUSES.has(s.status)) {
+    throw conflict('This checkout is no longer taking payments', { status: s.status });
+  }
   const q = await requireQuote(ctx);
+  if (q.deadline.getTime() <= now.getTime()) {
+    throw conflict('This quote has expired; request a new one');
+  }
+  // Recorded first: a deposit may be on its way even if 1Click's acknowledgement fails.
+  await ctx.db.quote.updateMany({
+    where: { id: q.id },
+    data: { depositTxHash: txHash, depositTxSubmittedAt: now },
+  });
   try {
     await providerFor(ctx.livemode).submitDeposit(txHash, q.depositAddress);
   } catch (err) {

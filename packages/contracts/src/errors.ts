@@ -38,6 +38,8 @@ export const ErrorCodes = [
   'SESSION_EXPIRED',
   /** The wallet / refund address failed sanctions screening; it cannot be used to pay. */
   'WALLET_NOT_ALLOWED',
+  /** A deposit for the current quote is on its way; a new quote would orphan its address. */
+  'DEPOSIT_IN_PROGRESS',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

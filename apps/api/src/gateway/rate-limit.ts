@@ -7,6 +7,7 @@
 //   dashboard_user  600 / membership (person per store)
 //   user_session    120 / person    (signed in, no store selected)
 //   public           60 / IP          routes declared `auth: 'public'`
+//   session_quote     8 / session     the shopper quote route only (route-level `sessionQuote`)
 //
 // Counters are keyed by ids (principalRef) and IPs, never by raw credentials. Fails open:
 // if Redis is unreachable the request is let through and a warning is logged.
@@ -27,7 +28,9 @@ export type RateLimitKind =
   | 'session_client'
   | 'dashboard_user'
   | 'user_session'
-  | 'public';
+  | 'public'
+  /** Shopper quotes per session (each one calls 1Click and allocates a deposit address). */
+  | 'session_quote';
 
 export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   ip_global: 3000,
@@ -37,6 +40,7 @@ export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   dashboard_user: 600,
   user_session: 120,
   public: 60,
+  session_quote: 8,
 };
 
 export type RateLimitOptions = {
@@ -64,7 +68,7 @@ type Hook = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 export async function createRateLimiters(
   app: FastifyInstance,
   opts: RateLimitOptions,
-): Promise<{ ip: Hook; principal: Hook }> {
+): Promise<{ ip: Hook; principal: Hook; sessionQuote: Hook }> {
   await app.register(rateLimit, {
     global: false,
     redis: opts.redis,
@@ -89,6 +93,7 @@ export async function createRateLimiters(
     dashboard_user: make('dashboard_user'),
     user_session: make('user_session'),
     public: make('public'),
+    session_quote: make('session_quote'),
   };
 
   async function enforce(
@@ -115,6 +120,15 @@ export async function createRateLimiters(
   }
 
   return {
+    /**
+     * Route-level hook for the shopper quote route (after auth): `session_quote` per session.
+     * Other principals pass through (the route refuses them anyway).
+     */
+    sessionQuote: async (req, reply) => {
+      const p = req.principal;
+      if (p?.kind !== 'session_client') return;
+      await enforce(req, reply, 'session_quote', `quote:${p.sessionId}`);
+    },
     ip: async (req, reply) => {
       if (!isV1(req.routeOptions.url)) return;
       await enforce(req, reply, 'ip_global', `ip:${req.ip}`);

@@ -217,7 +217,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(accountRoutes);
   await app.register(recoveryRoutes);
   await app.register(checkoutSessionRoutes);
-  await app.register(checkoutClientRoutes);
+  await app.register(checkoutClientRoutes, { quoteRateLimit: limiters.sessionQuote });
   opts.extraRoutes?.(app);
 
   return app;
