@@ -9,6 +9,10 @@ const compat = new FlatCompat({
   baseDirectory: __dirname,
 });
 
-const eslintConfig = [...compat.extends('next/core-web-vitals')];
+const eslintConfig = [
+  // Build output (`next dev` writes webpack runtime files here) and Playwright artifacts.
+  { ignores: ['.next/**', 'test-results/**', 'playwright-report/**'] },
+  ...compat.extends('next/core-web-vitals'),
+];
 
 export default eslintConfig;

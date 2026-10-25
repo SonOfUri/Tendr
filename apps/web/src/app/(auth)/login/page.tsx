@@ -40,6 +40,9 @@ function Login() {
       <p className="muted small">
         New to Tendr? <Link href="/signup">Create an account</Link>
       </p>
+      <p className="muted small">
+        Lost every passkey? <Link href="/recover">Use your recovery kit</Link>
+      </p>
     </div>
   );
 }

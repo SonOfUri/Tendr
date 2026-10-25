@@ -4,13 +4,17 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
+import { countdown } from '@/lib/actions';
 import {
   api,
   errorMessage,
   getStoreContext,
   isSignedOut,
+  onSignedOut,
+  setCsrfToken,
   setStoreContext,
   type Me,
+  type RecoveryRequest,
   type StoreContext,
   type StoreSummary,
 } from '@/lib/api';
@@ -49,6 +53,17 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [context, setContext] = useState<StoreContext | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Any request that comes back signed out (a 401 that is not a step-up request), on any
+  // dashboard page, sends the person to sign in and back here afterwards.
+  useEffect(
+    () =>
+      onSignedOut(() => {
+        const here = window.location.pathname + window.location.search;
+        router.replace(`/login?next=${encodeURIComponent(here)}`);
+      }),
+    [router],
+  );
+
   const refresh = useCallback(async () => {
     try {
       const m = await api<Me>('/v1/me', { store: false });
@@ -58,13 +73,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       setMe(m);
       setError(null);
     } catch (err) {
-      if (isSignedOut(err)) {
-        router.replace(`/login?next=${encodeURIComponent(window.location.pathname)}`);
-      } else {
-        setError(errorMessage(err));
-      }
+      // A signed-out answer is handled by the onSignedOut redirect above.
+      if (!isSignedOut(err)) setError(errorMessage(err));
     }
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -132,6 +144,7 @@ function DashboardHeader() {
       await api('/v1/auth/logout', { method: 'POST', json: {}, store: false });
     } finally {
       setStoreContext(null);
+      setCsrfToken(null);
       router.replace('/login');
     }
   }
@@ -186,10 +199,79 @@ function DashboardHeader() {
           Sign out
         </button>
       </div>
+      <DashboardNav />
+      <RecoveryBanner />
       {context?.livemode === false && (
         <p className="test-banner">Test mode — nothing here moves real money.</p>
       )}
     </div>
+  );
+}
+
+const NAV: { href: string; label: string }[] = [
+  { href: '/dashboard', label: 'Account' },
+  { href: '/dashboard/approvals', label: 'Approvals' },
+  { href: '/dashboard/withdraw', label: 'Withdraw' },
+  { href: '/dashboard/addresses', label: 'Saved addresses' },
+  { href: '/dashboard/team', label: 'Team' },
+  { href: '/dashboard/security', label: 'Security' },
+  { href: '/dashboard/recovery', label: 'Recovery' },
+];
+
+function DashboardNav() {
+  const pathname = usePathname();
+  const { store } = useDashboard();
+  if (!store) return null;
+  return (
+    <nav className="dash-nav" aria-label="Dashboard">
+      {NAV.map((n) => {
+        const current = n.href === '/dashboard' ? pathname === n.href : pathname.startsWith(n.href);
+        return (
+          <Link key={n.href} href={n.href} aria-current={current ? 'page' : undefined}>
+            {n.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+/**
+ * Shown on every dashboard page while a recovery of the store's LIVE account is pending (a
+ * recovery kit only exists for the live account): anyone who did not start it should cancel it
+ * before it executes.
+ */
+function RecoveryBanner() {
+  const { store } = useDashboard();
+  const [recovery, setRecovery] = useState<RecoveryRequest | null>(null);
+  const merchantId = store?.id;
+  useEffect(() => {
+    if (!merchantId) return;
+    let alive = true;
+    const load = async () => {
+      try {
+        const r = await api<{ recovery: RecoveryRequest | null }>('/v1/account/recovery', {
+          livemode: true,
+        });
+        if (alive) setRecovery(r.recovery?.status === 'pending' ? r.recovery : null);
+      } catch {
+        // The banner is advisory; the recovery page shows errors.
+      }
+    };
+    void load();
+    const t = setInterval(() => void load(), 60_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [merchantId]);
+  if (!recovery) return null;
+  return (
+    <p className="recovery-banner" role="alert">
+      <strong>A recovery of your live account is pending.</strong> It replaces every signer in{' '}
+      {countdown(recovery.executesAt)}. If nobody on your team started it,{' '}
+      <Link href="/dashboard/recovery">cancel it now</Link>.
+    </p>
   );
 }
 

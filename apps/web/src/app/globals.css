@@ -483,3 +483,102 @@ code {
     border: none;
   }
 }
+
+/* ─── Dashboard: navigation, lists, banners ─────────────────────────────── */
+
+.dash-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  flex-basis: 100%;
+  font-size: 0.9rem;
+}
+
+.dash-nav a {
+  color: var(--tendr-muted);
+  text-decoration: none;
+  padding: 0.2rem 0;
+}
+
+.dash-nav a[aria-current='page'] {
+  color: var(--tendr-white);
+  border-bottom: 2px solid var(--tendr-indigo);
+}
+
+.recovery-banner {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--tendr-radius);
+  border: 1px solid var(--tendr-danger);
+  color: var(--tendr-white);
+  font-size: 0.9rem;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--tendr-border);
+}
+
+.list .grow {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.address {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.status {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--tendr-border);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.status[data-status='executed'],
+.status[data-status='active'] {
+  color: var(--tendr-success);
+}
+
+.status[data-status='timelocked'],
+.status[data-status='pending'],
+.status[data-status='draft'] {
+  color: var(--tendr-warning);
+}
+
+.status[data-status='failed'],
+.status[data-status='cancelled'],
+.status[data-status='expired'],
+.status[data-status='revoked'] {
+  color: var(--tendr-muted);
+}
+
+.destination {
+  border: 1px solid var(--tendr-warning);
+  border-radius: var(--tendr-radius);
+  padding: 0.75rem 1rem;
+}
+
+.dash textarea {
+  font: inherit;
+  width: 100%;
+}

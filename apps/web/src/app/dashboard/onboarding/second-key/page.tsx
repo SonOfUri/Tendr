@@ -36,7 +36,22 @@ export default function SecondKeyPage() {
         <h1>Add a second key</h1>
         <p className="lead muted">
           Before {store.name} can take real money, there must be a second way into the account, so
-          losing one phone never locks you out. Pick one — you can add the others later.
+          losing one phone never locks you out. Two things count as a second key:
+        </p>
+        <ul className="muted">
+          <li>
+            <strong>A recovery kit</strong> — counts as soon as you confirm it below.
+          </li>
+          <li>
+            <strong>A second signer</strong> — invite someone; once they have joined and created a
+            passkey, choose <em>Make signer</em> for them on the{' '}
+            <Link href="/dashboard/team">Team</Link> page. That is a proposal you approve, and it
+            counts once it has executed. An invite on its own does not count.
+          </li>
+        </ul>
+        <p className="muted small">
+          Adding another device of yours is a good idea too, but it is still you, so it does not
+          count on its own.
         </p>
         {ready && (
           <Alert tone="success">
@@ -112,9 +127,10 @@ function InviteSigner() {
   return (
     <form onSubmit={submit} className="form">
       <p className="muted">
-        A co-owner or colleague with their own passkey. We email them an invite; once they join and
-        create their passkey, you approve making them a signer — someone who can approve payments
-        out alongside you.
+        A co-owner or colleague with their own passkey. We email them an invite. Joining makes them
+        a team member, not yet a signer: once they have created their passkey, choose{' '}
+        <em>Make signer</em> for them on the Team page and approve that proposal. They count as your
+        second key only after it executes.
       </p>
       <div className="row">
         <label className="field grow">

@@ -1,6 +1,12 @@
 // The dashboard's API client: cookie session (credentials: include), the double-submit CSRF
 // header on mutations, the selected store and mode headers, and typed errors from the API's
 // `{ error: { code, message, requestId, details? } }` envelope.
+//
+// CSRF (R31): the API returns the session's CSRF value as `csrfToken` in every response that
+// starts or describes a session (email verify, passkey login/register, step-up, recovery session,
+// `GET /v1/me`). It is kept in memory only (module state, gone on reload until `/v1/me` answers
+// again) and sent as `Tendr-CSRF`; the readable `tendr_csrf` cookie is the fallback, which works
+// only when the dashboard and the API share a host.
 import { CSRF_COOKIE } from '@tendr/contracts';
 import { publicEnv } from './env';
 
@@ -67,6 +73,32 @@ function readCookie(name: string): string | null {
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+let csrfToken: string | null = null;
+
+/** Sets (or, with null, forgets) the in-memory CSRF value. */
+export function setCsrfToken(token: string | null): void {
+  csrfToken = token;
+}
+
+/** The value `Tendr-CSRF` carries: the in-memory token, else the cookie. */
+export function currentCsrf(): string | null {
+  return csrfToken ?? readCookie(CSRF_COOKIE);
+}
+
+type SignedOutHandler = () => void;
+let signedOutHandler: SignedOutHandler | null = null;
+
+/**
+ * Registers what happens when any request comes back 401 (not a step-up request): the dashboard
+ * sends the person to sign in. Returns a function that unregisters it.
+ */
+export function onSignedOut(handler: SignedOutHandler): () => void {
+  signedOutHandler = handler;
+  return () => {
+    if (signedOutHandler === handler) signedOutHandler = null;
+  };
+}
+
 export async function api<T = unknown>(path: string, init: ApiInit = {}): Promise<T> {
   const { json, store, livemode, headers: extra, ...rest } = init;
   const method = (rest.method ?? 'GET').toUpperCase();
@@ -75,7 +107,7 @@ export async function api<T = unknown>(path: string, init: ApiInit = {}): Promis
   if (json !== undefined) headers.set('Content-Type', 'application/json');
 
   if (!SAFE_METHODS.has(method)) {
-    const csrf = readCookie(CSRF_COOKIE);
+    const csrf = currentCsrf();
     if (csrf) headers.set('Tendr-CSRF', csrf);
   }
 
@@ -112,14 +144,21 @@ export async function api<T = unknown>(path: string, init: ApiInit = {}): Promis
     const e = (
       body as { error?: { code?: string; message?: string; requestId?: string; details?: unknown } }
     )?.error;
-    throw new ApiError(
+    const err = new ApiError(
       res.status,
       e?.code ?? 'HTTP_ERROR',
       e?.message ?? `Request failed (${res.status})`,
       e?.requestId,
       e?.details,
     );
+    if (isSignedOut(err)) {
+      csrfToken = null;
+      signedOutHandler?.();
+    }
+    throw err;
   }
+  const returned = (body as { csrfToken?: unknown } | undefined)?.csrfToken;
+  if (typeof returned === 'string' && returned.length > 0) csrfToken = returned;
   return body as T;
 }
 
@@ -185,4 +224,103 @@ export interface GoLiveStatus {
     recoveryKeySet: boolean;
   };
   live: { status: AccountStatus; nearAccountId: string } | null;
+}
+
+export type ProposalStatus =
+  | 'draft'
+  | 'pending'
+  | 'timelocked'
+  | 'executing'
+  | 'executed'
+  | 'cancelled'
+  | 'expired'
+  | 'failed';
+
+/** The contract's `Action` as JSON: one key (the kind) holding its fields. */
+export type ActionJson = Record<string, unknown>;
+
+export interface Proposal {
+  id: string;
+  kind: string;
+  status: ProposalStatus;
+  onchainId: string;
+  action: ActionJson;
+  createdByUserId: string | null;
+  readyAt: string | null;
+  executedAt: string | null;
+  lastTxHash: string | null;
+  createdAt: string;
+  updatedAt: string;
+  approvals: { userId: string; signerEpoch: string; txHash: string | null; approvedAt: string }[];
+}
+
+export interface SavedAddress {
+  id: string;
+  chain: string;
+  address: string;
+  status: 'pending' | 'active' | 'revoked';
+  activeFrom: string;
+  createdAt: string;
+}
+
+export interface TeamMember {
+  id: string;
+  userId: string;
+  email: string;
+  role: Role;
+  isSigner: boolean;
+  createdAt: string;
+}
+
+export interface Team {
+  members: TeamMember[];
+  invites: { id: string; email: string; role: Role; expiresAt: string; createdAt: string }[];
+}
+
+export type SignerKey = { p256: string } | { ed25519: string };
+
+export interface MemberKeys {
+  membershipId: string;
+  userId: string;
+  role: Role;
+  isSigner: boolean;
+  keys: SignerKey[];
+}
+
+export interface AssetLimit {
+  asset: string;
+  perTx: string | null;
+  perDay: string | null;
+  refundCap: string | null;
+  autoSweep: {
+    triggerAbove: string | null;
+    keep: string | null;
+    savedAddressId: string | null;
+    chain: string | null;
+    address: string | null;
+  } | null;
+}
+
+export interface RecoveryRequest {
+  id: string;
+  onchainId: string | null;
+  status: 'pending' | 'cancelled' | 'executed' | 'failed';
+  executesAt: string;
+  newSignerIds: string[];
+  newThreshold: number | null;
+  createdAt: string;
+}
+
+export interface RecoveryParams {
+  accountId: string;
+  livemode: boolean;
+  recoveryKeySet: boolean;
+  recoveryKeyEpoch: string;
+  lastNonce: string;
+}
+
+/** The WebAuthn request for approving or cancelling (from a `/challenge` route). */
+export interface SignerChallenge {
+  challengeB64u: string;
+  allowCredentials: { id: string; type: 'public-key'; transports?: AuthenticatorTransport[] }[];
 }
