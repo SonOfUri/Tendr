@@ -54,6 +54,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { z } from 'zod';
 import type { Action } from '@near-js/transactions';
 import { JsonRpcProvider } from '@near-js/providers';
 import { p256 } from '@noble/curves/p256';
@@ -103,6 +104,8 @@ export interface VerifyArgs {
   evmAddress: string;
   statePath: string;
   cleanup: boolean;
+  /** `--abandon-balance`: allow cleanup to delete the account while it still holds tokens. */
+  abandonBalance: boolean;
   originAsset: string;
   destAsset: string;
   /** Origin-asset smallest units for the swap (1 USDC = 1000000). */
@@ -223,6 +226,7 @@ export function parseVerifyArgs(
     phase: 'value',
     state: 'value',
     cleanup: 'bool',
+    'abandon-balance': 'bool',
     'origin-asset': 'value',
     'destination-asset': 'value',
     amount: 'value',
@@ -274,6 +278,7 @@ export function parseVerifyArgs(
         : '.verify-merchant-account-state.json',
     ),
     cleanup: flags.has('cleanup'),
+    abandonBalance: flags.has('abandon-balance'),
     originAsset: asset('origin-asset', NEAR_USDC),
     destAsset: asset('destination-asset', ETH_USDC_OMFT),
     amount,
@@ -328,11 +333,88 @@ function saveState(path: string, s: State): void {
   writeFileSync(path, JSON.stringify(s, null, 2), { mode: 0o600 });
 }
 
-function loadState(path: string): State {
+const StateSchema = z
+  .object({
+    version: z.literal(1),
+    funderId: z.string().min(2),
+    merchantId: z.string().min(2),
+    passkeyPrivateHex: z.string().regex(/^[0-9a-f]{64}$/),
+    destAsset: z.string().startsWith('nep141:'),
+    originAsset: z.string().startsWith('nep141:'),
+    evmAddress: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+    activeAfterMs: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const escapeRegExp = (v: string): string => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Validates a state file before anything signs with the funder key on its say-so: strict shape,
+ * the funder must match, and the account to delete must be `acct-<id>.<funder>` and not the funder
+ * itself (so a hand-edited file cannot point DeleteAccount at a sibling account or at the funder).
+ */
+export function validateState(raw: unknown, funderId: string): State {
+  const parsed = StateSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new UsageError(
+      `state file is malformed: ${parsed.error.issues[0]?.message ?? 'invalid'}`,
+    );
+  }
+  const st = parsed.data;
+  if (st.funderId !== funderId)
+    throw new UsageError('state file belongs to another funder account');
+  const pattern = new RegExp(`^acct-[0-9a-z]+\\.${escapeRegExp(funderId)}$`);
+  if (st.merchantId === funderId || !pattern.test(st.merchantId)) {
+    throw new UsageError(
+      `state file names ${st.merchantId}, which is not a throwaway account this script creates (acct-<id>.${funderId}); refusing to sign for it`,
+    );
+  }
+  return st;
+}
+
+function loadState(path: string, funderId: string): State {
   if (!existsSync(path)) {
     throw new UsageError(`no state file at ${path}; run --phase prepare first`);
   }
-  return JSON.parse(readFileSync(path, 'utf8')) as State;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    throw new UsageError(`state file ${path} is not valid JSON`);
+  }
+  return validateState(raw, funderId);
+}
+
+/** Prepare must not overwrite a state file: it holds a live throwaway passkey and account id. */
+export function assertNoStaleState(path: string, cmd: string): void {
+  if (existsSync(path)) {
+    throw new UsageError(
+      `refusing to run prepare: a state file already exists at ${path} (a previous run left a throwaway account). Clean it up first:\n  ${cmd}`,
+    );
+  }
+}
+
+/**
+ * Cleanup deletes the account, abandoning whatever intents balance it still holds. Refuse unless
+ * the balance is zero or `--abandon-balance` was passed; returns what would be abandoned.
+ */
+export function assertCanDelete(
+  held: { dest: bigint; origin: bigint },
+  assets: { dest: string; origin: string },
+  abandon: boolean,
+): string {
+  const parts = [
+    ...(held.dest > 0n ? [`${held.dest} of ${assets.dest}`] : []),
+    ...(held.origin > 0n ? [`${held.origin} of ${assets.origin}`] : []),
+  ];
+  if (parts.length === 0) return 'nothing held';
+  const what = parts.join(', ');
+  if (!abandon) {
+    throw new UsageError(
+      `refusing to delete the account: it still holds ${what} in its intents balance. Withdraw it first, or pass --abandon-balance to give it up.`,
+    );
+  }
+  return `abandoning ${what}`;
 }
 
 // ─── passkey approvals (what a browser authenticator would produce) ──────────
@@ -852,7 +934,10 @@ async function propose(
   return { id, outcome };
 }
 
+let createdThisRun: string | null = null;
+
 async function prepare(c: Ctx): Promise<void> {
+  assertNoStaleState(c.a.statePath, cleanupCommand(c.a));
   const ts = Date.now().toString(36);
   const probeBytes = wasm('merchant-account-probe.wasm').length;
   const merchantBytes = wasm('merchant-account.wasm').length;
@@ -917,6 +1002,7 @@ async function prepare(c: Ctx): Promise<void> {
       return merchantId;
     },
   );
+  createdThisRun = merchantId;
   saveState(c.a.statePath, {
     version: 1,
     funderId: c.a.funderId,
@@ -959,9 +1045,7 @@ async function prepare(c: Ctx): Promise<void> {
 }
 
 async function finish(c: Ctx): Promise<void> {
-  const st = loadState(c.a.statePath);
-  if (st.funderId !== c.a.funderId)
-    throw new UsageError('state file belongs to another funder account');
+  const st = loadState(c.a.statePath, c.a.funderId);
   if (st.evmAddress.toLowerCase() !== c.a.evmAddress.toLowerCase()) {
     throw new UsageError('--evm-address differs from the one used in prepare');
   }
@@ -1027,12 +1111,15 @@ async function finish(c: Ctx): Promise<void> {
 
 /** Deletes the throwaway merchant account (NEAR returns to the funder) and the state file. */
 async function deleteThrowaway(c: Ctx, st: State): Promise<void> {
-  const rest = await intentsBalance(c, st.merchantId, st.destAsset);
+  // Re-read after any withdrawal attempt: only the chain's current balance counts.
+  const dest = await intentsBalance(c, st.merchantId, st.destAsset);
   const origin = await intentsBalance(c, st.merchantId, st.originAsset);
-  report.info(
-    'cleanup',
-    `deleting ${st.merchantId}; left in its intents balance and abandoned: ${rest} of ${st.destAsset}, ${origin} of ${st.originAsset}`,
+  const what = assertCanDelete(
+    { dest, origin },
+    { dest: st.destAsset, origin: st.originAsset },
+    c.a.abandonBalance,
   );
+  report.info('cleanup', `deleting ${st.merchantId}; ${what}`);
   const acct = new ScriptAccount(st.merchantId, c.funder.publicKey, c.funder.transport);
   await acct.sendOk(st.merchantId, [deleteAccountAction(st.funderId)], 'delete merchant account');
   if (existsSync(c.a.statePath)) unlinkSync(c.a.statePath);
@@ -1041,9 +1128,7 @@ async function deleteThrowaway(c: Ctx, st: State): Promise<void> {
 
 /** `--phase cleanup`: from any saved state, withdraw what can be withdrawn, then delete everything. */
 async function cleanup(c: Ctx): Promise<void> {
-  const st = loadState(c.a.statePath);
-  if (st.funderId !== c.a.funderId)
-    throw new UsageError('state file belongs to another funder account');
+  const st = loadState(c.a.statePath, c.a.funderId);
   const held = await intentsBalance(c, st.merchantId, st.destAsset);
   if (held > 0n && st.activeAfterMs > 0 && Date.now() >= st.activeAfterMs) {
     try {
@@ -1082,12 +1167,18 @@ async function run(a: VerifyArgs): Promise<void> {
     else await cleanup(c);
   } catch (err) {
     if (a.phase !== 'cleanup' && !(err instanceof UsageError) && existsSync(a.statePath)) {
-      const st = loadState(a.statePath);
-      console.error(
-        `
-The throwaway account ${st.merchantId} still exists and holds funds. Recover them with:
-  ${cleanupCommand(a)}`,
-      );
+      try {
+        const st = loadState(a.statePath, a.funderId);
+        const origin =
+          createdThisRun === st.merchantId ? 'created by this run' : 'left by a previous run';
+        console.error(
+          `\nThe throwaway account ${st.merchantId} (${origin}) still exists. Recover it with:\n  ${cleanupCommand(a)}`,
+        );
+      } catch {
+        console.error(
+          `\nA state file exists at ${a.statePath} but is invalid; inspect it by hand.`,
+        );
+      }
     }
     throw err;
   }

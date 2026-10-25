@@ -7,8 +7,13 @@ import { sha256 } from '@noble/hashes/sha2';
 import bs58 from 'bs58';
 import { describe, expect, it } from 'vitest';
 import { UsageError } from './lib/near-script.js';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import {
   CONFIRM_FLAG,
+  assertCanDelete,
+  assertNoStaleState,
+  validateState,
   MAX_SWAP_USD,
   assertSwapWithinCap,
   buildSpendPlan,
@@ -156,6 +161,67 @@ describe('swap cap, spend plan and cleanup', () => {
     expect(a.phase).toBe('cleanup');
     expect(cleanupCommand(a)).toBe(
       `npm run onchain:verify:mainnet --workspace=@tendr/api -- --yes-i-understand-this-spends-mainnet-funds --evm-address ${EVM} --phase cleanup --state /tmp/s.json`,
+    );
+  });
+});
+
+describe('cleanup safety', () => {
+  const good = {
+    version: 1,
+    funderId: 'me.near',
+    merchantId: 'acct-abc123.me.near',
+    passkeyPrivateHex: 'a'.repeat(64),
+    destAsset: 'nep141:eth-0xa0.omft.near',
+    originAsset: 'nep141:usdc.near',
+    evmAddress: EVM,
+    activeAfterMs: 0,
+  };
+
+  it('accepts a state file this script wrote', () => {
+    expect(validateState(good, 'me.near').merchantId).toBe('acct-abc123.me.near');
+  });
+
+  it('refuses malformed state, another funder, the funder itself and sibling accounts', () => {
+    expect(() => validateState({ ...good, extra: 1 }, 'me.near')).toThrow(/malformed/);
+    expect(() => validateState({ ...good, passkeyPrivateHex: 'zz' }, 'me.near')).toThrow(
+      /malformed/,
+    );
+    expect(() => validateState('x', 'me.near')).toThrow(/malformed/);
+    expect(() => validateState(good, 'other.near')).toThrow(/another funder/);
+    for (const merchantId of [
+      'me.near',
+      'sibling.me.near',
+      'acct-abc.other.near',
+      'acct-abc.me.near.evil.near',
+      'acct-ABC.me.near',
+      'acct-.me.near',
+      'acct-abc.meXnear',
+    ]) {
+      expect(() => validateState({ ...good, merchantId }, 'me.near')).toThrow(UsageError);
+    }
+  });
+
+  it('refuses to delete while tokens are held unless --abandon-balance, and says what is abandoned', () => {
+    const assets = { dest: 'nep141:d', origin: 'nep141:o' };
+    expect(assertCanDelete({ dest: 0n, origin: 0n }, assets, false)).toBe('nothing held');
+    expect(() => assertCanDelete({ dest: 5n, origin: 0n }, assets, false)).toThrow(/5 of nep141:d/);
+    expect(() => assertCanDelete({ dest: 0n, origin: 7n }, assets, false)).toThrow(/7 of nep141:o/);
+    expect(assertCanDelete({ dest: 5n, origin: 7n }, assets, true)).toBe(
+      'abandoning 5 of nep141:d, 7 of nep141:o',
+    );
+    expect(
+      parseVerifyArgs([...OK, '--phase', 'cleanup', '--abandon-balance'], ENV).abandonBalance,
+    ).toBe(true);
+    expect(parseVerifyArgs(OK, ENV).abandonBalance).toBe(false);
+  });
+
+  it('refuses prepare when a state file exists and points to cleanup', () => {
+    const dir = mkdtempSync(`${tmpdir()}/verify-state-`);
+    const path = `${dir}/state.json`;
+    expect(() => assertNoStaleState(path, 'CLEAN')).not.toThrow();
+    writeFileSync(path, '{}');
+    expect(() => assertNoStaleState(path, 'CLEAN')).toThrow(
+      /state file already exists[\s\S]*CLEAN/,
     );
   });
 });

@@ -152,8 +152,11 @@ The `probe` build adds a `probe_p256` view and exists only for this script; it i
 
 After any FAIL following the creation of the throwaway merchant account, the script prints the
 account id and the exact recovery command. `--phase cleanup` works from any saved state: it
-withdraws any held balance if the saved address is already active, deletes the throwaway account
-(NEAR returns to you) and deletes the state file. The state file holds the throwaway passkey, which
+withdraws any held balance if the saved address is already active, re-reads the balance and
+refuses to delete the account while it still holds tokens unless you pass `--abandon-balance` (it
+prints what would be given up), then deletes the throwaway account (NEAR returns to you) and the
+state file. It validates the state file first (the account must be `acct-<id>.<your account>`),
+and `prepare` refuses to run while a state file exists. The state file holds the throwaway passkey, which
 is the account's only signer, so keep it private (it is created mode 0600 and gitignored) until
 cleanup.
 
