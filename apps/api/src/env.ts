@@ -96,6 +96,14 @@ const EnvSchema = z
         message: 'local is not allowed in production (set KEYVAULT_DRIVER=gcp)',
       });
     }
+    const driver = e.NEAR_CLIENT_DRIVER ?? (e.NODE_ENV === 'production' ? 'rpc' : 'fake');
+    if (e.NEAR_FAKE_SIMULATE && driver !== 'fake') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['NEAR_FAKE_SIMULATE'],
+        message: 'the contract simulator only runs with NEAR_CLIENT_DRIVER=fake',
+      });
+    }
     if (e.NODE_ENV === 'production' && e.NEAR_CLIENT_DRIVER === 'fake') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

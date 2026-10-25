@@ -7,10 +7,12 @@ import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { DestinationBox, Status, useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { countdown, describeAction } from '@/lib/actions';
-import { api, type Proposal, type SavedAddress, type Team } from '@/lib/api';
-import { approveProposal, cancelProposal, STATUS_WORDS } from '@/lib/proposals';
+import { api, type AccountView, type Proposal, type SavedAddress, type Team } from '@/lib/api';
+import { approveProposal, approvedAtEpoch, cancelProposal, STATUS_WORDS } from '@/lib/proposals';
 
 interface Detail {
+  /** The account's current signer epoch (approvals from an older epoch no longer count). */
+  signerEpoch: string | null;
   proposal: Proposal;
   savedAddresses: SavedAddress[];
   team: Team;
@@ -21,12 +23,18 @@ export default function ProposalPage() {
   const { store, context, me } = useDashboard();
   const key = context && id ? `${context.merchantId}:${context.livemode}:${id}` : null;
   const detail = useLoad<Detail>(async () => {
-    const [proposal, s, team] = await Promise.all([
+    const [proposal, s, team, account] = await Promise.all([
       api<Proposal>(`/v1/account/proposals/${encodeURIComponent(id)}`),
       api<{ savedAddresses: SavedAddress[] }>('/v1/account/saved-addresses'),
       api<Team>('/v1/team'),
+      api<AccountView>('/v1/account'),
     ]);
-    return { proposal, savedAddresses: s.savedAddresses, team };
+    return {
+      proposal,
+      savedAddresses: s.savedAddresses,
+      team,
+      signerEpoch: account.account?.signerEpoch ?? null,
+    };
   }, key);
   const now = useTick(15_000);
   const action = useAction();
@@ -49,10 +57,15 @@ export default function ProposalPage() {
     );
   }
 
-  const { proposal: p, savedAddresses, team } = detail.data;
-  const summary = describeAction(p.action, { savedAddresses, members: team.members });
+  const { proposal: p, savedAddresses, team, signerEpoch } = detail.data;
+  const summary = describeAction(p.action, {
+    savedAddresses,
+    members: team.members,
+    livemode: context?.livemode ?? false,
+  });
   const creator = team.members.find((m) => m.userId === p.createdByUserId);
-  const approvedByMe = p.approvals.some((a) => a.userId === me.user.id);
+  // Only an approval at the current signer epoch counts: after a signer change, approve again.
+  const approvedByMe = approvedAtEpoch(p, me.user.id, signerEpoch);
   const open = ['draft', 'pending', 'timelocked'].includes(p.status);
   const canApprove =
     store.isSigner && !approvedByMe && (p.status === 'draft' || p.status === 'pending');

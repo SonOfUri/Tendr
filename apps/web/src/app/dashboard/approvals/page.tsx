@@ -37,7 +37,11 @@ export default function ApprovalsPage() {
     );
   }
 
-  const ctx = { savedAddresses: inbox.data.savedAddresses, members: inbox.data.team.members };
+  const ctx = {
+    savedAddresses: inbox.data.savedAddresses,
+    members: inbox.data.team.members,
+    livemode: context?.livemode ?? false,
+  };
   const by = (statuses: string[]) =>
     inbox.data!.proposals.filter((p) => statuses.includes(p.status));
   const waiting = by(['draft', 'pending']);

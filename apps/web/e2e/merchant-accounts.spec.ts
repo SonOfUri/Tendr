@@ -160,10 +160,16 @@ test.describe.serial('merchant accounts', () => {
     await finance
       .locator('select[name="saved-address"]')
       .selectOption((await option.getAttribute('value'))!);
-    await finance.locator('input[name="asset"]').fill('nep141:usdc.near');
+    await finance.locator('input[name="asset"]').fill('nep141:usdc.fakes.testnet');
     await finance.locator('input[name="amount"]').fill('1');
     await finance.getByRole('button', { name: 'Ask to withdraw' }).click();
     await expect(finance.getByText(/saved address is unknown or not yet active/)).toBeVisible();
+
+    // A finance member holding the kit is told who can start a recovery.
+    await finance.goto('/dashboard/recovery');
+    await expect(finance.getByTestId('recovery-start-restricted')).toContainText(
+      'owner or an admin',
+    );
 
     // They ask for another saved address: a draft only a signer can approve.
     const second = `second${run}.near`;

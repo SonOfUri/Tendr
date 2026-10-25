@@ -4,6 +4,12 @@ export const ErrorCodes = [
   'VALIDATION_ERROR',
   'NOT_FOUND',
   'UNAUTHORIZED',
+  /**
+   * A cookie-authenticated (dashboard) request with no live session: missing, expired or revoked.
+   * The dashboard sends the person to sign in on this code only; `UNAUTHORIZED` stays for API keys
+   * and for failed ceremonies (a passkey that did not verify), which must not sign anyone out.
+   */
+  'UNAUTHENTICATED',
   'FORBIDDEN',
   'CONFLICT',
   'IDEMPOTENCY_CONFLICT',

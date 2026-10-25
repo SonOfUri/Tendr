@@ -303,12 +303,18 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     if (auth === null || auth === 'public') return;
 
     const raw = bearerToken(req);
+    const cookieRoute = !raw && auth.principals.some((k) => COOKIE_KINDS.has(k));
     const resolved = raw
       ? await resolvePrincipal(raw)
-      : auth.principals.some((k) => COOKIE_KINDS.has(k))
+      : cookieRoute
         ? await resolveCookie(req, auth.principals)
         : null;
-    if (!resolved) throw unauthorized('Invalid or missing credentials');
+    if (!resolved) {
+      // A dashboard route with no live session: the dashboard signs the person in again on this
+      // code only. API-key callers keep UNAUTHORIZED.
+      if (cookieRoute) throw new AppError('UNAUTHENTICATED', 'Sign in to continue', 401);
+      throw unauthorized('Invalid or missing credentials');
+    }
     const { principal, signing, cookie } = resolved;
 
     const denial = !auth.principals.includes(principal.kind)

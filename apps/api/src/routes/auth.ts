@@ -26,7 +26,7 @@ import {
 } from '../auth/webauthn.js';
 import { requirePerson, requirePrincipal, requireStepUp } from '../gateway/principal.js';
 import { recordRecoveryPasskey, recoveryRegisterToken } from '../accounts/recovery.js';
-import { forbidden, unauthorized } from '../lib/errors.js';
+import { forbidden, notFound, unauthorized } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { storesFor } from '../merchants/team.js';
 
@@ -222,6 +222,24 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(204).send();
     },
   );
+
+  // The restricted recovery-kit session behind this browser (R28/R31): its CSRF value (the
+  // `/recover/passkey` page is a fresh load from the emailed link, so it has none in memory and
+  // the dashboard may not be able to read the API's cookie), the store being recovered and the
+  // person's email. Nothing else; an ordinary session gets 404.
+  app.get('/v1/auth/recovery-session', { config: { auth: personOrRecovery } }, async (req) => {
+    const merchantId = recoveryStoreOf(req);
+    if (!merchantId) throw notFound('No recovery session');
+    const { userId } = requirePerson(req);
+    const [user, store] = await Promise.all([
+      prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true } }),
+      prisma.merchant.findUniqueOrThrow({
+        where: { id: merchantId },
+        select: { id: true, slug: true, name: true },
+      }),
+    ]);
+    return { csrfToken: csrfOfRequest(req), store, email: user.email };
+  });
 
   app.post('/v1/auth/logout', { config: { auth: personOrRecovery } }, async (req, reply) => {
     const p = requirePrincipal(req);

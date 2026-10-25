@@ -104,25 +104,35 @@ describe('api', () => {
     expect(headersOf(again[0]!).get('Tendr-CSRF')).toBe('from-body-456');
   });
 
-  it('any 401 that is not a step-up calls the signed-out handler and forgets the token', async () => {
+  it('only a missing or expired session (UNAUTHENTICATED) signs out and forgets the token', async () => {
     const handler = vi.fn();
     const off = onSignedOut(handler);
     setCsrfToken('t-1');
-    stubFetch(401, { error: { code: 'UNAUTHORIZED', message: 'Sign in' } });
-    await expect(api('/v1/account/proposals')).rejects.toBeInstanceOf(ApiError);
-    expect(handler).toHaveBeenCalledTimes(1);
 
-    // Step-up 401s are handled by withStepUp, not by signing out.
+    // A failed passkey ceremony (UNAUTHORIZED) and a step-up request do not sign anyone out.
+    stubFetch(401, {
+      error: { code: 'UNAUTHORIZED', message: 'That passkey belongs to someone else' },
+    });
+    await expect(
+      api('/v1/auth/passkeys/step-up/verify', { method: 'POST', json: {} }),
+    ).rejects.toBeInstanceOf(ApiError);
     stubFetch(401, { error: { code: 'STEP_UP_REQUIRED', message: 'Confirm' } });
     await expect(api('/v1/team/invites', { method: 'POST', json: {} })).rejects.toThrow();
-    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+    const kept = stubFetch(200, {});
+    await api('/v1/x', { method: 'POST', json: {} });
+    expect(headersOf(kept[0]!).get('Tendr-CSRF')).toBe('t-1');
 
-    // The forgotten token falls back to the cookie.
+    // The session is gone: handler runs, the in-memory token is dropped (cookie fallback).
+    stubFetch(401, { error: { code: 'UNAUTHENTICATED', message: 'Sign in to continue' } });
+    await expect(api('/v1/account/proposals')).rejects.toBeInstanceOf(ApiError);
+    expect(handler).toHaveBeenCalledTimes(1);
     const calls = stubFetch(200, {});
     await api('/v1/x', { method: 'POST', json: {} });
     expect(headersOf(calls[0]!).get('Tendr-CSRF')).toBe('csrf-value-123');
+
     off();
-    stubFetch(401, { error: { code: 'UNAUTHORIZED', message: 'Sign in' } });
+    stubFetch(401, { error: { code: 'UNAUTHENTICATED', message: 'Sign in' } });
     await expect(api('/v1/me')).rejects.toThrow();
     expect(handler).toHaveBeenCalledTimes(1);
   });

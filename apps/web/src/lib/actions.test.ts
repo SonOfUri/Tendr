@@ -7,6 +7,7 @@ import type { SavedAddress, SignerKey } from './api';
 import { assetInfo, formatAmount, formatUnits, parseUnits, poaTokenContract } from './assets';
 import { encodeRecoveryPayload, recoveryMessage } from './recovery-payload';
 import { signRecovery } from './recovery-kit';
+import { approvedAtEpoch } from './proposals';
 
 const savedAddress = (over: Partial<SavedAddress> = {}): SavedAddress => ({
   id: 'pal_1',
@@ -17,6 +18,8 @@ const savedAddress = (over: Partial<SavedAddress> = {}): SavedAddress => ({
   createdAt: '2026-01-01T00:00:00Z',
   ...over,
 });
+
+const USDC_LIVE = 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1';
 
 describe('amounts', () => {
   it('formats and parses with the asset decimals', () => {
@@ -30,12 +33,23 @@ describe('amounts', () => {
     expect(parseUnits('-1', 6)).toBeNull();
   });
 
-  it('knows USDC/USDT; falls back to 18 decimals and shows the raw amount', () => {
-    expect(assetInfo('nep141:usdc.near')).toMatchObject({ symbol: 'USDC', decimals: 6 });
-    expect(formatAmount('nep141:usdt.tether-token.near', '2500000')).toBe('2.5 USDT');
-    expect(formatAmount('nep141:weird.near', '1500000000000000000')).toBe(
-      '1.5 weird.near (raw 1500000000000000000)',
-    );
+  it('humanises only exact registered ids of the mode; anything else stays raw with its id', () => {
+    expect(assetInfo(USDC_LIVE, true)).toEqual({ symbol: 'USDC', decimals: 6, known: true });
+    expect(formatAmount('nep141:usdt.tether-token.near', '2500000', true)).toBe('2.5 USDT');
+    expect(formatAmount('nep141:usdc.fakes.testnet', '2500000', false)).toBe('2.5 USDC');
+    // A look-alike id is not USDC: no guessed symbol or decimals, the raw amount and full id.
+    for (const lookalike of ['nep141:usdc.near', 'nep141:fake-usdt.near', 'nep141:usdc.e.near']) {
+      expect(assetInfo(lookalike, true)).toEqual({ symbol: lookalike, decimals: 0, known: false });
+      expect(formatAmount(lookalike, '2500000', true)).toBe(
+        `2500000 smallest units of ${lookalike}`,
+      );
+    }
+    // The registry is per mode: a mainnet id is not humanised on the test account.
+    expect(assetInfo(USDC_LIVE, false).known).toBe(false);
+    expect(assetInfo('nep141:usdc.fakes.testnet', true).known).toBe(false);
+    // Unknown assets are entered in whole smallest units.
+    expect(parseUnits('2500000', assetInfo('nep141:x.near', true).decimals)).toBe('2500000');
+    expect(parseUnits('2.5', assetInfo('nep141:x.near', true).decimals)).toBeNull();
   });
 
   it('derives the PoA token contract from the asset; never typed by hand', () => {
@@ -45,13 +59,13 @@ describe('amounts', () => {
 });
 
 describe('describeAction', () => {
-  const ctx = { savedAddresses: [savedAddress()], members: [] };
+  const ctx = { savedAddresses: [savedAddress()], members: [], livemode: true };
 
   it('a withdrawal shows the full destination address and chain, not a nickname', () => {
     const s = describeAction(
       {
         withdraw: {
-          asset: 'nep141:usdc.near',
+          asset: USDC_LIVE,
           amount: '25000000',
           saved_address_id: 'pal_1',
           route: { poa: { token_contract: 'usdc.near' } },
@@ -177,5 +191,19 @@ describe('recovery payload', () => {
         ed25519.getPublicKey(seed),
       ),
     ).toBe(true);
+  });
+});
+
+describe('approvedAtEpoch', () => {
+  const p = {
+    approvals: [
+      { userId: 'per_a', signerEpoch: '3', txHash: null, approvedAt: '2026-01-01T00:00:00Z' },
+    ],
+  };
+  it('an approval from an older signer epoch no longer counts (approve again)', () => {
+    expect(approvedAtEpoch(p, 'per_a', '3')).toBe(true);
+    expect(approvedAtEpoch(p, 'per_a', '4')).toBe(false);
+    expect(approvedAtEpoch(p, 'per_b', '3')).toBe(false);
+    expect(approvedAtEpoch(p, 'per_a', null)).toBe(true);
   });
 });

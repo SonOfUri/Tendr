@@ -5,6 +5,7 @@ import { chainLabel } from '@/lib/assets';
 import type { Destination } from '@/lib/actions';
 import { errorMessage } from '@/lib/api';
 import { STATUS_WORDS } from '@/lib/proposals';
+import { useDashboard } from './DashboardShell';
 
 /** Loads with `fn` whenever `key` changes; `reload` runs it again. */
 export function useLoad<T>(fn: () => Promise<T>, key: string | null) {
@@ -72,6 +73,11 @@ export function DestinationBox({ destination }: { destination: Destination }) {
       {destination.note && <p className="muted small">{destination.note}</p>}
     </div>
   );
+}
+
+/** The tab's mode (false until a store is selected). */
+export function useLivemode(): boolean {
+  return useDashboard().context?.livemode ?? false;
 }
 
 /** Re-renders every `ms` (for countdowns). */

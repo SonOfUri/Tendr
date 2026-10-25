@@ -114,6 +114,46 @@ describe('dashboard reads and the CSRF token in session responses', () => {
     });
   });
 
+  it('a missing or expired session is UNAUTHENTICATED; a failed ceremony stays UNAUTHORIZED', async () => {
+    const user = await createUser({ emailVerifiedAt: new Date() });
+    const auth = new SoftAuthenticator();
+    const login = await loginAs(user.id, { stepUp: false });
+    const ro = await post('/v1/auth/passkeys/register/options', dashHeaders(login));
+    await post('/v1/auth/passkeys/register/verify', dashHeaders(login), {
+      response: auth.create(ro.json()),
+    });
+
+    // No cookie or an unknown session: the dashboard signs in again.
+    const noCookie = await app.inject({ method: 'GET', url: '/v1/me' });
+    const unknown = await app.inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { cookie: `${SESSION_COOKIE}=not-a-session` },
+    });
+    for (const res of [noCookie, unknown]) {
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error.code).toBe('UNAUTHENTICATED');
+    }
+
+    // A step-up with someone else's passkey fails, but the session is still fine.
+    const other = new SoftAuthenticator();
+    const otherUser = await createUser({ emailVerifiedAt: new Date() });
+    const otherLogin = await loginAs(otherUser.id, { stepUp: false });
+    const oro = await post('/v1/auth/passkeys/register/options', dashHeaders(otherLogin));
+    await post('/v1/auth/passkeys/register/verify', dashHeaders(otherLogin), {
+      response: other.create(oro.json()),
+    });
+    const so = await post('/v1/auth/passkeys/step-up/options', dashHeaders(login));
+    const wrong = await post('/v1/auth/passkeys/step-up/verify', dashHeaders(login), {
+      response: other.get(so.json()),
+    });
+    expect(wrong.statusCode).toBe(401);
+    expect(wrong.json().error.code).toBe('UNAUTHORIZED');
+    expect(
+      (await app.inject({ method: 'GET', url: '/v1/me', headers: dashHeaders(login) })).statusCode,
+    ).toBe(200);
+  });
+
   describe('read routes', () => {
     let merchant: Merchant;
     let owner: Login;

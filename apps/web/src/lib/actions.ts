@@ -26,6 +26,8 @@ export interface ActionSummary {
 export interface ActionContext {
   savedAddresses: SavedAddress[];
   members: TeamMember[];
+  /** The account's mode: amounts are humanised only for that mode's registered assets. */
+  livemode: boolean;
 }
 
 const KIND_TITLES: Record<string, string> = {
@@ -80,8 +82,8 @@ function saved(
   };
 }
 
-const limit = (asset: string, v: unknown) =>
-  v === null || v === undefined ? 'No limit' : formatAmount(asset, String(v));
+const limit = (asset: string, v: unknown, livemode: boolean) =>
+  v === null || v === undefined ? 'No limit' : formatAmount(asset, String(v), livemode);
 
 export function describeAction(action: ActionJson, ctx: ActionContext): ActionSummary {
   const kind = kindOf(action);
@@ -97,7 +99,7 @@ export function describeAction(action: ActionJson, ctx: ActionContext): ActionSu
       const asset = String(v.asset);
       const s = saved(ctx, String(v.saved_address_id), warnings);
       if (kind === 'withdraw') {
-        const amount = formatAmount(asset, String(v.amount));
+        const amount = formatAmount(asset, String(v.amount), ctx.livemode);
         title = `Withdraw ${amount}`;
         rows.push({ label: 'Amount', value: amount });
         const route = v.route as {
@@ -127,16 +129,16 @@ export function describeAction(action: ActionJson, ctx: ActionContext): ActionSu
         rows.push({ label: 'Asset', value: asset });
         rows.push({
           label: 'Sweep when above',
-          value: formatAmount(asset, String(v.trigger_above)),
+          value: formatAmount(asset, String(v.trigger_above), ctx.livemode),
         });
-        rows.push({ label: 'Keep', value: formatAmount(asset, String(v.keep)) });
+        rows.push({ label: 'Keep', value: formatAmount(asset, String(v.keep), ctx.livemode) });
       }
       rows.push({ label: 'Asset id', value: asset });
       break;
     }
     case 'refund': {
       const asset = String(v.asset);
-      const amount = formatAmount(asset, String(v.amount));
+      const amount = formatAmount(asset, String(v.amount), ctx.livemode);
       title = `Refund ${amount}`;
       rows.push({ label: 'Amount', value: amount });
       rows.push({ label: 'Payment', value: String(v.payment_id) });
@@ -173,8 +175,8 @@ export function describeAction(action: ActionJson, ctx: ActionContext): ActionSu
     case 'set_limits': {
       const asset = String(v.asset);
       rows.push({ label: 'Asset', value: asset });
-      rows.push({ label: 'Per withdrawal', value: limit(asset, v.per_tx) });
-      rows.push({ label: 'Per day', value: limit(asset, v.per_day) });
+      rows.push({ label: 'Per withdrawal', value: limit(asset, v.per_tx, ctx.livemode) });
+      rows.push({ label: 'Per day', value: limit(asset, v.per_day, ctx.livemode) });
       rows.push({
         label: 'Note',
         value: 'Raising a limit waits 24 h; lowering it applies at once.',
@@ -186,7 +188,7 @@ export function describeAction(action: ActionJson, ctx: ActionContext): ActionSu
       rows.push({ label: 'Asset', value: asset });
       rows.push({
         label: 'Refunds per day without waiting',
-        value: formatAmount(asset, String(v.daily)),
+        value: formatAmount(asset, String(v.daily), ctx.livemode),
       });
       break;
     }

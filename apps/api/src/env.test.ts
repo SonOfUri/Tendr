@@ -106,6 +106,35 @@ describe('loadEnv NEAR settings', () => {
     ).toThrow(/NEAR_CLIENT_DRIVER/);
   });
 
+  it('NEAR_FAKE_SIMULATE: off by default, on only with the fake driver', () => {
+    expect(loadEnv({ ...base, NODE_ENV: 'development' }).NEAR_FAKE_SIMULATE).toBe(false);
+    expect(
+      loadEnv({ ...base, NODE_ENV: 'development', NEAR_FAKE_SIMULATE: '1' }).NEAR_FAKE_SIMULATE,
+    ).toBe(true);
+    expect(() =>
+      loadEnv({
+        ...base,
+        NODE_ENV: 'development',
+        NEAR_CLIENT_DRIVER: 'rpc',
+        NEAR_FAKE_SIMULATE: '1',
+      }),
+    ).toThrow(/NEAR_FAKE_SIMULATE/);
+    expect(() =>
+      loadEnv({
+        ...base,
+        ...gcp,
+        ...webauthn,
+        NODE_ENV: 'production',
+        KEYVAULT_DRIVER: 'gcp',
+        NEAR_FAKE_SIMULATE: '1',
+      }),
+    ).toThrow(/NEAR_FAKE_SIMULATE/);
+  });
+
+  it('API tests never run the contract simulator (setup-env pins it off)', () => {
+    expect(process.env.NEAR_FAKE_SIMULATE).toBe('0');
+  });
+
   it('defaults the per-mode accounts and parses caps as yocto bigints', () => {
     const e = loadEnv({ ...base, FUNDING_DAILY_CAP_YOCTO: '7000000000000000000000000' });
     expect(e).toMatchObject({

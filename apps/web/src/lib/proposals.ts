@@ -35,6 +35,20 @@ export async function cancelProposal(p: Pick<Proposal, 'id' | 'status'>): Promis
   });
 }
 
+/**
+ * Whether `userId` has an approval on `p` that still counts: made at the account's current signer
+ * epoch. With the epoch unknown, any approval of theirs counts (the API refuses a duplicate).
+ */
+export function approvedAtEpoch(
+  p: Pick<Proposal, 'approvals'>,
+  userId: string,
+  signerEpoch: string | null,
+): boolean {
+  return p.approvals.some(
+    (a) => a.userId === userId && (signerEpoch === null || a.signerEpoch === signerEpoch),
+  );
+}
+
 /** Creates a draft; the API answers with the proposal (its id for the detail page). */
 export function draftProposal(action: Record<string, unknown>): Promise<Proposal> {
   return api<Proposal>('/v1/account/proposals', { method: 'POST', json: { action } });

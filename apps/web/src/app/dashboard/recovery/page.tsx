@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
@@ -90,6 +91,18 @@ export default function RecoveryPage() {
         <section className="card">
           <h2>Start a recovery</h2>
           <StartRecovery onStarted={() => void status.reload()} />
+        </section>
+      )}
+      {!pending && store.role !== 'owner' && store.role !== 'admin' && (
+        <section className="card" data-testid="recovery-start-restricted">
+          <h2>Start a recovery</h2>
+          <p className="muted">
+            Holding the recovery kit is not enough on its own here: starting a recovery chooses the
+            new signers from the team, which only an owner or admin can see. Give the kit to the
+            store owner or an admin, or ask them to make you an admin first. If nobody on the team
+            can sign in any more, the kit holder can use{' '}
+            <Link href="/recover">Lost your passkeys?</Link> to get back in.
+          </p>
         </section>
       )}
     </div>

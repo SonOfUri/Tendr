@@ -89,8 +89,9 @@ type SignedOutHandler = () => void;
 let signedOutHandler: SignedOutHandler | null = null;
 
 /**
- * Registers what happens when any request comes back 401 (not a step-up request): the dashboard
- * sends the person to sign in. Returns a function that unregisters it.
+ * Registers what happens when any request finds the session missing or over (401
+ * `UNAUTHENTICATED`): the dashboard sends the person to sign in. Returns a function that
+ * unregisters it.
  */
 export function onSignedOut(handler: SignedOutHandler): () => void {
   signedOutHandler = handler;
@@ -162,9 +163,13 @@ export async function api<T = unknown>(path: string, init: ApiInit = {}): Promis
   return body as T;
 }
 
-/** True for a 401 that is not a step-up request: the session is missing or over. */
+/**
+ * True only when the session is missing or over (`UNAUTHENTICATED`). A failed passkey ceremony
+ * (`UNAUTHORIZED`, e.g. a step-up with someone else's passkey) or a step-up request
+ * (`STEP_UP_REQUIRED`) is not a sign-out.
+ */
 export const isSignedOut = (err: unknown) =>
-  err instanceof ApiError && err.status === 401 && err.code !== 'STEP_UP_REQUIRED';
+  err instanceof ApiError && err.status === 401 && err.code === 'UNAUTHENTICATED';
 
 /** A message safe to show a merchant. */
 export function errorMessage(err: unknown): string {
@@ -207,7 +212,14 @@ export type AccountStatus = 'provisioning' | 'active' | 'failed' | string;
 
 export interface AccountView {
   livemode: boolean;
-  account: { id: string; nearAccountId: string; status: AccountStatus; threshold: number } | null;
+  account: {
+    id: string;
+    nearAccountId: string;
+    status: AccountStatus;
+    threshold: number;
+    /** Decimal u64: bumps on every signer-set change. */
+    signerEpoch: string;
+  } | null;
   signers: { userId: string; email: string | null; keys: number }[];
 }
 

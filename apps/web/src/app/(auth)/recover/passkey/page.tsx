@@ -4,8 +4,14 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { Alert, Button } from '@tendr/ui';
-import { errorMessage } from '@/lib/api';
+import { api, errorMessage, isSignedOut } from '@/lib/api';
 import { registerPasskey } from '@/lib/webauthn';
+
+interface RecoverySession {
+  csrfToken: string | null;
+  store: { id: string; slug: string; name: string };
+  email: string;
+}
 
 /**
  * The emailed `recovery_register` link: with the recovery-kit session from /recover in this
@@ -18,13 +24,25 @@ function RecoverPasskey() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  // The kit session opened at /recover: its CSRF token (this page is a fresh load from the email,
+  // so nothing is in memory, and the API's cookie may be on another host), store and email.
+  const [session, setSession] = useState<RecoverySession | null | undefined>(undefined);
 
   useEffect(() => {
     if (params.get('token')) window.history.replaceState(null, '', '/recover/passkey');
   }, [params]);
 
+  useEffect(() => {
+    api<RecoverySession>('/v1/auth/recovery-session', { store: false })
+      .then(setSession)
+      .catch((err) => {
+        setSession(null);
+        if (!isSignedOut(err)) setError(errorMessage(err));
+      });
+  }, []);
+
   async function create() {
-    if (!token) return;
+    if (!token || !session) return;
     setBusy(true);
     setError(null);
     try {
@@ -47,6 +65,19 @@ function RecoverPasskey() {
       </div>
     );
   }
+  if (session === null) {
+    return (
+      <div className="card">
+        <h1>Open this link in the browser you started from</h1>
+        <p className="muted">
+          This link only works together with the recovery-kit check you did at{' '}
+          <Link href="/recover">Lost your passkeys?</Link> in this same browser; the emailed link
+          lasts 15 minutes. Start over there if it has expired.
+        </p>
+        {error && <Alert tone="danger">{error}</Alert>}
+      </div>
+    );
+  }
   if (done) {
     return (
       <div className="card">
@@ -62,12 +93,18 @@ function RecoverPasskey() {
   return (
     <div className="card">
       <h1>Create your new passkey</h1>
+      {session && (
+        <p>
+          For <strong>{session.email}</strong> at <strong>{session.store.name}</strong> (
+          <code>{session.store.slug}</code>).
+        </p>
+      )}
       <p className="muted">
         Use this same browser you started from. Your device will ask for Face ID, Touch ID, Windows
         Hello or its PIN.
       </p>
       {error && <Alert tone="danger">{error}</Alert>}
-      <Button onClick={() => void create()} disabled={busy}>
+      <Button onClick={() => void create()} disabled={busy || !session}>
         {busy ? 'Waiting for your device…' : 'Create my passkey'}
       </Button>
     </div>

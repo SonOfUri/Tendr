@@ -53,7 +53,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [context, setContext] = useState<StoreContext | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Any request that comes back signed out (a 401 that is not a step-up request), on any
+  // Any request that finds the session missing or over (401 UNAUTHENTICATED), on any
   // dashboard page, sends the person to sign in and back here afterwards.
   useEffect(
     () =>

@@ -480,6 +480,48 @@ describe('recovery API', () => {
       expect(replay.statusCode).toBe(401);
     });
 
+    it('GET /v1/auth/recovery-session gives a fresh page its CSRF token, store and email only', async () => {
+      const m = await lostMember(false);
+      const { res } = await openSession(m.user.email);
+      const login = loginFrom(res, m.user.id);
+      // A fresh page load (the emailed link): only the session cookie, no CSRF cookie or memory.
+      const cookieOnly = { cookie: `${SESSION_COOKIE}=${login.token}` };
+      const info = await app.inject({
+        method: 'GET',
+        url: '/v1/auth/recovery-session',
+        headers: cookieOnly,
+      });
+      expect(info.statusCode, info.body).toBe(200);
+      expect(info.json()).toEqual({
+        csrfToken: login.csrf,
+        store: { id: merchant.id, slug: merchant.slug, name: merchant.name },
+        email: m.user.email,
+      });
+      // The returned token alone (no CSRF cookie) lets the page register the passkey.
+      const opts = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/passkeys/register/options',
+        headers: { ...cookieOnly, 'tendr-csrf': info.json().csrfToken },
+        payload: { recoveryToken: mailboxToken(m.user.email) },
+      });
+      expect(opts.statusCode, opts.body).toBe(200);
+      // Other person routes stay closed to the restricted session.
+      const me = await app.inject({ method: 'GET', url: '/v1/me', headers: cookieOnly });
+      expect(me.statusCode).toBe(403);
+
+      // An ordinary session has no recovery session; no session is UNAUTHENTICATED.
+      const normal = await signerMember(true);
+      const plain = await app.inject({
+        method: 'GET',
+        url: '/v1/auth/recovery-session',
+        headers: dashHeaders(normal.login),
+      });
+      expect(plain.statusCode).toBe(404);
+      const none = await app.inject({ method: 'GET', url: '/v1/auth/recovery-session' });
+      expect(none.statusCode).toBe(401);
+      expect(none.json().error.code).toBe('UNAUTHENTICATED');
+    });
+
     it('a member who still has an active passkey cannot be taken over with the kit', async () => {
       const m = await signerMember();
       expect((await openSession(m.user.email)).res.statusCode).toBe(401);

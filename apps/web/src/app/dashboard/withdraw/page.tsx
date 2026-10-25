@@ -8,15 +8,9 @@ import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { DestinationBox, useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { usableIn } from '@/lib/actions';
 import { api, type Balances, type SavedAddress } from '@/lib/api';
+import { registeredAssetIds } from '@/lib/asset-registry';
 import { assetInfo, chainLabel, formatAmount, parseUnits, poaTokenContract } from '@/lib/assets';
 import { draftProposal } from '@/lib/proposals';
-
-/** Suggested asset ids when the account has no balances to pick from. */
-const SUGGESTED_ASSETS = [
-  'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
-  'nep141:usdt.tether-token.near',
-  'nep141:wrap.near',
-];
 
 export default function WithdrawPage() {
   const { store, context } = useDashboard();
@@ -45,7 +39,8 @@ export default function WithdrawPage() {
   }
   const { saved, balances } = data.data;
   const target = saved.find((a) => a.id === savedId) ?? null;
-  const info = asset ? assetInfo(asset) : null;
+  const livemode = context.livemode;
+  const info = asset ? assetInfo(asset, livemode) : null;
   const balance = balances.find((b) => b.asset === asset);
 
   async function submit(e: React.FormEvent) {
@@ -57,7 +52,11 @@ export default function WithdrawPage() {
     if (!token) return setError('This asset can’t be withdrawn from here yet.');
     const raw = parseUnits(amount, info!.decimals);
     if (!raw || raw === '0') {
-      return setError(`Enter an amount with at most ${info!.decimals} decimal places.`);
+      return setError(
+        info!.known
+          ? `Enter an amount with at most ${info!.decimals} decimal places.`
+          : 'Enter a whole number of smallest units.',
+      );
     }
     // The route's token is the asset's own contract: never typed by hand.
     const p = await run(() =>
@@ -130,23 +129,29 @@ export default function WithdrawPage() {
               placeholder="nep141:…"
             />
             <datalist id="withdraw-assets">
-              {[...new Set([...balances.map((b) => b.asset), ...SUGGESTED_ASSETS])].map((a) => (
-                <option key={a} value={a}>
-                  {assetInfo(a).symbol}
-                </option>
-              ))}
+              {[...new Set([...balances.map((b) => b.asset), ...registeredAssetIds(livemode)])].map(
+                (a) => (
+                  <option key={a} value={a}>
+                    {assetInfo(a, livemode).known ? assetInfo(a, livemode).symbol : a}
+                  </option>
+                ),
+              )}
             </datalist>
           </label>
           {info && (
             <p className="muted small">
-              {info.symbol} · {info.decimals} decimals
-              {!info.known && ' (assumed; the raw amount is shown on the approval)'}
-              {balance && ` · balance ${formatAmount(asset, balance.amount)}`}
+              {info.known
+                ? `${info.symbol} · ${info.decimals} decimals`
+                : 'Not a registered asset: enter the amount in raw smallest units.'}
+              {balance && ` · balance ${formatAmount(asset, balance.amount, livemode)}`}
             </p>
           )}
 
           <label className="field">
-            <span>Amount{info ? ` (${info.symbol})` : ''}</span>
+            <span>
+              Amount
+              {info ? (info.known ? ` (${info.symbol})` : ' (smallest units)') : ''}
+            </span>
             <input
               name="amount"
               required

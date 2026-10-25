@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
-import { useAction, useLoad } from '@/components/dashboard/common';
+import { useAction, useLivemode, useLoad } from '@/components/dashboard/common';
 import { RecoveryKitCreator } from '@/components/dashboard/RecoveryKitCreator';
 import {
   api,
@@ -191,10 +191,11 @@ function ThresholdForm({
 }
 
 function LimitsList({ limits }: { limits: AssetLimit[] }) {
+  const livemode = useLivemode();
   const set = limits.filter((l) => l.perTx !== null || l.perDay !== null || l.refundCap !== null);
   if (set.length === 0) return <p className="muted">No limits set: any approved amount can go.</p>;
   const show = (asset: string, v: string | null) =>
-    v === null ? 'No limit' : formatAmount(asset, v);
+    v === null ? 'No limit' : formatAmount(asset, v, livemode);
   return (
     <table className="balances">
       <thead>
@@ -208,10 +209,13 @@ function LimitsList({ limits }: { limits: AssetLimit[] }) {
       <tbody>
         {set.map((l) => (
           <tr key={l.asset}>
-            <td title={l.asset}>{assetInfo(l.asset).symbol}</td>
+            <td>
+              {assetInfo(l.asset, livemode).known && <>{assetInfo(l.asset, livemode).symbol} </>}
+              <code className="address">{l.asset}</code>
+            </td>
             <td>{show(l.asset, l.perTx)}</td>
             <td>{show(l.asset, l.perDay)}</td>
-            <td>{l.refundCap === null ? '0' : formatAmount(l.asset, l.refundCap)}</td>
+            <td>{l.refundCap === null ? '0' : formatAmount(l.asset, l.refundCap, livemode)}</td>
           </tr>
         ))}
       </tbody>
@@ -220,29 +224,48 @@ function LimitsList({ limits }: { limits: AssetLimit[] }) {
 }
 
 /** A human amount field → smallest units for `asset`, or an error message. */
-function toRaw(asset: string, human: string, what: string): string {
-  const raw = parseUnits(human, assetInfo(asset).decimals);
-  if (raw === null) throw new Error(`${what}: enter a number`);
+function toRaw(asset: string, human: string, what: string, livemode: boolean): string {
+  const info = assetInfo(asset, livemode);
+  const raw = parseUnits(human, info.decimals);
+  if (raw === null) {
+    throw new Error(
+      info.known
+        ? `${what}: enter an amount with at most ${info.decimals} decimal places`
+        : `${what}: enter a whole number of smallest units`,
+    );
+  }
   return raw;
 }
 
 function AssetField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const livemode = useLivemode();
+  const info = value ? assetInfo(value, livemode) : null;
   return (
-    <label className="field grow">
-      <span>Asset id</span>
-      <input
-        required
-        value={value}
-        onChange={(e) => onChange(e.target.value.trim())}
-        placeholder="nep141:…"
-        spellCheck={false}
-        autoComplete="off"
-      />
-    </label>
+    <>
+      <label className="field grow">
+        <span>Asset id</span>
+        <input
+          required
+          value={value}
+          onChange={(e) => onChange(e.target.value.trim())}
+          placeholder="nep141:…"
+          spellCheck={false}
+          autoComplete="off"
+        />
+      </label>
+      {info && (
+        <p className="muted small">
+          {info.known
+            ? `Amounts below are in ${info.symbol}.`
+            : 'Not a registered asset: enter amounts in raw smallest units.'}
+        </p>
+      )}
+    </>
   );
 }
 
 function LimitsForm({ onDraft }: { onDraft: (id: string) => void }) {
+  const livemode = useLivemode();
   const [asset, setAsset] = useState('');
   const [perTx, setPerTx] = useState('');
   const [perDay, setPerDay] = useState('');
@@ -256,8 +279,8 @@ function LimitsForm({ onDraft }: { onDraft: (id: string) => void }) {
           draftProposal({
             set_limits: {
               asset,
-              per_tx: perTx.trim() ? toRaw(asset, perTx, 'Per withdrawal') : null,
-              per_day: perDay.trim() ? toRaw(asset, perDay, 'Per day') : null,
+              per_tx: perTx.trim() ? toRaw(asset, perTx, 'Per withdrawal', livemode) : null,
+              per_day: perDay.trim() ? toRaw(asset, perDay, 'Per day', livemode) : null,
             },
           }),
         );
@@ -284,6 +307,7 @@ function LimitsForm({ onDraft }: { onDraft: (id: string) => void }) {
 }
 
 function RefundCapForm({ onDraft }: { onDraft: (id: string) => void }) {
+  const livemode = useLivemode();
   const [asset, setAsset] = useState('');
   const [daily, setDaily] = useState('');
   const { busy, error, run } = useAction();
@@ -293,7 +317,7 @@ function RefundCapForm({ onDraft }: { onDraft: (id: string) => void }) {
       onSubmit={async (e) => {
         e.preventDefault();
         const p = await run(() =>
-          draftProposal({ set_refund_cap: { asset, daily: toRaw(asset, daily, 'Cap') } }),
+          draftProposal({ set_refund_cap: { asset, daily: toRaw(asset, daily, 'Cap', livemode) } }),
         );
         if (p) onDraft(p.id);
       }}
@@ -328,13 +352,14 @@ function SweepRow({
   onDraft: (id: string) => void;
 }) {
   const s = limit.autoSweep!;
+  const livemode = useLivemode();
   const { busy, error, run } = useAction();
   return (
     <li>
       <span className="grow">
-        {assetInfo(limit.asset).symbol}: above{' '}
-        {s.triggerAbove ? formatAmount(limit.asset, s.triggerAbove) : '?'}, keep{' '}
-        {s.keep ? formatAmount(limit.asset, s.keep) : '?'} →{' '}
+        <code className="address">{limit.asset}</code>: above{' '}
+        {s.triggerAbove ? formatAmount(limit.asset, s.triggerAbove, livemode) : '?'}, keep{' '}
+        {s.keep ? formatAmount(limit.asset, s.keep, livemode) : '?'} →{' '}
         <strong>{s.chain ? chainLabel(s.chain) : '?'}</strong>{' '}
         <span className="address small">{s.address}</span>
       </span>
@@ -356,6 +381,7 @@ function SweepRow({
 }
 
 function SweepForm({ saved, onDraft }: { saved: SavedAddress[]; onDraft: (id: string) => void }) {
+  const livemode = useLivemode();
   const usable = saved.filter((a) => a.status !== 'revoked');
   const [asset, setAsset] = useState('');
   const [trigger, setTrigger] = useState('');
@@ -379,8 +405,8 @@ function SweepForm({ saved, onDraft }: { saved: SavedAddress[]; onDraft: (id: st
           draftProposal({
             set_auto_sweep: {
               asset,
-              trigger_above: toRaw(asset, trigger, 'Sweep above'),
-              keep: toRaw(asset, keep, 'Keep'),
+              trigger_above: toRaw(asset, trigger, 'Sweep above', livemode),
+              keep: toRaw(asset, keep, 'Keep', livemode),
               saved_address_id: savedId,
             },
           }),

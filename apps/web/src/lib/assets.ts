@@ -1,39 +1,22 @@
-// Asset ids (intents token ids such as `nep141:usdc.near`) and amounts. Amounts travel as strings
-// in the asset's smallest unit; the dashboard shows them with the asset's decimals when it knows
-// them, and always keeps the raw value one click away when it does not.
+// Asset ids (intents token ids such as `nep141:usdt.tether-token.near`) and amounts. Amounts
+// travel as strings in the asset's smallest unit. The dashboard converts to a human amount ONLY
+// for the exact asset ids in the registry (asset-registry.ts) of the account's mode; every other
+// asset is shown and entered in raw smallest units next to its full id, never with guessed
+// decimals or a guessed symbol.
+import { registeredAsset } from './asset-registry';
 
 export interface AssetInfo {
+  /** The registry symbol, or the full asset id when the asset is not in the registry. */
   symbol: string;
+  /** The registry decimals; 0 (raw smallest units) when the asset is not in the registry. */
   decimals: number;
-  /** False when the decimals are a guess (18): the raw amount is shown too. */
   known: boolean;
 }
 
-/** Assets the dashboard knows by id. */
-const KNOWN: Record<string, { symbol: string; decimals: number }> = {
-  'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1': {
-    symbol: 'USDC',
-    decimals: 6,
-  },
-  'nep141:usdt.tether-token.near': { symbol: 'USDT', decimals: 6 },
-  'nep141:wrap.near': { symbol: 'wNEAR', decimals: 24 },
-  'nep141:wrap.testnet': { symbol: 'wNEAR', decimals: 24 },
-};
-
-export const DEFAULT_DECIMALS = 18;
-
-export function assetInfo(asset: string): AssetInfo {
-  const known = KNOWN[asset];
-  if (known) return { ...known, known: true };
-  const lower = asset.toLowerCase();
-  if (/usdc/.test(lower)) return { symbol: 'USDC', decimals: 6, known: true };
-  if (/usdt/.test(lower)) return { symbol: 'USDT', decimals: 6, known: true };
-  const name = asset.replace(/^nep\d+:/, '');
-  return {
-    symbol: name.length > 24 ? `${name.slice(0, 21)}…` : name,
-    decimals: DEFAULT_DECIMALS,
-    known: false,
-  };
+export function assetInfo(asset: string, livemode: boolean): AssetInfo {
+  const known = registeredAsset(asset, livemode);
+  if (known) return { symbol: known.symbol, decimals: known.decimals, known: true };
+  return { symbol: asset, decimals: 0, known: false };
 }
 
 const DIGITS = /^(0|[1-9]\d*)$/;
@@ -61,11 +44,15 @@ export function parseUnits(human: string, decimals: number): string | null {
   return raw;
 }
 
-/** `12.5 USDC` (with `(raw 12500000)` when the decimals are a guess). */
-export function formatAmount(asset: string, raw: string): string {
-  const info = assetInfo(asset);
-  const human = `${formatUnits(raw, info.decimals)} ${info.symbol}`;
-  return info.known ? human : `${human} (raw ${raw})`;
+/**
+ * `12.5 USDC` for a registered asset; otherwise the raw amount and the full asset id
+ * (`12500000 smallest units of nep141:x.near`).
+ */
+export function formatAmount(asset: string, raw: string, livemode: boolean): string {
+  const info = assetInfo(asset, livemode);
+  return info.known
+    ? `${formatUnits(raw, info.decimals)} ${info.symbol}`
+    : `${raw} smallest units of ${asset}`;
 }
 
 /**
