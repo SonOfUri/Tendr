@@ -9,6 +9,10 @@ const yocto = z
   .regex(/^\d{1,39}$/, 'must be a non-negative integer (yoctoNEAR)')
   .transform((s) => BigInt(s));
 
+/** A NEAR account id (named or implicit), per the protocol's account-id rules. */
+const NEAR_ACCOUNT_ID = /^(?=.{2,64}$)(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
+const nearAccountId = z.string().regex(NEAR_ACCOUNT_ID, 'must be a valid NEAR account id');
+
 const codeHash = z
   .string()
   .refine((s) => {
@@ -85,6 +89,13 @@ const EnvSchema = z
      * fails loudly; production's default until a real provider is wired). Defaults per NODE_ENV.
      */
     MAIL_DRIVER: z.enum(['log', 'memory', 'unconfigured']).optional(),
+    // 1Click (checkout swaps). Live mode only; test mode uses the simulated provider.
+    ONECLICK_BASE_URL: z.string().url().default('https://1click.chaindefuser.com'),
+    /** 1Click JWT, sent as `X-API-Key`. Required in production. */
+    ONECLICK_API_KEY: optionalString,
+    /** Tendr's fee account per mode: the 1Click `appFees` recipient. */
+    FEE_ACCOUNT_LIVE: nearAccountId.default('fees.tendr.near'),
+    FEE_ACCOUNT_TEST: nearAccountId.default('fees.tendr.testnet'),
   })
   .superRefine((e, ctx) => {
     if (e.MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO > e.FUNDING_PER_ACCOUNT_YOCTO) {
@@ -140,6 +151,13 @@ const EnvSchema = z
           code: z.ZodIssueCode.custom,
           path: ['WEBAUTHN_ORIGINS'],
           message: 'required in production; every origin must be https',
+        });
+      }
+      if (!e.ONECLICK_API_KEY) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ONECLICK_API_KEY'],
+          message: 'required in production (the live 1Click provider authenticates with it)',
         });
       }
       if (e.MAIL_DRIVER === 'memory' || e.MAIL_DRIVER === 'log') {

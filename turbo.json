@@ -41,7 +41,11 @@
     "WEBAUTHN_RP_ID",
     "WEBAUTHN_RP_NAME",
     "WEBAUTHN_ORIGINS",
-    "MAIL_DRIVER"
+    "MAIL_DRIVER",
+    "ONECLICK_BASE_URL",
+    "ONECLICK_API_KEY",
+    "FEE_ACCOUNT_LIVE",
+    "FEE_ACCOUNT_TEST"
   ],
   "tasks": {
     "build": {

@@ -8,10 +8,11 @@ const gcp = {
   GCP_KMS_KEYRING: 'tendr',
   GCP_CREDENTIALS_JSON: '{"type":"service_account","client_email":"a@b","private_key":"k"}',
 };
-/** Production has no WebAuthn defaults. */
+/** Production has no WebAuthn defaults, and needs a 1Click API key. */
 const webauthn = {
   WEBAUTHN_RP_ID: 'usetendr.tech',
   WEBAUTHN_ORIGINS: 'https://dashboard.usetendr.tech',
+  ONECLICK_API_KEY: 'jwt',
 };
 
 describe('loadEnv keyvault rules', () => {
@@ -169,6 +170,7 @@ describe('loadEnv dashboard auth and mail', () => {
     KEYVAULT_DRIVER: 'gcp',
     WEBAUTHN_RP_ID: 'usetendr.tech',
     WEBAUTHN_ORIGINS: 'https://dashboard.usetendr.tech',
+    ONECLICK_API_KEY: 'jwt',
   };
 
   it('defaults WebAuthn to localhost and parses the origin list', () => {
@@ -217,5 +219,33 @@ describe('loadEnv merchant account seed balance', () => {
         MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO: '101',
       }),
     ).toThrow(/MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO/);
+  });
+});
+
+describe('loadEnv 1Click and fee accounts', () => {
+  const prod = { ...base, ...gcp, ...webauthn, NODE_ENV: 'production', KEYVAULT_DRIVER: 'gcp' };
+
+  it('defaults the 1Click base URL and the mode fee accounts', () => {
+    const e = loadEnv({ ...base, NODE_ENV: 'test' });
+    expect(e.ONECLICK_BASE_URL).toBe('https://1click.chaindefuser.com');
+    expect(e.ONECLICK_API_KEY).toBeUndefined();
+    expect(e.FEE_ACCOUNT_LIVE).toBe('fees.tendr.near');
+    expect(e.FEE_ACCOUNT_TEST).toBe('fees.tendr.testnet');
+  });
+
+  it('requires ONECLICK_API_KEY in production', () => {
+    const { ONECLICK_API_KEY: _key, ...noKey } = prod;
+    expect(() => loadEnv(noKey)).toThrow(/ONECLICK_API_KEY/);
+    expect(loadEnv(prod).ONECLICK_API_KEY).toBe('jwt');
+  });
+
+  it('rejects a fee account that is not a NEAR account id', () => {
+    expect(() => loadEnv({ ...base, FEE_ACCOUNT_LIVE: 'Fees.Tendr.near' })).toThrow(
+      /FEE_ACCOUNT_LIVE/,
+    );
+    expect(() => loadEnv({ ...base, FEE_ACCOUNT_TEST: 'fees..testnet' })).toThrow(
+      /FEE_ACCOUNT_TEST/,
+    );
+    expect(() => loadEnv({ ...base, ONECLICK_BASE_URL: 'not a url' })).toThrow(/ONECLICK_BASE_URL/);
   });
 });
