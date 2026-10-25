@@ -17,14 +17,12 @@ testnet-admin = []
 [dependencies]
 near-sdk.workspace = true
 
-# Native-only signature verification (unit tests). Contract builds use the
-# `p256_verify` / `ed25519_verify` host functions instead.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-p256.workspace = true
-ed25519-dalek.workspace = true
-
 [dev-dependencies]
 near-sdk = { workspace = true, features = ["unit-testing"] }
+# Only used to sign test fixtures; verification always goes through the
+# `p256_verify` / `ed25519_verify` host functions.
+p256.workspace = true
+ed25519-dalek.workspace = true
 
 [package.metadata.near.reproducible_build]
 image = "sourcescan/cargo-near:0.21.1-rust-1.93.0"

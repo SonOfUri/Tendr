@@ -4,8 +4,8 @@
 //! signed-message construction are vendored and adapted from near/intents
 //! `crates/signatures/webauthn` (crate `defuse-webauthn`, file `src/lib.rs`)
 //! at commit d340060afe1debb8c8f2f2fc6b6c999d48c886b0. Changes: typed errors
-//! instead of `bool`, plus the rpIdHash and origin checks the upstream crate
-//! leaves to its caller, and user verification (UV) is always required.
+//! instead of `bool`, plus the rpIdHash, origin and crossOrigin checks the
+//! upstream crate leaves to its caller, and user verification (UV) is always required.
 //!
 //! Upstream license:
 //!
@@ -70,6 +70,7 @@ pub enum WebauthnError {
     WrongClientDataType,
     ChallengeMismatch,
     OriginNotAllowed,
+    CrossOriginNotAllowed,
     InvalidSignatureLength,
     HighS,
     BadSignature,
@@ -87,6 +88,7 @@ impl core::fmt::Display for WebauthnError {
             Self::WrongClientDataType => "clientData type is not webauthn.get",
             Self::ChallengeMismatch => "challenge mismatch",
             Self::OriginNotAllowed => "origin not allowed",
+            Self::CrossOriginNotAllowed => "cross-origin assertions are not allowed",
             Self::InvalidSignatureLength => "signature must be 64 bytes",
             Self::HighS => "P-256 signature is not low-s",
             Self::BadSignature => "bad signature",
@@ -110,12 +112,16 @@ struct ClientData {
     typ: String,
     challenge: String,
     origin: String,
+    #[serde(rename = "crossOrigin", default)]
+    cross_origin: Option<bool>,
 }
 
 /// Verifies a WebAuthn assertion over `expected_challenge` by `key`.
 ///
 /// See <https://w3c.github.io/webauthn/#sctn-verifying-assertion>. Both UP and
-/// UV must be set. P-256 signatures must be low-s.
+/// UV must be set. P-256 signatures must be low-s. Signatures are checked with
+/// the `p256_verify` / `ed25519_verify` host functions; in unit tests,
+/// near-sdk's mocked blockchain runs the same nearcore verification logic.
 pub fn verify_assertion(
     key: &SignerKey,
     a: &Assertion,
@@ -142,9 +148,9 @@ pub fn verify_assertion(
             if !env::p256_signature_is_low_s(signature) {
                 return Err(WebauthnError::HighS);
             }
-            p256_verify(signature, &env::sha256_array(&msg), pk)
+            env::p256_verify(signature, &env::sha256_array(&msg), pk)
         }
-        SignerKey::Ed25519(pk) => ed25519_verify(signature, &msg, pk),
+        SignerKey::Ed25519(pk) => env::ed25519_verify(signature, &msg, pk),
     };
     if ok {
         Ok(())
@@ -196,38 +202,11 @@ fn check_client_data(
     if !allowed_origins.contains(&c.origin) {
         return Err(WebauthnError::OriginNotAllowed);
     }
+    // Step 13: Tendr has no cross-origin (iframe) embedding, so reject it outright.
+    if c.cross_origin == Some(true) {
+        return Err(WebauthnError::CrossOriginNotAllowed);
+    }
     Ok(())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn p256_verify(signature: &[u8; 64], prehash: &[u8; 32], public_key: &[u8; 33]) -> bool {
-    env::p256_verify(signature, prehash, public_key)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn ed25519_verify(signature: &[u8; 64], msg: &[u8], public_key: &[u8; 32]) -> bool {
-    env::ed25519_verify(signature, msg, public_key)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn p256_verify(signature: &[u8; 64], prehash: &[u8; 32], public_key: &[u8; 33]) -> bool {
-    use p256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
-    let Ok(vk) = VerifyingKey::from_sec1_bytes(public_key) else {
-        return false;
-    };
-    let Ok(sig) = Signature::from_slice(signature) else {
-        return false;
-    };
-    vk.verify_prehash(prehash, &sig).is_ok()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn ed25519_verify(signature: &[u8; 64], msg: &[u8], public_key: &[u8; 32]) -> bool {
-    let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(public_key) else {
-        return false;
-    };
-    vk.verify_strict(msg, &ed25519_dalek::Signature::from_bytes(signature))
-        .is_ok()
 }
 
 #[cfg(test)]
@@ -325,9 +304,12 @@ mod tests {
         assert_eq!(verify(&key, &a), Ok(()));
     }
 
-    #[test]
-    fn accepts_valid_ed25519_assertion() {
-        let sk = ed25519_dalek::SigningKey::from_bytes(&[2u8; 32]);
+    fn ed25519_key(seed: u8) -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+    }
+
+    fn valid_ed25519() -> (SignerKey, Assertion) {
+        let sk = ed25519_key(2);
         let authenticator_data = auth_data(rp_id_hash(), FLAGS_UP_UV);
         let client_data_json = client_data("webauthn.get", &CHALLENGE, ORIGIN);
         let signature = sk
@@ -340,6 +322,23 @@ mod tests {
             client_data_json,
             signature,
         };
+        (key, a)
+    }
+
+    /// Valid P-256 assertion whose clientDataJSON is `client_data_json`.
+    fn p256_with_client_data(client_data_json: &str) -> (SignerKey, Assertion) {
+        let sk = p256_key(1);
+        let a = p256_assertion(
+            &sk,
+            auth_data(rp_id_hash(), FLAGS_UP_UV),
+            client_data_json.to_string(),
+        );
+        (p256_signer(&sk), a)
+    }
+
+    #[test]
+    fn accepts_valid_ed25519_assertion() {
+        let (key, a) = valid_ed25519();
         assert_eq!(verify(&key, &a), Ok(()));
     }
 
@@ -467,5 +466,119 @@ mod tests {
             near_sdk::serde_json::from_value::<Assertion>(json).unwrap(),
             a
         );
+    }
+
+    #[test]
+    fn rejects_short_authenticator_data() {
+        let sk = p256_key(1);
+        let mut authenticator_data = auth_data(rp_id_hash(), FLAGS_UP_UV);
+        authenticator_data.truncate(36);
+        let a = p256_assertion(
+            &sk,
+            authenticator_data,
+            client_data("webauthn.get", &CHALLENGE, ORIGIN),
+        );
+        assert_eq!(
+            verify(&p256_signer(&sk), &a),
+            Err(WebauthnError::AuthenticatorDataTooShort)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_client_data() {
+        let challenge = URL_SAFE_NO_PAD.encode(CHALLENGE);
+        let cases = [
+            "not json".to_string(),
+            format!(r#"{{"type":"webauthn.get","origin":"{ORIGIN}"}}"#),
+            format!(
+                r#"{{"type":"webauthn.get","challenge":"{challenge}","challenge":"{challenge}","origin":"{ORIGIN}"}}"#
+            ),
+        ];
+        for json in cases {
+            let (key, a) = p256_with_client_data(&json);
+            assert_eq!(
+                verify(&key, &a),
+                Err(WebauthnError::InvalidClientData),
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_cross_origin() {
+        let json = format!(
+            r#"{{"type":"webauthn.get","challenge":"{}","origin":"{ORIGIN}","crossOrigin":true}}"#,
+            URL_SAFE_NO_PAD.encode(CHALLENGE)
+        );
+        let (key, a) = p256_with_client_data(&json);
+        assert_eq!(verify(&key, &a), Err(WebauthnError::CrossOriginNotAllowed));
+    }
+
+    #[test]
+    fn accepts_client_data_without_cross_origin() {
+        let json = format!(
+            r#"{{"type":"webauthn.get","challenge":"{}","origin":"{ORIGIN}"}}"#,
+            URL_SAFE_NO_PAD.encode(CHALLENGE)
+        );
+        let (key, a) = p256_with_client_data(&json);
+        assert_eq!(verify(&key, &a), Ok(()));
+    }
+
+    #[test]
+    fn rejects_invalid_signature_length() {
+        let (key, a) = valid_p256();
+        let sig = p256::ecdsa::Signature::from_slice(&a.signature).unwrap();
+        let der = sig.to_der().as_bytes().to_vec();
+        let mut long = a.signature.clone();
+        long.push(0);
+        let short = a.signature[..63].to_vec();
+        for bad in [short, long, der] {
+            let len = bad.len();
+            let a = Assertion {
+                signature: bad,
+                ..a.clone()
+            };
+            assert_eq!(
+                verify(&key, &a),
+                Err(WebauthnError::InvalidSignatureLength),
+                "len {len}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_backup_state_without_backup_eligible() {
+        let sk = p256_key(1);
+        // UP | UV | BS, without BE.
+        let a = p256_assertion(
+            &sk,
+            auth_data(rp_id_hash(), 0x15),
+            client_data("webauthn.get", &CHALLENGE, ORIGIN),
+        );
+        assert_eq!(
+            verify(&p256_signer(&sk), &a),
+            Err(WebauthnError::InvalidBackupFlags)
+        );
+    }
+
+    #[test]
+    fn rejects_ed25519_signature_by_other_key() {
+        let (_, a) = valid_ed25519();
+        let other = SignerKey::Ed25519(ed25519_key(4).verifying_key().to_bytes());
+        assert_eq!(verify(&other, &a), Err(WebauthnError::BadSignature));
+    }
+
+    #[test]
+    fn rejects_ed25519_tampered_message() {
+        let (key, mut a) = valid_ed25519();
+        a.authenticator_data[36] ^= 0x01; // signCount
+        assert_eq!(verify(&key, &a), Err(WebauthnError::BadSignature));
+    }
+
+    #[test]
+    fn rejects_p256_authenticator_data_tampered_after_signing() {
+        let (key, mut a) = valid_p256();
+        a.authenticator_data[36] ^= 0x01; // signCount
+        assert_eq!(verify(&key, &a), Err(WebauthnError::BadSignature));
     }
 }
