@@ -139,13 +139,13 @@ describe('dashboard auth, signup, team and invites', () => {
     });
 
     // Passkey login creates a fresh session.
-    const loginOptions = await post(
-      '/v1/auth/passkeys/login/options',
-      {},
-      {
-        email: 'owner@example.com',
-      },
-    );
+    const loginOptions = await post('/v1/auth/passkeys/login/options', {}, {});
+    expect(loginOptions.json().allowCredentials ?? []).toEqual([]);
+    // The email parameter is gone: it would disclose credential ids.
+    expect(
+      (await post('/v1/auth/passkeys/login/options', {}, { email: 'owner@example.com' }))
+        .statusCode,
+    ).toBe(400);
     const loggedIn = await post(
       '/v1/auth/passkeys/login/verify',
       {},

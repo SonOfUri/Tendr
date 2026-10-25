@@ -316,7 +316,9 @@ model User {
   @@map("users")
 }
 
-/// A passkey. `public_key` is the contract's `SignerKey` JSON:
+/// A passkey. An active `public_key` is unique (a partial unique index in migration
+/// 20261025170000_dashboard_auth_hardening; Prisma cannot express it).
+/// `public_key` is the contract's `SignerKey` JSON:
 /// `{ "p256": "<base64 33-byte compressed SEC1>" }` or `{ "ed25519": "<base64 32 bytes>" }`.
 model WebauthnCredential {
   id           String    @id
@@ -345,13 +347,16 @@ model WebauthnCredential {
 
 /// A dashboard login. Sliding expiry: each use moves `expires_at` (default 30 days).
 model DashboardSession {
-  id         String    @id
-  userId     String    @map("user_id")
-  tokenHash  String    @unique @map("token_hash")
-  expiresAt  DateTime  @map("expires_at")
-  revokedAt  DateTime? @map("revoked_at")
-  lastUsedAt DateTime? @map("last_used_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  id                String    @id
+  userId            String    @map("user_id")
+  tokenHash         String    @unique @map("token_hash")
+  expiresAt         DateTime  @map("expires_at")
+  revokedAt         DateTime? @map("revoked_at")
+  lastUsedAt        DateTime? @map("last_used_at")
+  /// When this session last proved a passkey (login, first registration, step-up). Sensitive
+  /// actions need it within the last 10 minutes.
+  passkeyVerifiedAt DateTime? @map("passkey_verified_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 

@@ -1,4 +1,8 @@
-// Email magic links: verifying a new person's email (signup) and signing in by email.
+// Email magic links: verifying a new person's email (signup) and bootstrapping their first
+// passkey. A link creates a session ONLY for a person with no active passkey; anyone with a
+// passkey signs in with it, so a mailbox alone never opens an account that has one.
+// Losing every passkey is not solved by email: a signer recovers through the recovery kit
+// (Task 12, `start_recovery`), which replaces the signer set on chain.
 //
 // A link carries 32 random bytes (base64url); only `sha256(token)` is stored in `email_tokens`.
 // Links are single-use and live 15 minutes. Using a link creates the person on first use (one
@@ -22,13 +26,18 @@ export function newLinkToken(): { raw: string; hash: string } {
   return { raw, hash: sha256(raw) };
 }
 
+const hasActivePasskey = async (userId: string) =>
+  (await prisma.webauthnCredential.count({ where: { userId, revokedAt: null } })) > 0;
+
 /**
- * Sends a sign-in link: `login_link` to a person whose email is verified, `verify_email`
- * otherwise. The caller learns nothing about which one was sent.
+ * Sends a sign-in link: `login_link` to a verified person with no passkey yet, `verify_email` to
+ * anyone new. A person with an active passkey gets nothing (they log in with the passkey). The
+ * caller learns nothing about which case applied.
  */
 export async function startEmailSignIn(rawEmail: string): Promise<void> {
   const email = EmailSchema.parse(rawEmail);
   const user = await prisma.user.findUnique({ where: { email } });
+  if (user && (await hasActivePasskey(user.id))) return;
   const purpose = user?.emailVerifiedAt ? 'login' : 'verify';
   const { raw, hash } = newLinkToken();
   await prisma.emailToken.create({
@@ -51,7 +60,8 @@ export async function startEmailSignIn(rawEmail: string): Promise<void> {
 
 /**
  * Consumes a verify/login link and returns the person, creating them on first use. Throws 401
- * for an unknown, used or expired link.
+ * for an unknown, used or expired link, and for a person who has registered a passkey since the
+ * link was sent.
  */
 export async function consumeEmailLink(token: string): Promise<{ userId: string; email: string }> {
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw unauthorized('Invalid or expired link');
@@ -72,5 +82,7 @@ export async function consumeEmailLink(token: string): Promise<{ userId: string;
       SET email_verified_at = COALESCE(users.email_verified_at, EXCLUDED.email_verified_at),
           updated_at = EXCLUDED.updated_at
     RETURNING id`;
-  return { userId: users[0]!.id, email };
+  const userId = users[0]!.id;
+  if (await hasActivePasskey(userId)) throw unauthorized('Sign in with your passkey');
+  return { userId, email };
 }

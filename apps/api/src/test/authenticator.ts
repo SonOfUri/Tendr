@@ -26,7 +26,7 @@ export type SoftAuthenticatorOptions = {
 
 export class SoftAuthenticator {
   readonly alg: 'ES256' | 'EdDSA';
-  readonly credentialId = randomBytes(16);
+  credentialId: Buffer = randomBytes(16);
   private readonly privateKey: KeyObject;
   private readonly publicJwk: { x?: string; y?: string };
   private counter = 0;

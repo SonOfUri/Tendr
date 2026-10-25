@@ -36,12 +36,13 @@ import { prisma } from '../lib/prisma.js';
 import { getSecret } from '../secrets/secrets.js';
 import {
   csrfMatches,
+  isSteppedUp,
   parseCookies,
   resolveDashboardSession,
   sessionCookies,
   type ResolvedSession,
 } from '../auth/session.js';
-import type { Principal, RouteAuth } from './principal.js';
+import { stepUpRequired, type Principal, type RouteAuth } from './principal.js';
 import { verifyRequestSignature } from './signing.js';
 
 /** Key prefixes; publishable ones first, since `tdr_pk_…` must not parse as a secret key. */
@@ -205,7 +206,12 @@ async function resolveCookie(
   const allowsPerson = allowed.includes('user_session');
   if (!allowsStore || (merchantId === undefined && allowsPerson)) {
     return {
-      principal: { kind: 'user_session', userId: session.userId, sessionId: session.sessionId },
+      principal: {
+        kind: 'user_session',
+        userId: session.userId,
+        sessionId: session.sessionId,
+        passkeyVerifiedAt: session.passkeyVerifiedAt,
+      },
       cookie,
     };
   }
@@ -234,6 +240,8 @@ async function resolveCookie(
       role: membership.role,
       isSigner: membership.isSigner,
       permissions: [...ROLE_PERMISSIONS[membership.role]],
+      sessionId: session.sessionId,
+      passkeyVerifiedAt: session.passkeyVerifiedAt,
     },
     cookie,
   };
@@ -247,14 +255,28 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   app.decorateRequest('rawBody', undefined);
 
   const unconfigured: string[] = [];
+  const misconfigured: string[] = [];
   app.addHook('onRoute', (route) => {
-    if (isV1(route.url) && route.config?.auth === undefined) {
-      unconfigured.push(`${String(route.method)} ${route.url}`);
+    const name = `${String(route.method)} ${route.url}`;
+    const cfg = route.config?.auth;
+    if (isV1(route.url) && cfg === undefined) unconfigured.push(name);
+    if (cfg && cfg !== 'public') {
+      // Fail closed: a permission is only meaningful for dashboard users, and step-up only for
+      // cookie sessions. Any other principal kind would pass such a check vacuously.
+      if (cfg.permission && cfg.principals.some((k) => k !== 'dashboard_user')) {
+        misconfigured.push(`${name} (permission needs principals ['dashboard_user'] only)`);
+      }
+      if (cfg.stepUp && cfg.principals.some((k) => !COOKIE_KINDS.has(k))) {
+        misconfigured.push(`${name} (stepUp needs cookie principals only)`);
+      }
     }
   });
   app.addHook('onReady', async () => {
     if (unconfigured.length > 0) {
       throw new Error(`routes without auth config: ${unconfigured.join(', ')}`);
+    }
+    if (misconfigured.length > 0) {
+      throw new Error(`routes with invalid auth config: ${misconfigured.join(', ')}`);
     }
   });
 
@@ -291,10 +313,11 @@ const authPlugin: FastifyPluginAsync = async (app) => {
         // the kind allowlist alone.
         auth.scope && 'scopes' in principal && !principal.scopes.includes(auth.scope)
         ? `Missing scope ${auth.scope}`
-        : // Dashboard users carry their role's permissions.
+        : // Dashboard users carry their role's permissions; any other kind fails closed
+          // (startup already rejects such routes; this is defense in depth).
           auth.permission &&
-            principal.kind === 'dashboard_user' &&
-            !principal.permissions.includes(auth.permission)
+            (principal.kind !== 'dashboard_user' ||
+              !principal.permissions.includes(auth.permission))
           ? `Missing permission ${auth.permission}`
           : cookie &&
               !SAFE_METHODS.has(req.method) &&
@@ -304,6 +327,15 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     if (denial) {
       requestLog(req, principal, { outcome: 'forbidden', statusCode: 403 });
       throw forbidden(denial);
+    }
+
+    // Step-up: a recent passkey assertion on the session, for routes that ask for it and for every
+    // team:manage mutation. Anything not authenticated by a session cookie cannot step up.
+    const needsStepUp =
+      auth.stepUp || (auth.permission === 'team:manage' && !SAFE_METHODS.has(req.method));
+    if (needsStepUp && !isSteppedUp(cookie?.session.passkeyVerifiedAt ?? null)) {
+      requestLog(req, principal, { outcome: 'step_up_required', statusCode: 401 });
+      throw stepUpRequired();
     }
 
     req.principal = principal;

@@ -14,6 +14,8 @@ export const ErrorCodes = [
   'RATE_LIMITED',
   'INTERNAL_ERROR',
   'EXPIRED',
+  /** A recent passkey assertion is required (`POST /v1/auth/passkeys/step-up/*`). */
+  'STEP_UP_REQUIRED',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../lib/prisma.js';
-import { createUser, resetDb } from '../test/helpers.js';
+import { createCredential, createUser, resetDb } from '../test/helpers.js';
 import { memoryMailer, tokenFromMail } from '../test/dashboard.js';
 import { consumeEmailLink, MAGIC_LINK_TTL_MS, startEmailSignIn } from './magic-link.js';
 
@@ -30,6 +30,29 @@ describe('magic links', () => {
     await createUser({ email: 'grace@example.com', emailVerifiedAt: new Date() });
     await startEmailSignIn('grace@example.com');
     expect(memoryMailer().sent[0]).toMatchObject({ template: 'login_link' });
+  });
+
+  it('a person with an active passkey gets no email link at all (passkey login only)', async () => {
+    const user = await createUser({ email: 'pk@example.com', emailVerifiedAt: new Date() });
+    await createCredential(user.id);
+    await startEmailSignIn('pk@example.com');
+    expect(memoryMailer().sent).toEqual([]);
+    expect(await prisma.emailToken.count()).toBe(0);
+    // A revoked passkey does not count: the person can bootstrap a new first passkey by email.
+    // (Losing every passkey of a signer is handled by the recovery kit, Task 12.)
+    await prisma.webauthnCredential.updateMany({ data: { revokedAt: new Date() } });
+    await startEmailSignIn('pk@example.com');
+    expect(memoryMailer().sent).toHaveLength(1);
+  });
+
+  it('a link issued before the person registered a passkey no longer signs in', async () => {
+    await startEmailSignIn('ada@example.com');
+    const token = tokenFromMail('ada@example.com', 'verify_email');
+    await startEmailSignIn('ada@example.com');
+    const second = tokenFromMail('ada@example.com', 'verify_email');
+    const { userId } = await consumeEmailLink(token);
+    await createCredential(userId);
+    await expect(consumeEmailLink(second)).rejects.toMatchObject({ status: 401 });
   });
 
   it('magic_link_single_use_and_expires_15min', async () => {

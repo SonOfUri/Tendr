@@ -10,6 +10,10 @@
 //   `CEREMONY_CHALLENGE_TAG ‖ 32 random bytes`. Proposal approvals sign a bare 32-byte
 //   `sha256(borsh(ApprovalPayload))`, so a login/registration assertion can never be an approval
 //   and an approval assertion can never be a login (its challenge was never issued here).
+// - Attestation is `none`, so a client can submit ANY public key. An active public key is unique
+//   (partial unique index), so nobody can register someone else's key. Still, a stored key proves
+//   only that its registrant controls it: on-chain signer mirroring and approvals must map a
+//   signer by (user_id, credential row id) — never look a person up by public key alone.
 // - Revoked credentials (`revoked_at` set) are ignored everywhere: login, `allowCredentials`,
 //   and `activeCredentials` (the lookup approvals must use).
 import { randomBytes } from 'node:crypto';
@@ -26,7 +30,7 @@ import {
   type RegistrationResponseJSON,
 } from '@simplewebauthn/server';
 import { decodeClientDataJSON, isoCBOR } from '@simplewebauthn/server/helpers';
-import type { WebauthnCredential } from '@prisma/client';
+import { Prisma, type WebauthnCredential } from '@prisma/client';
 import { SignerKeySchema, type SignerKey } from '@tendr/contracts';
 import { env } from '../env.js';
 import { sha256 } from '../lib/crypto.js';
@@ -219,30 +223,50 @@ export async function verifyRegistration(
   if (!verified.verified || !verified.registrationInfo.userVerified) throw registrationFailed();
   const { credential } = verified.registrationInfo;
   const publicKey = SignerKeySchema.parse(coseToSignerKey(credential.publicKey));
-  return prisma.webauthnCredential.create({
-    data: {
-      id: newId('cred'),
-      userId: user.id,
-      credentialId: credential.id,
-      publicKey,
-      signCount: BigInt(credential.counter),
-      transports: credential.transports ?? response.response.transports ?? [],
-      deviceLabel,
-    },
+  try {
+    return await prisma.webauthnCredential.create({
+      data: {
+        id: newId('cred'),
+        userId: user.id,
+        credentialId: credential.id,
+        publicKey,
+        signCount: BigInt(credential.counter),
+        transports: credential.transports ?? response.response.transports ?? [],
+        deviceLabel,
+      },
+    });
+  } catch (err) {
+    // The credential id, or the active public key, is already registered (to anyone).
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      throw conflict('This passkey is already registered');
+    }
+    throw err;
+  }
+}
+
+/**
+ * Login options: always a discoverable login with an empty `allowCredentials`, so the endpoint
+ * neither reveals whether an email has an account nor discloses credential ids.
+ */
+export async function authenticationOptions(): Promise<PublicKeyCredentialRequestOptionsJSON> {
+  const challenge = await issueChallenge('authentication', null);
+  return generateAuthenticationOptions({
+    rpID: env().WEBAUTHN_RP_ID,
+    challenge: Buffer.from(challenge, 'base64url'),
+    userVerification: 'required',
+    allowCredentials: [],
   });
 }
 
 /**
- * Login options. With an email of a known person, `allowCredentials` lists their active
- * passkeys; otherwise it is empty and the browser offers discoverable credentials.
+ * Step-up options for an already signed-in person: their active passkeys are offered (the
+ * session already knows who they are). Verified with `verifyAuthentication`; the caller must
+ * check that the returned person is the session's.
  */
-export async function authenticationOptions(
-  email?: string,
+export async function stepUpOptions(
+  userId: string,
 ): Promise<PublicKeyCredentialRequestOptionsJSON> {
-  const user = email
-    ? await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } })
-    : null;
-  const creds = user ? await activeCredentials(user.id) : [];
+  const creds = await activeCredentials(userId);
   const challenge = await issueChallenge('authentication', null);
   return generateAuthenticationOptions({
     rpID: env().WEBAUTHN_RP_ID,
@@ -300,9 +324,15 @@ export async function verifyAuthentication(
 
 /**
  * Revokes one of the person's own passkeys. Refuses to revoke their last active one (they would
- * be locked out). Serialised per person, so two concurrent revocations cannot both pass.
+ * be locked out). Serialised per person, so two concurrent revocations cannot both pass. Every
+ * other dashboard session of the person ends too (a lost device may hold one); the session
+ * `keepSessionId` doing the revocation survives.
  */
-export async function revokeCredential(userId: string, credentialRowId: string): Promise<void> {
+export async function revokeCredential(
+  userId: string,
+  credentialRowId: string,
+  keepSessionId?: string,
+): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`;
     const active = await tx.webauthnCredential.findMany({
@@ -311,9 +341,18 @@ export async function revokeCredential(userId: string, credentialRowId: string):
     });
     if (!active.some((c) => c.id === credentialRowId)) throw notFound('Passkey not found');
     if (active.length < 2) throw conflict('Cannot remove your only passkey; add another first');
+    const now = new Date();
     await tx.webauthnCredential.update({
       where: { id: credentialRowId },
-      data: { revokedAt: new Date() },
+      data: { revokedAt: now },
+    });
+    await tx.dashboardSession.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        ...(keepSessionId ? { id: { not: keepSessionId } } : {}),
+      },
+      data: { revokedAt: now },
     });
   });
 }

@@ -11,9 +11,12 @@ import { getMailer, MemoryMailer } from '../auth/mailer.js';
 
 export type Login = { token: string; csrf: string; userId: string };
 
-/** A live dashboard session for `userId`, as the cookie login would create it. */
-export async function loginAs(userId: string): Promise<Login> {
-  const s = await createDashboardSession(userId);
+/**
+ * A live dashboard session for `userId`. By default it is as a passkey login creates it (a fresh
+ * passkey assertion, so step-up checks pass); `{ stepUp: false }` gives an email-link session.
+ */
+export async function loginAs(userId: string, opts: { stepUp?: boolean } = {}): Promise<Login> {
+  const s = await createDashboardSession(userId, { passkeyVerified: opts.stepUp ?? true });
   return { token: s.token, csrf: s.csrf, userId };
 }
 

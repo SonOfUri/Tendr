@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import { SoftAuthenticator } from '../test/authenticator.js';
 import { createUser, resetDb } from '../test/helpers.js';
+import { createDashboardSession, resolveDashboardSession } from './session.js';
 import {
   activeCredentials,
   authenticationOptions,
@@ -87,9 +88,10 @@ describe('webauthn', () => {
     const user = await createUser();
     const auth = new SoftAuthenticator();
     await register(user, auth);
-    const options = await authenticationOptions(user.email);
+    const options = await authenticationOptions();
     expect(options.userVerification).toBe('required');
-    expect(options.allowCredentials?.map((c) => c.id)).toEqual([auth.id]);
+    // Always a discoverable login: no credential ids are disclosed.
+    expect(options.allowCredentials ?? []).toEqual([]);
     const result = await verifyAuthentication(auth.get(options));
     expect(result.userId).toBe(user.id);
     const row = await prisma.webauthnCredential.findUniqueOrThrow({
@@ -154,6 +156,38 @@ describe('webauthn', () => {
     expect(isCeremonyChallenge(Buffer.from(reg.challenge, 'base64url'))).toBe(true);
   });
 
+  it('a public key cannot be registered twice while active; nor a credential id', async () => {
+    const alice = await createUser();
+    const mallory = await createUser();
+    const auth = new SoftAuthenticator();
+    await register(alice, auth);
+    // Same key under a fresh credential id (none attestation lets anyone submit any key).
+    auth.credentialId = randomBytes(16);
+    await expect(register(mallory, auth)).rejects.toMatchObject({ status: 409 });
+    await expect(register(alice, auth)).rejects.toMatchObject({ status: 409 });
+    // Same credential id with a different key.
+    const other = new SoftAuthenticator();
+    other.credentialId = Buffer.from(auth.credentialId);
+    await register(alice, other); // auth's new id was never stored
+    const clash = new SoftAuthenticator();
+    clash.credentialId = Buffer.from(other.credentialId);
+    await expect(register(mallory, clash)).rejects.toMatchObject({ status: 409 });
+    expect(await prisma.webauthnCredential.count()).toBe(2);
+  });
+
+  it("revoking a passkey ends the person's other sessions, keeping the current one", async () => {
+    const user = await createUser();
+    const a = await register(user, new SoftAuthenticator());
+    await register(user, new SoftAuthenticator());
+    const current = await createDashboardSession(user.id, { passkeyVerified: true });
+    const other = await createDashboardSession(user.id, { passkeyVerified: true });
+    const stranger = await createDashboardSession((await createUser()).id);
+    await revokeCredential(user.id, a.id, current.sessionId);
+    expect(await resolveDashboardSession(current.token)).not.toBeNull();
+    expect(await resolveDashboardSession(other.token)).toBeNull();
+    expect(await resolveDashboardSession(stranger.token)).not.toBeNull();
+  });
+
   it('revoked passkeys cannot log in, are not offered, and the last one cannot be revoked', async () => {
     const user = await createUser();
     const a = new SoftAuthenticator();
@@ -163,16 +197,10 @@ describe('webauthn', () => {
     await revokeCredential(user.id, credA.id);
     await expect(revokeCredential(user.id, credB.id)).rejects.toMatchObject({ status: 409 });
     expect((await activeCredentials(user.id)).map((c) => c.id)).toEqual([credB.id]);
-    const options = await authenticationOptions(user.email);
-    expect(options.allowCredentials?.map((c) => c.id)).toEqual([b.id]);
+    const options = await authenticationOptions();
     await expect(verifyAuthentication(a.get(options))).rejects.toMatchObject({ status: 401 });
     // Another person's passkey is not found.
     const other = await createUser();
     await expect(revokeCredential(other.id, credB.id)).rejects.toMatchObject({ status: 404 });
-  });
-
-  it('an unknown email gets options with no credentials (discoverable login)', async () => {
-    const options = await authenticationOptions('nobody@example.com');
-    expect(options.allowCredentials ?? []).toEqual([]);
   });
 });

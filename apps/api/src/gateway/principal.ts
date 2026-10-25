@@ -4,7 +4,8 @@
 import type { MerchantPermission, MerchantUserRole, PrincipalKind, Scope } from '@tendr/contracts';
 import type { FastifyRequest } from 'fastify';
 import type { ScopedDb } from '../db/scoped.js';
-import { forbidden, unauthorized } from '../lib/errors.js';
+import { isSteppedUp } from '../auth/session.js';
+import { AppError, forbidden, unauthorized } from '../lib/errors.js';
 
 type Base = { merchantId: string; livemode: boolean };
 
@@ -21,11 +22,14 @@ export type Principal =
       role: MerchantUserRole;
       isSigner: boolean;
       permissions: MerchantPermission[];
+      /** The dashboard session (`dss_…`) and its last passkey assertion (step-up). */
+      sessionId: string;
+      passkeyVerifiedAt: Date | null;
     })
   // Resolved by the agent gateway (project 6); nothing produces it yet.
   | (Base & { kind: 'agent'; agentId: string })
   // A signed-in person with no store selected: signup, store switcher, invite acceptance.
-  | { kind: 'user_session'; userId: string; sessionId: string };
+  | { kind: 'user_session'; userId: string; sessionId: string; passkeyVerifiedAt: Date | null };
 
 /** A principal pinned to a merchant + mode (every kind but `user_session`). */
 export type MerchantPrincipal = Exclude<Principal, { kind: 'user_session' }>;
@@ -34,10 +38,19 @@ export type MerchantPrincipal = Exclude<Principal, { kind: 'user_session' }>;
  * Per-route auth: `'public'`, or the principal kinds allowed plus optional checks:
  * - `scope`: required of API-key principals (they carry scopes);
  * - `permission`: required of `dashboard_user` principals (from their role, `ROLE_PERMISSIONS`).
- *   Other principal kinds are not affected by it.
+ *   A route declaring it may allow ONLY `dashboard_user` (startup fails otherwise).
+ * - `stepUp`: the dashboard session must have proved a passkey within the last 10 minutes
+ *   (401 STEP_UP_REQUIRED). Only for cookie principals (`dashboard_user`, `user_session`).
+ *   Mutations under `permission: 'team:manage'` always require it.
  */
 export type RouteAuth =
-  { principals: PrincipalKind[]; scope?: Scope; permission?: MerchantPermission } | 'public';
+  | {
+      principals: PrincipalKind[];
+      scope?: Scope;
+      permission?: MerchantPermission;
+      stepUp?: boolean;
+    }
+  | 'public';
 
 declare module 'fastify' {
   interface FastifyContextConfig {
@@ -72,6 +85,24 @@ export function requireDashboardUser(req: FastifyRequest): DashboardUserPrincipa
   if (p.kind !== 'dashboard_user') throw forbidden('This endpoint needs a store (Tendr-Merchant)');
   return p;
 }
+
+/**
+ * Throws 401 STEP_UP_REQUIRED unless the request's dashboard session proved a passkey within the
+ * step-up window. For handlers whose need for step-up depends on state (e.g. adding a second
+ * passkey); fixed requirements belong in `RouteAuth.stepUp`.
+ */
+export function requireStepUp(req: FastifyRequest): void {
+  const p = requirePrincipal(req);
+  const at = p.kind === 'dashboard_user' || p.kind === 'user_session' ? p.passkeyVerifiedAt : null;
+  if (!isSteppedUp(at)) throw stepUpRequired();
+}
+
+export const stepUpRequired = () =>
+  new AppError(
+    'STEP_UP_REQUIRED',
+    'Confirm with your passkey first (POST /v1/auth/passkeys/step-up/options)',
+    401,
+  );
 
 /** The person behind a dashboard request (`dashboard_user` or `user_session`); 401 otherwise. */
 export function requirePerson(req: FastifyRequest): { userId: string } {
