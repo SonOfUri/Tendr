@@ -122,7 +122,11 @@ const EnvSchema = z
      */
     CHECKOUT_BASE_URL: z.preprocess(
       blankAsUnset,
-      z.string().url().default('http://localhost:3000'),
+      z
+        .string()
+        .url()
+        .refine((u) => /^https?:\/\//i.test(u), 'must be an http(s) URL')
+        .default('http://localhost:3000'),
     ),
   })
   .superRefine((e, ctx) => {

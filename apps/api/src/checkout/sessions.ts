@@ -27,8 +27,8 @@ import { sha256 } from '../lib/crypto.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { toJsonDecimal } from '../lib/serialize.js';
-import { providerFor } from './oneclick/index.js';
 import { resolvePayers } from './pricing.js';
+import { tokenInfo } from './tokens.js';
 
 /** The tenant (merchant + mode) plus its scoped client: the request's principal and `req.db`. */
 export type CheckoutCtx = ScopeContext & { db: ScopedDb };
@@ -46,7 +46,9 @@ const httpUrl = z
   .string()
   .max(2048)
   .url()
-  .refine((u) => /^https?:$/.test(new URL(u).protocol), 'must be an http(s) URL');
+  // A regex, not `new URL()`: refinements also run on strings `.url()` rejected, and a throw here
+  // would be a 500.
+  .refine((u) => /^https?:\/\//i.test(u), 'must be an http(s) URL');
 
 export const CreateSessionSchema = z
   .object({
@@ -109,13 +111,39 @@ export function hostedUrl(id: string): string {
   return `${env().CHECKOUT_BASE_URL.replace(/\/+$/, '')}/pay/${id}`;
 }
 
-/** P2002 on the partial unique index over open/paid sessions' `external_ref`. */
-function isExternalRefConflict(err: unknown): boolean {
-  return (
-    err instanceof Prisma.PrismaClientKnownRequestError &&
-    err.code === 'P2002' &&
-    JSON.stringify(err.meta ?? {}).includes('external_ref')
-  );
+/** Statuses that hold an `external_ref` (the partial unique index's predicate). */
+const REF_HOLDING_STATUSES = [
+  'PENDING_DEPOSIT',
+  'PROCESSING',
+  'SCREENING_PENDING',
+  'SETTLED',
+] as const;
+
+/**
+ * How Prisma may name the partial unique index `sessions_active_external_ref_key` (migration
+ * checkout_external_ref) in a P2002's meta: the index name, the column, or the field.
+ */
+const EXTERNAL_REF_META = /sessions_active_external_ref_key|external_ref|externalRef/;
+
+const isP2002 = (err: unknown): err is Prisma.PrismaClientKnownRequestError =>
+  err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
+
+/**
+ * Whether a P2002 is the `external_ref` index. The index is raw SQL, so what Prisma reports in
+ * `meta` varies by version (or is absent); when the meta names nothing we recognise, ask the
+ * database whether a ref-holding session with this ref now exists.
+ */
+async function isExternalRefConflict(
+  ctx: CheckoutCtx,
+  err: Prisma.PrismaClientKnownRequestError,
+  externalRef: string,
+): Promise<boolean> {
+  if (EXTERNAL_REF_META.test(JSON.stringify(err.meta ?? {}))) return true;
+  const holder = await ctx.db.session.findFirst({
+    where: { externalRef, status: { in: [...REF_HOLDING_STATUSES] } },
+    select: { id: true },
+  });
+  return holder !== null;
 }
 
 /**
@@ -143,10 +171,7 @@ export async function createSession(
   if (currency === 'USD') {
     assertAmount(input.amount, USD_DECIMALS, 'USD');
   } else if (currency === settlement.destAssetId) {
-    const token = (await providerFor(ctx.livemode).tokens()).find((t) => t.assetId === currency);
-    if (!token) {
-      throw new AppError('UNSUPPORTED_CURRENCY', `Unknown settlement asset ${currency}`, 400);
-    }
+    const token = await tokenInfo(ctx.livemode, currency);
     assertAmount(input.amount, Math.min(token.decimals, AMOUNT_MAX_SCALE), currency);
   } else {
     throw new AppError(
@@ -197,6 +222,21 @@ export async function createSession(
 
   try {
     await tenantTransaction(ctx, async (tx, t) => {
+      // A PENDING_DEPOSIT session past its expiry that the sweeper has not reached yet still holds
+      // the ref; expire it (timeout) first so the store's retry is not refused.
+      const stale = await tx.session.findMany({
+        where: {
+          merchantId: t.merchantId,
+          livemode: t.livemode,
+          externalRef: input.external_ref,
+          status: 'PENDING_DEPOSIT',
+          expiresAt: { lte: now },
+        },
+        select: { id: true },
+      });
+      for (const s of stale) {
+        await expireInTx(tx, t, s.id, input.external_ref, 'timeout');
+      }
       await tx.session.create({
         data: {
           id,
@@ -231,7 +271,7 @@ export async function createSession(
       });
     });
   } catch (err) {
-    if (isExternalRefConflict(err)) {
+    if (isP2002(err) && (await isExternalRefConflict(ctx, err, input.external_ref))) {
       throw conflict('A session with this external_ref is already open or paid', {
         external_ref: input.external_ref,
       });
@@ -342,14 +382,32 @@ export async function expireSession(ctx: CheckoutCtx, id: string): Promise<Sessi
       select: { externalRef: true },
     });
     if (!s) throw notFound('Session not found');
-    await transitionSession(tx, t, id, 'EXPIRED', { reason: 'canceled' });
-    await tx.session.updateMany({ where: { id, ...tenant }, data: { expiredReason: 'canceled' } });
-    await recordEvent(tx, t, {
-      aggregateType: 'session',
-      aggregateId: id,
-      type: 'checkout.session.expired',
-      payload: { session_id: id, external_ref: s.externalRef, reason: 'canceled' },
-    });
+    await expireInTx(tx, t, id, s.externalRef, 'canceled');
   });
   return sessionView(ctx, id);
+}
+
+/**
+ * `PENDING_DEPOSIT → EXPIRED` with `expired_reason`, plus `checkout.session.expired`, inside the
+ * caller's `tenantTransaction` (same `ctx`). Any other status is INVALID_STATE_TRANSITION (409);
+ * a concurrent change is CONFLICT (409).
+ */
+export async function expireInTx(
+  tx: Prisma.TransactionClient,
+  ctx: ScopeContext,
+  id: string,
+  externalRef: string | null,
+  reason: 'timeout' | 'canceled',
+): Promise<void> {
+  await transitionSession(tx, ctx, id, 'EXPIRED', { reason });
+  await tx.session.updateMany({
+    where: { id, merchantId: ctx.merchantId, livemode: ctx.livemode },
+    data: { expiredReason: reason },
+  });
+  await recordEvent(tx, ctx, {
+    aggregateType: 'session',
+    aggregateId: id,
+    type: 'checkout.session.expired',
+    payload: { session_id: id, external_ref: externalRef, reason },
+  });
 }

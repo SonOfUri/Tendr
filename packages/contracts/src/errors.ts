@@ -30,6 +30,10 @@ export const ErrorCodes = [
   'UNSUPPORTED_CURRENCY',
   /** The store cannot take payments in this mode yet: no active merchant account or settlement config. */
   'ACCOUNT_NOT_READY',
+  /** An external provider (e.g. 1Click) failed or timed out; retry later. */
+  'PROVIDER_UNAVAILABLE',
+  /** An asset the provider does not list (e.g. a settlement asset 1Click cannot route). */
+  'UNSUPPORTED_ASSET',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

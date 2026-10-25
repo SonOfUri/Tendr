@@ -263,6 +263,9 @@ describe('loadEnv checkout base url', () => {
 
   it('rejects a non-URL', () => {
     expect(() => loadEnv({ ...base, CHECKOUT_BASE_URL: 'not a url' })).toThrow(/CHECKOUT_BASE_URL/);
+    expect(() => loadEnv({ ...base, CHECKOUT_BASE_URL: 'ftp://pay.tendr.xyz' })).toThrow(
+      /CHECKOUT_BASE_URL/,
+    );
   });
 });
 

@@ -2,6 +2,8 @@ import type { Merchant } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
+import { simulatedOneClick } from '../checkout/oneclick/index.js';
+import { resetTokenCache } from '../checkout/tokens.js';
 import { env } from '../env.js';
 import { sha256 } from '../lib/crypto.js';
 import { prisma } from '../lib/prisma.js';
@@ -18,6 +20,7 @@ describe('checkout session routes', () => {
 
   beforeEach(async () => {
     await resetDb();
+    resetTokenCache();
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     app = await buildApp();
     await app.ready();
@@ -36,6 +39,8 @@ describe('checkout session routes', () => {
   afterEach(async () => {
     await app.close();
     logSpy.mockRestore();
+    vi.restoreAllMocks();
+    resetTokenCache();
   });
   afterAll(async () => {
     await prisma.$disconnect();
@@ -191,6 +196,43 @@ describe('checkout session routes', () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it('reads asset decimals from a cached token list', async () => {
+      const spy = vi.spyOn(simulatedOneClick(), 'tokens');
+      for (const ref of ['a-1', 'a-2']) {
+        const r = await create(
+          body({ amount_currency: 'nep141:usdc.test', amount: '1.5', external_ref: ref }),
+        );
+        expect(r.statusCode, r.body).toBe(201);
+      }
+      expect(spy).toHaveBeenCalledTimes(1);
+      // USD orders never ask the provider.
+      expect((await create(body({ external_ref: 'a-3' }))).statusCode).toBe(201);
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it('a provider outage is 503 PROVIDER_UNAVAILABLE, and is not cached', async () => {
+      const spy = vi
+        .spyOn(simulatedOneClick(), 'tokens')
+        .mockRejectedValueOnce(new Error('1Click down'));
+      const r = await create(body({ amount_currency: 'nep141:usdc.test', amount: '1.5' }));
+      expect(r.statusCode).toBe(503);
+      expect(r.json().error.code).toBe('PROVIDER_UNAVAILABLE');
+      const again = await create(body({ amount_currency: 'nep141:usdc.test', amount: '1.5' }));
+      expect(again.statusCode, again.body).toBe(201);
+      expect(spy).toHaveBeenCalledTimes(2);
+    });
+
+    it('a settlement asset the provider does not list is 400 UNSUPPORTED_ASSET', async () => {
+      await prisma.settlementConfig.updateMany({
+        where: { merchantId: merchant.id },
+        data: { destAssetId: 'nep141:unknown.test' },
+      });
+      const r = await create(body({ amount_currency: 'nep141:unknown.test', amount: '1' }));
+      expect(r.statusCode).toBe(400);
+      expect(r.json().error.code).toBe('UNSUPPORTED_ASSET');
+      expect(r.json().error.message).toContain('nep141:unknown.test');
+    });
+
     it('accepts the settlement asset with up to its decimals', async () => {
       const ok = await create(body({ amount_currency: 'nep141:usdc.test', amount: '25.123456' }));
       expect(ok.statusCode, ok.body).toBe(201);
@@ -237,6 +279,42 @@ describe('checkout session routes', () => {
       const third = await create(body());
       expect(third.statusCode).toBe(409);
       expect(third.json().error.code).toBe('CONFLICT');
+    });
+
+    it('two concurrent creates with the same ref: exactly one 201 and one 409', async () => {
+      const results = await Promise.all([
+        create(body(), testKey, 'race-a'),
+        create(body(), testKey, 'race-b'),
+      ]);
+      const codes = results.map((r) => r.statusCode).sort();
+      expect(codes, results.map((r) => r.body).join('\n')).toEqual([201, 409]);
+      const loser = results.find((r) => r.statusCode === 409)!;
+      expect(loser.json().error.code).toBe('CONFLICT');
+      expect(loser.json().error.details).toEqual({ external_ref: 'order-1001' });
+      expect(await prisma.session.count({ where: { externalRef: 'order-1001' } })).toBe(1);
+    });
+
+    it('expires an unswept PENDING_DEPOSIT session past its expiry, then creates', async () => {
+      const first = (await create(body())).json().id;
+      await prisma.session.update({
+        where: { id: first },
+        data: { expiresAt: new Date(Date.now() - 1000) },
+      });
+      const second = await create(body());
+      expect(second.statusCode, second.body).toBe(201);
+      const old = await prisma.session.findUniqueOrThrow({ where: { id: first } });
+      expect(old.status).toBe('EXPIRED');
+      expect(old.expiredReason).toBe('timeout');
+      const ev = await prisma.event.findFirst({
+        where: { aggregateId: first, type: 'checkout.session.expired' },
+      });
+      expect(ev?.payload).toMatchObject({
+        session_id: first,
+        external_ref: 'order-1001',
+        reason: 'timeout',
+      });
+      // A live (unexpired) one still conflicts.
+      expect((await create(body())).statusCode).toBe(409);
     });
 
     it('is scoped per mode', async () => {
@@ -437,6 +515,7 @@ describe('checkout session routes', () => {
   it('rejects unknown fields and bad urls', async () => {
     expect((await create(body({ dest_asset: 'x' }))).statusCode).toBe(400);
     expect((await create(body({ success_url: 'javascript:alert(1)' }))).statusCode).toBe(400);
+    expect((await create(body({ cancel_url: 'not a url' }))).statusCode).toBe(400);
     expect((await create(body({ customer_email: 'nope' }))).statusCode).toBe(400);
     const { external_ref: _omit, ...noRef } = body();
     expect((await create(noRef)).statusCode).toBe(400);
