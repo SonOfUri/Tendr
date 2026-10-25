@@ -25,9 +25,12 @@ const API_URL = `http://localhost:${API_PORT}`;
 /**
  * The browser: Playwright's bundled Chromium when it is installed, else the system Google Chrome
  * (`channel: 'chrome'`), so the specs run without downloading browsers. E2E_CHANNEL overrides.
+ * In CI (`CI=true`) always the installed Chromium (`npx playwright install chromium`): a missing
+ * install fails loudly instead of silently using whatever Chrome the runner has.
  */
 function channel(): string | undefined {
   if (process.env.E2E_CHANNEL) return process.env.E2E_CHANNEL;
+  if (process.env.CI === 'true' || process.env.CI === '1') return undefined;
   try {
     return existsSync(chromium.executablePath()) ? undefined : 'chrome';
   } catch {

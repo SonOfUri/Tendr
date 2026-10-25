@@ -97,6 +97,34 @@ access keys**. A threshold contract (`onchain/merchant-account`) is the only thi
 it, and signers are passkeys verified inside the contract. Design:
 `docs/superpowers/specs/2026-10-25-merchant-accounts-design.md`.
 
+**What waits 24 hours.** The contract holds these for 24 h after they reach the threshold, emails
+every signer when the wait starts, lets any signer cancel during it, and re-checks them when they
+run: swap withdrawals, refunds over the daily refund cap, raising a limit or the refund cap,
+upgrades, and every security change that widens who can sign or how — adding a signer, adding a
+passkey to a signer, replacing or clearing the recovery key, lowering the approval threshold, and
+changing the allowed origins (ruling R34). Removing a signer or a key and raising the threshold
+apply at once, so signers can always lock someone out immediately. A new saved address can receive
+money 24 h after it is approved.
+
+**Sweeps and limits.** Auto-sweeps are not counted against the per-withdrawal or per-day limits:
+a sweep can only pay the saved address pinned in its rule, which itself waited 24 h before it could
+receive money. Withdrawals and refunds are limited; sweeps are bounded by the sweep rule instead.
+
+**Account storage.** Each proposal's record stays in the account contract's storage, paid from the
+account's own NEAR (seeded with `MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO`, 0.5 NEAR by default).
+Measured on the sandbox (`storage_per_proposal` in `onchain/merchant-account/tests/sandbox.rs`), one
+proposal from creation through execution adds 401–586 bytes (a withdrawal 456, the first withdrawal
+of an asset 586 with its limits state, an AddSigner 516): about 0.006 NEAR. The watcher checks every
+active account on each reconcile and, when its free balance would cover fewer than 50 more
+proposals (600 bytes each, 0.3 NEAR), sends `MERCHANT_ACCOUNT_STORAGE_TOPUP_YOCTO` (0.5 NEAR by
+default) from `funding-near`. Top-ups are `funding.topup` events and count against
+`FUNDING_DAILY_CAP_YOCTO`; if the cap blocks one, the account is flagged
+(`merchant_account.storage_low`) and the dashboard's account home shows a warning.
+
+**Known limitations.** Proposals, approvals, removed-address tombstones and limit windows are never
+pruned yet, so an account's storage only grows; pruning is deferred to a later contract version.
+Until then the top-ups above keep accounts writable.
+
 **Local development needs no NEAR node, GCP or contract build.** Outside production
 `NEAR_CLIENT_DRIVER` defaults to `fake`, an in-memory NEAR client. Set `NEAR_FAKE_SIMULATE=1` (e2e
 and offline demos only; refused with any other driver) to also run the contract's rules in memory.

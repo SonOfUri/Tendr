@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ed25519 } from '@noble/curves/ed25519';
 import { describe, expect, it } from 'vitest';
-import { countdown, describeAction, usableIn } from './actions';
+import { countdown, describeAction, SECURITY_DELAY, upgradeCodeHash, usableIn } from './actions';
+import { base58Encode } from './base58';
 import type { SavedAddress, SignerKey } from './api';
 import { assetInfo, formatAmount, formatUnits, parseUnits, poaTokenContract } from './assets';
 import { encodeRecoveryPayload, recoveryMessage } from './recovery-payload';
@@ -135,6 +136,59 @@ describe('describeAction', () => {
         .destination,
     ).toEqual({ chain: 'near', address: 'me.near' });
     expect(describeAction({ set_threshold: 2 }, ctx).title).toBe('Require 2 approvals');
+  });
+
+  it('security changes that widen access say they take effect 24 h after approval (R34)', () => {
+    const key = { p256: Buffer.alloc(33, 2).toString('base64') };
+    const withThreshold = { ...ctx, threshold: 2 };
+    const delayed = [
+      { add_signer: { id: 'per_1', keys: [key] } },
+      { add_signer_key: { id: 'per_1', key } },
+      { rotate_recovery_key: Buffer.alloc(32, 1).toString('base64') },
+      { rotate_recovery_key: null },
+      { set_origins: ['https://usetendr.tech'] },
+      { set_threshold: 1 },
+    ];
+    for (const action of delayed) {
+      const rows = describeAction(action, withThreshold).rows;
+      expect(rows, JSON.stringify(action)).toContainEqual({ label: 'When', value: SECURITY_DELAY });
+    }
+    for (const action of [
+      { set_threshold: 2 },
+      { set_threshold: 3 },
+      { remove_signer: { id: 'per_1' } },
+      { remove_signer_key: { id: 'per_1', key } },
+    ]) {
+      const rows = describeAction(action, withThreshold).rows;
+      expect(
+        rows.map((r) => r.label),
+        JSON.stringify(action),
+      ).not.toContain('When');
+    }
+  });
+
+  it('an upgrade shows its code hash in base58 and whether it is the Tendr release (I4)', () => {
+    const hash = Buffer.alloc(32, 9);
+    const action = { upgrade: { code_hash: hash.toString('base64') } };
+    const b58 = 'cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN';
+    const ok = describeAction(action, { ...ctx, releaseCodeHash: b58 });
+    expect(ok.rows).toContainEqual({ label: 'Code hash', value: b58 });
+    expect(ok.rows).toContainEqual({ label: 'Release', value: 'Matches the Tendr release' });
+    expect(ok.warnings.join(' ')).not.toMatch(/NOT a Tendr release/);
+    for (const release of [null, undefined, '11111111111111111111111111111111']) {
+      const bad = describeAction(action, { ...ctx, releaseCodeHash: release });
+      expect(bad.rows).toContainEqual({ label: 'Code hash', value: b58 });
+      expect(bad.warnings.join(' ')).toMatch(/NOT a Tendr release — do not approve/);
+    }
+    expect(upgradeCodeHash(hash.toString('base64'), b58).isRelease).toBe(true);
+  });
+
+  it('base58 matches the encoding NEAR and the publish script use', () => {
+    expect(base58Encode(new Uint8Array(32).fill(9))).toBe(
+      'cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN',
+    );
+    expect(base58Encode(new Uint8Array([0, 0, 1, 2, 255]))).toBe('11LiA');
+    expect(base58Encode(new Uint8Array(32))).toBe('1'.repeat(32));
   });
 
   it('countdown', () => {

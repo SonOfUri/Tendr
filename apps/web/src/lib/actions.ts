@@ -4,6 +4,7 @@
 // swap's deposit account, which is shown as such.
 import type { ActionJson, SavedAddress, TeamMember } from './api';
 import { chainLabel, formatAmount } from './assets';
+import { base58Encode, base64ToBytes } from './base58';
 
 export interface Destination {
   chain: string;
@@ -28,6 +29,30 @@ export interface ActionContext {
   members: TeamMember[];
   /** The account's mode: amounts are humanised only for that mode's registered assets. */
   livemode: boolean;
+  /** The account's current threshold, when known: lowering it is held for 24 h. */
+  threshold?: number;
+  /** The mode's Tendr release code hash (base58), when configured; upgrades are compared to it. */
+  releaseCodeHash?: string | null;
+}
+
+/** Shown on security changes the contract holds for 24 h after approval (R34). */
+export const SECURITY_DELAY = 'Takes effect 24 hours after approval. Any signer can cancel.';
+const delayRow = () => ({ label: 'When', value: SECURITY_DELAY });
+
+/** An upgrade's code hash in base58 and whether it is the configured Tendr release. */
+export function upgradeCodeHash(
+  codeHashB64: string,
+  releaseCodeHash: string | null | undefined,
+): { codeHash: string; isRelease: boolean; verdict: string } {
+  const codeHash = base58Encode(base64ToBytes(codeHashB64));
+  const isRelease = !!releaseCodeHash && releaseCodeHash === codeHash;
+  return {
+    codeHash,
+    isRelease,
+    verdict: isRelease
+      ? 'Matches the Tendr release'
+      : 'NOT a Tendr release — do not approve unless you expected this',
+  };
 }
 
 const KIND_TITLES: Record<string, string> = {
@@ -199,6 +224,7 @@ export function describeAction(action: ActionJson, ctx: ActionContext): ActionSu
       const id = String(v.id);
       rows.push({ label: 'Person', value: person(ctx.members, id) });
       rows.push({ label: 'Passkeys', value: String((v.keys as unknown[]).length) });
+      rows.push(delayRow());
       break;
     }
     case 'remove_signer':
@@ -207,15 +233,18 @@ export function describeAction(action: ActionJson, ctx: ActionContext): ActionSu
     case 'add_signer_key':
     case 'remove_signer_key':
       rows.push({ label: 'Person', value: person(ctx.members, String(v.id)) });
+      if (kind === 'add_signer_key') rows.push(delayRow());
       break;
     case 'set_threshold': {
       const n = Number(action.set_threshold);
       rows.push({ label: 'Approvals needed', value: String(n) });
       title = `Require ${n} approval${n === 1 ? '' : 's'}`;
+      if (ctx.threshold !== undefined && n < ctx.threshold) rows.push(delayRow());
       break;
     }
     case 'set_origins':
       rows.push({ label: 'Origins', value: (action.set_origins as string[]).join(', ') });
+      rows.push(delayRow());
       break;
     case 'rotate_recovery_key':
       rows.push({
@@ -225,11 +254,16 @@ export function describeAction(action: ActionJson, ctx: ActionContext): ActionSu
             ? 'None (turned off)'
             : 'A new kit replaces the old one',
       });
+      rows.push(delayRow());
       break;
-    case 'upgrade':
-      rows.push({ label: 'Code hash', value: String(v.code_hash) });
+    case 'upgrade': {
+      const h = upgradeCodeHash(String(v.code_hash), ctx.releaseCodeHash);
+      rows.push({ label: 'Code hash', value: h.codeHash });
+      rows.push({ label: 'Release', value: h.verdict });
+      if (!h.isRelease) warnings.push(`This code hash is ${h.verdict}.`);
       warnings.push('An upgrade replaces the code that guards the account.');
       break;
+    }
     default:
       rows.push({ label: 'Action', value: JSON.stringify(action) });
       break;

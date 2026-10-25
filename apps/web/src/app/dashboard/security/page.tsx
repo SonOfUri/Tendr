@@ -54,7 +54,10 @@ export default function SecurityPage() {
         <h1>Security</h1>
         <p className="muted">
           Settings of the {context.livemode ? 'live' : 'test'} account. Each change is a proposal
-          the signers approve; raising a limit or the refund cap waits 24 hours.
+          the signers approve. Raising a limit or the refund cap, adding a signer or a passkey,
+          replacing the recovery kit, lowering the approval rule and changing origins take effect 24
+          hours after approval, and any signer can cancel in that time. Removing a signer or a key
+          and raising the approval rule apply at once.
         </p>
         {notice && <Alert tone="success">{notice}</Alert>}
       </div>
@@ -96,6 +99,11 @@ export default function SecurityPage() {
         <h2>Auto-sweep</h2>
         <p className="muted small">
           Moves everything above a threshold to a saved address automatically.
+        </p>
+        <p className="muted small" data-testid="sweep-limits-note">
+          Sweeps are not counted against the per-withdrawal or per-day limits: they can only go to
+          the saved address pinned in the sweep rule, which itself waited 24 hours before it could
+          receive money.
         </p>
         {limits.filter((l) => l.autoSweep).length > 0 && (
           <ul className="list">

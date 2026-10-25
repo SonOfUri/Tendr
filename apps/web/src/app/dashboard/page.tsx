@@ -87,6 +87,18 @@ export default function AccountHomePage() {
         <h1>{store.name}</h1>
         {allReady && live?.status === 'active' && <Alert tone="success">Account ready.</Alert>}
         {error && <Alert tone="danger">{error}</Alert>}
+        {[home.test, home.live]
+          .filter((v) => v.account?.storageLowAt)
+          .map((v) => (
+            <Alert key={v.livemode ? 'live' : 'test'} tone="danger">
+              <span data-testid={`storage-low-${v.livemode ? 'live' : 'test'}`}>
+                The {v.livemode ? 'live' : 'test'} account <code>{v.account!.nearAccountId}</code>{' '}
+                is low on NEAR for storing proposals, and Tendr could not top it up automatically.
+                New proposals and approvals may fail until it is funded. Contact Tendr support, or
+                send a little NEAR to the account.
+              </span>
+            </Alert>
+          ))}
       </div>
 
       <div className="grid-2">

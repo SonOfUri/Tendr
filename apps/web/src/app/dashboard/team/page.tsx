@@ -62,8 +62,8 @@ export default function TeamPage() {
         )}
         <p className="muted small">
           A signer approves money going out and security changes. Making someone a signer is a
-          proposal on the {context.livemode ? 'live' : 'test'} account: it takes effect once the
-          current signers approve it.
+          proposal on the {context.livemode ? 'live' : 'test'} account: it takes effect 24 hours
+          after the current signers approve it, and any signer can cancel it in that time.
         </p>
       </section>
 

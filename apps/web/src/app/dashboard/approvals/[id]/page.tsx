@@ -13,6 +13,8 @@ import { approveProposal, approvedAtEpoch, cancelProposal, STATUS_WORDS } from '
 interface Detail {
   /** The account's current signer epoch (approvals from an older epoch no longer count). */
   signerEpoch: string | null;
+  threshold: number | undefined;
+  releaseCodeHash: string | null;
   proposal: Proposal;
   savedAddresses: SavedAddress[];
   team: Team;
@@ -34,6 +36,8 @@ export default function ProposalPage() {
       savedAddresses: s.savedAddresses,
       team,
       signerEpoch: account.account?.signerEpoch ?? null,
+      threshold: account.account?.threshold,
+      releaseCodeHash: account.releaseCodeHash ?? null,
     };
   }, key);
   const now = useTick(15_000);
@@ -57,11 +61,20 @@ export default function ProposalPage() {
     );
   }
 
-  const { proposal: p, savedAddresses, team, signerEpoch } = detail.data;
+  const {
+    proposal: p,
+    savedAddresses,
+    team,
+    signerEpoch,
+    threshold,
+    releaseCodeHash,
+  } = detail.data;
   const summary = describeAction(p.action, {
     savedAddresses,
     members: team.members,
     livemode: context?.livemode ?? false,
+    threshold,
+    releaseCodeHash,
   });
   const creator = team.members.find((m) => m.userId === p.createdByUserId);
   // Only an approval at the current signer epoch counts: after a signer change, approve again.

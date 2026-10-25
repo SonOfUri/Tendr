@@ -219,8 +219,15 @@ export interface AccountView {
     threshold: number;
     /** Decimal u64: bumps on every signer-set change. */
     signerEpoch: string;
+    /**
+     * Set while the account's NEAR for contract storage is low and Tendr's automatic top-up is
+     * blocked; new proposals may start failing until it is funded.
+     */
+    storageLowAt?: string | null;
   } | null;
   signers: { userId: string; email: string | null; keys: number }[];
+  /** The mode's Tendr release code hash (base58), if configured; upgrades are compared to it. */
+  releaseCodeHash?: string | null;
 }
 
 export interface Balances {

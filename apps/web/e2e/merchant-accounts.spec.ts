@@ -129,6 +129,16 @@ test.describe.serial('merchant accounts', () => {
     await expect(row.locator('.status')).toHaveText('pending');
   });
 
+  test('the security page says which changes wait 24 h and that sweeps bypass limits', async () => {
+    await owner.goto('/dashboard/security');
+    await expect(owner.getByText(/adding a signer or a passkey/)).toContainText(
+      'take effect 24 hours after approval',
+    );
+    await expect(owner.getByTestId('sweep-limits-note')).toContainText(
+      'not counted against the per-withdrawal or per-day limits',
+    );
+  });
+
   test('a finance invitee cannot withdraw to it yet; their saved-address draft is approved by the owner', async ({
     browser,
   }) => {

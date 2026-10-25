@@ -96,8 +96,9 @@ export default function ApprovalsPage() {
       <section className="card">
         <h2>Timelocked</h2>
         <p className="muted small">
-          Approved, but held for 24 hours (different-token withdrawals, limit raises, large
-          refunds). Any signer can still cancel.
+          Approved, but held for 24 hours (different-token withdrawals, limit raises, large refunds,
+          upgrades, and security changes that add a signer or key, replace the recovery kit, lower
+          the approval rule or change origins). Any signer can still cancel.
         </p>
         {timelocked.length === 0 ? (
           <p className="muted">Nothing is timelocked.</p>
