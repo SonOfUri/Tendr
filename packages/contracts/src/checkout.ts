@@ -55,5 +55,12 @@ export const SMALL_OVERPAY_USD = 1;
 export const SESSION_TTL_MS = 30 * 60_000;
 /** Quote deadline from now, never later than the session's `expires_at`. */
 export const QUOTE_TTL_MS = 12 * 60_000;
+/** Default 1Click slippage tolerance (bps); the API overrides it with `CHECKOUT_SLIPPAGE_BPS`. */
+export const DEFAULT_SLIPPAGE_BPS = 100;
+/**
+ * Default per-session cap (USD) on the merchant's gas reimbursement when neither the session nor
+ * the payment link sets `gas_max_usd`; the API overrides it with `CHECKOUT_GAS_MAX_USD`.
+ */
+export const DEFAULT_GAS_MAX_USD = 2;
 /** Webhook retries back off exponentially and give up after this long. */
 export const WEBHOOK_RETRY_WINDOW_MS = 3 * 24 * 3600_000;

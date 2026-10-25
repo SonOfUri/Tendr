@@ -1,10 +1,13 @@
 import { QUOTE_TTL_MS } from '@tendr/contracts';
 import { describe, expect, it } from 'vitest';
+import { env } from '../env.js';
 import { AppError } from '../lib/errors.js';
 import type { QuoteResponse } from './oneclick/types.js';
 import {
   assertWithinMinimum,
   buildQuoteRequests,
+  DEFAULT_GAS_MAX_USD,
+  DEFAULT_SLIPPAGE_BPS,
   gasReimbursementUsd,
   quoteDeadline,
   resolvePayers,
@@ -132,8 +135,21 @@ describe('gasReimbursementUsd', () => {
     expect(gasReimbursementUsd('merchant', '5.25', '0')).toBe(0);
   });
 
-  it('is uncapped when there is no cap', () => {
-    expect(gasReimbursementUsd('merchant', '3.10', null)).toBe(3.1);
+  it('falls back to the default cap when the session/link sets none', () => {
+    expect(DEFAULT_GAS_MAX_USD).toBe(2);
+    expect(gasReimbursementUsd('merchant', '3.10', null)).toBe(2);
+    expect(gasReimbursementUsd('merchant', '1.10', null)).toBe(1.1);
+    expect(gasReimbursementUsd('merchant', '3.10', null, '0.75')).toBe(0.75);
+  });
+
+  it('takes the default cap from CHECKOUT_GAS_MAX_USD', () => {
+    const saved = env().CHECKOUT_GAS_MAX_USD;
+    env().CHECKOUT_GAS_MAX_USD = '1.25';
+    try {
+      expect(gasReimbursementUsd('merchant', '3.10', null)).toBe(1.25);
+    } finally {
+      env().CHECKOUT_GAS_MAX_USD = saved;
+    }
   });
 });
 
@@ -196,6 +212,21 @@ describe('buildQuoteRequests', () => {
   it('shopper pays fees, merchant pays gas: the output shrinks by the reimbursement', () => {
     const { real } = buildQuoteRequests(input({ gasPayer: 'merchant', gasEstimateUsd: '0.80' }));
     expect(real(quote('1', '1')).amount).toBe('24200000');
+  });
+
+  it('uses DEFAULT_SLIPPAGE_BPS, CHECKOUT_SLIPPAGE_BPS, or an explicit slippageBps', () => {
+    expect(DEFAULT_SLIPPAGE_BPS).toBe(100);
+    expect(buildQuoteRequests(input()).dry.slippageTolerance).toBe(100);
+    const saved = env().CHECKOUT_SLIPPAGE_BPS;
+    env().CHECKOUT_SLIPPAGE_BPS = 250;
+    try {
+      expect(buildQuoteRequests(input()).dry.slippageTolerance).toBe(250);
+      expect(
+        buildQuoteRequests(input({ slippageBps: 30 })).real(quote('1', '1')).slippageTolerance,
+      ).toBe(30);
+    } finally {
+      env().CHECKOUT_SLIPPAGE_BPS = saved;
+    }
   });
 
   it('omits appFees when feeBps is 0', () => {

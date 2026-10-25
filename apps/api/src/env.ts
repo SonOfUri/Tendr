@@ -1,4 +1,5 @@
 import bs58 from 'bs58';
+import { DEFAULT_GAS_MAX_USD, DEFAULT_SLIPPAGE_BPS } from '@tendr/contracts';
 import { z } from 'zod';
 
 const optionalString = z.string().min(1).optional();
@@ -96,6 +97,16 @@ const EnvSchema = z
     /** Tendr's fee account per mode: the 1Click `appFees` recipient. */
     FEE_ACCOUNT_LIVE: nearAccountId.default('fees.tendr.near'),
     FEE_ACCOUNT_TEST: nearAccountId.default('fees.tendr.testnet'),
+    /** 1Click slippage tolerance for checkout quotes, basis points (0–10000). */
+    CHECKOUT_SLIPPAGE_BPS: z.coerce.number().int().min(0).max(10_000).default(DEFAULT_SLIPPAGE_BPS),
+    /**
+     * Gas-reimbursement cap (USD) when a session/link sets no `gas_max_usd`. A decimal string,
+     * never parsed as a float.
+     */
+    CHECKOUT_GAS_MAX_USD: z
+      .string()
+      .regex(/^\d+(\.\d+)?$/, 'must be a non-negative decimal')
+      .default(String(DEFAULT_GAS_MAX_USD)),
   })
   .superRefine((e, ctx) => {
     if (e.MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO > e.FUNDING_PER_ACCOUNT_YOCTO) {

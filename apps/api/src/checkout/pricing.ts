@@ -7,6 +7,7 @@
 // amounts the shopper must send round UP, amounts credited to anyone round DOWN.
 
 import { QUOTE_TTL_MS, type FeePayer, type GasPayer } from '@tendr/contracts';
+import { env } from '../env.js';
 import { AppError } from '../lib/errors.js';
 import {
   OneClickError,
@@ -18,8 +19,7 @@ import {
 /** A non-negative decimal: a plain string ("25.10") or a Prisma.Decimal (anything with `toFixed()`). */
 export type DecimalLike = string | { toFixed(): string };
 
-/** Slippage tolerance sent with every quote, in basis points. */
-export const DEFAULT_SLIPPAGE_BPS = 100;
+export { DEFAULT_GAS_MAX_USD, DEFAULT_SLIPPAGE_BPS } from '@tendr/contracts';
 /** Quotes worth less than this (USD) are refused with `QUOTE_TOO_SMALL`. */
 export const MIN_QUOTE_USD = 0.5;
 
@@ -120,18 +120,19 @@ export function resolvePayers(args: {
 
 /**
  * Micro-USD the merchant reimburses for the shopper's origin-chain send: 0 when the shopper pays
- * gas, else min(estimate, cap). A null cap means uncapped. Rounds DOWN (it is credited to the
- * shopper).
+ * gas, else min(estimate, cap). A null cap (session/link sets none) falls back to
+ * `defaultCapUsd`, which is `CHECKOUT_GAS_MAX_USD` (default DEFAULT_GAS_MAX_USD); the
+ * reimbursement is never uncapped. Rounds DOWN (it is credited to the shopper).
  */
 export function gasReimbursementMicroUsd(
   gasPayer: GasPayer,
   gasEstimateUsd: DecimalLike,
   gasMaxUsd: DecimalLike | null,
+  defaultCapUsd: DecimalLike = env().CHECKOUT_GAS_MAX_USD,
 ): bigint {
   if (gasPayer === 'shopper') return 0n;
   const estimate = toScaled(gasEstimateUsd, USD_SCALE, 'down');
-  if (gasMaxUsd === null) return estimate;
-  const cap = toScaled(gasMaxUsd, USD_SCALE, 'down');
+  const cap = toScaled(gasMaxUsd ?? defaultCapUsd, USD_SCALE, 'down');
   return estimate < cap ? estimate : cap;
 }
 
@@ -140,8 +141,11 @@ export function gasReimbursementUsd(
   gasPayer: GasPayer,
   gasEstimateUsd: DecimalLike,
   gasMaxUsd: DecimalLike | null,
+  defaultCapUsd?: DecimalLike,
 ): number {
-  return microToNumber(gasReimbursementMicroUsd(gasPayer, gasEstimateUsd, gasMaxUsd));
+  return microToNumber(
+    gasReimbursementMicroUsd(gasPayer, gasEstimateUsd, gasMaxUsd, defaultCapUsd),
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -176,7 +180,7 @@ export interface PricingInput {
   gasPayer: GasPayer;
   /** Estimated origin-chain send fee, USD. */
   gasEstimateUsd: DecimalLike;
-  /** Per-session reimbursement cap, USD; null = uncapped. */
+  /** Per-session reimbursement cap, USD; null = `CHECKOUT_GAS_MAX_USD` (never uncapped). */
   gasMaxUsd: DecimalLike | null;
   recipient: string;
   recipientType: QuoteRequest['recipientType'];
@@ -187,6 +191,7 @@ export interface PricingInput {
   sessionExpiresAt: Date;
   /** Injected for tests; defaults to the current time. */
   now?: Date;
+  /** Defaults to `CHECKOUT_SLIPPAGE_BPS` (default DEFAULT_SLIPPAGE_BPS = 100). */
   slippageBps?: number;
 }
 
@@ -226,7 +231,7 @@ export function buildQuoteRequests(input: PricingInput): QuoteRequests {
     input.feeBps > 0 ? [{ recipient: input.feeAccount, fee: input.feeBps }] : undefined;
 
   const base = {
-    slippageTolerance: input.slippageBps ?? DEFAULT_SLIPPAGE_BPS,
+    slippageTolerance: input.slippageBps ?? env().CHECKOUT_SLIPPAGE_BPS,
     originAsset: input.originAsset,
     depositType: 'ORIGIN_CHAIN' as const,
     destinationAsset: input.settlementAsset,

@@ -249,3 +249,28 @@ describe('loadEnv 1Click and fee accounts', () => {
     expect(() => loadEnv({ ...base, ONECLICK_BASE_URL: 'not a url' })).toThrow(/ONECLICK_BASE_URL/);
   });
 });
+
+describe('loadEnv checkout pricing', () => {
+  it('defaults slippage to 100 bps and the gas cap to $2', () => {
+    const e = loadEnv(base);
+    expect(e.CHECKOUT_SLIPPAGE_BPS).toBe(100);
+    expect(e.CHECKOUT_GAS_MAX_USD).toBe('2');
+  });
+
+  it('accepts overrides', () => {
+    const e = loadEnv({ ...base, CHECKOUT_SLIPPAGE_BPS: '50', CHECKOUT_GAS_MAX_USD: '1.5' });
+    expect(e.CHECKOUT_SLIPPAGE_BPS).toBe(50);
+    expect(e.CHECKOUT_GAS_MAX_USD).toBe('1.5');
+  });
+
+  it('rejects out-of-range or malformed values', () => {
+    expect(() => loadEnv({ ...base, CHECKOUT_SLIPPAGE_BPS: '10001' })).toThrow(
+      /CHECKOUT_SLIPPAGE_BPS/,
+    );
+    expect(() => loadEnv({ ...base, CHECKOUT_SLIPPAGE_BPS: '1.5' })).toThrow(
+      /CHECKOUT_SLIPPAGE_BPS/,
+    );
+    expect(() => loadEnv({ ...base, CHECKOUT_GAS_MAX_USD: '-1' })).toThrow(/CHECKOUT_GAS_MAX_USD/);
+    expect(() => loadEnv({ ...base, CHECKOUT_GAS_MAX_USD: '2e3' })).toThrow(/CHECKOUT_GAS_MAX_USD/);
+  });
+});
