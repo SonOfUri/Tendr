@@ -6,6 +6,9 @@
 //! recorded as `(method, predecessor, attached_deposit, args)` so tests can
 //! check exactly what the merchant contract sent.
 //!
+//! `set_fail_next(true)` makes the next `mt_transfer` / `ft_withdraw` /
+//! `mt_withdraw` fail, so tests can drive the caller's failure callback.
+//!
 //! `deposit` mints balance out of thin air for anyone. That is why this
 //! contract is deployed only to testnet (`intents-mock.tendr.testnet`) and
 //! the sandbox, never to mainnet.
@@ -13,7 +16,7 @@
 use near_sdk::json_types::U128;
 use near_sdk::serde_json::{self, json};
 use near_sdk::store::{LookupMap, Vector};
-use near_sdk::{env, near, require, AccountId, NearToken};
+use near_sdk::{env, near, require, AccountId, Gas, NearToken, Promise, PromiseOrValue};
 
 /// One recorded call. `args` is the call's arguments as a JSON string.
 #[near(serializers = [borsh, json])]
@@ -30,6 +33,7 @@ pub struct CallRecord {
 pub struct MockIntents {
     balances: LookupMap<(AccountId, String), u128>,
     calls: Vector<CallRecord>,
+    fail_next: bool,
 }
 
 impl Default for MockIntents {
@@ -37,6 +41,7 @@ impl Default for MockIntents {
         Self {
             balances: LookupMap::new(b"b"),
             calls: Vector::new(b"c"),
+            fail_next: false,
         }
     }
 }
@@ -59,7 +64,7 @@ impl MockIntents {
         amount: U128,
         approval: Option<(AccountId, u64)>,
         memo: Option<String>,
-    ) {
+    ) -> PromiseOrValue<()> {
         assert_one_yocto();
         self.record(
             "mt_transfer",
@@ -71,9 +76,13 @@ impl MockIntents {
                 "memo": memo,
             }),
         );
+        if let Some(failure) = self.take_failure() {
+            return failure;
+        }
         let sender = env::predecessor_account_id();
         self.debit(&sender, &token_id, amount.0);
         self.credit(&receiver_id, &token_id, amount.0);
+        PromiseOrValue::Value(())
     }
 
     /// Withdraws `nep141:<token>` from the caller's balance. Returns the
@@ -87,7 +96,7 @@ impl MockIntents {
         memo: Option<String>,
         msg: Option<String>,
         storage_deposit: Option<U128>,
-    ) -> U128 {
+    ) -> PromiseOrValue<U128> {
         assert_one_yocto();
         self.record(
             "ft_withdraw",
@@ -100,9 +109,12 @@ impl MockIntents {
                 "storage_deposit": storage_deposit,
             }),
         );
+        if let Some(failure) = self.take_failure() {
+            return failure;
+        }
         let sender = env::predecessor_account_id();
         self.debit(&sender, &format!("nep141:{token}"), amount.0);
-        amount
+        PromiseOrValue::Value(amount)
     }
 
     /// Withdraws `nep245:<token>:<id>` balances from the caller.
@@ -117,7 +129,7 @@ impl MockIntents {
         memo: Option<String>,
         msg: Option<String>,
         storage_deposit: Option<U128>,
-    ) -> Vec<U128> {
+    ) -> PromiseOrValue<Vec<U128>> {
         assert_one_yocto();
         require!(token_ids.len() == amounts.len(), "length mismatch");
         self.record(
@@ -132,11 +144,31 @@ impl MockIntents {
                 "storage_deposit": storage_deposit,
             }),
         );
+        if let Some(failure) = self.take_failure() {
+            return failure;
+        }
         let sender = env::predecessor_account_id();
         for (id, amount) in token_ids.iter().zip(&amounts) {
             self.debit(&sender, &format!("nep245:{token}:{id}"), amount.0);
         }
-        amounts
+        PromiseOrValue::Value(amounts)
+    }
+
+    /// Test-only: while `true`, the next `mt_transfer`, `ft_withdraw` or
+    /// `mt_withdraw` fails. Public on purpose; see the module docs.
+    ///
+    /// A plain panic would roll back the flag's reset along with everything
+    /// else, so every later call would fail too. Instead the call consumes
+    /// the flag, moves no balance, and returns a promise to [`Self::fail_now`],
+    /// which panics: the caller's callback sees a failed result.
+    pub fn set_fail_next(&mut self, fail: bool) {
+        self.fail_next = fail;
+    }
+
+    /// Always panics; the failing tail of a call made while `fail_next` was set.
+    #[private]
+    pub fn fail_now(&self) {
+        env::panic_str("mock-intents: failure requested by set_fail_next");
     }
 
     pub fn mt_balance_of(&self, account_id: AccountId, token_id: String) -> U128 {
@@ -163,6 +195,20 @@ impl MockIntents {
 }
 
 impl MockIntents {
+    /// Consumes `fail_next`; when it was set, the failing promise to return.
+    fn take_failure<T>(&mut self) -> Option<PromiseOrValue<T>> {
+        if !std::mem::take(&mut self.fail_next) {
+            return None;
+        }
+        let fail = Promise::new(env::current_account_id()).function_call(
+            "fail_now",
+            Vec::new(),
+            NearToken::from_yoctonear(0),
+            Gas::from_tgas(5),
+        );
+        Some(PromiseOrValue::Promise(fail))
+    }
+
     fn balance(&self, account: &AccountId, token: &str) -> u128 {
         self.balances
             .get(&(account.clone(), token.to_owned()))
@@ -219,6 +265,13 @@ mod tests {
             .build());
     }
 
+    fn value<T>(r: PromiseOrValue<T>) -> T {
+        match r {
+            PromiseOrValue::Value(v) => v,
+            PromiseOrValue::Promise(_) => panic!("expected a value"),
+        }
+    }
+
     fn funded() -> MockIntents {
         as_caller("anyone.testnet", 0);
         let mut m = MockIntents::default();
@@ -230,13 +283,13 @@ mod tests {
     fn mt_transfer_moves_balance_and_records_the_call() {
         let mut m = funded();
         as_caller("shop.tendr.testnet", 1);
-        m.mt_transfer(
+        value(m.mt_transfer(
             acct("dep.1click.testnet"),
             USDC.into(),
             U128(300),
             None,
             None,
-        );
+        ));
         let balances = m.mt_batch_balance_of(
             acct("shop.tendr.testnet"),
             vec![USDC.into(), "nep141:other.testnet".into()],
@@ -269,7 +322,7 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(out, U128(250));
+        assert_eq!(value(out), U128(250));
         assert_eq!(
             m.mt_balance_of(acct("shop.tendr.testnet"), USDC.into()),
             U128(750)
@@ -298,7 +351,7 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(out, vec![U128(5)]);
+        assert_eq!(value(out), vec![U128(5)]);
         assert_eq!(
             m.mt_balance_of(acct("shop.tendr.testnet"), "nep245:mt.testnet:7".into()),
             U128(0)
@@ -319,18 +372,18 @@ mod tests {
         let mut m = funded();
         as_caller("shop.tendr.testnet", 0);
         let msg = panics(|| {
-            m.mt_transfer(acct("bob.testnet"), USDC.into(), U128(1), None, None);
+            let _ = m.mt_transfer(acct("bob.testnet"), USDC.into(), U128(1), None, None);
         });
         assert!(msg.contains("exactly 1 yoctoNEAR"), "{msg}");
         as_caller("shop.tendr.testnet", 1);
         let msg = panics(|| {
-            m.mt_transfer(acct("bob.testnet"), USDC.into(), U128(1_001), None, None);
+            let _ = m.mt_transfer(acct("bob.testnet"), USDC.into(), U128(1_001), None, None);
         });
         assert!(msg.contains("insufficient balance"), "{msg}");
         // Someone else cannot spend the shop's balance.
         as_caller("bob.testnet", 1);
         let msg = panics(|| {
-            m.ft_withdraw(
+            let _ = m.ft_withdraw(
                 acct("usdc.tendr.testnet"),
                 acct("usdc.tendr.testnet"),
                 U128(1),
@@ -340,5 +393,70 @@ mod tests {
             );
         });
         assert!(msg.contains("insufficient balance"), "{msg}");
+    }
+
+    #[test]
+    fn fail_next_fails_exactly_one_call_without_moving_funds() {
+        use near_sdk::mock::MockAction;
+        use near_sdk::test_utils::get_created_receipts;
+
+        let mut m = funded();
+        for n in 0..3 {
+            m.set_fail_next(true);
+            as_caller("shop.tendr.testnet", 1);
+            let r = match n {
+                0 => matches!(
+                    m.mt_transfer(acct("bob.testnet"), USDC.into(), U128(1), None, None),
+                    PromiseOrValue::Promise(_)
+                ),
+                1 => matches!(
+                    m.ft_withdraw(
+                        acct("usdc.tendr.testnet"),
+                        acct("usdc.tendr.testnet"),
+                        U128(1),
+                        None,
+                        None,
+                        None
+                    ),
+                    PromiseOrValue::Promise(_)
+                ),
+                _ => matches!(
+                    m.mt_withdraw(
+                        acct("mt.testnet"),
+                        acct("bob.testnet"),
+                        vec!["7".into()],
+                        vec![U128(1)],
+                        None,
+                        None,
+                        None
+                    ),
+                    PromiseOrValue::Promise(_)
+                ),
+            };
+            assert!(r, "call {n} should return the failing promise");
+            // The failing tail is a call to `fail_now` on the mock itself.
+            let receipts = get_created_receipts();
+            assert_eq!(receipts.len(), 1);
+            assert_eq!(receipts[0].receiver_id, acct("intents-mock.tendr.testnet"));
+            assert!(matches!(
+                &receipts[0].actions[0],
+                MockAction::FunctionCallWeight { method_name, .. } if method_name == b"fail_now"
+            ));
+        }
+        // No balance moved, every attempt is still recorded.
+        assert_eq!(
+            m.mt_balance_of(acct("shop.tendr.testnet"), USDC.into()),
+            U128(1_000)
+        );
+        assert_eq!(m.get_calls().len(), 3);
+        // The flag was consumed: the next call succeeds.
+        as_caller("shop.tendr.testnet", 1);
+        let ok = m.mt_transfer(acct("bob.testnet"), USDC.into(), U128(1), None, None);
+        assert!(matches!(ok, PromiseOrValue::Value(())));
+        assert_eq!(m.mt_balance_of(acct("bob.testnet"), USDC.into()), U128(1));
+        // `fail_now` always panics.
+        as_caller("intents-mock.tendr.testnet", 0);
+        let msg = panics(|| m.fail_now());
+        assert!(msg.contains("failure requested by set_fail_next"), "{msg}");
     }
 }

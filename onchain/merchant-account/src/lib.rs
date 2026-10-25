@@ -19,7 +19,7 @@ use near_sdk::json_types::U64;
 #[allow(unused_imports)]
 use near_sdk::serde;
 use near_sdk::serde_with::base64::Base64;
-use near_sdk::store::{IterableMap, LookupMap};
+use near_sdk::store::{IterableMap, LookupMap, LookupSet};
 use near_sdk::{env, near, require, AccountId, PanicOnDefault};
 
 use crate::action::{Action, ActionKind, Invalid, PayoutMode, Signer};
@@ -55,6 +55,8 @@ pub struct InitConfig {
     pub rp_id: String,
     pub origins: Vec<String>,
     pub intents_contract: AccountId,
+    /// Account suffix of PoA bridge tokens (`omft.near` when omitted).
+    pub poa_suffix: Option<String>,
     /// Accepted only when built with the `testnet-admin` feature.
     pub testnet_admin: Option<AccountId>,
 }
@@ -137,6 +139,7 @@ pub struct ConfigView {
     pub rp_id: String,
     pub recovery_key_set: bool,
     pub intents_contract: AccountId,
+    pub poa_suffix: String,
 }
 
 #[near(contract_state)]
@@ -152,6 +155,8 @@ pub struct MerchantAccount {
     rp_id_hash: [u8; 32],
     recovery_key: Option<[u8; 32]>,
     intents_contract: AccountId,
+    /// Account suffix of PoA bridge tokens, e.g. `omft.near`.
+    poa_suffix: String,
     testnet_admin: Option<AccountId>,
     proposals: IterableMap<ProposalId, Proposal>,
     /// Pending proposals per creating signer, for `MAX_PENDING_PER_SIGNER`.
@@ -162,6 +167,9 @@ pub struct MerchantAccount {
     assets: LookupMap<String, AssetState>,
     /// Pending proposals with a timelock, for the limits view.
     timelocked: Vec<ProposalId>,
+    /// `sha256(id)` of every removed saved address. An id is never reused,
+    /// so a pending withdrawal naming it cannot follow a new address.
+    removed_saved_ids: LookupSet<[u8; 32]>,
 }
 
 #[near]
@@ -175,8 +183,14 @@ impl MerchantAccount {
             rp_id,
             origins,
             intents_contract,
+            poa_suffix,
             testnet_admin,
         } = config;
+        let poa_suffix = poa_suffix.unwrap_or_else(|| money::DEFAULT_POA_SUFFIX.to_owned());
+        require!(
+            poa_suffix.parse::<AccountId>().is_ok(),
+            "poa_suffix must be an account id"
+        );
 
         if testnet_admin.is_some() && !cfg!(feature = "testnet-admin") {
             env::panic_str("testnet_admin requires the testnet-admin feature");
@@ -196,6 +210,7 @@ impl MerchantAccount {
             rp_id,
             recovery_key,
             intents_contract,
+            poa_suffix,
             testnet_admin,
             proposals: IterableMap::new(StorageKey::Proposals),
             pending_per_signer: LookupMap::new(StorageKey::PendingPerSigner),
@@ -203,6 +218,7 @@ impl MerchantAccount {
             settlement: None,
             assets: LookupMap::new(StorageKey::Assets),
             timelocked: Vec::new(),
+            removed_saved_ids: LookupSet::new(StorageKey::RemovedSavedIds),
         };
         require!(!signers.is_empty(), "at least one signer is required");
         for signer in signers {
@@ -321,6 +337,7 @@ impl MerchantAccount {
             rp_id: self.rp_id.clone(),
             recovery_key_set: self.recovery_key.is_some(),
             intents_contract: self.intents_contract.clone(),
+            poa_suffix: self.poa_suffix.clone(),
         }
     }
 
@@ -354,6 +371,7 @@ enum StorageKey {
     Proposals,
     PendingPerSigner,
     Assets,
+    RemovedSavedIds,
 }
 
 fn or_panic(r: Result<(), Invalid>) {
@@ -652,8 +670,17 @@ impl MerchantAccount {
                 if !saved::SUPPORTED_CHAINS.contains(&chain.as_str()) {
                     return Err("unsupported chain");
                 }
+                if chain == "near" && address.parse::<AccountId>().is_err() {
+                    return Err("near destination must be a valid NEAR account id");
+                }
                 if self.saved_addresses.iter().any(|a| &a.id == id) {
                     return Err("duplicate saved address id");
+                }
+                if self
+                    .removed_saved_ids
+                    .contains(&env::sha256_array(id.as_bytes()))
+                {
+                    return Err("saved address id was used before");
                 }
                 // Exact match, case-sensitive: no per-chain normalization.
                 if self
@@ -728,7 +755,11 @@ impl MerchantAccount {
                     active_from: env::block_timestamp() + saved::SAVED_ADDRESS_DELAY,
                 });
             }
-            Action::RemoveSavedAddress { id } => self.saved_addresses.retain(|a| &a.id != id),
+            Action::RemoveSavedAddress { id } => {
+                self.saved_addresses.retain(|a| &a.id != id);
+                self.removed_saved_ids
+                    .insert(env::sha256_array(id.as_bytes()));
+            }
             Action::SetSettlement {
                 dest_asset,
                 payout_mode,

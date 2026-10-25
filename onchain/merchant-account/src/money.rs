@@ -41,10 +41,28 @@ const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 const NO_DEPOSIT: NearToken = NearToken::from_yoctonear(0);
 /// Gas for the verifier's `ft_withdraw` / `mt_transfer`.
 const TRANSFER_GAS: Gas = Gas::from_tgas(50);
-const TRANSFER_CALLBACK_GAS: Gas = Gas::from_tgas(15);
+const TRANSFER_CALLBACK_GAS: Gas = Gas::from_tgas(25);
 const BALANCE_GAS: Gas = Gas::from_tgas(10);
-/// Covers the sweep transfer and its own callback.
-const SWEEP_BALANCE_CALLBACK_GAS: Gas = Gas::from_tgas(90);
+/// Covers the sweep transfer (50), its callback (25) and this callback's own
+/// work, with headroom.
+const SWEEP_BALANCE_CALLBACK_GAS: Gas = Gas::from_tgas(100);
+/// PoA token account suffix used when `InitConfig.poa_suffix` is not given.
+pub const DEFAULT_POA_SUFFIX: &str = "omft.near";
+/// Chain prefix of a PoA token account (`<prefix>-….<poa_suffix>` or
+/// `<prefix>.<poa_suffix>`) → the destination chain it bridges to.
+/// The exact omft prefixes are verified by the mainnet check script (Task 15).
+pub const POA_CHAIN_PREFIXES: [(&str, &str); 10] = [
+    ("eth", "eth"),
+    ("base", "base"),
+    ("arb", "arbitrum"),
+    ("sol", "sol"),
+    ("tron", "tron"),
+    ("btc", "btc"),
+    ("bsc", "bsc"),
+    ("pol", "polygon"),
+    ("op", "optimism"),
+    ("avax", "avalanche"),
+];
 /// Longest promise result read; a verifier answer is far shorter.
 const MAX_RESULT_LEN: usize = 1024;
 
@@ -198,22 +216,6 @@ fn poa_token(asset: &str) -> Result<AccountId, Invalid> {
         .ok_or("poa route needs a nep141 asset")
 }
 
-/// A PoA withdrawal must name the asset's own token contract as receiver:
-/// `ft_withdraw` hands the tokens to `receiver_id`, and only the PoA token
-/// contract turns them into a transfer to the `WITHDRAW_TO:` address. Any
-/// other receiver would get the tokens on NEAR, bypassing the saved address.
-fn check_route(asset: &str, route: &WithdrawRoute) -> Result<(), Invalid> {
-    match route {
-        WithdrawRoute::Poa { token_contract } => {
-            if &poa_token(asset)? != token_contract {
-                return Err("poa route must withdraw through the asset's token contract");
-            }
-            Ok(())
-        }
-        WithdrawRoute::Swap { .. } => Ok(()),
-    }
-}
-
 fn positive(amount: U128) -> Result<(), Invalid> {
     if amount.0 == 0 {
         return Err("amount must be positive");
@@ -273,6 +275,70 @@ impl MerchantAccount {
             .filter(|a| a.chain == sweep.chain && a.address == sweep.address)
     }
 
+    /// Where a `Poa`-route `ft_withdraw` of `asset` to `address` on `chain`
+    /// goes, as `(receiver_id, memo)`.
+    ///
+    /// - `near`: a plain NEP-141 transfer to the NEAR account `address`, no
+    ///   memo; any `nep141:` asset.
+    /// - any other chain: the asset must be a PoA bridge token (account ends
+    ///   in `.<poa_suffix>`) whose chain prefix maps to `chain`; the tokens go
+    ///   to the token contract, which bridges them to `WITHDRAW_TO:<address>`.
+    ///   `ft_withdraw` to a non-PoA token contract would just park the funds
+    ///   in that contract's own balance, so it is refused.
+    pub(crate) fn poa_target(
+        &self,
+        asset: &str,
+        chain: &str,
+        address: &str,
+    ) -> Result<(AccountId, Option<String>), Invalid> {
+        let token = poa_token(asset)?;
+        if chain == "near" {
+            let to = address
+                .parse()
+                .map_err(|_| "near destination must be a valid NEAR account id")?;
+            return Ok((to, None));
+        }
+        let prefix = token
+            .as_str()
+            .strip_suffix(self.poa_suffix.as_str())
+            .and_then(|s| s.strip_suffix('.'))
+            .filter(|s| !s.is_empty())
+            .ok_or("asset is not a PoA bridge token")?;
+        let label = prefix.split(['-', '.']).next().unwrap_or_default();
+        let bridged = POA_CHAIN_PREFIXES
+            .iter()
+            .find(|(p, _)| *p == label)
+            .map(|(_, c)| *c)
+            .ok_or("asset is not a PoA bridge token")?;
+        if bridged != chain {
+            return Err("asset's PoA bridge does not serve the destination chain");
+        }
+        Ok((token, Some(format!("WITHDRAW_TO:{address}"))))
+    }
+
+    /// Checks `route` can deliver `asset` to `address` on `chain`.
+    ///
+    /// A `Poa` route must name the asset's own token contract: `ft_withdraw`
+    /// hands the tokens to `receiver_id`, so any other account would receive
+    /// them on NEAR. Its real receiver comes from [`Self::poa_target`].
+    fn check_route(
+        &self,
+        asset: &str,
+        route: &WithdrawRoute,
+        chain: &str,
+        address: &str,
+    ) -> Result<(), Invalid> {
+        match route {
+            WithdrawRoute::Poa { token_contract } => {
+                if &poa_token(asset)? != token_contract {
+                    return Err("poa route must withdraw through the asset's token contract");
+                }
+                self.poa_target(asset, chain, address).map(|_| ())
+            }
+            WithdrawRoute::Swap { .. } => Ok(()),
+        }
+    }
+
     /// Validates a limits, sweep or money action against current state.
     pub(crate) fn check_money(&self, action: &Action, now: u64) -> Result<(), Invalid> {
         match action {
@@ -283,9 +349,10 @@ impl MerchantAccount {
                 route,
             } => {
                 positive(*amount)?;
-                check_route(asset, route)?;
-                self.saved_address_usable(saved_address_id, now)
+                let dest = self
+                    .saved_address_usable(saved_address_id, now)
                     .ok_or("saved address is unknown or not yet active")?;
+                self.check_route(asset, route, &dest.chain, &dest.address)?;
                 let state = self.asset(asset);
                 if state.per_tx.is_some_and(|max| amount.0 > max) {
                     return Err("amount exceeds the per-withdrawal limit");
@@ -304,15 +371,15 @@ impl MerchantAccount {
                 asset,
                 amount,
                 destination_chain,
+                destination,
                 route,
                 ..
             } => {
                 positive(*amount)?;
-                check_route(asset, route)?;
                 if !saved::SUPPORTED_CHAINS.contains(&destination_chain.as_str()) {
                     return Err("unsupported chain");
                 }
-                Ok(())
+                self.check_route(asset, route, destination_chain, destination)
             }
             Action::SetLimits { .. } | Action::SetRefundCap { .. } => Ok(()),
             Action::SetAutoSweep {
@@ -321,19 +388,17 @@ impl MerchantAccount {
                 keep,
                 saved_address_id,
             } => {
-                // Sweeps leave through the PoA route.
-                poa_token(asset)?;
                 if keep.0 > trigger_above.0 {
                     return Err("keep must not exceed trigger_above");
                 }
-                if !self
+                let dest = self
                     .saved_addresses
                     .iter()
-                    .any(|a| &a.id == saved_address_id)
-                {
-                    return Err("unknown saved address");
-                }
-                Ok(())
+                    .find(|a| &a.id == saved_address_id)
+                    .ok_or("unknown saved address")?;
+                // Sweeps leave through the PoA route.
+                self.poa_target(asset, &dest.chain, &dest.address)
+                    .map(|_| ())
             }
             Action::ClearAutoSweep { asset } => {
                 if self.asset(asset).sweep.is_none() {
@@ -413,18 +478,31 @@ impl MerchantAccount {
         }
     }
 
-    /// The verifier call that moves `amount` of `asset` out by `route`.
-    fn outgoing_call(&self, asset: &str, amount: u128, route: &WithdrawRoute, to: &str) -> Promise {
+    /// The verifier call that moves `amount` of `asset` out by `route` to
+    /// `address` on `chain`. The route was checked with [`Self::check_route`].
+    fn outgoing_call(
+        &self,
+        asset: &str,
+        amount: u128,
+        route: &WithdrawRoute,
+        chain: &str,
+        address: &str,
+    ) -> Promise {
         let (method, args) = match route {
-            WithdrawRoute::Poa { token_contract } => (
-                "ft_withdraw",
-                json!({
+            WithdrawRoute::Poa { .. } => {
+                let (receiver_id, memo) = self
+                    .poa_target(asset, chain, address)
+                    .unwrap_or_else(|e| env::panic_str(e));
+                let mut args = json!({
                     "token": poa_token(asset).expect("checked nep141 asset"),
-                    "receiver_id": token_contract,
+                    "receiver_id": receiver_id,
                     "amount": U128(amount),
-                    "memo": format!("WITHDRAW_TO:{to}"),
-                }),
-            ),
+                });
+                if let Some(memo) = memo {
+                    args["memo"] = json!(memo);
+                }
+                ("ft_withdraw", args)
+            }
             WithdrawRoute::Swap { deposit_account } => (
                 "mt_transfer",
                 json!({
@@ -446,7 +524,7 @@ impl MerchantAccount {
     /// callback. The proposal waits in `Executing` meanwhile.
     pub(crate) fn start_transfer(&mut self, id: ProposalId, action: &Action) {
         let (asset, amount, is_refund) = transfer_parts(action);
-        let (route, to) = match action {
+        let (route, chain, to) = match action {
             Action::Withdraw {
                 saved_address_id,
                 route,
@@ -455,14 +533,17 @@ impl MerchantAccount {
                 let dest = self
                     .saved_address_usable(saved_address_id, env::block_timestamp())
                     .expect("checked saved address is usable");
-                (route, dest.address.clone())
+                (route, dest.chain.clone(), dest.address.clone())
             }
             Action::Refund {
-                destination, route, ..
-            } => (route, destination.clone()),
+                destination,
+                destination_chain,
+                route,
+                ..
+            } => (route, destination_chain.clone(), destination.clone()),
             _ => unreachable!("transfer_parts accepts money actions only"),
         };
-        let call = self.outgoing_call(asset, amount, route, &to);
+        let call = self.outgoing_call(asset, amount, route, &chain, &to);
         self.update_asset(asset, |s| {
             if is_refund {
                 s.refund_in_flight = s.refund_in_flight.saturating_add(amount);
@@ -642,18 +723,22 @@ impl MerchantAccount {
             .and_then(|v| v.first().map(|x| x.0));
         let state = self.asset(&asset);
         let plan = match (state.sweep.as_ref(), balance) {
-            (Some(rule), Some(balance)) if balance > rule.trigger_above => {
-                self.sweep_destination(rule, now).map(|dest| {
+            (Some(rule), Some(balance)) if balance > rule.trigger_above => self
+                .sweep_destination(rule, now)
+                // Re-checked here too: the PoA bridge must still serve the
+                // destination chain under the current configuration.
+                .filter(|dest| self.poa_target(&asset, &dest.chain, &dest.address).is_ok())
+                .map(|dest| {
                     (
                         balance - rule.keep,
                         rule.saved_address_id.clone(),
+                        dest.chain.clone(),
                         dest.address.clone(),
                     )
-                })
-            }
+                }),
             _ => None,
         };
-        let Some((amount, saved_address_id, address)) = plan else {
+        let Some((amount, saved_address_id, chain, address)) = plan else {
             self.update_asset(&asset, |s| s.sweep_in_flight = false);
             return;
         };
@@ -662,6 +747,7 @@ impl MerchantAccount {
             &asset,
             amount,
             &WithdrawRoute::Poa { token_contract },
+            &chain,
             &address,
         )
         .then(

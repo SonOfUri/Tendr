@@ -15,6 +15,8 @@ use crate::webauthn::test_support::{
 };
 
 const CONTRACT: &str = "a.tendr.testnet";
+/// PoA token suffix the test accounts are configured with.
+const POA_SUFFIX: &str = "poa.tendr.testnet";
 const T0: u64 = 1_700_000_000_000_000_000;
 
 fn ctx_at(contract: &str, now: u64) {
@@ -88,6 +90,7 @@ fn config(people: &[&Person], threshold: u8) -> InitConfig {
         rp_id: "localhost".to_string(),
         origins: vec![ORIGIN.to_string()],
         intents_contract: "intents-mock.tendr.testnet".parse().unwrap(),
+        poa_suffix: Some(POA_SUFFIX.to_string()),
         testnet_admin: None,
     }
 }
@@ -691,9 +694,10 @@ fn long(n: usize) -> String {
     "x".repeat(n)
 }
 
+/// The PoA route for the test USDC (bridged to Base).
 fn poa() -> WithdrawRoute {
     WithdrawRoute::Poa {
-        token_contract: "usdc.tendr.testnet".parse().unwrap(),
+        token_contract: "base-usdc.poa.tendr.testnet".parse().unwrap(),
     }
 }
 

@@ -7,7 +7,9 @@ use near_sdk::{test_vm_config, NearToken, PromiseResult, RuntimeFeesConfig};
 use super::*;
 use crate::money::TIMELOCK_DELAY;
 
-const USDC: &str = "nep141:usdc.tendr.testnet";
+/// A PoA token bridged to Base (the chain of `add_saved`'s address).
+const USDC: &str = "nep141:base-usdc.poa.tendr.testnet";
+const USDC_TOKEN: &str = "base-usdc.poa.tendr.testnet";
 const INTENTS: &str = "intents-mock.tendr.testnet";
 const DEPOSIT: &str = "dep1.1click.testnet";
 const REFUND_TO: &str = "0x00000000000000000000000000000000000000aa";
@@ -627,8 +629,8 @@ fn outgoing_call_attaches_one_yocto_and_uses_route_args() {
     assert_eq!(
         call.args,
         serde_json::json!({
-            "token": "usdc.tendr.testnet",
-            "receiver_id": "usdc.tendr.testnet",
+            "token": USDC_TOKEN,
+            "receiver_id": USDC_TOKEN,
             "amount": "7",
             "memo": format!("WITHDRAW_TO:{ADDR}"),
         })
@@ -737,8 +739,8 @@ fn sweep_only_to_saved_address_and_only_above_trigger() {
     assert_eq!(
         send[0].args,
         serde_json::json!({
-            "token": "usdc.tendr.testnet",
-            "receiver_id": "usdc.tendr.testnet",
+            "token": USDC_TOKEN,
+            "receiver_id": USDC_TOKEN,
             "amount": "1400",
             "memo": format!("WITHDRAW_TO:{ADDR}"),
         })
@@ -762,28 +764,204 @@ fn sweep_only_to_saved_address_and_only_above_trigger() {
 }
 
 #[test]
-fn sweep_never_follows_a_reused_saved_address_id() {
-    let (mut c, a, _b, _c) = funded(1);
-    run(&mut c, &a, auto_sweep(1000, 100), 1);
-    run(
+fn removed_saved_address_id_cannot_be_reused() {
+    let (mut c, a, b, _c) = funded(2);
+    // A swap withdrawal to sav_1 waits in its timelock...
+    let w = pass(&mut c, &a, &b, withdraw(10, swap()), 1);
+    pass(
         &mut c,
         &a,
+        &b,
         Action::RemoveSavedAddress { id: "sav_1".into() },
         2,
     );
-    // Same id, different address, past its delay.
+    // ...and sav_1 can never name another address.
     let other = Action::AddSavedAddress {
         id: "sav_1".into(),
         chain: "base".into(),
         address: "0x00000000000000000000000000000000000000bb".into(),
     };
-    run(&mut c, &a, other, 3);
-    as_anyone(T1 + DAY);
-    let msg = panics(|| c.trigger_sweep(USDC.into()));
+    let msg = panics(|| {
+        propose(&mut c, &a, other, 3);
+    });
+    assert!(msg.contains("saved address id was used before"), "{msg}");
+    ctx(T1 + TIMELOCK_DELAY);
+    c.execute(w);
+    assert_eq!(status(&c, &w), ProposalStatus::Failed);
+}
+
+/// Adds saved address `id` on `chain` (1-of-N) and returns once it is usable.
+fn saved_on(c: &mut MerchantAccount, a: &Person, id: &str, chain: &str, address: &str, n: u8) {
+    let add = Action::AddSavedAddress {
+        id: id.into(),
+        chain: chain.into(),
+        address: address.into(),
+    };
+    run(c, a, add, n);
+}
+
+fn withdraw_asset(asset: &str, to: &str, amount: u128) -> Action {
+    let token = asset.strip_prefix("nep141:").unwrap();
+    Action::Withdraw {
+        asset: asset.into(),
+        amount: U128(amount),
+        saved_address_id: to.into(),
+        route: WithdrawRoute::Poa {
+            token_contract: token.parse().unwrap(),
+        },
+    }
+}
+
+#[test]
+fn poa_withdrawal_needs_a_bridge_token_for_the_destination_chain() {
+    let (mut c, a, _b, _c) = three_of(1);
+    saved_on(&mut c, &a, "eth_1", "eth", ADDR, 1);
+    saved_on(&mut c, &a, "base_1", "base", ADDR, 2);
+    ctx(T1);
+    // A plain NEP-141 (not a PoA token): ft_withdraw would park the funds in
+    // the token contract's own balance.
+    let msg = panics(|| {
+        propose(
+            &mut c,
+            &a,
+            withdraw_asset("nep141:usdc.tendr.testnet", "eth_1", 5),
+            3,
+        );
+    });
+    assert!(msg.contains("asset is not a PoA bridge token"), "{msg}");
+    // A PoA token under another suffix is not one of ours either.
+    let msg = panics(|| {
+        propose(
+            &mut c,
+            &a,
+            withdraw_asset("nep141:eth-usdc.omft.near", "eth_1", 5),
+            4,
+        );
+    });
+    assert!(msg.contains("asset is not a PoA bridge token"), "{msg}");
+    // An unknown chain prefix.
+    let msg = panics(|| {
+        let asset = "nep141:doge-usdc.poa.tendr.testnet";
+        propose(&mut c, &a, withdraw_asset(asset, "eth_1", 5), 5);
+    });
+    assert!(msg.contains("asset is not a PoA bridge token"), "{msg}");
+    // A Base token cannot go to an Ethereum address.
+    let msg = panics(|| {
+        propose(&mut c, &a, withdraw_asset(USDC, "eth_1", 5), 6);
+    });
     assert!(
-        msg.contains("sweep destination is unknown or not yet active"),
+        msg.contains("does not serve the destination chain"),
         "{msg}"
     );
+    // Prefix without a dash (`eth.<suffix>`) and the arb -> arbitrum mapping.
+    let eth = "nep141:eth.poa.tendr.testnet";
+    let id = propose(&mut c, &a, withdraw_asset(eth, "eth_1", 5), 7);
+    assert_eq!(status(&c, &id), ProposalStatus::Executing);
+    assert_eq!(calls()[0].args["receiver_id"], "eth.poa.tendr.testnet");
+    saved_on(&mut c, &a, "arb_1", "arbitrum", ADDR, 8);
+    ctx(T1 + DAY);
+    let arb = "nep141:arb-0xaf88.poa.tendr.testnet";
+    let id = propose(&mut c, &a, withdraw_asset(arb, "arb_1", 5), 9);
+    assert_eq!(status(&c, &id), ProposalStatus::Executing);
+}
+
+#[test]
+fn near_chain_withdrawal_transfers_to_the_account_without_memo() {
+    let (mut c, a, _b, _c) = three_of(1);
+    saved_on(&mut c, &a, "near_1", "near", "merchant.testnet", 1);
+    ctx(T1);
+    // Any NEP-141 works for a same-chain payout.
+    let asset = "nep141:usdc.tendr.testnet";
+    let id = propose(&mut c, &a, withdraw_asset(asset, "near_1", 42), 2);
+    assert_eq!(status(&c, &id), ProposalStatus::Executing);
+    let call = &calls()[0];
+    assert_eq!(call.receiver, INTENTS);
+    assert_eq!(call.method, "ft_withdraw");
+    assert_eq!(call.deposit, NearToken::from_yoctonear(1));
+    assert_eq!(
+        call.args,
+        serde_json::json!({
+            "token": "usdc.tendr.testnet",
+            "receiver_id": "merchant.testnet",
+            "amount": "42",
+        })
+    );
+}
+
+#[test]
+fn near_chain_destination_must_be_an_account_id() {
+    let (mut c, a, _b, _c) = three_of(1);
+    let bad = Action::AddSavedAddress {
+        id: "near_bad".into(),
+        chain: "near".into(),
+        address: "Not An Account!".into(),
+    };
+    let msg = panics(|| {
+        propose(&mut c, &a, bad, 1);
+    });
+    assert!(msg.contains("valid NEAR account id"), "{msg}");
+    let mut r = refund(1);
+    if let Action::Refund {
+        destination_chain,
+        destination,
+        ..
+    } = &mut r
+    {
+        *destination_chain = "near".into();
+        *destination = "UPPER.testnet".into();
+    }
+    let msg = panics(|| {
+        propose(&mut c, &a, r, 3);
+    });
+    assert!(msg.contains("valid NEAR account id"), "{msg}");
+}
+
+#[test]
+fn refund_poa_token_must_match_destination_chain() {
+    let (mut c, a, _b, _c) = three_of(1);
+    let mut r = refund(1);
+    if let Action::Refund {
+        destination_chain, ..
+    } = &mut r
+    {
+        *destination_chain = "sol".into();
+    }
+    let msg = panics(|| {
+        propose(&mut c, &a, r, 1);
+    });
+    assert!(
+        msg.contains("does not serve the destination chain"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn sweep_rule_with_mismatched_chain_rejected() {
+    let (mut c, a, _b, _c) = three_of(1);
+    saved_on(&mut c, &a, "sol_1", "sol", "So1anaAddre55", 1);
+    let rule = Action::SetAutoSweep {
+        asset: USDC.into(),
+        trigger_above: U128(10),
+        keep: U128(1),
+        saved_address_id: "sol_1".into(),
+    };
+    let msg = panics(|| {
+        propose(&mut c, &a, rule, 2);
+    });
+    assert!(
+        msg.contains("does not serve the destination chain"),
+        "{msg}"
+    );
+    let plain = Action::SetAutoSweep {
+        asset: "nep141:usdc.tendr.testnet".into(),
+        trigger_above: U128(10),
+        keep: U128(1),
+        saved_address_id: "sol_1".into(),
+    };
+    let msg = panics(|| {
+        propose(&mut c, &a, plain, 3);
+    });
+    assert!(msg.contains("asset is not a PoA bridge token"), "{msg}");
 }
 
 #[test]
