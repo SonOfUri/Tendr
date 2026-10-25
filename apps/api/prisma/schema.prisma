@@ -149,6 +149,14 @@ enum PaymentStatus {
   @@map("payment_status")
 }
 
+/// Where 1Click sends refunds for a quote (`refundType` of the 1Click request).
+enum QuoteRefundType {
+  ORIGIN_CHAIN
+  INTENTS
+
+  @@map("quote_refund_type")
+}
+
 /// Why a payment is HELD.
 enum HeldReason {
   sanctions
@@ -887,21 +895,26 @@ model Session {
 }
 
 model Quote {
-  id               String    @id
-  merchantId       String    @map("merchant_id")
+  id               String           @id
+  merchantId       String           @map("merchant_id")
   livemode         Boolean
-  sessionId        String    @map("session_id")
-  originAssetId    String    @map("origin_asset_id")
-  depositAddress   String    @map("deposit_address")
-  amountIn         Decimal   @map("amount_in") @db.Decimal(78, 0)
-  amountOut        Decimal   @map("amount_out") @db.Decimal(78, 0)
-  refundTo         String    @map("refund_to")
+  sessionId        String           @map("session_id")
+  originAssetId    String           @map("origin_asset_id")
+  depositAddress   String           @map("deposit_address")
+  amountIn         Decimal          @map("amount_in") @db.Decimal(78, 0)
+  amountOut        Decimal          @map("amount_out") @db.Decimal(78, 0)
+  refundTo         String           @map("refund_to")
   deadline         DateTime
-  oneclickQuoteRef String?   @map("oneclick_quote_ref")
+  oneclickQuoteRef String?          @map("oneclick_quote_ref")
   /// Set when a newer quote replaced this one for the session.
-  supersededAt     DateTime? @map("superseded_at")
-  amountInUsd      Decimal?  @map("amount_in_usd") @db.Decimal(18, 6)
-  createdAt        DateTime  @default(now()) @map("created_at")
+  supersededAt     DateTime?        @map("superseded_at")
+  amountInUsd      Decimal?         @map("amount_in_usd") @db.Decimal(18, 6)
+  /// 1Click's USD value of `amount_out` at quote time (the shopper's fee line is in − out).
+  amountOutUsd     Decimal?         @map("amount_out_usd") @db.Decimal(18, 6)
+  /// How 1Click returns money for this quote: to `refund_to` on the origin chain (direct), or
+  /// into the merchant's intents account (`INTENTS`, signer-approved return-to-sender).
+  refundType       QuoteRefundType? @map("refund_type")
+  createdAt        DateTime         @default(now()) @map("created_at")
 
   merchant Merchant  @relation(fields: [merchantId], references: [id])
   session  Session   @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)

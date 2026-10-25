@@ -11,6 +11,7 @@ import { AppError } from './lib/errors.js';
 import { log } from './lib/logger.js';
 import { accountRoutes } from './routes/accounts.js';
 import { authRoutes } from './routes/auth.js';
+import { CHECKOUT_CLIENT_PREFIX, checkoutClientRoutes } from './routes/checkout-client.js';
 import { checkoutSessionRoutes } from './routes/checkout-sessions.js';
 import { healthRoutes } from './routes/health.js';
 import { merchantRoutes } from './routes/merchants.js';
@@ -83,10 +84,22 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     overrides: opts.rateLimitOverrides,
   });
 
-  const origins = env().CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+  const origins = env()
+    .CORS_ORIGINS.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // The hosted checkout calls only the shopper routes, with a Bearer client secret: its origin is
+  // allowed there and nowhere else, and without credentials, so scripts on the checkout page
+  // (third-party wallet SDKs) can never make cookie-authenticated dashboard calls.
+  const checkoutOrigin = new URL(env().CHECKOUT_BASE_URL).origin;
   await app.register(cors, {
-    origin: origins,
-    credentials: true,
+    delegator: (req, cb) => {
+      if ((req.url ?? '').startsWith(CHECKOUT_CLIENT_PREFIX)) {
+        cb(null, { origin: [checkoutOrigin], credentials: false });
+      } else {
+        cb(null, { origin: origins, credentials: true });
+      }
+    },
   });
 
   // JSON only: Fastify's default text/plain parser would deliver bodies that signing never covers.
@@ -204,6 +217,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(accountRoutes);
   await app.register(recoveryRoutes);
   await app.register(checkoutSessionRoutes);
+  await app.register(checkoutClientRoutes);
   opts.extraRoutes?.(app);
 
   return app;

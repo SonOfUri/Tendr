@@ -34,6 +34,10 @@ export const ErrorCodes = [
   'PROVIDER_UNAVAILABLE',
   /** An asset the provider does not list (e.g. a settlement asset 1Click cannot route). */
   'UNSUPPORTED_ASSET',
+  /** The checkout session's lifetime is over (or it was canceled); no new quotes or payments. */
+  'SESSION_EXPIRED',
+  /** The wallet / refund address failed sanctions screening; it cannot be used to pay. */
+  'WALLET_NOT_ALLOWED',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];
