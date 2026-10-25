@@ -15,6 +15,8 @@
   - signed webhooks.
 - **Web:** `apps/web` gains one checkout route (`/pay/[sessionId]`), embedded by a dependency-free `tendr.js` script as a modal or widget, plus dashboard screens.
 
+**Gas note:** "merchant pays gas" is a reimbursement in this project (quote reduced by the estimated send fee). Pimlico sponsorship arrives with the gas service in project 5.
+
 **Tech Stack:**
 - Existing: Node 22, Fastify 5, Prisma 6, BullMQ, Next.js 15, Playwright.
 - New on the checkout page only: `@reown/appkit` (EVM, Solana, Bitcoin adapters), TronLink via `@tronweb3/tronwallet-adapter-tronlink`, `@near-wallet-selector/core` + modal, `qrcode`.
@@ -32,7 +34,7 @@
 
 **When an order counts as paid:** only on server-verified settlement:
 - the 1Click status is `SUCCESS`;
-- AND the merchant account's intents balance increased by `amount_out`, or the destination transaction hash is confirmed in `wallet` mode.
+- AND the specific settlement transfer is verified: the receipts of 1Click's `destinationChainTxHashes` contain a transfer of the settlement asset ≥ `amount_out` to the merchant account (or to the saved address in `wallet` mode). Balance deltas are never used.
 
 Browser `postMessage` events never mark anything paid.
 
@@ -56,12 +58,15 @@ Browser `postMessage` events never mark anything paid.
 
 **Refunds:**
 - **Connected wallet:** `refundTo` = the wallet address (`ORIGIN_CHAIN`); 1Click refunds directly.
-- **Manual send:** `refundTo` = the merchant's intents account (`INTENTS`). Returns go through project 2's `refund` proposal (signer-approved). The cross-chain return fee is deducted from the amount returned.
+- **Manual send with a refund address provided** (optional field): `refundTo` = that address (`ORIGIN_CHAIN`), and 1Click refunds directly.
+- **Manual send without a refund address:** `refundTo` = the merchant's intents account (`INTENTS`). Returns go through project 2's `refund` proposal (signer-approved). The cross-chain return fee is deducted from the amount returned.
 - **Known exchange senders:** held as `needs_address`.
 
 **Sanctions:**
-- Screen with Chainalysis at quote time (connected wallet) and on deposit detection (manual send).
-- A hit, or an unavailable screening API, puts the payment in `HELD`; it is never settled and never auto-refunded.
+- Screen with Chainalysis at quote time (connected wallet and any provided refund address) and on detection of EVERY sender.
+- A hit → `HELD`. Screening unavailable → `SCREENING_PENDING`, retried with backoff for up to 6 h; `allow` settles; still unavailable after 6 h → a merchant review item, not a hold.
+- A hold is a non-custodial notice. Tendr cannot freeze funds already swapped into the merchant account, and the UI, emails and docs say exactly that (spec "Changes after external plan review" #3).
+- A hit is never settled and never auto-refunded.
 - A held payment can only be refunded by a signer-approved proposal plus a typed acknowledgement that legal clearance was obtained. There is no "release to merchant" action.
 
 **Webhooks:**
@@ -134,14 +139,14 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
 - Create: `packages/contracts/src/checkout.ts` (+ test), migration `apps/api/prisma/migrations/<ts>_checkout_core/`
 
 **Interfaces — Produces:**
-- **Session states:** add `HELD`. Transitions:
+- **Session states:** add `HELD` and `SCREENING_PENDING` (`SCREENING_PENDING → SETTLED | HELD`; `PROCESSING → SCREENING_PENDING` allowed). Transitions:
   - `PENDING_DEPOSIT → PROCESSING | EXPIRED`;
   - `PROCESSING → SETTLED | REFUNDED | HELD | PENDING_DEPOSIT` (the last only for an underpay retry while unexpired);
   - `EXPIRED → LATE_DEPOSIT`;
   - `LATE_DEPOSIT → REFUNDED | HELD`;
   - `HELD → REFUNDED`;
   - `SETTLED` and `REFUNDED` terminal.
-- **Payment states:** add `HELD`. Transitions:
+- **Payment states:** add `HELD` and `SCREENING_PENDING` (`DETECTED|PROCESSING → SCREENING_PENDING`; `SCREENING_PENDING → SETTLED | HELD`). Transitions:
   - `DETECTED → PROCESSING | REFUNDING | HELD`;
   - `PROCESSING → SETTLED | REFUNDING | HELD`;
   - `HELD → REFUNDING`;
@@ -230,6 +235,7 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
 - **Consumes:** Task 1 schema, Task 3 `resolvePayers`; the project 2 settlement mirror (`settlement_configs`) and `merchant_accounts`.
 - **Produces:**
   - **`POST /v1/checkout/sessions`** (`secret_key`, scope `sessions:write`, idempotent). Body: `{ amount: string, amount_currency, external_ref, success_url, cancel_url, customer_email?, metadata?, fee_payer?, gas_payer?, payment_link_id?, expires_in? (60–1800 s) }`. Returns 201 `{ id, client_secret, url, expires_at, status }`; `url` = `${CHECKOUT_BASE_URL}/pay/${id}`.
+    - The returned `url` is `${CHECKOUT_BASE_URL}/pay/${id}#cs=${client_secret}` so a store redirect works; the fragment never reaches a server.
   - **`GET /v1/checkout/sessions/:id`** (`sessions:read`): the full view, including payments, refunds and totals.
   - **`POST /v1/checkout/sessions/:id/expire`** (`sessions:write`): sets `EXPIRED` with `expired_reason: canceled` (only from `PENDING_DEPOSIT`) and emits `checkout.session.expired`.
   - **`createSession(ctx, input)`** and **`sessionView(ctx, id)`**.
@@ -237,7 +243,7 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
   - USD amounts allow ≤ 2 decimals and must be > 0; settlement-asset amounts allow ≤ the asset's decimals.
   - `amount_currency` must be `USD` or the settlement asset.
   - The merchant must have an `active` merchant account in that mode and a settlement config.
-  - `external_ref` is unique per merchant+mode among non-terminal sessions (409 `CONFLICT`).
+  - `external_ref` is unique per merchant+mode among sessions in `PENDING_DEPOSIT` / `PROCESSING` / `SCREENING_PENDING` / `SETTLED` (409 `CONFLICT`), via a partial unique index. Expired, late and held orders may get a new session.
   - The client secret uses the foundation's `ses_<ULID>_secret_<32 hex>` format and is stored hashed.
 - **Env:** `CHECKOUT_BASE_URL` (default `http://localhost:3000`).
 
@@ -245,6 +251,8 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
   - creates a session with resolved payers;
   - rejects EUR / 3-decimal USD / 0 / negative (Review Focus 4);
   - duplicate `external_ref` with the same idempotency key replays, and with a different key gets 409 (Review Focus 3);
+  - after the first session EXPIRES, the same `external_ref` gets a new session; a SETTLED one still gets 409;
+  - the returned `url` ends with `#cs=<client_secret>`;
   - no merchant account gives 409 `ACCOUNT_NOT_READY`;
   - expire only from `PENDING_DEPOSIT`;
   - test/live isolation;
@@ -263,7 +271,7 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
 - **Produces** (all authenticated as `session_client` with the session's client secret, CORS allowed for `CHECKOUT_BASE_URL`):
   - **`GET /v1/checkout/client/session`:** the shopper-safe view — merchant name and logo, amount, currency, status, `expires_at`, the current quote, payments with their shopper-facing state, and whether an email is needed. No merchant internals.
   - **`GET /v1/checkout/client/tokens`:** 1Click tokens, cached 5 min, popular first.
-  - **`POST /v1/checkout/client/quote`:** `{ origin_asset, refund_address? (connected wallet), refund_chain? }`.
+  - **`POST /v1/checkout/client/quote`:** `{ origin_asset, refund_address? (connected wallet or the optional manual-send refund address), refund_chain? }`. Validates the address format for the origin chain; screens it (hit → 403 `WALLET_NOT_ALLOWED`; unavailable → quote allowed, the sender is screened again on detection); `refundTo` = `refund_address` (`ORIGIN_CHAIN`) when given, else the merchant intents account (`INTENTS`).
     - Screens `refund_address` first; a hit gives 403 `WALLET_NOT_ALLOWED`.
     - Builds requests via Task 3: `refundTo` is the wallet, or the merchant intents account when absent.
     - Calls dry then real, and stores a `quotes` row (`amount_in`, `amount_out`, `amount_in_usd`, `deposit_address`, `deadline`, `refund_to`). The previous active quote gets `superseded_at`.
@@ -291,11 +299,12 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
 
 **Interfaces — Produces:**
 - `screenAddress(ctx, { sessionId, address, chain }): Promise<{ decision: 'allow' | 'block' | 'unavailable' }>`. It writes `screening_results` (`provider: 'chainalysis'`).
+- `retryPendingScreenings()`: a scheduled job that retries `SCREENING_PENDING` payments with backoff (1, 5, 15, 30 min, then hourly) for up to 6 h; `allow` → back to the Task 7 settlement path; `block` → `HELD`; past 6 h → a review item `screening_unresolved` (the payment stays `SCREENING_PENDING`).
 - Chainalysis sanctions API: `GET https://public.chainalysis.com/api/v1/address/{address}` with header `X-API-Key` (secret purpose `chainalysis`, via `getSecret`). Non-empty `identifications` → `block`.
 - Timeout 3 s → `unavailable`. Results are cached 24 h per address in Redis.
 - In test mode, a configurable fixture list of blocked addresses is used and there are no HTTP calls.
 
-- [ ] **Step 1: Write failing tests:** allow, block, timeout → unavailable; cache hit makes no second call; test-mode fixture.
+- [ ] **Step 1: Write failing tests:** allow, block, timeout → unavailable; cache hit makes no second call; test-mode fixture. Retry job: unavailable then allow settles; block holds; 6 h unresolved creates a review item without a hold.
 - [ ] **Step 2: Run** them and expect FAIL. **Implement.** **Run** them and expect PASS.
 - [ ] **Step 3: Commit** `feat(api): sanctions screening with fail-closed result`.
 
@@ -315,15 +324,19 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
   - **`classify(quote, session, status): PaymentOutcome`** (pure), where `PaymentOutcome = settled | underpaid | overpaid | late | failed | pending`:
     - `late` = deposit observed after the quote deadline, or with the session not in `PENDING_DEPOSIT`/`PROCESSING`;
     - `overpaid` = `SUCCESS` with `refundedAmount > 0`.
-  - **Settlement verification:** `SUCCESS` → read the merchant account intents balance for the settlement asset, then mark `SETTLED` only if it rose by ≥ `amount_out` since the quote's baseline (stored at quote time). In `wallet` mode, require `destinationChainTxHashes`.
-  - **Sender detection** from `originChainTxHashes` (chain read through a minimal per-chain lookup, or 1Click's provided sender if present). The manual-send sender is screened on detection. Block or unavailable → payment `HELD` (`held_reason`), session `HELD`, and `payment.held` is emitted.
+  - **Settlement verification:** `SUCCESS` → for each `destinationChainTxHashes` entry, fetch the NEAR transaction status (add `NearClient.txStatus(hash)` with fake support) and parse receipt logs for a NEP-245 `mt_transfer`/`mt_mint` (or NEP-141 `ft_transfer`) event of the settlement asset to the merchant account with amount ≥ `amount_out`. Mark `SETTLED` only if found. In `wallet` mode verify the destination chain's transfer to the saved address (per-chain verifiers behind one interface; chains without one use 1Click's `amountOut` + tx hash and record `verified_by: 'oneclick'`). Never use balance deltas.
+  - **Sender detection** from `originChainTxHashes` (a minimal per-chain lookup, or 1Click's provided sender). EVERY detected sender is screened, including connected-wallet flows. `block` → payment and session `HELD` + `payment.held` (non-custodial notice to all signers: Tendr cannot freeze the funds; the merchant must not use them; get legal advice). `unavailable` → `SCREENING_PENDING` (Task 6 retries).
   - **Events and webhooks**, written as events (Task 9 delivers): `payment.detected`, `payment.processing`, `payment.succeeded` (with `overpaid_amount`, `kept_small_overpayment`), `payment.refunded` (reason), `payment.late`, `payment.held`.
-  - **Underpay with the session still valid** → session back to `PENDING_DEPOSIT`.
+  - **Underpay:** while the quote deadline hasn't passed and 1Click reports `INCOMPLETE_DEPOSIT`, the shopper view shows "Send the remaining X to the same address" (`required − depositedAmount`), gated by env `CHECKOUT_TOPUP_ENABLED` (default true in test, false in live until the mainnet check confirms accumulation). After the deadline, or with the flag off, the refund happens and the session goes back to `PENDING_DEPOSIT` if unexpired.
   - **`recordRevenue(payment)`:** `revenue_entries` rows for the Tendr fee (`appFees` bps × amountIn), 1Click fee, network fee and gas reimbursement, using the existing `RevenueSource` enum (extend it if a source is missing).
 
 - [ ] **Step 1: Write failing tests** (SimulatedOneClick + fake near client):
   - exact → `SETTLED` + `payment.succeeded`;
-  - balance not risen → stays `PROCESSING` (never settled);
+  - `SUCCESS` but no matching transfer event → stays `PROCESSING`;
+  - another payment's transfer to the same account does NOT settle this payment;
+  - a merchant withdrawal between quote and settlement does not block settlement;
+  - underpay with a live quote → top-up offered; completed top-up → settled; deadline passes → refunded + reopened;
+  - connected-wallet flow whose actual sender differs and is sanctioned → `HELD`;
   - underpay → refunded + session reopens;
   - overpay ≥ $1 → settled + return-to-sender queued (Task 8 hook called);
   - overpay < $1 → settled + `kept_small_overpayment`;
@@ -331,7 +344,7 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
   - deposit to a superseded quote is attributed to it (Review Focus 1);
   - a second payment into a settled session is late/overpay, and the order is paid once (Review Focus 2);
   - sanctioned manual sender → `HELD`;
-  - screening unavailable → `HELD`;
+  - screening unavailable → `SCREENING_PENDING` (not `HELD`);
   - polling stops after 24 h;
   - revenue rows written.
 - [ ] **Step 2: Run** them and expect FAIL. **Implement.** **Run** them and expect PASS.
@@ -353,12 +366,14 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
   - **Signer approval** uses the existing approvals UI. The watcher from project 2 executes it, and this module listens for `account.proposal.executed` on refund proposals to mark the refund `confirmed` and emit `refund.sent`.
   - **`provideRefundAddress(clientSecret, { address, chain })`** (shopper route added to Task 5's router): fills a `needs_address` refund and creates the draft.
   - **Held (sanctions) refunds** require `acknowledged_legal_at`, set by a dashboard action (Task 10) before the draft can be created.
+  - Payments whose quote had a shopper refund address never create drafts (1Click refunds directly); record the refund from status `refundedAmount`.
 
 - [ ] **Step 1: Write failing tests:**
   - < $1 is kept (no draft);
   - an exchange sender becomes `needs_address` and the email is queued;
   - a normal manual-send overpay creates a refund draft with the right route and net amount;
   - a connected-wallet overpay creates no draft (1Click already refunded);
+  - a manual send with a refund address creates no draft (1Click refunds directly);
   - an executed proposal marks the refund sent;
   - a held payment draft without acknowledgement is refused.
 - [ ] **Step 2: Run** them and expect FAIL. **Implement.** **Run** them and expect PASS.
@@ -416,7 +431,7 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
   - `GET/PATCH /v1/settings/checkout` (`settings:manage`) — `checkout_domains` (origins, `https://` only in prod, max 20), `default_fee_payer`, `default_gas_payer`.
 - **Web screens:**
   - the payments list and detail (order amount, received, fees broken out, source token and chain, tx links, refunds);
-  - the review queue (no "release" action exists for held funds);
+  - the review queue (no "release" action exists for held funds). Held items show verbatim: "These funds came from a sanctioned address. Tendr cannot freeze them; you are responsible for not using them; get legal advice." `screening_unresolved` items appear separately as "Screening couldn't complete";
   - webhook endpoints with a delivery log and resend;
   - checkout settings.
 
@@ -440,7 +455,7 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
   - **Screens** (spec §2):
     1. Choose token (search, popular first).
     2. Quote: exact amount, countdown to the quote deadline, auto-requote on expiry, fee lines only when the shopper pays, network warning.
-    3. Pay: a connect-wallet button (Task 12 fills it in) or manual send with QR (`qrcode`), copy buttons and the "send only on <network>" warning.
+    3. Pay: a connect-wallet button (Task 12 fills it in) or manual send with QR (`qrcode`), copy buttons and the "send only on <network>" warning. Manual send shows the optional "Your address on <network>, in case we need to send money back" field (format-validated; changing it re-quotes). Before payment: "Leftovers under $1 aren't returned." An underpaid payment with a live quote shows "Send the remaining X to the same address".
     4. Status: detected → converting → settled.
     5. Terminal states: complete with tx link and a "Return to store" button to `success_url`; late; refunded; held ("We couldn't complete this payment"); `needs_address` form; email capture when needed.
   - **Status polling:** `GET /v1/checkout/client/session` every 2 s while visible.
@@ -526,7 +541,8 @@ apps/api/scripts/verify-checkout-mainnet.ts   # Task 14
   - stops at the first FAIL;
   - a `--phase cleanup` path.
 - **Checks (spec "Assumptions to verify early"):**
-  1. `EXACT_OUTPUT` delivers the exact amount to an intents recipient, and an overpay excess goes to `refundTo`.
+  1. `EXACT_OUTPUT` delivers the exact amount to an intents recipient, and an overpay excess goes to `refundTo`. Also print the settlement tx receipts' event shapes, which Task 7's verifier parses.
+  1b. After an underpay, a top-up to the same address before the deadline is accumulated (PASS lets `CHECKOUT_TOPUP_ENABLED=true` in live).
   2. A late deposit is refunded or swapped (print which).
   3. `appFees` arrives at the fee account.
   4. Chainalysis key works (`identifications` for a known sanctioned test address, empty for a clean one).
