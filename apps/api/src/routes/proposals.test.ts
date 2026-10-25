@@ -447,13 +447,14 @@ describe('account proposals', () => {
       where: { id: viewer.credentialRowId },
     });
     await bad({ add_signer: { id: viewer.userId, keys: [vk.publicKey] } });
-    expect(
-      (
-        await post('/v1/account/proposals', owner, {
-          action: { add_saved_address: { id: 'pal_NEW', chain: 'near', address: 'shop.near' } },
-        })
-      ).statusCode,
-    ).toBe(201);
+    const saved = await post('/v1/account/proposals', owner, {
+      action: { add_saved_address: { id: 'pal_NEW', chain: 'near', address: 'shop.near' } },
+    });
+    expect(saved.statusCode).toBe(201);
+    // The API mints the saved-address id (globally unique); the client's choice is ignored (I3).
+    const minted = saved.json().action.add_saved_address.id as string;
+    expect(minted).toMatch(/^pal_[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(minted).not.toBe('pal_NEW');
   });
 
   it('approval_with_stale_epoch_rejected_before_relay', async () => {

@@ -74,18 +74,28 @@ export const AccountEventTypes = {
   savedAddressRemoved: 'account.saved_address.removed',
   limitsChanged: 'account.limits.changed',
   settlementChanged: 'account.settlement.changed',
+  recoverySessionOpened: 'account.recovery_session.opened',
+  recoveryPasskeyRegistered: 'account.recovery_session.passkey_registered',
+  mirrorConflict: 'merchant_account.mirror_conflict',
 } as const;
 const T = AccountEventTypes;
 
 /** What the chain changed that needs a fresh contract view (fetched outside the transaction). */
 export interface ApplyOutcome {
   signers: boolean;
+  /**
+   * What caused each signer change (the proposal id, else the transaction hash): the
+   * `account.signers.changed` event is keyed by it, so every change is announced even when a
+   * later one returns to an earlier signer set (M2).
+   */
+  signerCauses: string[];
   savedAddresses: boolean;
   limitAssets: Set<string>;
 }
 
 const emptyOutcome = (): ApplyOutcome => ({
   signers: false,
+  signerCauses: [],
   savedAddresses: false,
   limitAssets: new Set(),
 });
@@ -159,6 +169,9 @@ export async function applyAccountEventsTx(
       case 'signers_changed':
         await signersChangedTx(tx, ctx, account, e.data);
         out.signers = true;
+        out.signerCauses.push(
+          str(e.data.proposal_id) ?? txHash ?? `epoch:${String(e.data.signer_epoch)}`,
+        );
         break;
       case 'recovery_started':
         await recoveryStartedTx(tx, ctx, account, e.data, txHash);
@@ -236,7 +249,11 @@ export async function afterAccountEvents(
   };
   if (outcome.signers) {
     await step('signers', async () =>
-      syncSigners(account, await client.view<ConfigView>(account.nearAccountId, 'get_config', {})),
+      syncSigners(
+        account,
+        await client.view<ConfigView>(account.nearAccountId, 'get_config', {}),
+        outcome.signerCauses,
+      ),
     );
   }
   if (outcome.savedAddresses) {
@@ -384,8 +401,9 @@ async function proposalEventsTx(
 
 /**
  * A row for a proposal first seen on chain (created outside our relayer, or a relay whose answer
- * was lost). Needs the on-chain action and a creator who is a known person. The salt is not
- * recoverable from chain and is never needed once a proposal is on chain, so it is left empty.
+ * was lost). Needs the on-chain action. A creator who is not a known person is stored as null
+ * (the proposal is still mirrored and notified). The salt is not recoverable from chain and is
+ * never needed once a proposal is on chain, so it is left empty.
  */
 async function createFromChain(
   tx: Tx,
@@ -395,10 +413,11 @@ async function createFromChain(
   d: Record<string, unknown>,
 ) {
   const action = ActionSchema.safeParse(d.action);
+  if (!action.success) return null;
   const creator = str(d.signer_id);
-  if (!action.success || !creator) return null;
-  const person = await tx.user.findUnique({ where: { id: creator }, select: { id: true } });
-  if (!person) return null;
+  const person = creator
+    ? await tx.user.findUnique({ where: { id: creator }, select: { id: true } })
+    : null;
   const createdAt = nsToDate(d.created_at);
   return tx.accountProposal.create({
     data: {
@@ -411,7 +430,7 @@ async function createFromChain(
       action: action.data as Prisma.InputJsonValue,
       salt: '',
       status: 'draft',
-      createdByUserId: creator,
+      createdByUserId: person?.id ?? null,
       ...(createdAt ? { createdAt } : {}),
     },
   });
@@ -610,10 +629,18 @@ async function recoveryEndedTx(
  * Brings the signer mirror up to `config` (the contract's `get_config`): the account's threshold
  * and epoch, `merchant_users.is_signer` (see `setSignerFlags`), and the account's passkey rows in
  * `account_keys`, each on-chain key matched to that same person's credential (active first; R1:
- * never by public key across people). Records `account.signers.changed` once per distinct signer
- * set (epoch, threshold, signers and keys).
+ * never by public key across people). Also mirrors `recovery_key_epoch`.
+ *
+ * Records `account.signers.changed`:
+ * - with `causes` (the proposal ids / tx hashes of the chain's `signers_changed`): once per cause,
+ *   so A → B → A within one epoch still announces (and mirrors to test) each change;
+ * - without (reconciliation): only when the signer set differs from the last one announced.
  */
-export async function syncSigners(account: MerchantAccount, config: ConfigView): Promise<boolean> {
+export async function syncSigners(
+  account: MerchantAccount,
+  config: ConfigView,
+  causes: string[] = [],
+): Promise<boolean> {
   const ctx = ctxOf(account);
   return tenantTransaction(ctx, async (tx) => {
     await lockAccount(tx, account.id);
@@ -631,6 +658,13 @@ export async function syncSigners(account: MerchantAccount, config: ConfigView):
       });
       changed = true;
     }
+    const keyEpoch = u64Of(config.recovery_key_epoch);
+    if (keyEpoch !== null && current.recoveryKeyEpoch !== keyEpoch) {
+      await tx.merchantAccount.update({
+        where: { id: account.id },
+        data: { recoveryKeyEpoch: keyEpoch },
+      });
+    }
     const ids = config.signers.map((s) => s.id);
     if (await setSignerFlags(tx, account, ids)) changed = true;
     if (await syncSignerKeys(tx, account, config)) changed = true;
@@ -638,19 +672,37 @@ export async function syncSigners(account: MerchantAccount, config: ConfigView):
     const signers = [...config.signers]
       .map((s) => ({ id: s.id, keys: s.keys.map(keyIdOf).sort() }))
       .sort((a, b) => a.id.localeCompare(b.id));
-    await recordOnce(tx, ctx, {
+    const contentKey = `${config.signer_epoch}:${config.threshold}:${hash(signers)}`;
+    const payload = {
+      nearAccountId: account.nearAccountId,
+      signerIds: ids,
+      threshold: config.threshold,
+      signerEpoch: config.signer_epoch,
+      recoveryKeySet: config.recovery_key_set,
+      contentKey,
+    };
+    const scope = {
       aggregateType: 'merchant_account',
       aggregateId: account.id,
       type: T.signersChanged,
-      key: `signers:${config.signer_epoch}:${config.threshold}:${hash(signers)}`,
-      payload: {
-        nearAccountId: account.nearAccountId,
-        signerIds: ids,
-        threshold: config.threshold,
-        signerEpoch: config.signer_epoch,
-        recoveryKeySet: config.recovery_key_set,
-      },
-    });
+    };
+    if (causes.length > 0) {
+      for (const cause of new Set(causes)) {
+        await recordOnce(tx, ctx, { ...scope, key: `cause:${cause}`, payload });
+      }
+    } else {
+      const last = await tx.event.findFirst({
+        where: { merchantId: ctx.merchantId, livemode: ctx.livemode, ...scope },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { payload: true },
+      });
+      if ((last?.payload as { contentKey?: unknown } | undefined)?.contentKey !== contentKey) {
+        await recordEvent(tx, ctx, {
+          ...scope,
+          payload: { ...payload, dedupeKey: `content:${contentKey}` },
+        });
+      }
+    }
     return changed;
   });
 }
@@ -774,6 +826,27 @@ export async function syncSavedAddresses(
       const status = activeFrom > now ? ('pending' as const) : ('active' as const);
       const row = byId.get(v.id);
       if (!row) {
+        // The on-chain id is the row's primary key. One already owned by another store or mode
+        // (an id chosen outside our API, which mints `pal_<ULID>` ids) cannot be mirrored here:
+        // record the conflict and skip the entry rather than fail the whole mirror (I3).
+        const taken = await tx.payoutAllowlistEntry.findUnique({
+          where: { id: v.id },
+          select: { merchantId: true, livemode: true },
+        });
+        if (taken) {
+          await recordOnce(tx, ctx, {
+            aggregateType: 'merchant_account',
+            aggregateId: account.id,
+            type: T.mirrorConflict,
+            key: `saved_address:${v.id}`,
+            payload: { table: 'payout_allowlist', id: v.id, chain: v.chain, address: v.address },
+          });
+          log('warn', 'saved-address id already mirrored for another store or mode; skipped', {
+            accountId: account.id,
+            savedAddressId: v.id,
+          });
+          continue;
+        }
         await tx.payoutAllowlistEntry.create({
           data: {
             id: v.id,
@@ -1013,7 +1086,8 @@ function eventsFromView(v: ContractProposalView): AccountEvent[] {
 const OPEN_ON_CHAIN: ProposalStatus[] = ['pending', 'timelocked', 'executing'];
 
 /**
- * Reconciles one account with its contract (scheduled every 60 s per active account, both modes):
+ * Reconciles one account with its contract (one job per active account every 60 s, both modes;
+ * each proposal is applied in its own short transaction):
  * - new proposals since the cursor (`list_proposals`), and every proposal the mirror still has open
  *   (`get_proposal`), applied as the events their views imply, then the views themselves;
  * - drafts whose relay claim went stale (R24): looked up by on-chain id — brought up to date when
@@ -1036,18 +1110,17 @@ export async function reconcileAccount(merchantId: string, livemode: boolean): P
     client.view<RecoveryView | null>(contract, 'get_recovery', {}),
   ]);
 
-  // Proposals: new ones since the cursor, then every one the mirror still has open.
-  const views = new Map<string, ContractProposalView>();
-  let listed = 0;
+  // Proposals: new ones since the cursor (in creation order), then every one still open here.
+  const listed: ContractProposalView[] = [];
   for (let page = 0; page < MAX_PAGES_PER_RUN; page++) {
     const batch = await client.view<ContractProposalView[]>(contract, 'list_proposals', {
-      from_index: account.proposalsSeen + listed,
+      from_index: account.proposalsSeen + listed.length,
       limit: LIST_PAGE,
     });
-    for (const v of batch) views.set(v.id, v);
-    listed += batch.length;
+    listed.push(...batch);
     if (batch.length < LIST_PAGE) break;
   }
+  const listedIds = new Set(listed.map((v) => v.id));
   const staleClaim = new Date(Date.now() - RELAY_CLAIM_LEASE_MS);
   const open = await prisma.accountProposal.findMany({
     where: {
@@ -1061,72 +1134,38 @@ export async function reconcileAccount(merchantId: string, livemode: boolean): P
     },
     select: { id: true, onchainId: true, status: true },
   });
+  const byId: ContractProposalView[] = [];
   const unclaim: string[] = [];
   for (const row of open) {
-    if (views.has(row.onchainId)) continue;
+    if (listedIds.has(row.onchainId)) continue;
     const v = await client.view<ContractProposalView | null>(contract, 'get_proposal', {
       id: row.onchainId,
     });
-    if (v) views.set(v.id, v);
+    if (v) byId.push(v);
     else if (row.status === 'draft') unclaim.push(row.id);
   }
 
-  const events: AccountEvent[] = [];
-  for (const v of views.values()) events.push(...eventsFromView(v));
-
-  // Recovery: a started one we never saw; pending rows the chain no longer has.
-  const pending = await prisma.recoveryRequest.findMany({
-    where: { accountId: account.id, merchantId, livemode, status: 'pending' },
-  });
-  if (recovery) {
-    const known = await prisma.recoveryRequest.findFirst({
-      where: { accountId: account.id, merchantId, livemode, onchainId: recovery.recovery_id },
-      select: { id: true },
-    });
-    if (!known) events.push(ev('recovery_started', { ...recovery }));
-  }
-  const chainIds = new Set(config.signers.map((s) => s.id));
-  for (const row of pending) {
-    if (row.onchainId === recovery?.recovery_id) continue;
-    const executed =
-      row.executesAt <= new Date() &&
-      row.newThreshold === config.threshold &&
-      row.newSignerIds.length === chainIds.size &&
-      row.newSignerIds.every((id) => chainIds.has(id));
-    events.push(
-      executed
-        ? ev('recovery_executed', {
-            recovery_id: row.onchainId,
-            new_signer_ids: config.signers.map((s) => s.id),
-            new_threshold: config.threshold,
-            signer_epoch: config.signer_epoch,
-          })
-        : ev('recovery_cancelled', { recovery_id: row.onchainId, reason: 'not_pending_on_chain' }),
-    );
-  }
-
-  const outcome = await tenantTransaction(ctx, async (tx, c) => {
-    const out = await applyAccountEventsTx(tx, c, account, events, null);
-    for (const v of views.values()) {
-      const row = await tx.accountProposal.findFirst({
-        where: { accountId: account.id, onchainId: v.id, merchantId, livemode },
-      });
-      if (!row) continue;
-      await applyProposalView(tx, c, row.id, v);
-      if (row.relayClaimedAt) {
-        await tx.accountProposal.update({ where: { id: row.id }, data: { relayClaimedAt: null } });
-      }
-      for (const a of v.approvals) {
-        const credentialId = await credentialForKey(a.signer_id, a.key);
-        const epoch = u64Of(a.signer_epoch);
-        if (!credentialId || epoch === null) continue;
-        await upsertApproval(tx, c, row.id, a.signer_id, {
-          credentialId,
-          signerEpoch: epoch,
-          txHash: null,
-        });
-      }
+  // One short transaction per proposal. The cursor advances only over listed proposals that
+  // applied, up to the first failure, so a failing one is retried on the next run.
+  const assets = new Set<string>();
+  const failures: unknown[] = [];
+  let applied = 0;
+  for (const v of listed) {
+    try {
+      for (const a of (await reconcileProposal(account, v)).limitAssets) assets.add(a);
+      if (failures.length === 0) applied += 1;
+    } catch (err) {
+      failures.push(err);
     }
+  }
+  for (const v of byId) {
+    try {
+      for (const a of (await reconcileProposal(account, v)).limitAssets) assets.add(a);
+    } catch (err) {
+      failures.push(err);
+    }
+  }
+  await tenantTransaction(ctx, async (tx) => {
     if (unclaim.length > 0) {
       await tx.accountProposal.updateMany({
         where: {
@@ -1139,12 +1178,49 @@ export async function reconcileAccount(merchantId: string, livemode: boolean): P
         data: { relayClaimedAt: null },
       });
     }
-    await tx.merchantAccount.update({
-      where: { id: account.id },
-      data: { proposalsSeen: account.proposalsSeen + listed, reconciledAt: new Date() },
+    // Conditional on the cursor we read: a concurrent run cannot move it twice.
+    await tx.merchantAccount.updateMany({
+      where: { id: account.id, merchantId, livemode, proposalsSeen: account.proposalsSeen },
+      data: { proposalsSeen: account.proposalsSeen + applied, reconciledAt: new Date() },
     });
-    return out;
   });
+
+  // Recovery: a started one we never saw; pending rows the chain no longer has.
+  const recoveryEvents: AccountEvent[] = [];
+  const pending = await prisma.recoveryRequest.findMany({
+    where: { accountId: account.id, merchantId, livemode, status: 'pending' },
+  });
+  if (recovery) {
+    const known = await prisma.recoveryRequest.findFirst({
+      where: { accountId: account.id, merchantId, livemode, onchainId: recovery.recovery_id },
+      select: { id: true },
+    });
+    if (!known) recoveryEvents.push(ev('recovery_started', { ...recovery }));
+  }
+  const chainIds = new Set(config.signers.map((s) => s.id));
+  for (const row of pending) {
+    if (row.onchainId === recovery?.recovery_id) continue;
+    const executed =
+      row.executesAt <= new Date() &&
+      row.newThreshold === config.threshold &&
+      row.newSignerIds.length === chainIds.size &&
+      row.newSignerIds.every((id) => chainIds.has(id));
+    recoveryEvents.push(
+      executed
+        ? ev('recovery_executed', {
+            recovery_id: row.onchainId,
+            new_signer_ids: config.signers.map((s) => s.id),
+            new_threshold: config.threshold,
+            signer_epoch: config.signer_epoch,
+          })
+        : ev('recovery_cancelled', { recovery_id: row.onchainId, reason: 'not_pending_on_chain' }),
+    );
+  }
+  if (recoveryEvents.length > 0) {
+    await tenantTransaction(ctx, (tx, c) =>
+      applyAccountEventsTx(tx, c, account, recoveryEvents, null),
+    );
+  }
 
   // Mirrors read straight from the contract's views.
   await syncSigners(account, config);
@@ -1159,7 +1235,6 @@ export async function reconcileAccount(merchantId: string, livemode: boolean): P
       await writeSettlement(tx, c, account, settlement);
     });
   }
-  const assets = new Set<string>(outcome.limitAssets);
   for (const r of await prisma.accountLimit.findMany({
     where: { accountId: account.id, merchantId, livemode },
     select: { asset: true },
@@ -1182,28 +1257,54 @@ export async function reconcileAccount(merchantId: string, livemode: boolean): P
     if (asset) assets.add(asset);
   }
   for (const asset of assets) await refreshLimits(account, asset);
+
+  if (failures.length > 0) {
+    log('warn', 'some proposals failed to reconcile', {
+      accountId: account.id,
+      failed: failures.length,
+      err: String(failures[0]),
+    });
+    throw failures[0];
+  }
   return true;
 }
 
-/** Reconciles every active account (both modes); one failing account does not stop the rest. */
-export async function reconcileAllAccounts(): Promise<{ ok: number; failed: number }> {
-  const accounts = await prisma.merchantAccount.findMany({
-    where: { status: 'active' },
-    select: { merchantId: true, livemode: true, id: true },
-    orderBy: { reconciledAt: { sort: 'asc', nulls: 'first' } },
-  });
-  let ok = 0;
-  let failed = 0;
-  for (const a of accounts) {
-    try {
-      await reconcileAccount(a.merchantId, a.livemode);
-      ok += 1;
-    } catch (err) {
-      failed += 1;
-      log('warn', 'account reconciliation failed', { accountId: a.id, err: String(err) });
+/**
+ * One proposal's view applied in its own transaction: the events the view implies, then the view
+ * itself (status incl. `executing`), its approvals (each key matched to that person's credential),
+ * and a stale relay claim cleared.
+ */
+async function reconcileProposal(
+  account: MerchantAccount,
+  v: ContractProposalView,
+): Promise<ApplyOutcome> {
+  return tenantTransaction(ctxOf(account), async (tx, c) => {
+    const out = await applyAccountEventsTx(tx, c, account, eventsFromView(v), null);
+    const row = await tx.accountProposal.findFirst({
+      where: {
+        accountId: account.id,
+        onchainId: v.id,
+        merchantId: c.merchantId,
+        livemode: c.livemode,
+      },
+    });
+    if (!row) return out;
+    await applyProposalView(tx, c, row.id, v);
+    if (row.relayClaimedAt) {
+      await tx.accountProposal.update({ where: { id: row.id }, data: { relayClaimedAt: null } });
     }
-  }
-  return { ok, failed };
+    for (const a of v.approvals) {
+      const credentialId = await credentialForKey(a.signer_id, a.key);
+      const epoch = u64Of(a.signer_epoch);
+      if (!credentialId || epoch === null) continue;
+      await upsertApproval(tx, c, row.id, a.signer_id, {
+        credentialId,
+        signerEpoch: epoch,
+        txHash: null,
+      });
+    }
+    return out;
+  });
 }
 
 // ─── permissionless executions (the relayer pays gas) ───────────────────────

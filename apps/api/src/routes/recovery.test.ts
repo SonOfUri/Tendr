@@ -15,6 +15,8 @@ import { SoftAuthenticator } from '../test/authenticator.js';
 import { dashHeaders, loginAs, responseCookies, type Login } from '../test/dashboard.js';
 import { createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
 import { CSRF_COOKIE, SESSION_COOKIE } from '@tendr/contracts';
+import { onRecoveryPasskeyRegistered, onRecoverySessionOpened } from '../jobs/account-notices.js';
+import { memoryMailer } from '../test/dashboard.js';
 import { RECOVERY_LIMIT } from './recovery.js';
 
 const HOUR = 3_600_000;
@@ -172,14 +174,53 @@ describe('recovery API', () => {
     expect((await start(signedBody())).statusCode).toBe(409);
   });
 
-  it('is strictly rate limited per account', async () => {
-    fake.failNext('start_recovery', 'x');
+  const startFrom = (payload: object, ip: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/v1/account/recovery/start',
+      payload,
+      remoteAddress: ip,
+    });
+
+  it('is strictly rate limited per IP, for every request', async () => {
     for (let i = 0; i < RECOVERY_LIMIT; i++) {
-      expect((await start({ ...signedBody(), newThreshold: 2 })).statusCode).toBe(400);
+      expect((await startFrom({ junk: true }, '10.9.9.9')).statusCode).toBe(400);
     }
-    const res = await start(signedBody());
+    const res = await startFrom(signedBody(), '10.9.9.9');
     expect(res.statusCode).toBe(429);
     expect(res.headers['retry-after']).toBeDefined();
+  });
+
+  it("unverified requests never use up the account's attempts (I2)", async () => {
+    // Many bad signatures from many IPs, and requests for accounts that do not exist.
+    for (let i = 0; i < RECOVERY_LIMIT + 3; i++) {
+      expect(
+        (await startFrom({ ...signedBody(), newThreshold: 2 }, `10.1.0.${i}`)).statusCode,
+      ).toBe(400);
+      expect(
+        (await startFrom({ ...signedBody(), merchant: `nope-${i}` }, `10.2.0.${i}`)).statusCode,
+      ).toBe(404);
+    }
+    fake.scriptLogs(account.nearAccountId, 'start_recovery', []);
+    expect((await startFrom(signedBody(), '10.3.0.1')).statusCode).toBe(202);
+    // Verified attempts do count per account.
+    for (let i = 1; i < RECOVERY_LIMIT; i++) {
+      fake.failNext('start_recovery', 'Smart contract panicked: recovery already pending');
+      expect((await startFrom(signedBody(), `10.4.0.${i}`)).statusCode).toBe(409);
+    }
+    expect((await startFrom(signedBody(), '10.5.0.1')).statusCode).toBe(429);
+  });
+
+  it('verifies against the mirrored recovery-key epoch without reading the chain', async () => {
+    await prisma.merchantAccount.update({
+      where: { id: account.id },
+      data: { recoveryKeyEpoch: 3n },
+    });
+    fake.scriptLogs(account.nearAccountId, 'start_recovery', []);
+    expect((await start(signedBody())).statusCode).toBe(202);
+    expect(fake.calls.filter((c) => c.kind === 'view' && c.method === 'get_config')).toHaveLength(
+      0,
+    );
   });
 
   async function signerMember(isSigner = true) {
@@ -255,12 +296,23 @@ describe('recovery API', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  describe('lost all passkeys: the restricted recovery session', () => {
-    async function openSession(email: string, signWith = kit.priv) {
+  describe('lost all passkeys: the restricted recovery session (R28)', () => {
+    /** A store member whose passkeys were all removed (revoked): the only recoverable person. */
+    async function lostMember(isSigner = true) {
+      const m = await signerMember(isSigner);
+      await prisma.webauthnCredential.updateMany({
+        where: { userId: m.user.id },
+        data: { revokedAt: new Date() },
+      });
+      return m;
+    }
+
+    async function openSession(email: string, signWith = kit.priv, ip = '10.0.0.1') {
       const opt = await app.inject({
         method: 'POST',
         url: '/v1/auth/recovery-session/options',
         payload: { merchant: merchant.slug, email },
+        remoteAddress: ip,
       });
       expect(opt.statusCode, opt.body).toBe(200);
       const { challenge, message } = opt.json();
@@ -273,6 +325,7 @@ describe('recovery API', () => {
         method: 'POST',
         url: '/v1/auth/recovery-session/verify',
         payload,
+        remoteAddress: ip,
       });
       return { res, payload };
     }
@@ -282,8 +335,30 @@ describe('recovery API', () => {
       return { token: cookies[SESSION_COOKIE]!, csrf: cookies[CSRF_COOKIE]!, userId };
     }
 
-    it('the kit opens a session that may only register a passkey (and use public recovery)', async () => {
-      const m = await signerMember();
+    /** The `recovery_register` token from the last mail to `to`. */
+    function mailboxToken(to: string): string {
+      const msg = [...memoryMailer().sent]
+        .reverse()
+        .find((m) => m.to === to && m.template === 'recovery_register_link');
+      if (!msg) throw new Error(`no recovery_register_link mail to ${to}`);
+      return new URL(msg.data.url!).searchParams.get('token')!;
+    }
+
+    async function runOutbox(type: string) {
+      const events = await prisma.event.findMany({
+        where: { type },
+        orderBy: { createdAt: 'asc' },
+      });
+      for (const e of events) {
+        if (type === 'account.recovery_session.opened') await onRecoverySessionOpened(e);
+        else await onRecoveryPasskeyRegistered(e);
+      }
+      return events;
+    }
+
+    it('kit + mailbox register the first passkey; the person and every signer are told', async () => {
+      const other = await signerMember(true);
+      const m = await lostMember(false);
       const { res, payload } = await openSession(m.user.email);
       expect(res.statusCode, res.body).toBe(200);
       expect(res.json()).toMatchObject({
@@ -297,24 +372,62 @@ describe('recovery API', () => {
       });
       expect(session.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(30 * 60_000);
 
-      // Registers a new passkey without a step-up, although the person has a (lost) one.
-      const auth = new SoftAuthenticator();
+      // Opening it is announced to the person and to every current signer.
+      const opened = await runOutbox('account.recovery_session.opened');
+      expect(opened).toHaveLength(1);
+      const told = (t: string) =>
+        memoryMailer()
+          .sent.filter((x) => x.template === t)
+          .map((x) => x.to)
+          .sort();
+      expect(told('recovery_session_opened')).toEqual([m.user.email, other.user.email].sort());
+
+      // Without the mailbox link: refused, at options and at verify.
+      const h = dashHeaders(login);
+      const noLink = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/passkeys/register/options',
+        headers: h,
+        payload: {},
+      });
+      expect(noLink.statusCode).toBe(403);
+      const token = mailboxToken(m.user.email);
       const opts = await app.inject({
         method: 'POST',
         url: '/v1/auth/passkeys/register/options',
-        headers: dashHeaders(login),
-        payload: {},
+        headers: h,
+        payload: { recoveryToken: token },
       });
       expect(opts.statusCode, opts.body).toBe(200);
+      const auth = new SoftAuthenticator();
+      const created = auth.create(opts.json());
+      const noLinkVerify = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/passkeys/register/verify',
+        headers: h,
+        payload: { response: created },
+      });
+      expect(noLinkVerify.statusCode).toBe(403);
       const reg = await app.inject({
         method: 'POST',
         url: '/v1/auth/passkeys/register/verify',
-        headers: dashHeaders(login),
-        payload: { response: auth.create(opts.json()) },
+        headers: h,
+        payload: { response: created, recoveryToken: token },
       });
       expect(reg.statusCode, reg.body).toBe(200);
+      await runOutbox('account.recovery_session.passkey_registered');
+      expect(told('recovery_passkey_registered')).toEqual([m.user.email, other.user.email].sort());
 
-      // Everything else refuses it.
+      // The link is single use, and only a first passkey can be added this way.
+      const again = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/passkeys/register/options',
+        headers: h,
+        payload: { recoveryToken: token },
+      });
+      expect(again.statusCode).toBe(403);
+
+      // Everything else refuses the session.
       for (const [method, url, store] of [
         ['GET', '/v1/me', false],
         ['GET', '/v1/auth/passkeys', false],
@@ -334,21 +447,73 @@ describe('recovery API', () => {
       }
 
       // The challenge is single use.
-      const again = await app.inject({
+      const replay = await app.inject({
         method: 'POST',
         url: '/v1/auth/recovery-session/verify',
         payload,
+        remoteAddress: '10.0.0.9',
       });
-      expect(again.statusCode).toBe(401);
+      expect(replay.statusCode).toBe(401);
+    });
+
+    it('a member who still has an active passkey cannot be taken over with the kit', async () => {
+      const m = await signerMember();
+      expect((await openSession(m.user.email)).res.statusCode).toBe(401);
+      expect(
+        await prisma.dashboardSession.count({ where: { recoveryMerchantId: merchant.id } }),
+      ).toBe(0);
+      // Nor if they register one between options and verify (re-checked at verify).
+      const lost = await lostMember();
+      const opt = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/recovery-session/options',
+        payload: { merchant: merchant.slug, email: lost.user.email },
+      });
+      await prisma.webauthnCredential.updateMany({
+        where: { userId: lost.user.id },
+        data: { revokedAt: null },
+      });
+      const { challenge, message } = opt.json();
+      const late = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/recovery-session/verify',
+        payload: {
+          merchant: merchant.slug,
+          email: lost.user.email,
+          challenge,
+          signature: b64(ed25519.sign(new TextEncoder().encode(message), kit.priv)),
+        },
+      });
+      expect(late.statusCode).toBe(401);
+    });
+
+    it('a session whose person leaves the store stops working', async () => {
+      const m = await lostMember(false);
+      const { res } = await openSession(m.user.email);
+      expect(res.statusCode).toBe(200);
+      const login = loginFrom(res, m.user.id);
+      const token = mailboxToken(m.user.email);
+      await prisma.merchantUser.deleteMany({
+        where: { merchantId: merchant.id, userId: m.user.id },
+      });
+      const r = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/passkeys/register/options',
+        headers: dashHeaders(login),
+        payload: { recoveryToken: token },
+      });
+      expect(r.statusCode).toBe(403);
     });
 
     it('a wrong kit, an expired challenge or a non-member email gets no session', async () => {
-      const m = await signerMember();
+      const m = await lostMember();
       expect(
-        (await openSession(m.user.email, ed25519.utils.randomPrivateKey())).res.statusCode,
+        (await openSession(m.user.email, ed25519.utils.randomPrivateKey(), '10.0.1.1')).res
+          .statusCode,
       ).toBe(401);
-      expect((await openSession('stranger@example.com')).res.statusCode).toBe(401);
-
+      expect((await openSession('stranger@example.com', kit.priv, '10.0.1.2')).res.statusCode).toBe(
+        401,
+      );
       const opt = await app.inject({
         method: 'POST',
         url: '/v1/auth/recovery-session/options',

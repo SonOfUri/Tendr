@@ -19,6 +19,9 @@ export const MailTemplateValues = [
   'recovery_started',
   'recovery_executes_soon',
   'proposal_executed',
+  'recovery_register_link',
+  'recovery_session_opened',
+  'recovery_passkey_registered',
 ] as const;
 export type MailTemplate = (typeof MailTemplateValues)[number];
 

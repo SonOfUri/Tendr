@@ -209,7 +209,13 @@ export async function createDraft(
   actor: ProposalActor,
   input: { kind?: ProposalKind; action: unknown },
 ): Promise<ProposalView> {
-  const action = ActionSchema.parse(input.action);
+  const parsed = ActionSchema.parse(input.action);
+  // A saved address's on-chain id is the `payout_allowlist` primary key, so it must be globally
+  // unique: the API mints it (`pal_<ULID>`); whatever id the client sent is replaced (I3).
+  const action: ActionJson =
+    'add_saved_address' in parsed
+      ? { add_saved_address: { ...parsed.add_saved_address, id: newId('pal') } }
+      : parsed;
   const kind = kindOf(action);
   if (input.kind && input.kind !== kind) {
     throw invalid(`kind ${input.kind} does not match the action (${kind})`);

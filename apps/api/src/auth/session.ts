@@ -12,6 +12,7 @@
 // cookie (double submit). The CSRF value is derived from the session token, so a value planted
 // by another origin (or taken from another session) never matches.
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { CSRF_COOKIE, DASHBOARD_SESSION_TTL_MS, SESSION_COOKIE } from '@tendr/contracts';
 import { env } from '../env.js';
 import { sha256 } from '../lib/crypto.js';
@@ -51,13 +52,18 @@ export type NewSession = { sessionId: string; token: string; csrf: string; expir
  */
 export async function createDashboardSession(
   userId: string,
-  opts: { passkeyVerified?: boolean; recoveryMerchantId?: string } = {},
+  opts: {
+    passkeyVerified?: boolean;
+    recoveryMerchantId?: string;
+    /** A transaction to create the session in (default: the root client). */
+    db?: Pick<Prisma.TransactionClient, 'dashboardSession'>;
+  } = {},
 ): Promise<NewSession> {
   const token = randomBytes(32).toString('base64url');
   const now = new Date();
   const ttl = opts.recoveryMerchantId ? RECOVERY_SESSION_TTL_MS : DASHBOARD_SESSION_TTL_MS;
   const expiresAt = new Date(now.getTime() + ttl);
-  const row = await prisma.dashboardSession.create({
+  const row = await (opts.db ?? prisma).dashboardSession.create({
     data: {
       id: newId('dss'),
       userId,

@@ -9,9 +9,10 @@ import {
   ACCOUNTS_QUEUE,
   EXECUTE_RECOVERY_JOB,
   EXECUTE_TIMELOCKS_JOB,
+  EXECUTORS_QUEUE,
   processAccountJob,
   RECONCILE_JOB,
-  setDelayedJobs,
+  setAccountJobs,
 } from './jobs/account-notices.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
@@ -142,15 +143,19 @@ export async function startWorker(
     concurrency: 5,
   });
   const maintenanceWorker = new Worker(MAINTENANCE_QUEUE, processMaintenanceJob, setup);
-  const accountsQueue = new Queue(ACCOUNTS_QUEUE, setup);
-  // Delayed account jobs (the recovery reminder) go on this process's accounts queue.
-  setDelayedJobs(accountsQueue);
-  const accountsWorker = new Worker(
-    ACCOUNTS_QUEUE,
-    (job: Job) => processAccountJob(job.name, job.data),
-    setup,
-  );
-  for (const w of [eventsWorker, maintenanceWorker, accountsWorker] as Worker[]) {
+  // Account jobs: one reconciliation job per account per tick (fanned out by `reconcile-accounts`)
+  // and the delayed recovery reminder, several at once; the permissionless executors on their own
+  // queue so a slow reconciliation never holds up a ready timelock (or the reverse).
+  const accountsQueue = new Queue(ACCOUNTS_QUEUE, {
+    ...setup,
+    defaultJobOptions: { removeOnComplete: { age: 3600 }, removeOnFail: { age: 86400 } },
+  });
+  const executorsQueue = new Queue(EXECUTORS_QUEUE, setup);
+  setAccountJobs(accountsQueue);
+  const runAccountJob = (job: Job) => processAccountJob(job.name, job.data);
+  const accountsWorker = new Worker(ACCOUNTS_QUEUE, runAccountJob, { ...setup, concurrency: 5 });
+  const executorsWorker = new Worker(EXECUTORS_QUEUE, runAccountJob, { ...setup, concurrency: 1 });
+  for (const w of [eventsWorker, maintenanceWorker, accountsWorker, executorsWorker] as Worker[]) {
     w.on('failed', (job, err) =>
       log('warn', 'job failed', {
         queue: w.name,
@@ -169,8 +174,13 @@ export async function startWorker(
     { name: PURGE_IDEMPOTENCY_JOB },
   );
 
-  for (const name of [RECONCILE_JOB, EXECUTE_TIMELOCKS_JOB, EXECUTE_RECOVERY_JOB]) {
-    await accountsQueue.upsertJobScheduler(name, { every: ACCOUNT_JOB_EVERY_MS }, { name });
+  await accountsQueue.upsertJobScheduler(
+    RECONCILE_JOB,
+    { every: ACCOUNT_JOB_EVERY_MS },
+    { name: RECONCILE_JOB },
+  );
+  for (const name of [EXECUTE_TIMELOCKS_JOB, EXECUTE_RECOVERY_JOB]) {
+    await executorsQueue.upsertJobScheduler(name, { every: ACCOUNT_JOB_EVERY_MS }, { name });
   }
 
   const stopDispatcher =
@@ -188,9 +198,13 @@ export async function startWorker(
     healthPort: health.port,
     stop: async () => {
       await stopDispatcher();
-      await Promise.all([eventsWorker.close(), maintenanceWorker.close(), accountsWorker.close()]);
-      await Promise.all([eventsQueue.close(), maintenanceQueue.close(), accountsQueue.close()]);
-      setDelayedJobs(null);
+      await Promise.all(
+        [eventsWorker, maintenanceWorker, accountsWorker, executorsWorker].map((w) => w.close()),
+      );
+      await Promise.all(
+        [eventsQueue, maintenanceQueue, accountsQueue, executorsQueue].map((q) => q.close()),
+      );
+      setAccountJobs(null);
       await closeConnection(connection);
       await health.close();
     },

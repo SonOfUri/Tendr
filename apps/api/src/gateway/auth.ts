@@ -338,6 +338,21 @@ const authPlugin: FastifyPluginAsync = async (app) => {
       requestLog(req, principal, { outcome: 'forbidden', statusCode: 403 });
       throw forbidden('A recovery session can only register a passkey or start a recovery');
     }
+    // ...and only while its person is still a member of that (active) store (R28 d).
+    if (cookie?.session.recoveryMerchantId) {
+      const still = await prisma.merchantUser.findFirst({
+        where: {
+          merchantId: cookie.session.recoveryMerchantId,
+          userId: cookie.session.userId,
+          merchant: { status: 'active' },
+        },
+        select: { id: true },
+      });
+      if (!still) {
+        requestLog(req, principal, { outcome: 'forbidden', statusCode: 403 });
+        throw forbidden('This recovery session is no longer valid');
+      }
+    }
 
     // Step-up: a recent passkey assertion on the session, for routes that ask for it and for every
     // team:manage mutation. Anything not authenticated by a session cookie cannot step up.

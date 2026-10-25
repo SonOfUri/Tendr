@@ -10,12 +10,19 @@ import {
   resetDb,
 } from '../test/helpers.js';
 import {
+  enqueueReconciles,
+  keyFingerprint,
+  onProposalCreated,
+  onProposalExecuted,
   onSignersChanged,
   onRecoveryStarted,
   onTimelockStarted,
+  RECONCILE_ACCOUNT_JOB,
   RECOVERY_SOON_JOB,
   sendRecoveryExecutesSoon,
+  setAccountJobs,
   setDelayedJobs,
+  summarizeAction,
 } from '../jobs/account-notices.js';
 import { env } from '../env.js';
 import { newId } from '../lib/ids.js';
@@ -554,7 +561,7 @@ describe('chain watcher', () => {
 
   it('recovery_soon_notice_scheduled_24h_before', async () => {
     const a = await signer();
-    const added: { name: string; data: object; opts: { delay: number; jobId: string } }[] = [];
+    const added: { name: string; data: object; opts: { delay?: number; jobId: string } }[] = [];
     setDelayedJobs({ add: async (name, data, opts) => added.push({ name, data, opts }) });
     const executesMs = Date.now() + 72 * HOUR;
     const started = ev('recovery_started', {
@@ -715,5 +722,186 @@ describe('chain watcher', () => {
       (await prisma.accountKey.findUniqueOrThrow({ where: { id: old.id } })).revokedAt,
     ).not.toBeNull();
     expect(await eventsOf('account.recovery_key.rotated')).toHaveLength(1);
+  });
+
+  // ─── fix round 1 ───────────────────────────────────────────────────────────
+
+  it('notices decode every action variant from the chain (I1)', async () => {
+    const a = await signer();
+    chain.saved = [
+      { id: 'pal_S', chain: 'base', address: '0xsweep', active_from: ns(Date.now() - 30 * HOUR) },
+    ];
+    const acct = { livemode: true, nearAccountId: account.nearAccountId, merchantId: merchant.id };
+    const fp = (b64: string, curve: 'p256' | 'ed25519') =>
+      keyFingerprint(curve === 'p256' ? { p256: b64 } : { ed25519: b64 });
+    const p256 = (a.key as { p256: string }).p256;
+    const rec = Buffer.alloc(32, 7).toString('base64');
+    const hash = Buffer.alloc(32, 9);
+    const cases: [ActionJson, Record<string, string>][] = [
+      [
+        { add_signer: { id: a.userId, keys: [a.key] } },
+        { signer: `${a.email} (${a.userId})`, keyFingerprints: fp(p256, 'p256') },
+      ],
+      [{ remove_signer: { id: a.userId } }, { signer: `${a.email} (${a.userId})` }],
+      [{ remove_signer_key: { id: a.userId, key: a.key } }, { keyFingerprints: fp(p256, 'p256') }],
+      [{ set_threshold: 3 }, { threshold: '3' }],
+      [{ set_origins: ['https://usetendr.tech'] }, { origins: 'https://usetendr.tech' }],
+      [{ rotate_recovery_key: rec }, { recoveryKeyFingerprint: fp(rec, 'ed25519') }],
+      [
+        { add_saved_address: { id: 'pal_N', chain: 'eth', address: '0xnew' } },
+        { destination: '0xnew', destinationChain: 'eth' },
+      ],
+      [
+        { remove_saved_address: { id: 'pal_S' } },
+        { destination: '0xsweep', destinationChain: 'base' },
+      ],
+      [
+        { set_limits: { asset: 'nep141:usdc.near', per_tx: '100', per_day: null } },
+        { asset: 'nep141:usdc.near', perTx: '100', perDay: 'unlimited' },
+      ],
+      [{ set_refund_cap: { asset: 'nep141:usdc.near', daily: '500' } }, { refundCap: '500' }],
+      [
+        {
+          set_auto_sweep: {
+            asset: 'nep141:usdc.near',
+            trigger_above: '1000',
+            keep: '10',
+            saved_address_id: 'pal_S',
+          },
+        },
+        { triggerAbove: '1000', keep: '10', destination: '0xsweep', destinationChain: 'base' },
+      ],
+      [{ clear_auto_sweep: { asset: 'nep141:usdc.near' } }, { asset: 'nep141:usdc.near' }],
+      [{ upgrade: { code_hash: hash.toString('base64') } }, { codeHash: hash.toString('hex') }],
+      [
+        {
+          set_settlement: {
+            dest_asset: 'nep141:usdc.near',
+            payout_mode: 'wallet',
+            saved_address_id: 'pal_S',
+          },
+        },
+        { payoutMode: 'wallet', destination: '0xsweep', destinationChain: 'base' },
+      ],
+    ];
+    for (const [action, fields] of cases) {
+      const sum = await summarizeAction(action, acct);
+      expect(sum.fields, sum.kind).toMatchObject(fields);
+      expect(sum.summary.length, sum.kind).toBeGreaterThan(sum.kind.length);
+    }
+  });
+
+  it('an executed remove_signer is also mailed to the removed signer (M3)', async () => {
+    const a = await signer();
+    const b = await signer(false); // already un-flagged by the change
+    const action: ActionJson = { remove_signer: { id: b.userId } };
+    const row = await proposalRow(action);
+    await applyAccountEvents(ctx(), account.id, [
+      ev('proposal_executed', { proposal_id: row.onchainId, action }),
+    ]);
+    const [event] = await eventsOf('account.proposal.executed');
+    await onProposalExecuted(event!);
+    expect(
+      memoryMailer()
+        .sent.filter((m) => m.template === 'proposal_executed')
+        .map((m) => m.to)
+        .sort(),
+    ).toEqual([a.email, b.email].sort());
+  });
+
+  it('every on-chain signer change is announced, even A → B → A in one epoch (M2)', async () => {
+    const a = await signer();
+    const extra = Buffer.concat([Buffer.from([3]), randomBytes(32)]).toString('base64');
+    const withKey = {
+      ...chain.config,
+      signers: [{ id: a.userId, keys: [a.key, { p256: extra }] }],
+    };
+    const without = { ...chain.config, signers: [{ id: a.userId, keys: [a.key] }] };
+    const change = (proposal: string) =>
+      ev('signers_changed', {
+        proposal_id: proposal.repeat(32),
+        signer_ids: [a.userId],
+        threshold: 2,
+        signer_epoch: '0',
+        recovery_key_set: true,
+      });
+    chain.config = without;
+    await applyAccountEvents(ctx(), account.id, [change('a1')]);
+    chain.config = withKey;
+    await applyAccountEvents(ctx(), account.id, [change('b2')]);
+    chain.config = without;
+    await applyAccountEvents(ctx(), account.id, [change('c3')]);
+    await applyAccountEvents(ctx(), account.id, [change('c3')]); // replay
+    expect(await eventsOf('account.signers.changed')).toHaveLength(3);
+    // Reconciliation finds nothing new to announce.
+    await reconcileAccount(merchant.id, true);
+    expect(await eventsOf('account.signers.changed')).toHaveLength(3);
+  });
+
+  it('a proposal whose creator is not a known person is still mirrored and notified (I4)', async () => {
+    const a = await signer();
+    chain.config = { ...chain.config, signers: [{ id: a.userId, keys: [a.key] }] };
+    const action = swapWithdraw('swap-1.near');
+    const id = computeProposalId(action, randomBytes(32));
+    chain.proposals = [
+      {
+        id,
+        action,
+        creator: newId('per'),
+        created_at: ns(Date.now() - HOUR),
+        expires_at: ns(Date.now() + 6 * 24 * HOUR),
+        approvals: [],
+        valid_approvals: 0,
+        ready_at: null,
+        status: 'pending',
+      },
+    ];
+    await reconcileAccount(merchant.id, true);
+    const row = await prisma.accountProposal.findFirstOrThrow({ where: { onchainId: id } });
+    expect(row).toMatchObject({ status: 'pending', createdByUserId: null });
+    const [created] = await eventsOf('account.proposal.created');
+    await onProposalCreated(created!);
+    expect(memoryMailer().sent.map((m) => m.template)).toEqual(['proposal_needs_approval']);
+    expect(
+      (await prisma.merchantAccount.findUniqueOrThrow({ where: { id: account.id } })).proposalsSeen,
+    ).toBe(1);
+  });
+
+  it('a saved-address id owned by another store is a recorded conflict, not a failure (I3)', async () => {
+    const other = await createMerchant();
+    await createRow('PayoutAllowlistEntry', other.id, true, { id: 'pal_TAKEN', chain: 'eth' });
+    chain.saved = [
+      { id: 'pal_TAKEN', chain: 'base', address: '0xmine', active_from: ns(Date.now() - HOUR) },
+      { id: 'pal_OK', chain: 'base', address: '0xok', active_from: ns(Date.now() - HOUR) },
+    ];
+    await reconcileAccount(merchant.id, true);
+    await reconcileAccount(merchant.id, true);
+    expect(
+      (await prisma.payoutAllowlistEntry.findMany({ where: { merchantId: merchant.id } })).map(
+        (r) => r.id,
+      ),
+    ).toEqual(['pal_OK']);
+    expect(
+      (await prisma.payoutAllowlistEntry.findUniqueOrThrow({ where: { id: 'pal_TAKEN' } }))
+        .merchantId,
+    ).toBe(other.id);
+    const conflicts = await eventsOf('merchant_account.mirror_conflict');
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]!.payload).toMatchObject({ id: 'pal_TAKEN' });
+  });
+
+  it('reconciliation fans out one job per active account per tick (I5)', async () => {
+    await createRow('MerchantAccount', merchant.id, false, { status: 'active' });
+    const other = await createMerchant();
+    await createRow('MerchantAccount', other.id, true, { status: 'provisioning' });
+    const added: { name: string; jobId: string }[] = [];
+    setAccountJobs({ add: async (name, _d, opts) => added.push({ name, jobId: opts.jobId }) });
+    const now = Date.now();
+    expect(await enqueueReconciles(now)).toBe(2);
+    expect(await enqueueReconciles(now + 1)).toBe(2);
+    expect(added.every((j) => j.name === RECONCILE_ACCOUNT_JOB)).toBe(true);
+    const ids = added.map((j) => j.jobId);
+    expect(new Set(ids).size).toBe(2); // same tick → same job ids
+    expect(ids).toContain(`reconcile__${account.id}__${Math.floor(now / 60_000)}`);
   });
 });

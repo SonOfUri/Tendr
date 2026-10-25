@@ -6,15 +6,21 @@
 //   before spending gas, then relays `start_recovery` with the kit's arguments unchanged. The
 //   contract re-checks everything; signers have 72 h to cancel.
 // - Cancelling is a signer's WebAuthn `cancel` approval over the recovery id from `get_recovery`.
-// - Lost all passkeys: a person proves the kit to the API (an Ed25519 signature over a fresh,
-//   namespaced, single-use, 5-minute server challenge) and gets a RESTRICTED session that can only
-//   register a passkey for that person (a member of the store, named by email — the kit holder
-//   vouches) and start a recovery of that store. Every other route refuses it (gateway).
+// - Lost all passkeys (R19, R28): a person with NO active passkey proves the kit to the API (an
+//   Ed25519 signature over a fresh, namespaced, single-use, 5-minute server challenge) and gets a
+//   RESTRICTED session; registering a passkey through it also needs a single-use link mailed to
+//   that person (kit AND mailbox). The person and every signer are notified. Every other route
+//   refuses the session (gateway), which also re-checks the person's membership on every use.
 import { ed25519 } from '@noble/curves/ed25519';
+import type { Prisma } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import { MAGIC_LINK_TTL_MS, newLinkToken } from '../auth/magic-link.js';
+import { getMailer } from '../auth/mailer.js';
 import { createDashboardSession, type NewSession } from '../auth/session.js';
 import { CHALLENGE_TTL_MS } from '../auth/webauthn.js';
+import { env } from '../env.js';
+import { recordEvent } from '../events/record.js';
 import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { sha256 } from '../lib/crypto.js';
@@ -36,7 +42,12 @@ import {
   withRelayTimeout,
   type ProposalActor,
 } from './proposals.js';
-import { afterAccountEvents, applyAccountEventsTx, type RecoveryView } from './watcher.js';
+import {
+  AccountEventTypes,
+  afterAccountEvents,
+  applyAccountEventsTx,
+  type RecoveryView,
+} from './watcher.js';
 
 const invalid = (message: string, details?: unknown) =>
   new AppError('VALIDATION_ERROR', message, 400, details);
@@ -167,24 +178,44 @@ export async function recoveryStatus(ctx: ScopeContext) {
  * and the signature verifies over `sha256(borsh(RecoveryPayload))` at the contract's current
  * recovery-key epoch. Then `start_recovery` is relayed with exactly the kit's arguments.
  */
-export async function startRecovery(input: StartRecoveryInput) {
+export async function startRecovery(
+  input: StartRecoveryInput,
+  hooks: {
+    /** Runs once the kit signature verified, before the relay (the per-account rate limit). */
+    onVerified?: (accountId: string) => Promise<void>;
+  } = {},
+) {
   const account = await accountByRef(input);
   const key = await recoveryKeyOf(account);
   if (!key) throw conflict('This account has no recovery key');
-  const client = nearClient(account.livemode);
-  const config = await client.view<ConfigView>(account.nearAccountId, 'get_config', {});
-  if (!config.recovery_key_set) throw conflict('This account has no recovery key');
-  const message = recoveryMessage({
-    contractId: account.nearAccountId,
-    newSigners: input.newSigners as SignerJson[],
-    newThreshold: input.newThreshold,
-    nonce: BigInt(input.nonce),
-    recoveryKeyEpoch: BigInt(config.recovery_key_epoch),
-    validUntil: BigInt(input.validUntil),
-  });
-  if (!verifyEd25519(input.signature, message, key)) {
-    throw invalid('The recovery signature does not verify for this account');
+  const messageAt = (recoveryKeyEpoch: bigint) =>
+    recoveryMessage({
+      contractId: account.nearAccountId,
+      newSigners: input.newSigners as SignerJson[],
+      newThreshold: input.newThreshold,
+      nonce: BigInt(input.nonce),
+      recoveryKeyEpoch,
+      validUntil: BigInt(input.validUntil),
+    });
+  // The mirrored recovery-key epoch first (no RPC for junk requests); the contract's own when
+  // there is no mirror yet or the mirror may be stale.
+  let verified =
+    account.recoveryKeyEpoch !== null &&
+    verifyEd25519(input.signature, messageAt(account.recoveryKeyEpoch), key);
+  if (!verified) {
+    const config = await nearClient(account.livemode).view<ConfigView>(
+      account.nearAccountId,
+      'get_config',
+      {},
+    );
+    if (!config.recovery_key_set) throw conflict('This account has no recovery key');
+    const chainEpoch = BigInt(config.recovery_key_epoch);
+    verified =
+      chainEpoch !== account.recoveryKeyEpoch &&
+      verifyEd25519(input.signature, messageAt(chainEpoch), key);
   }
+  if (!verified) throw invalid('The recovery signature does not verify for this account');
+  await hooks.onVerified?.(account.id);
   const result = await withRelayTimeout(
     relay(account.livemode, account.nearAccountId, 'start_recovery', {
       new_signers: input.newSigners,
@@ -266,10 +297,19 @@ export async function cancelRecovery(actor: ProposalActor, response: unknown) {
   return { txHash: result.txHash, ...(await recoveryStatus(actor)) };
 }
 
-// ─── lost all passkeys: the restricted recovery session ──────────────────────
+// ─── lost all passkeys: the restricted recovery session (R19, R28) ──────────
+//
+// Kit AND mailbox: the kit opens a restricted session for a store member who has NO active
+// passkey (checked under a lock on the person's row at options and at verify); opening it mails
+// that person a single-use `recovery_register` link (15 minutes), and registering a passkey needs
+// both the kit session and that link. The person and every current signer of the store are told
+// when such a session opens and when a passkey is registered through it. The session re-checks
+// the person's membership of the store on every use (gateway).
 
 /** Namespace of the message a kit signs to open a recovery session. */
 export const RECOVERY_SESSION_DOMAIN = 'tendr-recovery-session-v1';
+/** How long the mailbox link of a recovery registration lives. */
+export const RECOVERY_REGISTER_TTL_MS = MAGIC_LINK_TTL_MS;
 
 /**
  * The exact bytes the recovery kit signs (Ed25519) to open a session: an ASCII line naming the
@@ -285,23 +325,50 @@ export function recoverySessionMessage(nearAccountId: string, email: string, cha
 const lower = (e: string) => e.trim().toLowerCase();
 
 /**
+ * The member of `merchantId` with `email` if they may be recovered: a member of the store with
+ * ZERO active passkeys. Locks the person's `users` row (`FOR UPDATE`), so a passkey registered
+ * concurrently is seen.
+ */
+async function recoverableMember(
+  tx: Prisma.TransactionClient,
+  merchantId: string,
+  email: string,
+): Promise<string | null> {
+  const [person] = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM users WHERE email = ${email} FOR UPDATE`;
+  if (!person) return null;
+  const member = await tx.merchantUser.findFirst({
+    where: { merchantId, userId: person.id },
+    select: { id: true },
+  });
+  if (!member) return null;
+  const active = await tx.webauthnCredential.count({
+    where: { userId: person.id, revokedAt: null },
+  });
+  return active === 0 ? person.id : null;
+}
+
+/**
  * A fresh single-use challenge (5 minutes) for opening a recovery session on `merchant`'s LIVE
- * account for the member `email`. Answers the same whether or not the email is a member (no
- * enumeration); verification fails for a non-member.
+ * account for the member `email`. Answers the same whether or not the email names a recoverable
+ * member (no enumeration); for anyone else the challenge can never verify.
  */
 export async function recoverySessionOptions(input: { merchant: string; email: string }) {
   const account = await accountByRef({ merchant: input.merchant, livemode: true });
   const email = lower(input.email);
   const challenge = randomBytes(32).toString('base64url');
   const message = recoverySessionMessage(account.nearAccountId, email, challenge);
-  await prisma.webauthnChallenge.create({
-    data: {
-      id: newId('wch'),
-      purpose: 'recovery_session',
-      challengeHash: sha256(Buffer.from(message).toString('utf8')),
-      userId: null,
-      expiresAt: new Date(Date.now() + CHALLENGE_TTL_MS),
-    },
+  await prisma.$transaction(async (tx) => {
+    const userId = await recoverableMember(tx, account.merchantId, email);
+    await tx.webauthnChallenge.create({
+      data: {
+        id: newId('wch'),
+        purpose: 'recovery_session',
+        challengeHash: sha256(Buffer.from(message).toString('utf8')),
+        userId,
+        expiresAt: new Date(Date.now() + CHALLENGE_TTL_MS),
+      },
+    });
   });
   return {
     challenge,
@@ -312,45 +379,120 @@ export async function recoverySessionOptions(input: { merchant: string; email: s
 }
 
 /**
- * Opens a restricted recovery session: consumes the challenge (single use), checks the kit's
- * signature against the account's recovery key, and binds the session to the store member with
- * that email. Any failure is the same 401.
+ * Opens a restricted recovery session: consumes the challenge (single use, even when the rest
+ * fails), checks the kit's signature against the account's recovery key, re-checks under a lock
+ * that the person is still a member with no active passkey, creates the session, mails the person
+ * the `recovery_register` link, and records `account.recovery_session.opened` (which notifies the
+ * person and every signer). Any failure is the same 401.
  */
-export async function verifyRecoverySession(input: {
-  merchant: string;
-  email: string;
-  challenge: string;
-  signature: string;
-}): Promise<{ session: NewSession; userId: string; merchantId: string }> {
+export async function verifyRecoverySession(
+  input: { merchant: string; email: string; challenge: string; signature: string },
+  hooks: {
+    /** Runs once the kit signature verified (the per-merchant rate limit). */
+    onKitVerified?: (merchantId: string) => Promise<void>;
+  } = {},
+): Promise<{ session: NewSession; userId: string; merchantId: string }> {
   const fail = () => unauthorized('The recovery kit could not be verified');
   const account = await accountByRef({ merchant: input.merchant, livemode: true });
   const email = lower(input.email);
   const message = recoverySessionMessage(account.nearAccountId, email, input.challenge);
   const now = new Date();
-  const { count } = await prisma.webauthnChallenge.updateMany({
+  const row = await prisma.webauthnChallenge.findFirst({
     where: {
       challengeHash: sha256(Buffer.from(message).toString('utf8')),
       purpose: 'recovery_session',
       consumedAt: null,
       expiresAt: { gt: now },
     },
+  });
+  if (!row) throw fail();
+  const { count } = await prisma.webauthnChallenge.updateMany({
+    where: { id: row.id, consumedAt: null },
     data: { consumedAt: now },
   });
-  if (count !== 1) throw fail();
+  if (count !== 1 || !row.userId) throw fail();
   const key = await recoveryKeyOf(account);
   if (!key || !Sig64.safeParse(input.signature).success) throw fail();
   if (!verifyEd25519(input.signature, message, key)) throw fail();
-  const member = await prisma.merchantUser.findFirst({
-    where: { merchantId: account.merchantId, user: { email } },
-    select: { userId: true },
+  await hooks.onKitVerified?.(account.merchantId);
+
+  const ctx = { merchantId: account.merchantId, livemode: true };
+  const link = newLinkToken();
+  const { session, userId } = await tenantTransaction(ctx, async (tx) => {
+    const target = await recoverableMember(tx, account.merchantId, email);
+    if (!target || target !== row.userId) throw fail();
+    const session = await createDashboardSession(target, {
+      recoveryMerchantId: account.merchantId,
+      db: tx,
+    });
+    await tx.emailToken.create({
+      data: {
+        id: newId('etok'),
+        email,
+        purpose: 'recovery_register',
+        tokenHash: link.hash,
+        expiresAt: new Date(Date.now() + RECOVERY_REGISTER_TTL_MS),
+      },
+    });
+    await recordEvent(tx, ctx, {
+      aggregateType: 'user',
+      aggregateId: target,
+      type: AccountEventTypes.recoverySessionOpened,
+      payload: { userId: target, email, sessionId: session.sessionId },
+    });
+    return { session, userId: target };
   });
-  if (!member) throw fail();
-  const session = await createDashboardSession(member.userId, {
-    recoveryMerchantId: account.merchantId,
+  const url = new URL('/recover/passkey', env().WEB_URL);
+  url.searchParams.set('token', link.raw);
+  await getMailer().send({
+    to: email,
+    template: 'recovery_register_link',
+    data: { url: url.toString(), store: input.merchant },
   });
-  log('info', 'recovery session opened', {
-    merchantId: account.merchantId,
-    userId: member.userId,
+  log('info', 'recovery session opened', { merchantId: account.merchantId, userId });
+  return { session, userId, merchantId: account.merchantId };
+}
+
+/**
+ * Checks (or, with `consume`, uses up) the person's `recovery_register` mailbox link: unexpired,
+ * unused, and sent to this person's email. Returns whether it holds.
+ */
+export async function recoveryRegisterToken(
+  userId: string,
+  token: string | undefined,
+  opts: { consume: boolean },
+): Promise<boolean> {
+  if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return false;
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+  if (!user) return false;
+  const where = {
+    tokenHash: sha256(token),
+    purpose: 'recovery_register' as const,
+    email: user.email,
+    consumedAt: null,
+    expiresAt: { gt: new Date() },
+  };
+  if (!opts.consume) return (await prisma.emailToken.count({ where })) === 1;
+  const { count } = await prisma.emailToken.updateMany({
+    where,
+    data: { consumedAt: new Date() },
   });
-  return { session, userId: member.userId, merchantId: account.merchantId };
+  return count === 1;
+}
+
+/** Records `account.recovery_session.passkey_registered` (notifies the person and the signers). */
+export async function recordRecoveryPasskey(
+  merchantId: string,
+  userId: string,
+  credentialRowId: string,
+): Promise<void> {
+  const ctx = { merchantId, livemode: true };
+  await tenantTransaction(ctx, (tx) =>
+    recordEvent(tx, ctx, {
+      aggregateType: 'user',
+      aggregateId: userId,
+      type: AccountEventTypes.recoveryPasskeyRegistered,
+      payload: { userId, credentialId: credentialRowId },
+    }),
+  );
 }

@@ -22,7 +22,8 @@ import {
   verifyRegistration,
 } from '../auth/webauthn.js';
 import { requirePerson, requirePrincipal, requireStepUp } from '../gateway/principal.js';
-import { unauthorized } from '../lib/errors.js';
+import { recordRecoveryPasskey, recoveryRegisterToken } from '../accounts/recovery.js';
+import { forbidden, unauthorized } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { storesFor } from '../merchants/team.js';
 
@@ -31,12 +32,28 @@ const person = { principals: ['user_session' as const] };
 const personOrRecovery = { ...person, recoverySession: true };
 
 /**
- * Whether the request runs on a restricted recovery-kit session: its person lost every passkey
- * and the store's recovery key vouched for them, so registering a new passkey needs no step-up.
+ * The store a restricted recovery-kit session may recover, or null for an ordinary session. Such
+ * a session belongs to a person with no active passkey (R28); it registers their FIRST passkey only,
+ * and only with the `recovery_register` link mailed to them (kit AND mailbox).
  */
-function isRecoverySession(req: FastifyRequest): boolean {
+function recoveryStoreOf(req: FastifyRequest): string | null {
   const p = requirePrincipal(req);
-  return p.kind === 'user_session' && !!p.recoveryMerchantId;
+  return p.kind === 'user_session' ? (p.recoveryMerchantId ?? null) : null;
+}
+
+const mailboxLinkRequired = () =>
+  forbidden('Open the link we emailed you to register a passkey with your recovery kit');
+
+/** R28 checks for a recovery-kit registration: no active passkey, and the mailbox link. */
+async function assertRecoveryRegistration(
+  userId: string,
+  token: string | undefined,
+  consume: boolean,
+): Promise<void> {
+  if ((await activeCredentials(userId)).length > 0) {
+    throw forbidden('A recovery session can only register the first passkey of someone with none');
+  }
+  if (!(await recoveryRegisterToken(userId, token, { consume }))) throw mailboxLinkRequired();
 }
 
 /** The dashboard session behind a cookie-authenticated request. */
@@ -88,13 +105,19 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   // The first passkey is the bootstrap (an email-verified session may add it). Every further
   // passkey needs a recent assertion from an existing one, checked again at verify time.
-  // A recovery-kit session (lost all passkeys) may register without a step-up.
+  // A recovery-kit session registers only a FIRST passkey, with the mailed link (R28).
   app.post(
     '/v1/auth/passkeys/register/options',
     { config: { auth: personOrRecovery } },
     async (req) => {
       const { userId } = requirePerson(req);
-      if (!isRecoverySession(req) && (await activeCredentials(userId)).length > 0) {
+      const { recoveryToken } = z
+        .object({ recoveryToken: z.string().max(128).optional() })
+        .passthrough()
+        .parse(req.body ?? {});
+      if (recoveryStoreOf(req)) {
+        await assertRecoveryRegistration(userId, recoveryToken, false);
+      } else if ((await activeCredentials(userId)).length > 0) {
         requireStepUp(req);
       }
       const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
@@ -111,13 +134,16 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         .object({
           response: WebauthnResponse,
           deviceLabel: z.string().trim().min(1).max(64).optional(),
+          recoveryToken: z.string().max(128).optional(),
         })
         .strict()
         .parse(req.body);
       // Fast path; the authoritative first-passkey check runs inside `verifyRegistration`, under a
       // row lock on the person, so two passkey-less sessions cannot both register a "first" one.
-      const recovery = isRecoverySession(req);
-      if (!recovery && (await activeCredentials(userId)).length > 0) requireStepUp(req);
+      const recoveryStore = recoveryStoreOf(req);
+      // The mailbox link is used up here, before the ceremony is verified: single use.
+      if (recoveryStore) await assertRecoveryRegistration(userId, body.recoveryToken, true);
+      else if ((await activeCredentials(userId)).length > 0) requireStepUp(req);
       const p = requirePrincipal(req);
       const passkeyVerifiedAt =
         p.kind === 'user_session' || p.kind === 'dashboard_user' ? p.passkeyVerifiedAt : null;
@@ -125,8 +151,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         { id: userId },
         body.response as unknown as RegistrationResponseJSON,
         body.deviceLabel ?? null,
-        { sessionId: sessionOf(req), steppedUp: recovery || isSteppedUp(passkeyVerifiedAt) },
+        // A recovery session never counts as stepped up: only a FIRST passkey can be added.
+        { sessionId: sessionOf(req), steppedUp: !recoveryStore && isSteppedUp(passkeyVerifiedAt) },
       );
+      if (recoveryStore) await recordRecoveryPasskey(recoveryStore, userId, credential.id);
       // Registering the first passkey is itself a fresh passkey assertion (user-verified); it also
       // ended the person's other sessions.
       if (first) await markPasskeyVerified(sessionOf(req));

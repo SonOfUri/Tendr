@@ -94,7 +94,7 @@ export const RecoveryStatusValues = ['pending', 'cancelled', 'executed', 'failed
 export type RecoveryStatus = (typeof RecoveryStatusValues)[number];
 export const RecoveryStatusSchema = z.enum(RecoveryStatusValues);
 
-export const EmailTokenPurposeValues = ['verify', 'login', 'invite'] as const;
+export const EmailTokenPurposeValues = ['verify', 'login', 'invite', 'recovery_register'] as const;
 export type EmailTokenPurpose = (typeof EmailTokenPurposeValues)[number];
 export const EmailTokenPurposeSchema = z.enum(EmailTokenPurposeValues);
 

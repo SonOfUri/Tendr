@@ -8,7 +8,6 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
-  accountByRef,
   cancelRecovery,
   recoveryCancelChallenge,
   recoverySessionOptions,
@@ -58,23 +57,23 @@ export const recoveryRoutes: FastifyPluginAsync = async (app) => {
   // Tests get a private keyspace per app instance so counters never leak between them.
   const namespace =
     process.env.NODE_ENV === 'test' ? `tendr:rl:recovery:${randomUUID()}:` : 'tendr:rl:recovery:';
-  const limit = async (
-    req: FastifyRequest,
-    reply: FastifyReply,
-    route: string,
-    account: string,
-  ) => {
-    await hit(namespace, reply, `${route}:ip:${req.ip}`);
-    await hit(namespace, reply, `${route}:acct:${account}`);
-  };
+  // Every request is charged to its IP before anything else (body parsing included). The
+  // per-account counter is charged only once the kit's signature has verified, so unverified
+  // requests can never use up an account's attempts and block its recovery (I2); no counter key
+  // is ever created for an account that does not exist.
+  const perIp = (req: FastifyRequest, reply: FastifyReply, route: string) =>
+    hit(namespace, reply, `${route}:ip:${req.ip}`);
+  const perAccount = (reply: FastifyReply, route: string, accountId: string) =>
+    hit(namespace, reply, `${route}:acct:${accountId}`);
 
   // Authorised by the recovery kit's Ed25519 signature over the recovery payload (R19).
   app.post('/v1/account/recovery/start', { config: { auth: 'public' } }, async (req, reply) => {
+    await perIp(req, reply, 'start');
     const body = StartRecoverySchema.parse(req.body);
-    const account = await accountByRef(body).catch(() => null);
-    await limit(req, reply, 'start', account?.id ?? `unknown:${body.merchant ?? body.accountId}`);
-    if (!account) throw new AppError('NOT_FOUND', 'Account not found', 404);
-    return reply.status(202).send(await startRecovery(body));
+    const result = await startRecovery(body, {
+      onVerified: (accountId) => perAccount(reply, 'start', accountId),
+    });
+    return reply.status(202).send(result);
   });
 
   app.get('/v1/account/recovery', { config: { auth: read } }, async (req) => {
@@ -98,11 +97,11 @@ export const recoveryRoutes: FastifyPluginAsync = async (app) => {
     '/v1/auth/recovery-session/options',
     { config: { auth: 'public' } },
     async (req, reply) => {
+      await perIp(req, reply, 'session-options');
       const body = z
         .object({ merchant: z.string().min(1).max(64), email: z.string().email().max(254) })
         .strict()
         .parse(req.body);
-      await limit(req, reply, 'session-options', `merchant:${body.merchant}`);
       return recoverySessionOptions(body);
     },
   );
@@ -111,6 +110,7 @@ export const recoveryRoutes: FastifyPluginAsync = async (app) => {
     '/v1/auth/recovery-session/verify',
     { config: { auth: 'public' } },
     async (req, reply) => {
+      await perIp(req, reply, 'session-verify');
       const body = z
         .object({
           merchant: z.string().min(1).max(64),
@@ -120,15 +120,20 @@ export const recoveryRoutes: FastifyPluginAsync = async (app) => {
         })
         .strict()
         .parse(req.body);
-      await limit(req, reply, 'session-verify', `merchant:${body.merchant}`);
-      const { session, userId, merchantId } = await verifyRecoverySession(body);
+      const { session, userId, merchantId } = await verifyRecoverySession(body, {
+        onKitVerified: (id) => perAccount(reply, 'session-verify', id),
+      });
       reply.header('set-cookie', sessionCookies(session.token, session.expiresAt));
       return {
         userId,
         merchantId,
         restricted: true,
         expiresAt: session.expiresAt,
-        allowed: ['register a passkey', 'POST /v1/account/recovery/start'],
+        // Registering also needs the single-use link just emailed to the person (R28).
+        allowed: [
+          'register your first passkey (with the emailed link)',
+          'POST /v1/account/recovery/start',
+        ],
       };
     },
   );
