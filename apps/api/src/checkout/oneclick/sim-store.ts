@@ -1,6 +1,7 @@
 // Where SimulatedOneClick keeps its deposits. The API process serves the test-mode `simulate`
 // route while the worker polls `status`, so the default store is Redis (shared by both):
-// `sim1click:<depositAddress>` → JSON, 48 h TTL. The in-memory store is for unit tests only.
+// `sim1click:<depositAddress>` → JSON, 48 h TTL. Tests give each file its own key prefix
+// (src/test/sim-1click.ts). The in-memory store is for unit tests only.
 import { randomBytes } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import { getRedis, whenReady } from '../../lib/redis.js';
@@ -19,6 +20,11 @@ export interface SimDeposit {
   origin: TxHashRef[];
   senderAddress?: string;
   settled: boolean;
+  /**
+   * Settlement credits already made (`recipient` = the merchant, `fee:<i>` = `appFees[i]`), saved
+   * after each one so a retried settlement never credits a recipient twice.
+   */
+  credited: string[];
 }
 
 export interface SimStore {
@@ -37,9 +43,6 @@ export const SIM_KEY_PREFIX = 'sim1click:';
 export const SIM_TTL_MS = 48 * 60 * 60 * 1000;
 /** Upper bound on one locked simulate (it makes NEAR calls). */
 const LOCK_TTL_MS = 30_000;
-
-const key = (depositAddress: string): string => `${SIM_KEY_PREFIX}${depositAddress}`;
-const lockKey = (depositAddress: string): string => `${key(depositAddress)}:lock`;
 
 function busy(depositAddress: string): OneClickError {
   return new OneClickError(`simulated deposit ${depositAddress} is being updated`, 409, 'BUSY');
@@ -72,6 +75,7 @@ export function decodeSimDeposit(text: string): SimDeposit {
   const j = JSON.parse(text) as SimDepositJson;
   return {
     ...j,
+    credited: j.credited ?? [],
     amountIn: BigInt(j.amountIn),
     amountOut: BigInt(j.amountOut),
     deadline: new Date(j.deadline),
@@ -113,9 +117,30 @@ export class MemorySimStore implements SimStore {
 
 const RELEASE_LOCK = `if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end`;
 
+export interface RedisSimStoreOptions {
+  /** Defaults to the process-wide client. */
+  redis?: () => Redis;
+  /** Defaults to `sim1click:`. Tests use a unique prefix per file. */
+  keyPrefix?: string;
+}
+
 /** Shared across processes (API + worker). Defaults to the process-wide Redis client. */
 export class RedisSimStore implements SimStore {
-  constructor(private readonly redis: () => Redis = getRedis) {}
+  private readonly redis: () => Redis;
+  readonly keyPrefix: string;
+
+  constructor(opts: RedisSimStoreOptions = {}) {
+    this.redis = opts.redis ?? getRedis;
+    this.keyPrefix = opts.keyPrefix ?? SIM_KEY_PREFIX;
+  }
+
+  private key(depositAddress: string): string {
+    return `${this.keyPrefix}${depositAddress}`;
+  }
+
+  private lockKey(depositAddress: string): string {
+    return `${this.key(depositAddress)}:lock`;
+  }
 
   private async client(): Promise<Redis> {
     const r = this.redis();
@@ -124,29 +149,31 @@ export class RedisSimStore implements SimStore {
   }
 
   async get(depositAddress: string): Promise<SimDeposit | null> {
-    const text = await (await this.client()).get(key(depositAddress));
+    const text = await (await this.client()).get(this.key(depositAddress));
     return text === null ? null : decodeSimDeposit(text);
   }
 
   async create(depositAddress: string, d: SimDeposit): Promise<boolean> {
     const r = await this.client();
-    const ok = await r.set(key(depositAddress), encodeSimDeposit(d), 'PX', SIM_TTL_MS, 'NX');
+    const ok = await r.set(this.key(depositAddress), encodeSimDeposit(d), 'PX', SIM_TTL_MS, 'NX');
     return ok === 'OK';
   }
 
   async put(depositAddress: string, d: SimDeposit): Promise<void> {
-    await (await this.client()).set(key(depositAddress), encodeSimDeposit(d), 'PX', SIM_TTL_MS);
+    await (
+      await this.client()
+    ).set(this.key(depositAddress), encodeSimDeposit(d), 'PX', SIM_TTL_MS);
   }
 
   async withLock<T>(depositAddress: string, fn: () => Promise<T>): Promise<T> {
     const r = await this.client();
     const token = randomBytes(16).toString('hex');
-    const ok = await r.set(lockKey(depositAddress), token, 'PX', LOCK_TTL_MS, 'NX');
+    const ok = await r.set(this.lockKey(depositAddress), token, 'PX', LOCK_TTL_MS, 'NX');
     if (ok !== 'OK') throw busy(depositAddress);
     try {
       return await fn();
     } finally {
-      await r.eval(RELEASE_LOCK, 1, lockKey(depositAddress), token).catch(() => undefined);
+      await r.eval(RELEASE_LOCK, 1, this.lockKey(depositAddress), token).catch(() => undefined);
     }
   }
 }

@@ -22,6 +22,12 @@ describe('providerFor', () => {
     expect(providerFor(false)).toBe(simulatedOneClick());
   });
 
+  it('can install a test-mode provider (e.g. on an isolated Redis key prefix)', () => {
+    const sim = new SimulatedOneClick();
+    resetOneClickProviders({ simulated: sim });
+    expect(providerFor(false)).toBe(sim);
+  });
+
   it('names the mode fee accounts', () => {
     const { FEE_ACCOUNT_LIVE: _l, FEE_ACCOUNT_TEST: _t, ...rest } = process.env;
     loadEnv(rest);

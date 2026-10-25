@@ -1,9 +1,11 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { env } from '../../env.js';
-import { closeRedis, getRedis, whenReady } from '../../lib/redis.js';
+import { closeRedis, getRedis } from '../../lib/redis.js';
 import { fakeNearClient, resetNearClients } from '../../near/client.js';
 import type { FakeNearClient } from '../../near/fake.js';
-import { MemorySimStore, SIM_KEY_PREFIX, SIM_TTL_MS } from './sim-store.js';
+import type { NearClient } from '../../near/client.js';
+import { isolatedSimStore } from '../../test/sim-1click.js';
+import { MemorySimStore, RedisSimStore, SIM_TTL_MS } from './sim-store.js';
 import { SimulatedOneClick, simulatedDestinationTxHash } from './simulated.js';
 import { OneClickError, type QuoteRequest } from './types.js';
 
@@ -43,32 +45,27 @@ function depositsTo(accountId: string) {
     );
 }
 
-/** Deletes every simulated deposit (deposit addresses are deterministic across tests). */
-async function clearSimKeys(): Promise<void> {
-  const redis = getRedis();
-  await whenReady(redis);
-  const keys = await redis.keys(`${SIM_KEY_PREFIX}*`);
-  if (keys.length > 0) await redis.del(...keys);
-}
+// Redis-backed, as in the API and the worker, on a key prefix of this file's own.
+const sim1click = isolatedSimStore();
+const newSim = () => new SimulatedOneClick({ now: () => clock, store: sim1click.store() });
 
 beforeEach(async () => {
-  await clearSimKeys();
+  await sim1click.clear();
   resetNearClients();
   fake = fakeNearClient(false);
   clock = T0;
-  // Default store: Redis, as in the API and the worker.
-  sim = new SimulatedOneClick({ now: () => clock });
+  sim = newSim();
 });
 
 afterAll(async () => {
-  await clearSimKeys();
+  await sim1click.clear();
   await closeRedis();
 });
 
 describe('SimulatedOneClick quotes', () => {
   it('is deterministic for the same request', async () => {
     const a = await sim.quote(request());
-    const b = await new SimulatedOneClick({ now: () => clock }).quote(request());
+    const b = await newSim().quote(request());
     expect(a).toEqual(b);
     expect(a.quote.amountOut).toBe('25000000');
     expect(a.quote.amountOutUsd).toBe('25');
@@ -283,8 +280,8 @@ describe('SimulatedOneClick status and scenarios', () => {
 
 describe('SimulatedOneClick shared state (Redis)', () => {
   it('two provider instances (API and worker processes) see the same deposits', async () => {
-    const api = new SimulatedOneClick({ now: () => clock });
-    const worker = new SimulatedOneClick({ now: () => clock });
+    const api = newSim();
+    const worker = newSim();
     const { quote } = await api.quote(request());
     const addr = quote.depositAddress!;
 
@@ -300,7 +297,7 @@ describe('SimulatedOneClick shared state (Redis)', () => {
   it('stores each deposit as JSON under sim1click:<address> with a 48 h TTL', async () => {
     const { quote } = await sim.quote(request());
     const redis = getRedis();
-    const key = `${SIM_KEY_PREFIX}${quote.depositAddress!}`;
+    const key = `${sim1click.prefix}${quote.depositAddress!}`;
     const stored = JSON.parse((await redis.get(key))!) as Record<string, unknown>;
     expect(stored).toMatchObject({
       status: 'PENDING_DEPOSIT',
@@ -315,8 +312,8 @@ describe('SimulatedOneClick shared state (Redis)', () => {
   });
 
   it('a concurrent simulate on the same address is refused, so it settles once', async () => {
-    const a = new SimulatedOneClick({ now: () => clock });
-    const b = new SimulatedOneClick({ now: () => clock });
+    const a = newSim();
+    const b = newSim();
     const { quote } = await a.quote(request());
     const results = await Promise.allSettled([
       a.simulate(quote.depositAddress!, 'exact'),
@@ -334,5 +331,73 @@ describe('SimulatedOneClick shared state (Redis)', () => {
     const { quote } = await mem.quote(request({ recipient: 'mem.tendr.testnet' }));
     expect((await mem.simulate(quote.depositAddress!, 'exact')).status).toBe('SUCCESS');
     await expect(sim.status(quote.depositAddress!)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('SimulatedOneClick fix round 1', () => {
+  it("a store on another key prefix does not see this file's deposits", async () => {
+    const { quote } = await sim.quote(request());
+    expect(sim1click.prefix).toMatch(/^sim1click:test:/);
+    const other = new SimulatedOneClick({
+      now: () => clock,
+      store: new RedisSimStore({ keyPrefix: `${sim1click.prefix}other:` }),
+    });
+    await expect(other.status(quote.depositAddress!)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('a retry after a failed fee credit does not credit the merchant again', async () => {
+    let failFees = true;
+    const flaky = (): NearClient => {
+      const inner = fakeNearClient(false);
+      return new Proxy(inner, {
+        get(target, prop, receiver) {
+          if (prop !== 'call') return Reflect.get(target, prop, receiver) as unknown;
+          return async (...args: Parameters<NearClient['call']>) => {
+            const a = args[3] as { account_id?: string };
+            if (failFees && a.account_id === 'fees.tendr.testnet') {
+              return {
+                txHash: 'x',
+                logs: [],
+                successLogs: [],
+                status: 'failure' as const,
+                topLevelStatus: 'failure' as const,
+                failure: 'Smart contract panicked',
+              };
+            }
+            return target.call(...args);
+          };
+        },
+      });
+    };
+    const s1 = new SimulatedOneClick({ now: () => clock, near: flaky, store: sim1click.store() });
+    const { quote } = await s1.quote(request());
+    const addr = quote.depositAddress!;
+
+    await expect(s1.simulate(addr, 'exact')).rejects.toThrow(/fees\.tendr\.testnet/);
+    expect((await s1.status(addr)).status).toBe('PENDING_DEPOSIT');
+    expect(depositsTo('shop.tendr.testnet')).toHaveLength(1);
+
+    failFees = false;
+    const res = await s1.simulate(addr, 'exact');
+    expect(res.status).toBe('SUCCESS');
+    expect(res.swapDetails.depositedAmount).toBe(quote.amountIn);
+    expect(depositsTo('shop.tendr.testnet')).toHaveLength(1);
+    expect(depositsTo('fees.tendr.testnet')).toHaveLength(1);
+  });
+
+  it.each([-1, 10_000, 12.5, Number.NaN])('refuses appFees fee %s with a 400', async (fee) => {
+    const err = await sim
+      .quote(request({ appFees: [{ recipient: 'fees.tendr.testnet', fee }] }))
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OneClickError);
+    expect(err).toMatchObject({ status: 400, code: 'INVALID_APP_FEE' });
+  });
+
+  it('accepts a zero app fee and credits no fee', async () => {
+    const { quote } = await sim.quote(
+      request({ appFees: [{ recipient: 'fees.tendr.testnet', fee: 0 }] }),
+    );
+    expect((await sim.simulate(quote.depositAddress!, 'exact')).status).toBe('SUCCESS');
+    expect(depositsTo('fees.tendr.testnet')).toHaveLength(0);
   });
 });

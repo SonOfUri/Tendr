@@ -218,6 +218,15 @@ export class SimulatedOneClick implements OneClickProvider {
     if (Number.isNaN(deadline.getTime())) {
       throw new OneClickError('deadline must be an ISO-8601 date', 400, 'INVALID_DEADLINE');
     }
+    for (const f of req.appFees ?? []) {
+      if (!Number.isInteger(f.fee) || f.fee < 0 || f.fee >= 10_000) {
+        throw new OneClickError(
+          'appFees[].fee must be an integer number of basis points in [0, 10000)',
+          400,
+          'INVALID_APP_FEE',
+        );
+      }
+    }
     const feeBps = BigInt(
       SIM_ONECLICK_FEE_BPS + (req.appFees ?? []).reduce((sum, f) => sum + f.fee, 0),
     );
@@ -255,6 +264,7 @@ export class SimulatedOneClick implements OneClickProvider {
         refunded: 0n,
         origin: [],
         settled: false,
+        credited: [],
       });
     }
     return {
@@ -352,7 +362,10 @@ export class SimulatedOneClick implements OneClickProvider {
     } else if (next.deposited < d.amountIn) {
       next.status = 'INCOMPLETE_DEPOSIT';
     } else {
-      await this.settle(next);
+      // Credits are saved on the stored (pre-deposit) state as they happen, so a retry after a
+      // partial failure skips recipients already credited.
+      await this.settle(depositAddress, d);
+      next.credited = d.credited;
       next.status = 'SUCCESS';
       next.settled = true;
       next.refunded = next.deposited - d.amountIn;
@@ -361,15 +374,17 @@ export class SimulatedOneClick implements OneClickProvider {
     return view(depositAddress, next);
   }
 
-  private async settle(d: SimDeposit): Promise<void> {
+  /** `d` is the stored state; each successful credit is recorded on it and saved at once. */
+  private async settle(depositAddress: string, d: SimDeposit): Promise<void> {
     if (d.req.recipientType !== 'INTENTS') return;
     const credits = [
-      { account: d.req.recipient, amount: d.amountOut },
-      ...(d.req.appFees ?? []).map((f) => ({
+      { id: 'recipient', account: d.req.recipient, amount: d.amountOut },
+      ...(d.req.appFees ?? []).map((f, i) => ({
+        id: `fee:${i}`,
         account: f.recipient,
         amount: (d.amountOut * BigInt(f.fee)) / 10_000n,
       })),
-    ].filter((c) => c.amount > 0n);
+    ].filter((c) => c.amount > 0n && !d.credited.includes(c.id));
     const client = this.near();
     const intents = this.intentsContract();
     for (const c of credits) {
@@ -383,6 +398,8 @@ export class SimulatedOneClick implements OneClickProvider {
           `simulated settlement: mock verifier deposit to ${c.account} failed: ${res.failure ?? 'unknown'}`,
         );
       }
+      d.credited = [...d.credited, c.id];
+      await this.store.put(depositAddress, d);
     }
   }
 

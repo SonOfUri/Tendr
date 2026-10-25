@@ -3,7 +3,13 @@
 import { env } from '../../env.js';
 import { HttpOneClick } from './http.js';
 import { SimulatedOneClick } from './simulated.js';
-export { MemorySimStore, RedisSimStore, type SimStore } from './sim-store.js';
+export {
+  MemorySimStore,
+  RedisSimStore,
+  SIM_KEY_PREFIX,
+  type RedisSimStoreOptions,
+  type SimStore,
+} from './sim-store.js';
 import type { OneClickProvider } from './types.js';
 
 export * from './types.js';
@@ -45,8 +51,11 @@ export function feeAccountFor(livemode: boolean): string {
   return livemode ? e.FEE_ACCOUNT_LIVE : e.FEE_ACCOUNT_TEST;
 }
 
-/** Drops the cached providers (tests). */
-export function resetOneClickProviders(): void {
+/**
+ * Drops the cached providers (tests). `simulated` installs the test-mode provider to use next,
+ * e.g. one on an isolated Redis key prefix (`isolatedSimStore()` in src/test/sim-1click.ts).
+ */
+export function resetOneClickProviders(opts: { simulated?: SimulatedOneClick } = {}): void {
   live = null;
-  test = null;
+  test = opts.simulated ?? null;
 }
