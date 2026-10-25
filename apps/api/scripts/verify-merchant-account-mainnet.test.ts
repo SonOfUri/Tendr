@@ -9,6 +9,10 @@ import { describe, expect, it } from 'vitest';
 import { UsageError } from './lib/near-script.js';
 import {
   CONFIRM_FLAG,
+  MAX_SWAP_USD,
+  assertSwapWithinCap,
+  buildSpendPlan,
+  cleanupCommand,
   compressedPublicKey,
   omftLabel,
   parseVerifyArgs,
@@ -115,4 +119,43 @@ describe('verify script helpers', () => {
     const r = await probeProviderRetries(2);
     expect(r).toEqual({ requests: 3, resolved: true, method: 'send_tx' });
   }, 20_000);
+});
+
+describe('swap cap, spend plan and cleanup', () => {
+  it('caps the swap at 5 USD of the quote value and refuses a missing value', () => {
+    expect(MAX_SWAP_USD).toBe(5);
+    expect(assertSwapWithinCap('1.02')).toBeCloseTo(1.02);
+    expect(assertSwapWithinCap('5')).toBe(5);
+    expect(() => assertSwapWithinCap('5.01')).toThrow(/above the 5 USD cap/);
+    expect(() => assertSwapWithinCap('100000')).toThrow(UsageError);
+    expect(() => assertSwapWithinCap(undefined)).toThrow(/no amountInUsd/);
+    expect(() => assertSwapWithinCap('abc')).toThrow(/no amountInUsd/);
+  });
+
+  it('prints every spend line from the wasm sizes and marks the unrecoverable ones', () => {
+    const p = buildSpendPlan({
+      probeBytes: 385_525,
+      merchantBytes: 382_139,
+      amount: '1000000',
+      originAsset: 'nep141:usdc.near',
+      swapUsd: 1,
+    });
+    expect(p.text).toContain('probe contract account: 3.8552 NEAR');
+    expect(p.text).toContain('throwaway merchant account: 4.8213 NEAR');
+    expect(p.text).toMatch(/zero-key sub-account.*LOST/);
+    expect(p.text).toMatch(/storage_deposit.*LOST/);
+    expect(p.text).toMatch(/gas.*LOST/);
+    expect(p.text).toContain('1000000 smallest units of nep141:usdc.near, worth 1 USD (cap 5)');
+    const near = p.lines.reduce((t, l) => t + (l.near ?? 0n), 0n);
+    expect(p.totalNear).toBe(near + 10n ** 24n);
+    expect(p.lines.filter((l) => l.near && !l.recoverable).length).toBe(3);
+  });
+
+  it('accepts --phase cleanup and prints the exact cleanup command', () => {
+    const a = parseVerifyArgs([...OK, '--phase', 'cleanup', '--state', '/tmp/s.json'], ENV);
+    expect(a.phase).toBe('cleanup');
+    expect(cleanupCommand(a)).toBe(
+      `npm run onchain:verify:mainnet --workspace=@tendr/api -- --yes-i-understand-this-spends-mainnet-funds --evm-address ${EVM} --phase cleanup --state /tmp/s.json`,
+    );
+  });
 });

@@ -140,6 +140,7 @@ async function ftMetadata(
 }
 
 async function run(a: PublishArgs): Promise<void> {
+  let failures = 0;
   console.log(plan(a));
   if (!a.skipBuild) build();
 
@@ -185,8 +186,10 @@ async function run(a: PublishArgs): Promise<void> {
     const token = asset.id.replace(/^nep141:/, '');
     const meta = await ftMetadata(acct, token);
     if (!meta) {
+      failures++;
       console.log(`  FAIL: ${asset.id}: no ft_metadata on ${token}; fix asset-registry.ts`);
     } else if (meta.decimals !== asset.decimals) {
+      failures++;
       console.log(
         `  FAIL: ${asset.id}: registry says ${asset.decimals} decimals, token says ${meta.decimals}`,
       );
@@ -199,6 +202,7 @@ async function run(a: PublishArgs): Promise<void> {
   console.log(`  MERCHANT_ACCOUNT_CODE_HASH_TEST=${codeHash}`);
   console.log(`  INTENTS_CONTRACT_TEST=${a.mockId}`);
   console.log('The mock accepts any token id; seed balances with its `deposit` method.');
+  if (failures > 0) throw new Error(`${failures} asset check(s) FAILED above`);
 }
 
 const isMain =

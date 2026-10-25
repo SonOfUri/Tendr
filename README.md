@@ -136,8 +136,26 @@ npm run onchain:verify:mainnet --workspace=@tendr/api -- \
   --yes-i-understand-this-spends-mainnet-funds --evm-address 0x... --phase finish --cleanup
 ```
 
-It prints PASS / FAIL / INFO per check and stops at the first FAIL. The `probe` build adds a
-`probe_p256` view and exists only for this script; it is never published.
+Before spending anything it fetches a dry 1Click quote and prints a spend plan computed from the
+actual wasm sizes. The swap is capped at 5 USD by the quote's own `amountInUsd` (a missing or higher
+value is refused); the funder's NEAR and origin-token balances must cover the plan. With the
+default build sizes the plan is roughly: probe account about 3.9 NEAR (deleted automatically,
+returns), throwaway merchant account about 4.8 NEAR (returns on cleanup), and **not recoverable**:
+0.01 NEAR for the zero-key sub-account (it has no key, so it can never be deleted), up to 0.00125
+NEAR for the 1Click deposit address's `storage_deposit`, and about 0.05 NEAR of gas, plus the swap
+(about 1 USD by default, mostly recovered by the withdrawal minus bridge fees).
+
+It prints PASS / FAIL / INFO per check and stops at the first FAIL. A first FAIL may be a
+script-shape error against the 1Click and verifier APIs, which the script was written against
+without being able to call them: read the printed response before concluding the contract is wrong.
+The `probe` build adds a `probe_p256` view and exists only for this script; it is never published.
+
+After any FAIL following the creation of the throwaway merchant account, the script prints the
+account id and the exact recovery command. `--phase cleanup` works from any saved state: it
+withdraws any held balance if the saved address is already active, deletes the throwaway account
+(NEAR returns to you) and deletes the state file. The state file holds the throwaway passkey, which
+is the account's only signer, so keep it private (it is created mode 0600 and gitignored) until
+cleanup.
 
 **Audit gate.** The contract must be independently audited before any live merchant holds funds.
 Do not set `MERCHANT_ACCOUNT_CODE_HASH_LIVE` (and do not publish a global contract on mainnet) until

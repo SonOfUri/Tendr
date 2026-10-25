@@ -35,10 +35,22 @@
  *   (3)   a threshold-approved ft_withdraw with a WITHDRAW_TO memo to your EVM address, recording
  *         what the real verifier returned from mt_transfer / ft_withdraw
  * Everything throwaway lives under your account. State between phases is a local file holding a
- * throwaway passkey (no funds depend on it beyond the swapped dollar).
+ * throwaway passkey. That passkey is the sole signer of the throwaway merchant account, so it
+ * controls whatever the account holds until the account is deleted; the file is created 0600 and
+ * gitignored. Keep it until `finish` or `--phase cleanup` has run.
+ *
+ * `--phase cleanup` works from any saved state (after a FAIL, or instead of finish): it withdraws
+ * any held balance to the saved address when that is already usable, deletes the throwaway merchant
+ * account (NEAR returns to your account) and deletes the state file. Every FAIL after the account
+ * exists prints the account id and the exact cleanup command.
+ *
+ * The swap is capped at 5 USD of the 1Click quote's own amountInUsd (refused if missing or above)
+ * and the full spend plan is printed, from the real wasm sizes, before anything is spent.
+ * A first FAIL may be a script-shape error against the unverified 1Click / verifier APIs rather
+ * than a contract problem; read the printed response before drawing conclusions.
  */
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -81,7 +93,10 @@ const SIGNER_ID = 'per_verify';
 const SAVED_ADDRESS_ID = 'addr_verify';
 const DAY_MS = 24 * 3_600_000;
 
-export type Phase = 'prepare' | 'finish';
+export type Phase = 'prepare' | 'finish' | 'cleanup';
+
+/** Hard cap on the swap's USD value (the 1Click quote's own `amountInUsd`). */
+export const MAX_SWAP_USD = 5;
 
 export interface VerifyArgs {
   phase: Phase;
@@ -100,13 +115,102 @@ export interface VerifyArgs {
 }
 
 export const PLAN_TEXT = [
-  'This script spends MAINNET funds from the account you supply:',
-  '  - about 4 NEAR per throwaway contract account (probe, merchant) for storage, recoverable by',
-  '    deleting the accounts (the probe is deleted automatically, the merchant with --cleanup)',
-  '  - a 1Click swap of about 1 USDC (originAsset to destinationAsset), delivered to the throwaway',
-  '    merchant contract; most comes back out in the final withdrawal to your EVM address',
-  '  - gas for roughly 15 transactions',
+  'This script spends MAINNET funds from the account you supply: NEAR for contract storage and gas,',
+  `and a 1Click swap capped at ${MAX_SWAP_USD} USD. The exact amounts (from the real wasm sizes and a dry quote)`,
+  'are printed before anything is spent, with the unrecoverable ones marked.',
 ].join('\n');
+
+const GAS_ESTIMATE = NEAR / 20n; // about 20 transactions at a few Tgas each, rounded up
+const ZERO_KEY_FUNDING = NEAR / 100n;
+const DEPOSIT_STORAGE_ESTIMATE = (125n * NEAR) / 100_000n; // 0.00125 NEAR NEP-145 minimum
+const SAFETY_MARGIN = NEAR;
+
+export interface SpendLine {
+  label: string;
+  near?: bigint;
+  recoverable: boolean;
+  text: string;
+}
+
+/** Throws UsageError unless the quote's USD value is present and at most MAX_SWAP_USD. */
+export function assertSwapWithinCap(amountInUsd: unknown): number {
+  const usd = typeof amountInUsd === 'string' ? Number(amountInUsd) : amountInUsd;
+  if (typeof usd !== 'number' || !Number.isFinite(usd) || usd < 0) {
+    throw new UsageError(
+      'refusing to spend: the 1Click quote has no amountInUsd, so the swap cannot be capped',
+    );
+  }
+  if (usd > MAX_SWAP_USD) {
+    throw new UsageError(
+      `refusing to spend: the swap is worth ${usd} USD, above the ${MAX_SWAP_USD} USD cap (check --amount and --origin-asset)`,
+    );
+  }
+  return usd;
+}
+
+/** Every spend of a prepare run, from the actual wasm sizes. NEAR lines add up to `totalNear`. */
+export function buildSpendPlan(p: {
+  probeBytes: number;
+  merchantBytes: number;
+  amount: string;
+  originAsset: string;
+  swapUsd: number;
+}): { lines: SpendLine[]; totalNear: bigint; text: string } {
+  const probe = BigInt(p.probeBytes) * 10n ** 19n;
+  const merchant = BigInt(p.merchantBytes) * 10n ** 19n + NEAR;
+  const lines: SpendLine[] = [
+    {
+      label: 'probe contract account',
+      near: probe,
+      recoverable: true,
+      text: `${formatNear(probe)} storage; deleted automatically, NEAR returns`,
+    },
+    {
+      label: 'throwaway merchant account',
+      near: merchant,
+      recoverable: true,
+      text: `${formatNear(merchant)} storage and balance; returns on --phase cleanup`,
+    },
+    {
+      label: 'zero-key sub-account (check 4)',
+      near: ZERO_KEY_FUNDING,
+      recoverable: false,
+      text: `${formatNear(ZERO_KEY_FUNDING)}; it has no key, so it can never be deleted: LOST`,
+    },
+    {
+      label: '1Click deposit-address storage_deposit',
+      near: DEPOSIT_STORAGE_ESTIMATE,
+      recoverable: false,
+      text: `up to ${formatNear(DEPOSIT_STORAGE_ESTIMATE)} NEP-145 registration: LOST`,
+    },
+    {
+      label: 'gas',
+      near: GAS_ESTIMATE,
+      recoverable: false,
+      text: `about ${formatNear(GAS_ESTIMATE)} for roughly 20 transactions: LOST`,
+    },
+    {
+      label: 'swap',
+      recoverable: false,
+      text: `${p.amount} smallest units of ${p.originAsset}, worth ${p.swapUsd} USD (cap ${MAX_SWAP_USD}); delivered to the throwaway merchant, mostly recoverable by the finish withdrawal minus bridge fees`,
+    },
+  ];
+  const totalNear = lines.reduce((t, l) => t + (l.near ?? 0n), 0n);
+  const lost = lines
+    .filter((l) => !l.recoverable && l.near)
+    .reduce((t, l) => t + (l.near ?? 0n), 0n);
+  const text = [
+    'Spend plan:',
+    ...lines.map((l) => `  - ${l.label}: ${l.text}`),
+    `  NEAR needed up front: ${formatNear(totalNear)} (+ ${formatNear(SAFETY_MARGIN)} margin); not recoverable: ${formatNear(lost)}`,
+  ].join('\n');
+  return { lines, totalNear: totalNear + SAFETY_MARGIN, text };
+}
+
+/** The exact command that cleans up a throwaway account left behind by a failed run. */
+export function cleanupCommand(a: Pick<VerifyArgs, 'evmAddress' | 'statePath'>): string {
+  return `npm run onchain:verify:mainnet --workspace=@tendr/api -- --${CONFIRM_FLAG} --evm-address ${a.evmAddress} --phase cleanup --state ${a.statePath}`;
+}
 
 /** Parses argv and env. Throws UsageError (a refusal) unless every safety requirement is explicit. */
 export function parseVerifyArgs(
@@ -127,8 +231,10 @@ export function parseVerifyArgs(
     throw new UsageError(`refusing to run: pass --${CONFIRM_FLAG} to confirm.\n${PLAN_TEXT}`);
   }
   const phase = flags.get('phase') ?? 'prepare';
-  if (phase !== 'prepare' && phase !== 'finish') {
-    throw new UsageError(`--phase must be "prepare" or "finish", got "${String(phase)}"`);
+  if (phase !== 'prepare' && phase !== 'finish' && phase !== 'cleanup') {
+    throw new UsageError(
+      `--phase must be "prepare", "finish" or "cleanup", got "${String(phase)}"`,
+    );
   }
   const evm = flags.get('evm-address') ?? env.VERIFY_EVM_ADDRESS;
   if (typeof evm !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(evm)) {
@@ -529,7 +635,30 @@ async function check1P256(c: Ctx, ts: string): Promise<void> {
 }
 
 interface Quote {
-  quote: { depositAddress: string; amountIn?: string; amountOut?: string; minAmountOut?: string };
+  quote: {
+    depositAddress: string;
+    amountIn?: string;
+    amountInUsd?: string;
+    amountOut?: string;
+    minAmountOut?: string;
+  };
+}
+
+function quoteBody(a: VerifyArgs, account: string, dry: boolean): object {
+  return {
+    dry,
+    swapType: 'EXACT_INPUT',
+    slippageTolerance: 100,
+    originAsset: a.originAsset,
+    depositType: 'ORIGIN_CHAIN',
+    destinationAsset: a.destAsset,
+    amount: a.amount,
+    refundTo: account,
+    refundType: 'INTENTS',
+    recipient: account,
+    recipientType: 'INTENTS',
+    deadline: new Date(Date.now() + 60 * 60_000).toISOString(),
+  };
 }
 interface Status {
   status: string;
@@ -543,21 +672,10 @@ async function check2Quote(c: Ctx, merchantId: string): Promise<void> {
     async () => {
       const q = await oneClick<Quote>(c, '/v0/quote', {
         method: 'POST',
-        body: {
-          dry: false,
-          swapType: 'EXACT_INPUT',
-          slippageTolerance: 100,
-          originAsset: c.a.originAsset,
-          depositType: 'ORIGIN_CHAIN',
-          destinationAsset: c.a.destAsset,
-          amount: c.a.amount,
-          refundTo: merchantId,
-          refundType: 'INTENTS',
-          recipient: merchantId,
-          recipientType: 'INTENTS',
-          deadline: new Date(Date.now() + 60 * 60_000).toISOString(),
-        },
+        body: quoteBody(c.a, merchantId, false),
       });
+      // The real quote is capped again: it is the one that gets funded.
+      assertSwapWithinCap(q.quote?.amountInUsd);
       if (!q.quote?.depositAddress)
         throw new Error(`no depositAddress in ${JSON.stringify(q).slice(0, 300)}`);
       depositAddress = q.quote.depositAddress;
@@ -736,18 +854,41 @@ async function propose(
 
 async function prepare(c: Ctx): Promise<void> {
   const ts = Date.now().toString(36);
-  await check('preflight: funder account and key', async () => {
+  const probeBytes = wasm('merchant-account-probe.wasm').length;
+  const merchantBytes = wasm('merchant-account.wasm').length;
+  // A dry quote spends nothing; it is the only source of the swap's USD value.
+  const dry = await oneClick<Quote>(c, '/v0/quote', {
+    method: 'POST',
+    body: quoteBody(c.a, c.a.funderId, true),
+  });
+  const swapUsd = assertSwapWithinCap(dry.quote?.amountInUsd);
+  const plan = buildSpendPlan({
+    probeBytes,
+    merchantBytes,
+    amount: c.a.amount,
+    originAsset: c.a.originAsset,
+    swapUsd,
+  });
+  console.log(plan.text);
+  console.log(`cleanup later with: ${cleanupCommand(c.a)}\n`);
+  await check('preflight: funder account, key and balances cover the plan', async () => {
     const bal = await c.funder.accountBalance(c.a.funderId);
-    if (bal < 15n * NEAR)
-      throw new Error(`${c.a.funderId} holds ${formatNear(bal)}; need about 15 NEAR`);
+    if (bal < plan.totalNear)
+      throw new Error(
+        `${c.a.funderId} holds ${formatNear(bal)}; the plan needs ${formatNear(plan.totalNear)}`,
+      );
     const keys = await c.funder.rpc.accessKeyList(c.a.funderId);
     if (!keys.includes(c.funder.publicKey.nearPublicKey)) {
       throw new Error('VERIFY_FUNDER_PRIVATE_KEY is not an access key of the funder account');
     }
+    const token = tokenAccount(c.a.originAsset);
+    const held = BigInt(
+      await view<string>(c, token, 'ft_balance_of', { account_id: c.a.funderId }),
+    );
+    if (held < BigInt(c.a.amount))
+      throw new Error(`funder holds ${held} of ${token}, the swap needs ${c.a.amount}`);
     return formatNear(bal);
   });
-  wasm('merchant-account-probe.wasm');
-  wasm('merchant-account.wasm');
 
   await infoRpcErrorShapes(c);
   await infoProviderRetries();
@@ -881,24 +1022,75 @@ async function finish(c: Ctx): Promise<void> {
   );
   await check5Storage(c, st.merchantId);
 
-  if (c.a.cleanup) {
-    const rest = await intentsBalance(c, st.merchantId, st.destAsset);
+  if (c.a.cleanup) await deleteThrowaway(c, st);
+}
+
+/** Deletes the throwaway merchant account (NEAR returns to the funder) and the state file. */
+async function deleteThrowaway(c: Ctx, st: State): Promise<void> {
+  const rest = await intentsBalance(c, st.merchantId, st.destAsset);
+  const origin = await intentsBalance(c, st.merchantId, st.originAsset);
+  report.info(
+    'cleanup',
+    `deleting ${st.merchantId}; left in its intents balance and abandoned: ${rest} of ${st.destAsset}, ${origin} of ${st.originAsset}`,
+  );
+  const acct = new ScriptAccount(st.merchantId, c.funder.publicKey, c.funder.transport);
+  await acct.sendOk(st.merchantId, [deleteAccountAction(st.funderId)], 'delete merchant account');
+  if (existsSync(c.a.statePath)) unlinkSync(c.a.statePath);
+  report.pass('cleanup: throwaway merchant account and state file deleted, NEAR returned');
+}
+
+/** `--phase cleanup`: from any saved state, withdraw what can be withdrawn, then delete everything. */
+async function cleanup(c: Ctx): Promise<void> {
+  const st = loadState(c.a.statePath);
+  if (st.funderId !== c.a.funderId)
+    throw new UsageError('state file belongs to another funder account');
+  const held = await intentsBalance(c, st.merchantId, st.destAsset);
+  if (held > 0n && st.activeAfterMs > 0 && Date.now() >= st.activeAfterMs) {
+    try {
+      const action: ActionJson = {
+        withdraw: {
+          asset: st.destAsset,
+          amount: held.toString(),
+          saved_address_id: SAVED_ADDRESS_ID,
+          route: { poa: { token_contract: tokenAccount(st.destAsset) } },
+        },
+      };
+      const { outcome } = await propose(c, st.merchantId, hexToBytes(st.passkeyPrivateHex), action);
+      report.info(
+        'cleanup withdrawal',
+        firstFailure(outcome) ?? `sent ${held} to ${st.evmAddress}`,
+      );
+    } catch (err) {
+      report.info('cleanup withdrawal failed', (err as Error).message);
+    }
+  } else if (held > 0n) {
     report.info(
       'cleanup',
-      `deleting ${st.merchantId}; ${rest} of ${st.destAsset} left in its intents balance is abandoned`,
+      `${held} of ${st.destAsset} cannot be withdrawn yet (the saved address is not active); it will be abandoned`,
     );
-    const acct = new ScriptAccount(st.merchantId, c.funder.publicKey, c.funder.transport);
-    await acct.sendOk(st.merchantId, [deleteAccountAction(st.funderId)], 'delete merchant account');
-    report.pass('cleanup: throwaway merchant account deleted, NEAR returned');
   }
+  await deleteThrowaway(c, st);
 }
 
 async function run(a: VerifyArgs): Promise<void> {
   console.log(PLAN_TEXT);
   console.log(`phase: ${a.phase}   funder: ${a.funderId}   rpc: ${a.rpcUrl}\n`);
   const c: Ctx = { a, funder: ScriptAccount.open(a.funderId, a.funderKey, a.rpcUrl) };
-  if (a.phase === 'prepare') await prepare(c);
-  else await finish(c);
+  try {
+    if (a.phase === 'prepare') await prepare(c);
+    else if (a.phase === 'finish') await finish(c);
+    else await cleanup(c);
+  } catch (err) {
+    if (a.phase !== 'cleanup' && !(err instanceof UsageError) && existsSync(a.statePath)) {
+      const st = loadState(a.statePath);
+      console.error(
+        `
+The throwaway account ${st.merchantId} still exists and holds funds. Recover them with:
+  ${cleanupCommand(a)}`,
+      );
+    }
+    throw err;
+  }
   console.log('\nALL CHECKS PASSED');
 }
 
