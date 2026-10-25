@@ -7,7 +7,7 @@ use near_sdk::json_types::U64;
 use near_sdk::serde::Serialize;
 use near_sdk::{env, serde_json};
 
-use crate::action::Action;
+use crate::action::{Action, PayoutMode};
 use crate::approval::ProposalId;
 
 pub const EVENT_STANDARD: &str = "tendr-merchant-account";
@@ -75,7 +75,9 @@ pub enum Event<'a> {
     },
     SettlementChanged {
         proposal_id: ProposalId,
-        action: &'a Action,
+        dest_asset: &'a str,
+        payout_mode: PayoutMode,
+        saved_address_id: Option<&'a str>,
     },
 }
 

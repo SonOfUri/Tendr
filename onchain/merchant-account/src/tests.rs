@@ -505,18 +505,6 @@ fn money_actions_not_yet_supported() {
     propose(&mut c, &a, action, 1);
 }
 
-#[test]
-#[should_panic(expected = "not yet supported")]
-fn settlement_not_yet_supported() {
-    let (mut c, a, _b, _c) = three_of(2);
-    let action = Action::SetSettlement {
-        dest_asset: "nep141:usdc.tendr.testnet".into(),
-        payout_mode: PayoutMode::Intents,
-        saved_address_id: None,
-    };
-    propose(&mut c, &a, action, 1);
-}
-
 #[cfg(not(feature = "testnet-admin"))]
 #[test]
 #[should_panic(expected = "testnet_admin requires the testnet-admin feature")]
@@ -724,16 +712,10 @@ fn poa() -> WithdrawRoute {
     }
 }
 
-/// One instance of every action that later tasks enable, with valid sizes.
+/// One instance of every action that later tasks (4-5) enable, with valid sizes.
 fn unsupported_actions() -> Vec<Action> {
     let asset = || "nep141:usdc.tendr.testnet".to_string();
     vec![
-        Action::AddSavedAddress {
-            id: "sav_1".into(),
-            chain: "base".into(),
-            address: "0x91a1b2c3d4e5f60718293a4b5c6d7e8f90a1b244".into(),
-        },
-        Action::RemoveSavedAddress { id: "sav_1".into() },
         Action::SetLimits {
             asset: asset(),
             per_tx: Some(U128(1)),
@@ -765,11 +747,6 @@ fn unsupported_actions() -> Vec<Action> {
             route: poa(),
         },
         Action::Upgrade { code_hash: [1; 32] },
-        Action::SetSettlement {
-            dest_asset: asset(),
-            payout_mode: PayoutMode::Wallet,
-            saved_address_id: Some("sav_1".into()),
-        },
     ]
 }
 
@@ -1013,6 +990,258 @@ fn b64(bytes: &[u8]) -> String {
 
 /// Writes (with `UPDATE_VECTORS=1`) or checks the shared Rust/TypeScript
 /// approval-encoding vectors.
+const DAY: u64 = 24 * HOUR;
+const ADDR: &str = "0x91a1b2c3d4e5f60718293a4b5c6d7e8f90a1b244";
+
+fn add_saved(id: &str) -> Action {
+    Action::AddSavedAddress {
+        id: id.into(),
+        chain: "base".into(),
+        address: ADDR.into(),
+    }
+}
+
+fn wallet(id: &str) -> Action {
+    Action::SetSettlement {
+        dest_asset: "nep141:usdc.tendr.testnet".into(),
+        payout_mode: PayoutMode::Wallet,
+        saved_address_id: Some(id.into()),
+    }
+}
+
+fn intents() -> Action {
+    Action::SetSettlement {
+        dest_asset: "nep141:usdc.tendr.testnet".into(),
+        payout_mode: PayoutMode::Intents,
+        saved_address_id: None,
+    }
+}
+
+/// Proposes `action` as a 1-of-N account, so the proposer's approval executes it.
+fn run(c: &mut MerchantAccount, by: &Person, action: Action, n: u8) -> ProposalId {
+    let id = propose(c, by, action, n);
+    assert_eq!(status(c, &id), ProposalStatus::Executed);
+    id
+}
+
+#[test]
+fn saved_address_unusable_for_24h() {
+    let (mut c, a, _b, _c) = three_of(1);
+    run(&mut c, &a, add_saved("sav_1"), 1);
+    let listed = c.list_saved_addresses();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, "sav_1");
+    assert_eq!(listed[0].chain, "base");
+    assert_eq!(listed[0].address, ADDR);
+    assert_eq!(listed[0].active_from, U64(T0 + DAY));
+    assert!(c.saved_address_usable("sav_1", T0 + DAY - 1).is_none());
+    assert!(c.saved_address_usable("sav_1", T0 + DAY).is_some());
+    assert!(c.saved_address_usable("nope", T0 + DAY).is_none());
+}
+
+#[test]
+fn remove_saved_address_is_immediate() {
+    let (mut c, a, _b, _c) = three_of(1);
+    run(&mut c, &a, add_saved("sav_1"), 1);
+    run(
+        &mut c,
+        &a,
+        Action::RemoveSavedAddress { id: "sav_1".into() },
+        2,
+    );
+    assert!(c.list_saved_addresses().is_empty());
+    assert!(c.saved_address_usable("sav_1", T0 + 10 * DAY).is_none());
+    let msg = panics(|| {
+        propose(
+            &mut c,
+            &a,
+            Action::RemoveSavedAddress { id: "sav_1".into() },
+            3,
+        );
+    });
+    assert!(msg.contains("unknown saved address"), "{msg}");
+}
+
+#[test]
+fn duplicate_saved_address_id_rejected() {
+    let (mut c, a, _b, _c) = three_of(1);
+    run(&mut c, &a, add_saved("sav_1"), 1);
+    let msg = panics(|| {
+        propose(&mut c, &a, add_saved("sav_1"), 2);
+    });
+    assert!(msg.contains("duplicate saved address id"), "{msg}");
+}
+
+#[test]
+fn saved_address_count_capped() {
+    let (mut c, a, _b, _c) = three_of(1);
+    for i in 0..saved::MAX_SAVED_ADDRESSES {
+        ctx(T0); // resets the mock log, which is capped at 16 KiB
+        run(&mut c, &a, add_saved(&format!("sav_{i}")), i as u8);
+    }
+    let msg = panics(|| {
+        propose(&mut c, &a, add_saved("one_more"), 200);
+    });
+    assert!(msg.contains("too many saved addresses"), "{msg}");
+}
+
+#[test]
+fn chain_and_address_validated() {
+    let (mut c, a, _b, _c) = three_of(1);
+    for (n, chain) in saved::SUPPORTED_CHAINS.iter().enumerate() {
+        let action = Action::AddSavedAddress {
+            id: format!("sav_{n}"),
+            chain: chain.to_string(),
+            address: ADDR.into(),
+        };
+        run(&mut c, &a, action, n as u8);
+    }
+    let bad = [
+        ("doge", ADDR, "unsupported chain"),
+        ("ETH", ADDR, "unsupported chain"),
+        ("", ADDR, "chain must be 1 to 16"),
+        ("base", "", "address must be 1 to 128"),
+    ];
+    for (n, (chain, address, expected)) in bad.into_iter().enumerate() {
+        let action = Action::AddSavedAddress {
+            id: format!("bad_{n}"),
+            chain: chain.into(),
+            address: address.into(),
+        };
+        let msg = panics(|| {
+            propose(&mut c, &a, action, 100 + n as u8);
+        });
+        assert!(msg.contains(expected), "{chain:?}: {msg}");
+    }
+    // Exactly 128 characters is accepted, 129 is not.
+    let at_limit = Action::AddSavedAddress {
+        id: "long".into(),
+        chain: "sol".into(),
+        address: long(128),
+    };
+    run(&mut c, &a, at_limit, 150);
+    let over = Action::AddSavedAddress {
+        id: "toolong".into(),
+        chain: "sol".into(),
+        address: long(129),
+    };
+    let msg = panics(|| {
+        propose(&mut c, &a, over, 151);
+    });
+    assert!(msg.contains("address must be 1 to 128"), "{msg}");
+}
+
+#[test]
+fn settlement_wallet_mode_requires_usable_saved_address() {
+    let (mut c, a, _b, _c) = three_of(1);
+    assert_eq!(c.get_settlement(), None);
+    // Unknown address.
+    let msg = panics(|| {
+        propose(&mut c, &a, wallet("sav_1"), 1);
+    });
+    assert!(msg.contains("unknown or not yet active"), "{msg}");
+    // Known but still inside the 24h delay.
+    run(&mut c, &a, add_saved("sav_1"), 2);
+    ctx(T0 + DAY - 1);
+    let msg = panics(|| {
+        propose(&mut c, &a, wallet("sav_1"), 3);
+    });
+    assert!(msg.contains("unknown or not yet active"), "{msg}");
+    // Wallet mode without an address is invalid.
+    let no_addr = Action::SetSettlement {
+        dest_asset: "nep141:usdc.tendr.testnet".into(),
+        payout_mode: PayoutMode::Wallet,
+        saved_address_id: None,
+    };
+    let msg = panics(|| {
+        propose(&mut c, &a, no_addr, 4);
+    });
+    assert!(msg.contains("needs a saved address"), "{msg}");
+    // Usable from t + 24h.
+    ctx(T0 + DAY);
+    let id = run(&mut c, &a, wallet("sav_1"), 5);
+    assert_eq!(
+        c.get_settlement(),
+        Some(Settlement {
+            dest_asset: "nep141:usdc.tendr.testnet".into(),
+            payout_mode: PayoutMode::Wallet,
+            saved_address_id: Some("sav_1".into()),
+        })
+    );
+    let evs = events(&get_logs());
+    let ev = evs
+        .iter()
+        .find(|e| e["event"] == "settlement_changed")
+        .unwrap();
+    assert_eq!(ev["data"]["proposal_id"], hex(&id.0));
+    assert_eq!(ev["data"]["dest_asset"], "nep141:usdc.tendr.testnet");
+    assert_eq!(ev["data"]["payout_mode"], "wallet");
+    assert_eq!(ev["data"]["saved_address_id"], "sav_1");
+}
+
+#[test]
+fn settlement_intents_mode_needs_no_saved_address() {
+    let (mut c, a, _b, _c) = three_of(1);
+    run(&mut c, &a, intents(), 1);
+    assert_eq!(c.get_settlement().unwrap().payout_mode, PayoutMode::Intents);
+    let with_addr = Action::SetSettlement {
+        dest_asset: "nep141:usdc.tendr.testnet".into(),
+        payout_mode: PayoutMode::Intents,
+        saved_address_id: Some("sav_1".into()),
+    };
+    let msg = panics(|| {
+        propose(&mut c, &a, with_addr, 2);
+    });
+    assert!(msg.contains("takes no saved address"), "{msg}");
+}
+
+#[test]
+fn settlement_address_removed_before_execute_marks_failed() {
+    let (mut c, a, b, _c) = three_of(2);
+    let add = propose(&mut c, &a, add_saved("sav_1"), 1);
+    c.approve(add, b.approve(&add, 0));
+    ctx(T0 + DAY);
+    // The removal executes first, so the settlement is stale at its last approval.
+    let set = propose(&mut c, &a, wallet("sav_1"), 2);
+    let rm = propose(
+        &mut c,
+        &a,
+        Action::RemoveSavedAddress { id: "sav_1".into() },
+        3,
+    );
+    c.approve(rm, b.approve(&rm, 0));
+    assert_eq!(status(&c, &rm), ProposalStatus::Executed);
+    c.approve(set, b.approve(&set, 0));
+    assert_eq!(status(&c, &set), ProposalStatus::Failed);
+    assert_eq!(c.get_settlement(), None);
+}
+
+#[test]
+fn cannot_remove_address_current_settlement_points_to() {
+    let (mut c, a, _b, _c) = three_of(1);
+    run(&mut c, &a, add_saved("sav_1"), 1);
+    ctx(T0 + DAY);
+    run(&mut c, &a, wallet("sav_1"), 2);
+    let msg = panics(|| {
+        propose(
+            &mut c,
+            &a,
+            Action::RemoveSavedAddress { id: "sav_1".into() },
+            3,
+        );
+    });
+    assert!(msg.contains("current settlement destination"), "{msg}");
+    // Switching to intents mode releases it.
+    run(&mut c, &a, intents(), 4);
+    run(
+        &mut c,
+        &a,
+        Action::RemoveSavedAddress { id: "sav_1".into() },
+        5,
+    );
+    assert!(c.list_saved_addresses().is_empty());
+}
+
 #[test]
 fn write_test_vectors() {
     ctx(T0);

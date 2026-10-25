@@ -21,7 +21,7 @@ pub const MAX_ORIGINS: usize = 10;
 pub const MAX_ORIGIN_LEN: usize = 256;
 /// Longest id (signer, saved address, payment).
 pub const MAX_ID_LEN: usize = 64;
-/// Longest chain name (Task 3 narrows it to a fixed list).
+/// Longest chain name (`saved::SUPPORTED_CHAINS` narrows it further).
 pub const MAX_CHAIN_LEN: usize = 16;
 /// Longest destination or saved address.
 pub const MAX_ADDRESS_LEN: usize = 128;
@@ -176,12 +176,15 @@ impl Action {
         )
     }
 
-    /// Whether this action can be proposed yet. Only security actions execute
-    /// in this version; saved addresses (Task 3), limits, sweeps and money
-    /// (Task 4), upgrades (Task 5) and settlement (Task 3) are enabled later,
-    /// so nothing unexecutable can sit in storage.
+    /// Whether this action can be proposed yet. Security, saved-address and
+    /// settlement actions execute in this version; limits, sweeps and money
+    /// (Task 4) and upgrades (Task 5) are enabled later, so nothing
+    /// unexecutable can sit in storage.
     pub fn is_proposable(&self) -> bool {
-        self.kind() == ActionKind::Security
+        matches!(
+            self.kind(),
+            ActionKind::Security | ActionKind::SavedAddress | ActionKind::Settlement
+        )
     }
 }
 

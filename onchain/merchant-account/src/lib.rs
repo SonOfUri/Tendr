@@ -9,6 +9,7 @@
 pub mod action;
 pub mod approval;
 pub mod events;
+pub mod saved;
 pub mod webauthn;
 
 use near_sdk::json_types::U64;
@@ -20,9 +21,10 @@ use near_sdk::serde_with::base64::Base64;
 use near_sdk::store::{IterableMap, LookupMap};
 use near_sdk::{env, near, require, AccountId, PanicOnDefault};
 
-use crate::action::{Action, ActionKind, Invalid, Signer};
+use crate::action::{Action, ActionKind, Invalid, PayoutMode, Signer};
 use crate::approval::{ApprovalIntent, ApprovalPayload, ProposalId, Salt, SignedApproval};
 use crate::events::Event;
+use crate::saved::{SavedAddress, SavedAddressView, Settlement};
 use crate::webauthn::SignerKey;
 
 /// Nanoseconds in one hour.
@@ -143,6 +145,8 @@ pub struct MerchantAccount {
     proposals: IterableMap<ProposalId, Proposal>,
     /// Pending proposals per creating signer, for `MAX_PENDING_PER_SIGNER`.
     pending_per_signer: LookupMap<String, u8>,
+    saved_addresses: Vec<SavedAddress>,
+    settlement: Option<Settlement>,
 }
 
 #[near]
@@ -180,6 +184,8 @@ impl MerchantAccount {
             testnet_admin,
             proposals: IterableMap::new(StorageKey::Proposals),
             pending_per_signer: LookupMap::new(StorageKey::PendingPerSigner),
+            saved_addresses: Vec::new(),
+            settlement: None,
         };
         require!(!signers.is_empty(), "at least one signer is required");
         for signer in signers {
@@ -299,6 +305,15 @@ impl MerchantAccount {
             recovery_key_set: self.recovery_key.is_some(),
             intents_contract: self.intents_contract.clone(),
         }
+    }
+
+    pub fn list_saved_addresses(&self) -> Vec<SavedAddressView> {
+        self.saved_addresses.iter().map(Into::into).collect()
+    }
+
+    /// The current checkout settlement choice; `None` until one is set.
+    pub fn get_settlement(&self) -> Option<Settlement> {
+        self.settlement.clone()
     }
 
     pub fn get_proposal(&self, id: ProposalId) -> Option<ProposalView> {
@@ -498,6 +513,20 @@ impl MerchantAccount {
                     action: &action,
                 }
                 .emit();
+                if let Action::SetSettlement {
+                    dest_asset,
+                    payout_mode,
+                    saved_address_id,
+                } = &action
+                {
+                    Event::SettlementChanged {
+                        proposal_id: id,
+                        dest_asset,
+                        payout_mode: *payout_mode,
+                        saved_address_id: saved_address_id.as_deref(),
+                    }
+                    .emit();
+                }
                 if action.bumps_epoch() {
                     self.signer_epoch += 1;
                 }
@@ -564,7 +593,45 @@ impl MerchantAccount {
             Action::SetOrigins(origins) => action::validate_origins(origins),
             Action::RotateRecoveryKey(Some(pk)) => self.check_recovery_key(pk),
             Action::RotateRecoveryKey(None) => Ok(()),
-            // Not proposable until Tasks 3-5 implement them.
+            Action::AddSavedAddress { id, chain, .. } => {
+                if !saved::SUPPORTED_CHAINS.contains(&chain.as_str()) {
+                    return Err("unsupported chain");
+                }
+                if self.saved_addresses.iter().any(|a| &a.id == id) {
+                    return Err("duplicate saved address id");
+                }
+                if self.saved_addresses.len() >= saved::MAX_SAVED_ADDRESSES {
+                    return Err("too many saved addresses");
+                }
+                Ok(())
+            }
+            Action::RemoveSavedAddress { id } => {
+                if !self.saved_addresses.iter().any(|a| &a.id == id) {
+                    return Err("unknown saved address");
+                }
+                let in_use = self
+                    .settlement
+                    .as_ref()
+                    .and_then(|s| s.saved_address_id.as_ref());
+                if in_use == Some(id) {
+                    return Err("saved address is the current settlement destination");
+                }
+                Ok(())
+            }
+            Action::SetSettlement {
+                payout_mode,
+                saved_address_id,
+                ..
+            } => match (payout_mode, saved_address_id) {
+                (PayoutMode::Intents, None) => Ok(()),
+                (PayoutMode::Intents, Some(_)) => Err("intents settlement takes no saved address"),
+                (PayoutMode::Wallet, None) => Err("wallet settlement needs a saved address"),
+                (PayoutMode::Wallet, Some(id)) => self
+                    .saved_address_usable(id, env::block_timestamp())
+                    .map(|_| ())
+                    .ok_or("saved address is unknown or not yet active"),
+            },
+            // Not proposable until Tasks 4-5 implement them.
             _ => Err("not yet supported"),
         }
     }
@@ -584,9 +651,36 @@ impl MerchantAccount {
             Action::SetThreshold(t) => self.threshold = *t,
             Action::SetOrigins(origins) => self.origins = origins.clone(),
             Action::RotateRecoveryKey(pk) => self.recovery_key = *pk,
+            Action::AddSavedAddress { id, chain, address } => {
+                self.saved_addresses.push(SavedAddress {
+                    id: id.clone(),
+                    chain: chain.clone(),
+                    address: address.clone(),
+                    active_from: env::block_timestamp() + saved::SAVED_ADDRESS_DELAY,
+                });
+            }
+            Action::RemoveSavedAddress { id } => self.saved_addresses.retain(|a| &a.id != id),
+            Action::SetSettlement {
+                dest_asset,
+                payout_mode,
+                saved_address_id,
+            } => {
+                self.settlement = Some(Settlement {
+                    dest_asset: dest_asset.clone(),
+                    payout_mode: *payout_mode,
+                    saved_address_id: saved_address_id.clone(),
+                });
+            }
             _ => return Err("not yet supported"),
         }
         Ok(())
+    }
+
+    /// The saved address `id` if it may receive funds at `now`.
+    pub(crate) fn saved_address_usable(&self, id: &str, now: u64) -> Option<&SavedAddress> {
+        self.saved_addresses
+            .iter()
+            .find(|a| a.id == id && a.active_from <= now)
     }
 
     fn signer_mut(&mut self, id: &str) -> &mut Signer {
