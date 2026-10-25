@@ -7,7 +7,15 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { nearPublicKey } from '../keyvault/keys.js';
 import { LocalKeyVault } from '../keyvault/local.js';
 import { RpcNearClient, type InitConfigJson } from './client.js';
-import { NearRpc, NearRpcError, NotBroadcastError, toTxResult, type RpcTransport } from './rpc.js';
+import {
+  JsonRpcTransport,
+  NearRpc,
+  NearRpcError,
+  NotBroadcastError,
+  OutcomeUnknownError,
+  toTxResult,
+  type RpcTransport,
+} from './rpc.js';
 import { decodeSigned, implicitAccountId } from './tx.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'tendr-near-client-'));
@@ -55,6 +63,13 @@ class ScriptedTransport implements RpcTransport {
     }
     if (method === 'query' && p.request_type === 'view_access_key_list') {
       return { keys: [] } as T;
+    }
+    if (method === 'query' && p.request_type === 'view_account') {
+      return {
+        amount: '400000000000000000000000',
+        locked: '0',
+        storage_usage: 2500,
+      } as T;
     }
     if (method === 'query' && p.request_type === 'call_function') {
       return { result: Array.from(Buffer.from(JSON.stringify({ ok: 1 }))), logs: [] } as T;
@@ -389,17 +404,113 @@ describe('RpcNearClient broadcast classification', () => {
     );
   });
 
-  it('a timeout after broadcast is rethrown as is (outcome unknown)', async () => {
+  it('a timeout after broadcast resends the identical tx once; a second timeout is unknown', async () => {
     const t = new ScriptedTransport();
     const timeout = Object.assign(new Error('Timeout'), { type: 'TimeoutError' });
-    t.sendResults.push(() => {
-      throw timeout;
-    });
+    t.sendResults.push(
+      () => {
+        throw timeout;
+      },
+      () => {
+        throw timeout;
+      },
+    );
     const err = await client(t)
       .provisionAccount(provisionParams)
       .catch((e: unknown) => e);
-    expect(err).toBe(timeout);
+    expect(err).toBeInstanceOf(OutcomeUnknownError);
     expect(err).not.toBeInstanceOf(NotBroadcastError);
+    expect((err as Error).cause).toBe(timeout);
+    expect(t.sent).toHaveLength(2);
+    expect(t.sent[1]!.params.signed_tx_base64).toBe(t.sent[0]!.params.signed_tx_base64);
+  });
+
+  it('InvalidNonce after an unknown outcome is UNKNOWN, never NotBroadcast (I5)', async () => {
+    const t = new ScriptedTransport();
+    t.sendResults.push(
+      () => {
+        throw Object.assign(new Error('fetch failed'), { type: 'FetchError' });
+      },
+      () => {
+        // The first send most likely landed and used the nonce.
+        throw Object.assign(new Error('InvalidNonce'), { type: 'InvalidNonce' });
+      },
+    );
+    const err = await client(t)
+      .call('relayer-accounts', 's.tendr.testnet', 'approve', {})
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OutcomeUnknownError);
+    expect(err).not.toBeInstanceOf(NotBroadcastError);
+    // No new nonce was tried: the same signed bytes went out twice, nothing else.
+    expect(t.sent).toHaveLength(2);
+    expect(t.sent[1]!.params.signed_tx_base64).toBe(t.sent[0]!.params.signed_tx_base64);
+  });
+
+  it('a resend after a timeout that returns the outcome is the answer', async () => {
+    const t = new ScriptedTransport();
+    t.sendResults.push(() => {
+      throw Object.assign(new Error('Timeout'), { type: 'TimeoutError' });
+    });
+    const res = await client(t).call('relayer-accounts', 's.tendr.testnet', 'approve', {});
+    expect(res.status).toBe('success');
+    expect(t.sent).toHaveLength(2);
+    expect(t.sent[1]!.params.signed_tx_base64).toBe(t.sent[0]!.params.signed_tx_base64);
+  });
+});
+
+describe('JsonRpcTransport', () => {
+  it('sends send_tx through a provider that never retries; reads keep retrying', () => {
+    const t = new JsonRpcTransport('http://127.0.0.1:1');
+    expect(t.sendProvider.options.retries).toBe(1);
+    expect(t.readProvider.options.retries).toBeGreaterThan(1);
+  });
+});
+
+describe('RpcNearClient storage top-ups and account views (R35)', () => {
+  it('viewAccount reads balance and storage', async () => {
+    const t = new ScriptedTransport();
+    expect(await client(t).viewAccount('shop.tendr.testnet')).toEqual({
+      amountYocto: 4n * 10n ** 23n,
+      lockedYocto: 0n,
+      storageUsageBytes: 2500n,
+    });
+  });
+
+  it('topUpAccount sends one Transfer from the parent, signed by funding-near', async () => {
+    const t = new ScriptedTransport();
+    const res = await client(t).topUpAccount({
+      merchantId: 'mer_x',
+      livemode: false,
+      accountId: 'shop.tendr.testnet',
+      amountYocto: 5n * 10n ** 23n,
+    });
+    expect(res.status).toBe('success');
+    const tx = signedFrom(t);
+    expect(tx.signerId).toBe('tendr.testnet');
+    expect(tx.receiverId).toBe('shop.tendr.testnet');
+    expect(Buffer.from(tx.publicKey)).toEqual(
+      Buffer.from((await kv.publicKey('funding-near')).raw),
+    );
+    expect(tx.actions.map((a) => a.kind)).toEqual(['transfer']);
+    expect(tx.actions[0]!.fields.deposit).toBe(5n * 10n ** 23n);
+  });
+
+  it('topUpAccount refuses anything but a direct sub-account of the mode parent', async () => {
+    const t = new ScriptedTransport();
+    for (const accountId of ['tendr.testnet', 'a.shop.tendr.testnet', 'shop.tendr.near']) {
+      await expect(
+        client(t).topUpAccount({ merchantId: 'm', livemode: false, accountId, amountYocto: 1n }),
+      ).rejects.toBeInstanceOf(NotBroadcastError);
+    }
+    await expect(
+      client(t).topUpAccount({
+        merchantId: 'm',
+        livemode: true,
+        accountId: 'shop.tendr.testnet',
+        amountYocto: 1n,
+      }),
+    ).rejects.toBeInstanceOf(NotBroadcastError);
+    expect(t.sent).toHaveLength(0);
   });
 });
 

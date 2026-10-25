@@ -202,7 +202,15 @@ const registrationFailed = () =>
  * (every other session of theirs ends), and whether it holds a recent assertion (needed for any
  * passkey after the first).
  */
-export type RegisteringSession = { sessionId: string; steppedUp: boolean };
+export type RegisteringSession = {
+  sessionId: string;
+  steppedUp: boolean;
+  /**
+   * Runs inside the transaction that inserts the credential (e.g. the recovery-session event,
+   * M7), so the credential exists if and only if it does.
+   */
+  onCreated?: (tx: Prisma.TransactionClient, credential: WebauthnCredential) => Promise<void>;
+};
 
 /**
  * Verifies a registration and stores the passkey. The person's first-passkey check and the insert
@@ -261,6 +269,7 @@ export async function verifyRegistration(
           deviceLabel,
         },
       });
+      await session?.onCreated?.(tx, created);
       if (first) {
         await tx.dashboardSession.updateMany({
           where: {

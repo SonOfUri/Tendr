@@ -560,6 +560,9 @@ model MerchantAccount {
   /// Mirror of the contract's `recovery_key_epoch` (`get_config`); recovery payloads sign it.
   recoveryKeyEpoch   BigInt?               @map("recovery_key_epoch")
   reconciledAt       DateTime?             @map("reconciled_at")
+  /// Set while a storage top-up is blocked by the funding daily cap (R35); the dashboard warns
+  /// while it is set. Cleared once the account has enough free balance again.
+  storageLowAt       DateTime?             @map("storage_low_at")
   createdAt          DateTime              @default(now()) @map("created_at")
   updatedAt          DateTime              @updatedAt @map("updated_at")
 
@@ -594,6 +597,9 @@ model AccountProposal {
   /// stops a local draft cancel from racing the relay. Cleared when the relay ends; a claim older
   /// than the lease (2 minutes) is stale and may be taken over.
   relayClaimedAt  DateTime?      @map("relay_claimed_at")
+  /// An expired proposal holds its creator's pending slot on chain until `execute` marks it
+  /// expired there. Set once the executor job settled it (I3).
+  expirySettledAt DateTime?      @map("expiry_settled_at")
   createdAt       DateTime       @default(now()) @map("created_at")
   updatedAt       DateTime       @updatedAt @map("updated_at")
 

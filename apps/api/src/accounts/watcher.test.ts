@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import type { Merchant, MerchantAccount } from '@prisma/client';
+import type { Merchant, MerchantAccount, Prisma } from '@prisma/client';
+import bs58 from 'bs58';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryMailer } from '../test/dashboard.js';
 import {
@@ -23,8 +24,13 @@ import {
   setAccountJobs,
   setDelayedJobs,
   summarizeAction,
+  processAccountJob,
+  EXECUTE_TIMELOCKS_JOB,
 } from '../jobs/account-notices.js';
-import { env } from '../env.js';
+import { env, loadEnv } from '../env.js';
+import { recordEvent } from '../events/record.js';
+import { accountView } from './accounts.js';
+import { STORAGE_LOW_EVENT, STORAGE_LOW_THRESHOLD_YOCTO, YOCTO_PER_BYTE } from './storage.js';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { fakeNearClient, resetNearClients, type SignerKeyJson } from '../near/client.js';
@@ -39,10 +45,24 @@ import {
   executeReadyTimelocks,
   parseAccountEvents,
   reconcileAccount,
+  settleExpiredProposals,
   type RecoveryView,
   type SavedAddressView,
   type SettlementView,
 } from './watcher.js';
+
+/** A prior `funding.spent` of `amount` in live mode (another account), for the daily cap. */
+const recordEventForTest = (tx: Prisma.TransactionClient, merchantId: string, amount: bigint) =>
+  recordEvent(
+    tx,
+    { merchantId, livemode: true },
+    {
+      aggregateType: 'near_account',
+      aggregateId: 'other.tendr.near',
+      type: 'funding.spent',
+      payload: { accountId: 'other.tendr.near', amountYocto: amount.toString() },
+    },
+  );
 
 const HOUR = 3_600_000;
 const ns = (ms: number) => (BigInt(ms) * 1_000_000n).toString();
@@ -637,6 +657,203 @@ describe('chain watcher', () => {
     expect(await eventsOf('account.proposal.executed')).toHaveLength(1);
   });
 
+  // ─── final review fixes ────────────────────────────────────────────────────
+
+  it('expired proposals are settled on chain by the executor job, freeing the slot (I3)', async () => {
+    const action: ActionJson = { set_threshold: 2 };
+    const pending = await proposalRow(action, { status: 'pending' });
+    // The chain's view reports it expired (past its TTL) while it still holds the slot.
+    chain.proposals = [
+      {
+        id: pending.onchainId,
+        action,
+        creator: pending.createdByUserId!,
+        created_at: ns(Date.now() - 8 * 24 * HOUR),
+        expires_at: ns(Date.now() - 24 * HOUR),
+        approvals: [],
+        valid_approvals: 0,
+        ready_at: null,
+        status: 'expired',
+      } as unknown as ContractProposalView,
+    ];
+    await reconcileAccount(merchant.id, true);
+    expect(
+      await prisma.accountProposal.findUniqueOrThrow({ where: { id: pending.id } }),
+    ).toMatchObject({ status: 'expired', expirySettledAt: null });
+
+    fake.scriptLogs(account.nearAccountId, 'execute', (args) => [
+      eventLog('proposal_failed', {
+        proposal_id: (args as { proposal_id: string }).proposal_id,
+        reason: 'expired',
+      }),
+    ]);
+    await processAccountJob(EXECUTE_TIMELOCKS_JOB, {});
+    expect(fake.callsTo('execute').map((c) => (c as { args: object }).args)).toEqual([
+      { proposal_id: pending.onchainId },
+    ]);
+    const settled = await prisma.accountProposal.findUniqueOrThrow({ where: { id: pending.id } });
+    expect(settled.status).toBe('expired');
+    expect(settled.expirySettledAt).not.toBeNull();
+    expect(await eventsOf('account.proposal.failed')).toHaveLength(1);
+    // Settled once: the next run does not call it again.
+    expect(await settleExpiredProposals()).toBe(0);
+    expect(fake.callsTo('execute')).toHaveLength(1);
+  });
+
+  it('an expired proposal the chain already finished is marked settled; other refusals retry', async () => {
+    const done = await proposalRow({ set_threshold: 2 }, { status: 'expired' });
+    fake.failNext('execute', 'Smart contract panicked: proposal is not pending');
+    expect(await settleExpiredProposals()).toBe(1);
+    expect(
+      (await prisma.accountProposal.findUniqueOrThrow({ where: { id: done.id } })).expirySettledAt,
+    ).not.toBeNull();
+
+    const later = await proposalRow({ set_threshold: 1 }, { status: 'expired' });
+    fake.failNext('execute', 'Exceeded the prepaid gas');
+    expect(await settleExpiredProposals()).toBe(0);
+    expect(
+      (await prisma.accountProposal.findUniqueOrThrow({ where: { id: later.id } })).expirySettledAt,
+    ).toBeNull();
+    fake.scriptLogs(account.nearAccountId, 'execute', [
+      eventLog('proposal_failed', { proposal_id: later.onchainId, reason: 'expired' }),
+    ]);
+    expect(await settleExpiredProposals()).toBe(1);
+  });
+
+  describe('storage top-ups (R35)', () => {
+    const NEAR = 10n ** 24n;
+    const provision = () =>
+      fake.provisionAccount({
+        merchantId: merchant.id,
+        livemode: true,
+        accountId: account.nearAccountId,
+        init: {
+          signers: [],
+          threshold: 1,
+          recovery_key: null,
+          rp_id: 'localhost',
+          origins: ['http://localhost:3000'],
+          intents_contract: env().INTENTS_CONTRACT_LIVE,
+          poa_suffix: null,
+          testnet_admin: null,
+        },
+        initialBalanceYocto: NEAR / 2n,
+      });
+    /** Storage that leaves `free` yocto of a 0.5 NEAR balance. */
+    const leaveFree = (free: bigint) =>
+      fake.scriptAccountState(account.nearAccountId, {
+        storageUsageBytes: (NEAR / 2n - free) / YOCTO_PER_BYTE,
+      });
+    const topUps = () => fake.calls.filter((c) => c.kind === 'topup');
+    const storageLowAt = async () =>
+      (await prisma.merchantAccount.findUniqueOrThrow({ where: { id: account.id } })).storageLowAt;
+
+    it('nothing happens while the free balance covers 50 more proposals', async () => {
+      await provision();
+      leaveFree(STORAGE_LOW_THRESHOLD_YOCTO);
+      await reconcileAccount(merchant.id, true);
+      expect(topUps()).toHaveLength(0);
+    });
+
+    it('a low account is topped up once from funding-near (funding.topup, capped)', async () => {
+      await provision();
+      leaveFree(STORAGE_LOW_THRESHOLD_YOCTO - YOCTO_PER_BYTE);
+      await reconcileAccount(merchant.id, true);
+      expect(topUps()).toEqual([
+        {
+          kind: 'topup',
+          accountId: account.nearAccountId,
+          amountYocto: env().MERCHANT_ACCOUNT_STORAGE_TOPUP_YOCTO,
+        },
+      ]);
+      const [ev] = await prisma.event.findMany({ where: { type: 'funding.topup' } });
+      expect(ev).toMatchObject({ merchantId: merchant.id, livemode: true });
+      expect(fake.accounts.get(account.nearAccountId)!.balanceYocto).toBe(
+        NEAR / 2n + env().MERCHANT_ACCOUNT_STORAGE_TOPUP_YOCTO,
+      );
+      // Still low by storage (scripted) but inside the cooldown: no second top-up.
+      fake.scriptAccountState(account.nearAccountId, { storageUsageBytes: 10n ** 6n });
+      await reconcileAccount(merchant.id, true);
+      expect(topUps()).toHaveLength(1);
+      expect(await storageLowAt()).toBeNull();
+    });
+
+    it('a top-up blocked by the daily cap flags the account and the dashboard; recovery clears it', async () => {
+      await provision();
+      // The mode's whole daily cap is already spent.
+      await prisma.$transaction((tx) =>
+        recordEventForTest(tx, merchant.id, env().FUNDING_DAILY_CAP_YOCTO),
+      );
+      leaveFree(0n);
+      await reconcileAccount(merchant.id, true);
+      expect(topUps()).toHaveLength(0);
+      expect(await storageLowAt()).not.toBeNull();
+      const [low] = await eventsOf(STORAGE_LOW_EVENT);
+      expect(low).toMatchObject({ aggregateId: account.id });
+      const view = await accountView(ctx());
+      expect(view.account?.storageLowAt).not.toBeNull();
+      // Recorded once while it stays blocked.
+      await reconcileAccount(merchant.id, true);
+      expect(await eventsOf(STORAGE_LOW_EVENT)).toHaveLength(1);
+
+      // Funded out of band: the flag clears.
+      leaveFree(NEAR / 2n);
+      await reconcileAccount(merchant.id, true);
+      expect(await storageLowAt()).toBeNull();
+    });
+  });
+
+  it('upgrade notices name the code hash in base58 and whether it is the Tendr release (I4)', async () => {
+    const hash = Buffer.alloc(32, 9);
+    const acct = { livemode: true, nearAccountId: account.nearAccountId, merchantId: merchant.id };
+    const action: ActionJson = { upgrade: { code_hash: hash.toString('base64') } };
+    try {
+      loadEnv({ ...process.env, MERCHANT_ACCOUNT_CODE_HASH_LIVE: bs58.encode(hash) });
+      const ok = await summarizeAction(action, acct);
+      expect(ok.fields).toMatchObject({
+        codeHash: bs58.encode(hash),
+        codeHashIsTendrRelease: 'yes',
+      });
+      expect(ok.summary).toContain('matches the Tendr release');
+      // The test mode's release is a different setting.
+      const test = await summarizeAction(action, { ...acct, livemode: false });
+      expect(test.fields.codeHashIsTendrRelease).toBe('no');
+      expect(test.summary).toContain('NOT a Tendr release');
+    } finally {
+      loadEnv(process.env);
+    }
+  });
+
+  it('notices say widening security changes take effect 24 h after approval (R34)', async () => {
+    const a = await signer();
+    const acct = {
+      livemode: true,
+      nearAccountId: account.nearAccountId,
+      merchantId: merchant.id,
+      threshold: 2,
+    };
+    const delayed: ActionJson[] = [
+      { add_signer: { id: a.userId, keys: [a.key] } },
+      { add_signer_key: { id: a.userId, key: a.key } },
+      { rotate_recovery_key: Buffer.alloc(32, 7).toString('base64') },
+      { rotate_recovery_key: null },
+      { set_origins: ['https://usetendr.tech'] },
+      { set_threshold: 1 },
+    ];
+    for (const action of delayed) {
+      const sum = await summarizeAction(action, acct);
+      expect(sum.summary, sum.kind).toContain('takes effect 24 h after approval');
+    }
+    for (const action of [
+      { set_threshold: 2 },
+      { remove_signer: { id: a.userId } },
+      { remove_signer_key: { id: a.userId, key: a.key } },
+    ] as ActionJson[]) {
+      const sum = await summarizeAction(action, acct);
+      expect(sum.summary, sum.kind).not.toContain('24 h');
+    }
+  });
+
   it('a ready recovery is executed by the job and mirrors the new signers', async () => {
     const a = await signer();
     const b = await signer();
@@ -772,7 +989,10 @@ describe('chain watcher', () => {
         { triggerAbove: '1000', keep: '10', destination: '0xsweep', destinationChain: 'base' },
       ],
       [{ clear_auto_sweep: { asset: 'nep141:usdc.near' } }, { asset: 'nep141:usdc.near' }],
-      [{ upgrade: { code_hash: hash.toString('base64') } }, { codeHash: hash.toString('hex') }],
+      [
+        { upgrade: { code_hash: hash.toString('base64') } },
+        { codeHash: bs58.encode(hash), codeHashIsTendrRelease: 'no' },
+      ],
       [
         {
           set_settlement: {

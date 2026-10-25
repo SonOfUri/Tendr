@@ -70,6 +70,11 @@ const EnvSchema = z
     FUNDING_PER_ACCOUNT_YOCTO: yocto.default('1000000000000000000000000'), // 1 NEAR
     /** yoctoNEAR each new merchant account is seeded with (storage); within the per-account cap. */
     MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO: yocto.default('500000000000000000000000'), // 0.5 NEAR
+    /**
+     * yoctoNEAR one storage top-up sends to a merchant account whose free balance runs low (the
+     * watcher, R35); counts against FUNDING_DAILY_CAP_YOCTO, within the per-account cap.
+     */
+    MERCHANT_ACCOUNT_STORAGE_TOPUP_YOCTO: yocto.default('500000000000000000000000'), // 0.5 NEAR
     // Dashboard auth. Production must set the RP ID and origins explicitly (no localhost defaults).
     WEBAUTHN_RP_ID: optionalString,
     WEBAUTHN_RP_NAME: z.string().min(1).default('Tendr'),
@@ -87,6 +92,16 @@ const EnvSchema = z
         code: z.ZodIssueCode.custom,
         path: ['MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO'],
         message: 'must not exceed FUNDING_PER_ACCOUNT_YOCTO',
+      });
+    }
+    if (
+      e.MERCHANT_ACCOUNT_STORAGE_TOPUP_YOCTO === 0n ||
+      e.MERCHANT_ACCOUNT_STORAGE_TOPUP_YOCTO > e.FUNDING_PER_ACCOUNT_YOCTO
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['MERCHANT_ACCOUNT_STORAGE_TOPUP_YOCTO'],
+        message: 'must be positive and not exceed FUNDING_PER_ACCOUNT_YOCTO',
       });
     }
     if (e.NODE_ENV === 'production' && e.KEYVAULT_DRIVER === 'local') {

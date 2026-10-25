@@ -54,6 +54,40 @@ describe('webauthn', () => {
     expect(key).toEqual({ p256: expected.toString('base64') });
   });
 
+  it('onCreated runs in the credential transaction: if it fails, no credential is stored (M7)', async () => {
+    const user = await createUser();
+    const session = await createDashboardSession(user.id);
+    const options = await registrationOptions(user);
+    await expect(
+      verifyRegistration(user, new SoftAuthenticator().create(options), 'x', {
+        sessionId: session.sessionId,
+        steppedUp: false,
+        onCreated: async () => {
+          throw new Error('event insert failed');
+        },
+      }),
+    ).rejects.toThrow(/event insert failed/);
+    expect(await prisma.webauthnCredential.count()).toBe(0);
+
+    const again = await registrationOptions(user);
+    let seen: string | null = null;
+    const { credential } = await verifyRegistration(
+      user,
+      new SoftAuthenticator().create(again),
+      'x',
+      {
+        sessionId: session.sessionId,
+        steppedUp: false,
+        onCreated: async (tx, created) => {
+          // Inside the transaction the new row is visible.
+          seen =
+            (await tx.webauthnCredential.findUnique({ where: { id: created.id } }))?.id ?? null;
+        },
+      },
+    );
+    expect(seen).toBe(credential.id);
+  });
+
   it('stores an EdDSA passkey as a raw ed25519 signer key', async () => {
     const user = await createUser();
     const auth = new SoftAuthenticator({ alg: 'EdDSA' });

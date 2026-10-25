@@ -6,7 +6,9 @@
 // It is NOT the contract and checks far less: it trusts the relay's approvals (the API verified
 // the passkey assertion locally), never verifies a recovery signature (the API did), and moves no
 // funds (withdrawals and refunds execute at once). The rules it does keep are the ones the
-// dashboard shows: the threshold, timelocks (swap withdrawals, limit and refund-cap raises),
+// dashboard shows: the threshold, timelocks (swap withdrawals, limit and refund-cap raises, and
+// security changes that widen access: adding a signer or key, replacing or clearing the recovery
+// key, lowering the threshold, changing origins), expiry settled by `execute`,
 // saved addresses becoming usable 24 h after they are added, the 72 h recovery delay, nonces and
 // epochs. API unit tests do not use it: they script the fake directly.
 import { proposalId, recoveryId, type ActionJson } from '../accounts/encoding.js';
@@ -36,7 +38,7 @@ interface Proposal {
   approvals: Approval[];
   readyAt: bigint | null;
   timelockEpoch: bigint | null;
-  status: 'pending' | 'executed' | 'failed' | 'cancelled';
+  status: 'pending' | 'executed' | 'failed' | 'cancelled' | 'expired';
 }
 
 interface AssetState {
@@ -133,6 +135,12 @@ export class FakeMerchantContracts {
       case 'approve':
         return this.approve(accountId, s, args, now);
       case 'execute': {
+        const pending = s.proposals.get(String(args.proposal_id));
+        if (pending?.status === 'pending' && now > pending.createdAt + SIM_PROPOSAL_TTL_NS) {
+          // Like the contract: `execute` past the TTL marks it expired (and frees the slot).
+          pending.status = 'expired';
+          return [log('proposal_failed', { proposal_id: pending.id, reason: 'expired' })];
+        }
         const p = this.open(s, String(args.proposal_id), now);
         if (p.readyAt === null || p.timelockEpoch !== s.epoch) panic('proposal is not approved');
         if (now < p.readyAt!) panic('proposal is timelocked');
@@ -367,6 +375,14 @@ export class FakeMerchantContracts {
     const raises = (old: bigint | null, next: bigint | null) =>
       old === null ? false : next === null ? true : next > old;
     switch (kindOf(action)) {
+      case 'add_signer':
+      case 'add_signer_key':
+      case 'rotate_recovery_key':
+      case 'set_origins':
+      case 'upgrade':
+        return true;
+      case 'set_threshold':
+        return valueOf<number>(action) < s.threshold;
       case 'withdraw':
         return 'swap' in valueOf<{ route: object }>(action).route;
       case 'refund': {

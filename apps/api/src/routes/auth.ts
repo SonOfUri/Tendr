@@ -25,7 +25,7 @@ import {
   verifyRegistration,
 } from '../auth/webauthn.js';
 import { requirePerson, requirePrincipal, requireStepUp } from '../gateway/principal.js';
-import { recordRecoveryPasskey, recoveryRegisterToken } from '../accounts/recovery.js';
+import { recordRecoveryPasskeyTx, recoveryRegisterToken } from '../accounts/recovery.js';
 import { forbidden, notFound, unauthorized } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { storesFor } from '../merchants/team.js';
@@ -166,10 +166,19 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         { id: userId },
         body.response as unknown as RegistrationResponseJSON,
         body.deviceLabel ?? null,
-        // A recovery session never counts as stepped up: only a FIRST passkey can be added.
-        { sessionId: sessionOf(req), steppedUp: !recoveryStore && isSteppedUp(passkeyVerifiedAt) },
+        {
+          sessionId: sessionOf(req),
+          // A recovery session never counts as stepped up: only a FIRST passkey can be added.
+          steppedUp: !recoveryStore && isSteppedUp(passkeyVerifiedAt),
+          // Its notice is written in the same transaction as the credential (M7).
+          ...(recoveryStore
+            ? {
+                onCreated: (tx, created) =>
+                  recordRecoveryPasskeyTx(tx, recoveryStore, userId, created.id),
+              }
+            : {}),
+        },
       );
-      if (recoveryStore) await recordRecoveryPasskey(recoveryStore, userId, credential.id);
       // Registering the first passkey is itself a fresh passkey assertion (user-verified); it also
       // ended the person's other sessions.
       if (first) await markPasskeyVerified(sessionOf(req));

@@ -4,14 +4,21 @@
 import { randomBytes } from 'node:crypto';
 import bs58 from 'bs58';
 import type {
+  AccountState,
   CallOptions,
   InitConfigJson,
   NearClient,
   ProvisionParams,
+  TopUpParams,
   TxResult,
 } from './client.js';
 import { FakeMerchantContracts, SimulatedPanic } from './fake-contract.js';
-import { assertProvisionable, assertTestnetAdminCall, type ProvisionScope } from './provision.js';
+import {
+  assertProvisionable,
+  assertTestnetAdminCall,
+  assertTopUpAllowed,
+  type ProvisionScope,
+} from './provision.js';
 import { DEFAULT_CALL_GAS } from './tx.js';
 
 export type FakeCall =
@@ -26,12 +33,15 @@ export type FakeCall =
       deposit: bigint;
     }
   | { kind: 'view'; contractId: string; method: string; args: object }
-  | { kind: 'provision'; accountId: string; init: InitConfigJson; initialBalanceYocto: bigint };
+  | { kind: 'provision'; accountId: string; init: InitConfigJson; initialBalanceYocto: bigint }
+  | { kind: 'topup'; accountId: string; amountYocto: bigint };
 
 type Kind = FakeCall['kind'];
 type Scripted<T> = T | ((args: object) => T);
 
 const fakeHash = (): string => bs58.encode(randomBytes(32));
+/** Storage a freshly provisioned fake account reports (bytes), about what a real one uses. */
+export const FAKE_ACCOUNT_STORAGE_BYTES = 2_000n;
 const key = (contractId: string, method: string): string => `${contractId}#${method}`;
 
 export class FakeNearClient implements NearClient {
@@ -51,7 +61,14 @@ export class FakeNearClient implements NearClient {
     { failure: string; failedLogs: string[] }[]
   >();
   private readonly provisionFailures: string[] = [];
-  private readonly throws: Record<Kind, unknown[]> = { call: [], view: [], provision: [] };
+  private readonly throws: Record<Kind, unknown[]> = {
+    call: [],
+    view: [],
+    provision: [],
+    topup: [],
+  };
+  /** Storage use (bytes) per account, as `viewAccount` reports it. */
+  private readonly storage = new Map<string, bigint>();
 
   /**
    * With `simulateContracts`, provisioned accounts run an in-memory merchant-account contract
@@ -109,6 +126,19 @@ export class FakeNearClient implements NearClient {
   /** The next operation of `kind` is recorded, then throws `err` (e.g. a NotBroadcastError). */
   throwNext(kind: Kind, err: unknown): void {
     this.throws[kind].push(err);
+  }
+
+  /** Sets an account's balance and/or storage use as `viewAccount` reports them. */
+  scriptAccountState(
+    accountId: string,
+    s: { balanceYocto?: bigint; storageUsageBytes?: bigint },
+  ): void {
+    const a = this.accounts.get(accountId);
+    if (s.balanceYocto !== undefined) {
+      if (!a) throw new Error(`FakeNearClient: account ${accountId} does not exist`);
+      a.balanceYocto = s.balanceYocto;
+    }
+    if (s.storageUsageBytes !== undefined) this.storage.set(accountId, s.storageUsageBytes);
   }
 
   callsTo(method: string): FakeCall[] {
@@ -273,6 +303,41 @@ export class FakeNearClient implements NearClient {
       epoch: 0n,
     });
     this.contracts?.init(p.accountId, p.init);
+    return {
+      txHash: fakeHash(),
+      logs: [],
+      successLogs: [],
+      status: 'success',
+      topLevelStatus: 'success',
+    };
+  }
+
+  async viewAccount(accountId: string): Promise<AccountState> {
+    const a = this.accounts.get(accountId);
+    if (!a) throw new Error(`FakeNearClient: account ${accountId} does not exist`);
+    return {
+      amountYocto: a.balanceYocto,
+      lockedYocto: 0n,
+      storageUsageBytes: this.storage.get(accountId) ?? FAKE_ACCOUNT_STORAGE_BYTES,
+    };
+  }
+
+  async topUpAccount(p: TopUpParams): Promise<TxResult> {
+    assertTopUpAllowed(p, this.scope);
+    this.calls.push({ kind: 'topup', accountId: p.accountId, amountYocto: p.amountYocto });
+    this.maybeThrow('topup');
+    const a = this.accounts.get(p.accountId);
+    if (!a) {
+      return {
+        txHash: fakeHash(),
+        logs: [],
+        successLogs: [],
+        status: 'failure',
+        topLevelStatus: 'failure',
+        failure: `account ${p.accountId} does not exist`,
+      };
+    }
+    a.balanceYocto += p.amountYocto;
     return {
       txHash: fakeHash(),
       logs: [],

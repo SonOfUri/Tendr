@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { proposalId, recoveryId, type ActionJson } from '../accounts/encoding.js';
 import { parseAccountEvents } from '../accounts/events.js';
 import type { InitConfigJson } from './client.js';
@@ -98,7 +98,8 @@ describe('FakeNearClient with simulated merchant-account contracts', () => {
 
   it('threshold 2: pending after one approval; a second executes; double approval panics', async () => {
     const f = await provisioned(2);
-    const { id, events } = await propose(f, { set_threshold: 1 });
+    // An unchanged (or raised) threshold is not timelocked; lowering it is (below).
+    const { id, events } = await propose(f, { set_threshold: 2 });
     expect(events.map((e) => e.event)).toEqual(['proposal_created', 'proposal_approved']);
     const again = await f.call('relayer-accounts', ACCOUNT, 'approve', {
       proposal_id: id,
@@ -115,8 +116,60 @@ describe('FakeNearClient with simulated merchant-account contracts', () => {
       'signers_changed',
     ]);
     expect(await f.view(ACCOUNT, 'get_config', {})).toMatchObject({
-      threshold: 1,
+      threshold: 2,
       signer_epoch: '1',
+    });
+  });
+
+  it('security changes that widen access are timelocked for 24 h (R34); removals are not', async () => {
+    const widening: ActionJson[] = [
+      { add_signer: { id: 'per_01CCCCCCCCCCCCCCCCCCCCCCCC', keys: [key(3)] } },
+      { add_signer_key: { id: SIGNER, key: key(4) } },
+      { rotate_recovery_key: Buffer.alloc(32, 5).toString('base64') },
+      { rotate_recovery_key: null },
+      { set_origins: ['http://localhost:3000', 'https://other.example'] },
+      { set_threshold: 1 },
+    ];
+    for (const action of widening) {
+      const f = await provisioned(2);
+      const { id } = await propose(f, action);
+      const second = await f.call('relayer-accounts', ACCOUNT, 'approve', {
+        proposal_id: id,
+        approval: approval(OTHER, 2),
+      });
+      expect(
+        parseAccountEvents(second.successLogs).map((e) => e.event),
+        JSON.stringify(action),
+      ).toEqual(['proposal_approved', 'timelock_started']);
+      const early = await f.call('relayer-accounts', ACCOUNT, 'execute', { proposal_id: id });
+      expect(early.failure).toMatch(/timelocked/);
+    }
+    const f = await provisioned(1);
+    const { events } = await propose(f, { remove_signer: { id: OTHER } });
+    expect(events.map((e) => e.event)).toContain('proposal_executed');
+  });
+
+  describe('expiry', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('execute past the TTL marks the proposal expired (I3)', async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.now() });
+      const f = await provisioned(2);
+      const { id } = await propose(f, { set_threshold: 2 });
+      vi.setSystemTime(Date.now() + 8 * 24 * 3_600_000);
+      expect(await f.view(ACCOUNT, 'get_proposal', { id })).toMatchObject({ status: 'expired' });
+      const res = await f.call('relayer-accounts', ACCOUNT, 'execute', { proposal_id: id });
+      expect(res.topLevelStatus).toBe('success');
+      expect(parseAccountEvents(res.successLogs)).toEqual([
+        expect.objectContaining({
+          event: 'proposal_failed',
+          data: { proposal_id: id, reason: 'expired' },
+        }),
+      ]);
+      const again = await f.call('relayer-accounts', ACCOUNT, 'execute', { proposal_id: id });
+      expect(again.failure).toMatch(/proposal is expired/);
     });
   });
 

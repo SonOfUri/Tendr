@@ -1,6 +1,7 @@
 // The API's NEAR client. Two keys, never mixed:
 //   - `relayer-accounts` signs `call()` (gas only) from its implicit account;
-//   - `funding-near` signs `provisionAccount()` from the mode's parent account.
+//   - `funding-near` signs `provisionAccount()` and `topUpAccount()` (storage NEAR for a merchant
+//     account) from the mode's parent account.
 // `nearClient(livemode)` picks the mode's RPC / parent / intents / code hash and wraps the driver
 // (RPC, or the in-memory fake in dev/test) in the funding caps.
 import { env, type Env } from '../env.js';
@@ -13,14 +14,17 @@ import {
   CappedNearClient,
   assertProvisionable,
   assertTestnetAdminCall,
+  assertTopUpAllowed,
   type ProvisionScope,
 } from './provision.js';
 import {
   JsonRpcTransport,
   NearRpc,
   NotBroadcastError,
+  OutcomeUnknownError,
   isInvalidNonce,
   isInvalidTransaction,
+  type AccountState,
 } from './rpc.js';
 import {
   DEFAULT_CALL_GAS,
@@ -30,6 +34,7 @@ import {
   implicitAccountId,
   provisionActions,
   signTransaction,
+  transferAction,
   type NearSigningKey,
   type SignedTx,
 } from './tx.js';
@@ -88,6 +93,17 @@ export interface ProvisionParams {
   initialBalanceYocto: bigint;
 }
 
+/** Storage NEAR `funding-near` sends to an existing merchant account (R35). */
+export interface TopUpParams {
+  /** The merchant the account belongs to; the `funding.topup` event is recorded against it. */
+  merchantId: string;
+  livemode: boolean;
+  accountId: string;
+  amountYocto: bigint;
+}
+
+export type { AccountState };
+
 export interface CallOptions {
   gas?: bigint;
   deposit?: bigint;
@@ -103,6 +119,13 @@ export interface NearClient {
   ): Promise<TxResult>;
   view<T>(contractId: string, method: string, args: object): Promise<T>;
   provisionAccount(p: ProvisionParams): Promise<TxResult>;
+  /**
+   * Sends `amountYocto` from the mode's parent account (`funding-near`) to an existing merchant
+   * account, for its contract storage. Same request guards and funding caps as provisioning.
+   */
+  topUpAccount(p: TopUpParams): Promise<TxResult>;
+  /** Balance and storage use of an account (`view_account`). */
+  viewAccount(accountId: string): Promise<AccountState>;
   /** Public keys (`ed25519:…`) of the account's access keys. */
   accessKeys(accountId: string): Promise<string[]>;
   /**
@@ -179,6 +202,23 @@ export class RpcNearClient implements NearClient {
     return this.rpc.accessKeyList(accountId);
   }
 
+  viewAccount(accountId: string): Promise<AccountState> {
+    return this.rpc.viewAccount(accountId);
+  }
+
+  async topUpAccount(p: TopUpParams): Promise<TxResult> {
+    let pk: Uint8Array;
+    try {
+      assertTopUpAllowed(p, this.config);
+      pk = await this.ed25519PublicKey('funding-near');
+    } catch (err) {
+      throw new NotBroadcastError(err);
+    }
+    return this.signAndSend('funding-near', this.config.parentAccountId, pk, p.accountId, [
+      transferAction(p.amountYocto),
+    ]);
+  }
+
   /**
    * Everything provisioning needs before any funding is reserved: a valid request, the mode's code
    * hash, and a reachable ed25519 `funding-near` key in the vault.
@@ -230,8 +270,13 @@ export class RpcNearClient implements NearClient {
    *
    * Throws NotBroadcastError when nothing reached the chain: a failure before `send_tx` (vault,
    * nonce or block lookup, signing) or the node rejecting the transaction itself
-   * (InvalidTxError). Any other send error (timeout, network) is rethrown as is: the outcome is
-   * unknown.
+   * (InvalidTxError).
+   *
+   * Any other send error (timeout, network) leaves the outcome unknown. The identical signed
+   * transaction is then sent once more (same hash: it can execute at most once). If that resend
+   * returns an outcome, it is the answer; if it fails in any way, including InvalidNonce (which
+   * then most likely means the first send used the nonce), the error is OutcomeUnknownError, never
+   * NotBroadcastError, so callers keep funding reservations and relay claims.
    *
    * Nonces: next = max(node nonce, last nonce this process handed out) + 1 and the counter is
    * never reset, so a retry never reuses a nonce already given to a concurrent in-flight call.
@@ -270,7 +315,11 @@ export class RpcNearClient implements NearClient {
       } catch (err) {
         if (attempt === 0 && isInvalidNonce(err)) continue;
         if (isInvalidTransaction(err)) throw new NotBroadcastError(err);
-        throw err;
+        try {
+          return await this.rpc.sendTx(signed.bytes, signed.hash);
+        } catch (resendErr) {
+          throw new OutcomeUnknownError(err, resendErr);
+        }
       }
     }
   }

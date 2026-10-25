@@ -287,6 +287,75 @@ describe('CappedNearClient reservation release', () => {
   });
 });
 
+describe('CappedNearClient.topUpAccount (R35)', () => {
+  const eventsOf = async (type: string) =>
+    prisma.event.findMany({ where: { type }, orderBy: { createdAt: 'asc' } });
+  const topUp = (merchantId: string, amount: bigint, accountId = 'shop.tendr.testnet') => ({
+    merchantId,
+    livemode: false,
+    accountId,
+    amountYocto: amount,
+  });
+
+  it('records funding.topup, counted against the same daily cap as provisioning', async () => {
+    const m = await createMerchant();
+    const { inner, capped } = setup({ perAccountYocto: NEAR, dailyYocto: 2n * NEAR });
+    await capped.provisionAccount(params(m.id, 'shop', NEAR));
+    const res = await capped.topUpAccount(topUp(m.id, NEAR / 2n));
+    expect(res.status).toBe('success');
+    expect(inner.accounts.get('shop.tendr.testnet')!.balanceYocto).toBe(NEAR + NEAR / 2n);
+    const [ev] = await eventsOf('funding.topup');
+    expect(ev).toMatchObject({
+      merchantId: m.id,
+      livemode: false,
+      aggregateId: 'shop.tendr.testnet',
+      payload: { accountId: 'shop.tendr.testnet', amountYocto: (NEAR / 2n).toString() },
+    });
+    expect(await fundingSpentLast24h(prisma, false)).toBe(NEAR + NEAR / 2n);
+    // 1.5 + 0.6 > 2: blocked by the daily cap; nothing is sent.
+    await expect(capped.topUpAccount(topUp(m.id, (NEAR * 6n) / 10n))).rejects.toMatchObject({
+      details: { cap: 'daily' },
+    });
+    expect(inner.calls.filter((c) => c.kind === 'topup')).toHaveLength(1);
+  });
+
+  it('refuses above the per-account cap and anything but a merchant sub-account', async () => {
+    const m = await createMerchant();
+    const { inner, capped } = setup({ perAccountYocto: NEAR, dailyYocto: 5n * NEAR });
+    await expect(capped.topUpAccount(topUp(m.id, 2n * NEAR))).rejects.toMatchObject({
+      details: { cap: 'per_account' },
+    });
+    await expect(capped.topUpAccount(topUp(m.id, 1n, 'tendr.testnet'))).rejects.toThrow(
+      /sub-account/,
+    );
+    await expect(capped.topUpAccount(topUp(m.id, 1n, 'relayer.other.testnet'))).rejects.toThrow(
+      /sub-account/,
+    );
+    expect(inner.calls).toHaveLength(0);
+    expect(await prisma.event.count()).toBe(0);
+  });
+
+  it('a pre-broadcast failure releases the top-up reservation; an unknown outcome keeps it', async () => {
+    const m = await createMerchant();
+    const { inner, capped } = setup({ perAccountYocto: NEAR, dailyYocto: 3n * NEAR });
+    await capped.provisionAccount(params(m.id, 'shop', NEAR));
+    inner.throwNext('topup', new NotBroadcastError(new Error('RPC down')));
+    await expect(capped.topUpAccount(topUp(m.id, NEAR))).rejects.toBeInstanceOf(NotBroadcastError);
+    const [reservation] = await eventsOf('funding.topup');
+    const [released] = await eventsOf('funding.released');
+    expect(released!.payload).toMatchObject({
+      reservationId: reservation!.id,
+      amountYocto: NEAR.toString(),
+      reason: 'not_broadcast',
+    });
+    expect(await fundingSpentLast24h(prisma, false)).toBe(NEAR);
+
+    inner.throwNext('topup', Object.assign(new Error('Timeout'), { type: 'TimeoutError' }));
+    await expect(capped.topUpAccount(topUp(m.id, NEAR))).rejects.toThrow(/Timeout/);
+    expect(await fundingSpentLast24h(prisma, false)).toBe(2n * NEAR);
+  });
+});
+
 describe('CappedNearClient.callAsTestnetAdmin', () => {
   it('is refused for livemode=true before reaching the inner client', async () => {
     const liveScope = {

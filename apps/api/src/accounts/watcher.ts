@@ -32,6 +32,7 @@ import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { nearClient, type SignerKeyJson } from '../near/client.js';
 import type { ConfigView } from './accounts.js';
+import { ensureStorageFunds } from './storage.js';
 import { ActionSchema, kindOf, type ActionJson } from './encoding.js';
 import { nsToDate, parseAccountEvents, u64Of, type AccountEvent } from './events.js';
 import {
@@ -1258,6 +1259,13 @@ export async function reconcileAccount(merchantId: string, livemode: boolean): P
   }
   for (const asset of assets) await refreshLimits(account, asset);
 
+  // Storage (R35): top the account up before its free balance runs out.
+  try {
+    await ensureStorageFunds(account);
+  } catch (err) {
+    log('warn', 'storage check failed', { accountId: account.id, err: String(err) });
+  }
+
   if (failures.length > 0) {
     log('warn', 'some proposals failed to reconcile', {
       accountId: account.id,
@@ -1355,6 +1363,56 @@ export async function executeReadyTimelocks(now = new Date()): Promise<number> {
     }
   }
   return executed;
+}
+
+/**
+ * Settles expired proposals on chain (I3). The contract's view reports a proposal past its TTL
+ * as `expired` at once, but it stays pending in storage, and keeps counting toward its creator's
+ * pending cap, until someone calls `execute` on it. This calls the permissionless `execute` (the
+ * relayer pays gas) for every mirrored `expired` proposal not yet settled, which marks it expired
+ * on chain and frees the slot. A refusal saying the proposal is no longer pending (or not on
+ * chain at all) means it was already settled.
+ */
+export async function settleExpiredProposals(): Promise<number> {
+  const due = await prisma.accountProposal.findMany({
+    where: { status: 'expired', expirySettledAt: null, account: { status: 'active' } },
+    include: { account: true },
+    orderBy: { updatedAt: 'asc' },
+    take: EXECUTE_BATCH,
+  });
+  let settled = 0;
+  for (const p of due) {
+    const ctx = ctxOf(p);
+    try {
+      const result = await relay(p.livemode, p.account.nearAccountId, 'execute', {
+        proposal_id: p.onchainId,
+      });
+      const done =
+        landed(result) || /not pending|unknown proposal/i.test(String(result.failure ?? ''));
+      if (!done) {
+        log('info', 'expired proposal not settled yet', {
+          proposalId: p.id,
+          failure: result.failure,
+        });
+        continue;
+      }
+      if (landed(result)) {
+        await applyAccountEvents(ctx, p.accountId, parseAccountEvents(result.successLogs), {
+          txHash: result.txHash,
+        });
+      }
+      await tenantTransaction(ctx, (tx, c) =>
+        tx.accountProposal.updateMany({
+          where: { id: p.id, merchantId: c.merchantId, livemode: c.livemode },
+          data: { expirySettledAt: new Date() },
+        }),
+      );
+      settled += 1;
+    } catch (err) {
+      log('warn', 'settling an expired proposal failed', { proposalId: p.id, err: String(err) });
+    }
+  }
+  return settled;
 }
 
 /** Calls `execute_recovery` on every pending recovery past `executes_at` and applies it. */

@@ -8,16 +8,35 @@ export interface RpcTransport {
   request<T>(method: string, params: object): Promise<T>;
 }
 
+/**
+ * @near-js's provider retries a request (up to 10 attempts) on HTTP 408/500/503 and fetch errors.
+ * That is fine for reads, but `send_tx` must be sent exactly once per call: the node answers 408
+ * when `wait_until` times out on a transaction it already accepted, and a silent resend then comes
+ * back as InvalidNonce (the first one used the nonce), which would read as "never sent". So
+ * `send_tx` goes through a provider with a single attempt; `RpcNearClient` decides any resend.
+ */
+export const SEND_TX_PROVIDER_OPTIONS = { retries: 1 } as const;
+
 export class JsonRpcTransport implements RpcTransport {
-  private readonly provider: JsonRpcProvider;
+  readonly readProvider: JsonRpcProvider;
+  readonly sendProvider: JsonRpcProvider;
 
   constructor(url: string) {
-    this.provider = new JsonRpcProvider({ url });
+    this.readProvider = new JsonRpcProvider({ url });
+    this.sendProvider = new JsonRpcProvider({ url }, SEND_TX_PROVIDER_OPTIONS);
   }
 
   request<T>(method: string, params: object): Promise<T> {
-    return this.provider.sendJsonRpc<T>(method, params);
+    const provider = method === 'send_tx' ? this.sendProvider : this.readProvider;
+    return provider.sendJsonRpc<T>(method, params);
   }
+}
+
+/** A NEAR account's balance and storage (`view_account`). */
+export interface AccountState {
+  amountYocto: bigint;
+  lockedYocto: bigint;
+  storageUsageBytes: bigint;
 }
 
 type ExecutionStatus = { SuccessValue?: string; SuccessReceiptId?: string; Failure?: unknown };
@@ -54,6 +73,22 @@ export class NotBroadcastError extends Error {
   constructor(cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = 'NotBroadcastError';
+  }
+}
+
+/**
+ * The transaction may or may not have executed: `send_tx` timed out or the network failed after
+ * the transaction left this process, and a resend of the identical transaction did not settle it.
+ * Callers must treat it as possibly spent (keep funding reservations and relay claims) and learn
+ * the outcome from the chain. `cause` is the first error, `resendError` the resend's.
+ */
+export class OutcomeUnknownError extends Error {
+  constructor(
+    cause: unknown,
+    readonly resendError: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'OutcomeUnknownError';
   }
 }
 
@@ -167,6 +202,20 @@ export class NearRpc {
       args_base64: Buffer.from(JSON.stringify(args)).toString('base64'),
     });
     return JSON.parse(Buffer.from(r.result).toString('utf8')) as T;
+  }
+
+  /** `view_account`: liquid and locked balance (yoctoNEAR) and storage used (bytes). */
+  async viewAccount(accountId: string): Promise<AccountState> {
+    const r = await this.query<{ amount: string; locked: string; storage_usage: number }>({
+      request_type: 'view_account',
+      finality: 'final',
+      account_id: accountId,
+    });
+    return {
+      amountYocto: BigInt(r.amount),
+      lockedYocto: BigInt(r.locked),
+      storageUsageBytes: BigInt(r.storage_usage),
+    };
   }
 
   /** Public keys (`ed25519:…`) of every access key on `accountId`. */

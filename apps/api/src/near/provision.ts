@@ -4,7 +4,7 @@ import type { PrismaClient, Prisma } from '@prisma/client';
 import { recordEvent } from '../events/record.js';
 import { AppError } from '../lib/errors.js';
 import { prisma as defaultPrisma } from '../lib/prisma.js';
-import type { NearClient, ProvisionParams, TxResult } from './client.js';
+import type { NearClient, ProvisionParams, TopUpParams, TxResult } from './client.js';
 import { NotBroadcastError } from './rpc.js';
 
 /** The per-mode facts a provisioning request is checked against. */
@@ -53,6 +53,26 @@ export function assertProvisionable(p: ProvisionParams, scope: ProvisionScope): 
 }
 
 /**
+ * Rejects a storage top-up the funding key must never sign: wrong mode, a receiver that is not a
+ * direct sub-account of this mode's parent (a merchant account), or a non-positive amount.
+ */
+export function assertTopUpAllowed(p: TopUpParams, scope: ProvisionScope): void {
+  if (p.livemode !== scope.livemode) {
+    throw new ProvisionRequestError(
+      `top-up livemode=${p.livemode} on a livemode=${scope.livemode} client`,
+    );
+  }
+  const suffix = `.${scope.parentAccountId}`;
+  const label = p.accountId.endsWith(suffix) ? p.accountId.slice(0, -suffix.length) : '';
+  if (!LABEL.test(label) || p.accountId.length > 64) {
+    throw new ProvisionRequestError(
+      `account ${p.accountId} is not a direct sub-account of ${scope.parentAccountId}`,
+    );
+  }
+  if (p.amountYocto <= 0n) throw new ProvisionRequestError('top-up amount must be positive');
+}
+
+/**
  * Guards `callAsTestnetAdmin`: only on a testnet client, and only to a direct sub-account of the
  * test parent (a merchant test account, whose `testnet_admin` is that parent).
  */
@@ -80,16 +100,17 @@ const FUNDING_LOCK = { live: 0x74656e6472_01n, test: 0x74656e6472_00n } as const
 type Db = PrismaClient | Prisma.TransactionClient;
 
 /**
- * Net yoctoNEAR reserved in `livemode` during the last 24 hours: `funding.spent` rows in the
- * window, minus the `funding.released` rows that cancel one of those reservations (matched by
- * `reservationId`, so a release never outlives the reservation it cancels).
+ * Net yoctoNEAR reserved in `livemode` during the last 24 hours: `funding.spent` (provisioning)
+ * and `funding.topup` (storage top-ups) rows in the window, minus the `funding.released` rows
+ * that cancel one of those reservations (matched by `reservationId`, so a release never outlives
+ * the reservation it cancels).
  */
 export async function fundingSpentLast24h(db: Db, livemode: boolean): Promise<bigint> {
   const [row] = await db.$queryRaw<{ total: string }[]>`
     WITH spent AS (
       SELECT id, (payload->>'amountYocto')::numeric AS amount
       FROM events
-      WHERE type = 'funding.spent'
+      WHERE type IN ('funding.spent', 'funding.topup')
         AND livemode = ${livemode}
         AND created_at > now() - interval '24 hours'
     )
@@ -140,6 +161,7 @@ export class CappedNearClient implements NearClient {
 
   call: NearClient['call'] = (...args) => this.inner.call(...args);
   view: NearClient['view'] = (...args) => this.inner.view(...args);
+  viewAccount: NearClient['viewAccount'] = (...args) => this.inner.viewAccount(...args);
   accessKeys: NearClient['accessKeys'] = (...args) => this.inner.accessKeys(...args);
 
   async callAsTestnetAdmin(
@@ -161,7 +183,33 @@ export class CappedNearClient implements NearClient {
       );
     }
     await this.inner.preflightProvision?.(p);
+    const spend = { ...p, amountYocto: amount };
+    return this.spendWithinCap(spend, 'funding.spent', () => this.inner.provisionAccount(p));
+  }
 
+  /**
+   * A storage top-up of an existing merchant account (R35): the same guards as provisioning (a
+   * direct sub-account of the parent, at most the per-account cap) and the same daily cap,
+   * reserved as a `funding.topup` event.
+   */
+  async topUpAccount(p: TopUpParams): Promise<TxResult> {
+    assertTopUpAllowed(p, this.scope);
+    if (p.amountYocto > this.caps.perAccountYocto) {
+      throw new FundingCapError(
+        'per_account',
+        `top-up ${p.amountYocto} yocto exceeds the per-account cap ${this.caps.perAccountYocto}`,
+      );
+    }
+    return this.spendWithinCap(p, 'funding.topup', () => this.inner.topUpAccount(p));
+  }
+
+  /** Reserves `amountYocto` against the daily cap, runs `send`, releases it if nothing was spent. */
+  private async spendWithinCap(
+    p: TopUpParams,
+    type: 'funding.spent' | 'funding.topup',
+    send: () => Promise<TxResult>,
+  ): Promise<TxResult> {
+    const amount = p.amountYocto;
     const reservationId = await this.db.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${
         p.livemode ? FUNDING_LOCK.live : FUNDING_LOCK.test
@@ -179,7 +227,7 @@ export class CappedNearClient implements NearClient {
         {
           aggregateType: 'near_account',
           aggregateId: p.accountId,
-          type: 'funding.spent',
+          type,
           payload: { accountId: p.accountId, amountYocto: amount.toString() },
         },
       );
@@ -187,7 +235,7 @@ export class CappedNearClient implements NearClient {
 
     let result: TxResult;
     try {
-      result = await this.inner.provisionAccount(p);
+      result = await send();
     } catch (err) {
       if (err instanceof NotBroadcastError) {
         await this.release(p, reservationId, 'not_broadcast');
@@ -201,7 +249,7 @@ export class CappedNearClient implements NearClient {
   }
 
   private async release(
-    p: ProvisionParams,
+    p: TopUpParams,
     reservationId: string,
     reason: 'not_broadcast' | 'failed_on_chain',
     txHash?: string,
@@ -216,7 +264,7 @@ export class CappedNearClient implements NearClient {
           type: 'funding.released',
           payload: {
             accountId: p.accountId,
-            amountYocto: p.initialBalanceYocto.toString(),
+            amountYocto: p.amountYocto.toString(),
             reservationId,
             reason,
             ...(txHash ? { txHash } : {}),

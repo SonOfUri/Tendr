@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import { createCredential, createMerchant, createUser, resetDb } from '../test/helpers.js';
-import { createStore, slugBase } from './signup.js';
+import { RESERVED_SLUGS, createStore, slugBase } from './signup.js';
 
 /** A NEAR sub-account label: lower-case alphanumerics separated by single `-`/`_`. */
 const NEAR_LABEL = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
@@ -36,6 +36,46 @@ describe('signup', () => {
     expect(cred.revokedAt).not.toBeNull();
     await expect(createStore(user.id, 'Acme')).rejects.toMatchObject({ status: 409 });
     expect(await prisma.merchant.count()).toBe(0);
+  });
+
+  it('reserved slugs (Tendr accounts and names) are never given to a store', async () => {
+    for (const reserved of [
+      'intents-mock',
+      'intents',
+      'relayer',
+      'relayer-accounts',
+      'funding',
+      'funding-near',
+      'tendr',
+      'admin',
+      'api',
+      'www',
+      'app',
+      'dashboard',
+      'pay',
+      'checkout',
+      'mock',
+      'test',
+      'solver',
+      'gas',
+    ]) {
+      expect(RESERVED_SLUGS.has(reserved), reserved).toBe(true);
+      const s = slugBase(reserved);
+      expect(s, reserved).toBe(`${reserved}-store`);
+      expect(s).toMatch(NEAR_LABEL);
+    }
+    expect(slugBase('Intents Mock')).toBe('intents-mock-store');
+    expect(slugBase('TENDR')).toBe('tendr-store');
+    expect(slugBase('Tendr Coffee')).toBe('tendr-coffee');
+
+    const user = await createUser();
+    await createCredential(user.id);
+    const { merchant } = await createStore(user.id, 'Funding NEAR');
+    expect(merchant.slug).toBe('funding-near-store');
+    const account = await prisma.merchantAccount.findFirstOrThrow({
+      where: { merchantId: merchant.id },
+    });
+    expect(account.nearAccountId).toBe('funding-near-store.tendr.testnet');
   });
 
   it('slug_collision_gets_suffix', async () => {

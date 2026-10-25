@@ -439,6 +439,16 @@ describe('recovery API', () => {
         payload: { response: created, recoveryToken: token },
       });
       expect(reg.statusCode, reg.body).toBe(200);
+      // M7: the notice was written with the credential (same transaction), naming it.
+      const registered = await prisma.webauthnCredential.findFirstOrThrow({
+        where: { userId: m.user.id, revokedAt: null },
+      });
+      const notices = await prisma.event.findMany({
+        where: { type: 'account.recovery_session.passkey_registered' },
+      });
+      expect(notices.map((e) => e.payload)).toEqual([
+        { userId: m.user.id, credentialId: registered.id },
+      ]);
       await runOutbox('account.recovery_session.passkey_registered');
       expect(told('recovery_passkey_registered')).toEqual([m.user.email, other.user.email].sort());
 

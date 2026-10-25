@@ -10,6 +10,7 @@
 // fields (destinations, keys as fingerprints, amounts, thresholds, rules).
 import { createHash } from 'node:crypto';
 import type { Event } from '@prisma/client';
+import bs58 from 'bs58';
 import { Queue } from 'bullmq';
 import { mirrorTestSigners } from '../accounts/accounts.js';
 import { ActionSchema, kindOf, type ActionJson, type ActionOf } from '../accounts/encoding.js';
@@ -17,6 +18,7 @@ import {
   AccountEventTypes as T,
   executeReadyRecovery,
   executeReadyTimelocks,
+  settleExpiredProposals,
   reconcileAccount,
   type SavedAddressView,
 } from '../accounts/watcher.js';
@@ -190,6 +192,32 @@ async function personLabel(id: string): Promise<string> {
 
 const unlimited = (v: string | null) => v ?? 'unlimited';
 
+/** Suffix of a security change the contract holds for 24 h after approval (R34). */
+export const SECURITY_DELAY_NOTE = 'takes effect 24 h after approval';
+
+/** The configured Tendr release code hash (base58) for a mode, if any. */
+export function releaseCodeHash(livemode: boolean): string | null {
+  const e = env();
+  return (livemode ? e.MERCHANT_ACCOUNT_CODE_HASH_LIVE : e.MERCHANT_ACCOUNT_CODE_HASH_TEST) ?? null;
+}
+
+/** An upgrade's code hash in base58 (as published) and whether it is the mode's Tendr release. */
+export function describeCodeHash(
+  codeHashB64: string,
+  livemode: boolean,
+): { codeHash: string; isRelease: boolean; verdict: string } {
+  const codeHash = bs58.encode(Buffer.from(codeHashB64, 'base64'));
+  const release = releaseCodeHash(livemode);
+  const isRelease = release !== null && release === codeHash;
+  return {
+    codeHash,
+    isRelease,
+    verdict: isRelease
+      ? 'matches the Tendr release'
+      : 'NOT a Tendr release — do not approve unless you expected this',
+  };
+}
+
 /**
  * Decodes an on-chain action into the facts a notice states, for every `Action` variant. For a
  * withdrawal over a Swap route the funds leave to the swap's `deposit_account`, so that is the
@@ -199,7 +227,7 @@ const unlimited = (v: string | null) => v ?? 'unlimited';
  */
 export async function summarizeAction(
   action: ActionJson,
-  account: { livemode: boolean; nearAccountId: string; merchantId: string },
+  account: { livemode: boolean; nearAccountId: string; merchantId: string; threshold?: number },
 ): Promise<ActionSummary> {
   const kind = kindOf(action);
   const out = (summary: string, fields: Record<string, string>): ActionSummary => ({
@@ -255,7 +283,10 @@ export async function summarizeAction(
       const v = a.add_signer as ActionOf<'add_signer'>;
       const who = await personLabel(v.id);
       const keys = v.keys.map((k) => keyFingerprint(k as SignerKeyJson)).join(', ');
-      return out(`Add signer ${who} with keys ${keys}`, { signer: who, keyFingerprints: keys });
+      return out(`Add signer ${who} with keys ${keys} (${SECURITY_DELAY_NOTE})`, {
+        signer: who,
+        keyFingerprints: keys,
+      });
     }
     case 'remove_signer': {
       const who = await personLabel((a.remove_signer as ActionOf<'remove_signer'>).id);
@@ -266,25 +297,32 @@ export async function summarizeAction(
       const v = a[kind] as ActionOf<'add_signer_key'>;
       const who = await personLabel(v.id);
       const fp = keyFingerprint(v.key as SignerKeyJson);
-      return out(`${kind === 'add_signer_key' ? 'Add' : 'Remove'} key ${fp} of signer ${who}`, {
-        signer: who,
-        keyFingerprints: fp,
-      });
+      const delay = kind === 'add_signer_key' ? ` (${SECURITY_DELAY_NOTE})` : '';
+      return out(
+        `${kind === 'add_signer_key' ? 'Add' : 'Remove'} key ${fp} of signer ${who}${delay}`,
+        { signer: who, keyFingerprints: fp },
+      );
     }
     case 'set_threshold': {
       const t = String(a.set_threshold);
-      return out(`Require ${t} signer approvals`, { threshold: t });
+      const lowers = account.threshold !== undefined && Number(t) < account.threshold;
+      return out(`Require ${t} signer approvals${lowers ? ` (${SECURITY_DELAY_NOTE})` : ''}`, {
+        threshold: t,
+      });
     }
     case 'set_origins': {
       const o = (a.set_origins as string[]).join(', ');
-      return out(`Set the allowed passkey origins to ${o}`, { origins: o });
+      return out(`Set the allowed passkey origins to ${o} (${SECURITY_DELAY_NOTE})`, {
+        origins: o,
+      });
     }
     case 'rotate_recovery_key': {
       const k = a.rotate_recovery_key as string | null;
       const fp = k ? keyFingerprint({ ed25519: k }) : 'none';
-      return out(k ? `Replace the recovery key with ${fp}` : 'Remove the recovery key', {
-        recoveryKeyFingerprint: fp,
-      });
+      return out(
+        `${k ? `Replace the recovery key with ${fp}` : 'Remove the recovery key'} (${SECURITY_DELAY_NOTE})`,
+        { recoveryKeyFingerprint: fp },
+      );
     }
     case 'add_saved_address': {
       const v = a.add_saved_address as ActionOf<'add_saved_address'>;
@@ -336,10 +374,12 @@ export async function summarizeAction(
       return out(`Turn off auto-sweep of ${asset}`, { asset });
     }
     case 'upgrade': {
-      const hash = Buffer.from((a.upgrade as ActionOf<'upgrade'>).code_hash, 'base64').toString(
-        'hex',
-      );
-      return out(`Upgrade the account contract to code ${hash}`, { codeHash: hash });
+      const h = describeCodeHash((a.upgrade as ActionOf<'upgrade'>).code_hash, account.livemode);
+      return out(`Upgrade the account contract to code ${h.codeHash} (${h.verdict})`, {
+        codeHash: h.codeHash,
+        codeHashIsTendrRelease: h.isRelease ? 'yes' : 'no',
+        codeHashVerdict: h.verdict,
+      });
     }
     case 'set_settlement': {
       const v = a.set_settlement as ActionOf<'set_settlement'>;
@@ -555,6 +595,7 @@ export async function processAccountJob(name: string, data: unknown): Promise<vo
     }
     case EXECUTE_TIMELOCKS_JOB:
       await executeReadyTimelocks();
+      await settleExpiredProposals();
       return;
     case EXECUTE_RECOVERY_JOB:
       await executeReadyRecovery();

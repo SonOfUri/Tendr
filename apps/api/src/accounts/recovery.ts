@@ -501,19 +501,22 @@ export async function recoveryRegisterToken(
   return count === 1;
 }
 
-/** Records `account.recovery_session.passkey_registered` (notifies the person and the signers). */
-export async function recordRecoveryPasskey(
+/**
+ * Records `account.recovery_session.passkey_registered` (notifies the person and the signers),
+ * inside the caller's transaction: the one that inserts the credential (M7), so a registered
+ * recovery passkey always has its notice and a rolled-back one never does.
+ */
+export async function recordRecoveryPasskeyTx(
+  tx: Prisma.TransactionClient,
   merchantId: string,
   userId: string,
   credentialRowId: string,
 ): Promise<void> {
   const ctx = { merchantId, livemode: true };
-  await tenantTransaction(ctx, (tx) =>
-    recordEvent(tx, ctx, {
-      aggregateType: 'user',
-      aggregateId: userId,
-      type: AccountEventTypes.recoveryPasskeyRegistered,
-      payload: { userId, credentialId: credentialRowId },
-    }),
-  );
+  await recordEvent(tx, ctx, {
+    aggregateType: 'user',
+    aggregateId: userId,
+    type: AccountEventTypes.recoveryPasskeyRegistered,
+    payload: { userId, credentialId: credentialRowId },
+  });
 }

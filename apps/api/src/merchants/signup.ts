@@ -17,6 +17,32 @@ const ATTEMPTS = 10;
 /** Most stores one person may own: each store costs a funded testnet account. */
 export const MAX_OWNED_STORES = 5;
 
+/**
+ * Labels a store may never take under Tendr's parent accounts: Tendr's own accounts (the mock
+ * verifier, relayers, funding), and names that would read as Tendr itself. A store name mapping
+ * to one gets `-store` appended (`intents` -> `intents-store`).
+ */
+export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
+  'intents-mock',
+  'intents',
+  'relayer',
+  'relayer-accounts',
+  'funding',
+  'funding-near',
+  'tendr',
+  'admin',
+  'api',
+  'www',
+  'app',
+  'dashboard',
+  'pay',
+  'checkout',
+  'mock',
+  'test',
+  'solver',
+  'gas',
+]);
+
 /** The slug a store name maps to before collision suffixes. */
 export function slugBase(name: string): string {
   let s = name
@@ -27,7 +53,8 @@ export function slugBase(name: string): string {
     .replace(/^-+|-+$/g, '');
   s = s.slice(0, MAX_BASE).replace(/-+$/, '');
   if (s.length === 0) return 'store';
-  return s.length < 3 ? `${s}-store` : s;
+  const base = s.length < 3 ? `${s}-store` : s;
+  return RESERVED_SLUGS.has(base) ? `${base}-store` : base;
 }
 
 /** The next free slug for `base`: `base`, then `base-2`, `base-3`, … */

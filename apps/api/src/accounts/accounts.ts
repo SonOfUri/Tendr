@@ -937,6 +937,8 @@ export function accountJson(a: MerchantAccount) {
     threshold: a.threshold,
     signerEpoch: a.signerEpoch.toString(),
     contractCodeHash: a.contractCodeHash,
+    /** Set while a storage top-up is blocked (R35): the dashboard warns. */
+    storageLowAt: a.storageLowAt,
     createdTx: a.createdTx,
     createdAt: a.createdAt,
     updatedAt: a.updatedAt,
@@ -976,6 +978,8 @@ export async function accountView(ctx: ScopeContext) {
     livemode: ctx.livemode,
     account: account ? accountJson(account) : null,
     signers: [...bySigner.values()],
+    /** The mode's Tendr release code hash (base58): what an upgrade proposal is compared to. */
+    releaseCodeHash: codeHashFor(ctx.livemode),
   };
 }
 

@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { prisma } from '../lib/prisma.js';
 import { createApiKey, createMerchant, resetDb } from '../test/helpers.js';
@@ -89,11 +89,9 @@ describe('request signing (gateway)', () => {
           { config: { auth: { principals: ['secret_key', 'publishable_key'] } } },
           async (req) => ({ body: req.body ?? null }),
         );
-        a.get(
-          '/v1/test-get',
-          { config: { auth: { principals: ['secret_key'] } } },
-          async () => ({ ok: true }),
-        );
+        a.get('/v1/test-get', { config: { auth: { principals: ['secret_key'] } } }, async () => ({
+          ok: true,
+        }));
       },
     });
     await app.ready();
@@ -101,6 +99,14 @@ describe('request signing (gateway)', () => {
   afterAll(async () => {
     await app.close();
     await prisma.$disconnect();
+  });
+  // The clock is frozen for each test (only `Date`; timers stay real), so a signature made at
+  // `nowSec()` and the gateway's check see the same second and the ±300 s edges cannot flake.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   const post = (key: string, body: string, signature?: string) =>
@@ -120,6 +126,15 @@ describe('request signing (gateway)', () => {
     const res = await post(required, body, sign(SECRET, nowSec(), body));
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ body: { x: 1 } });
+  });
+
+  it('accepts signatures exactly at the 300 s edges (frozen clock)', async () => {
+    const body = '{"x":1}';
+    const t = nowSec();
+    for (const at of [t - 300, t + 300]) {
+      expect((await post(required, body, sign(SECRET, at, body))).statusCode).toBe(200);
+    }
+    expect(nowSec()).toBe(t);
   });
 
   it('rejects wrong secret, stale, future and missing-when-required with SIGNATURE_INVALID', async () => {
@@ -142,7 +157,11 @@ describe('request signing (gateway)', () => {
     const res = await post(required, body, sign(SECRET, nowSec(), body));
     expect(res.statusCode).toBe(200);
     // A signature over the canonical re-serialisation must not verify.
-    const bad = await post(required, body, sign(SECRET, nowSec(), JSON.stringify(JSON.parse(body))));
+    const bad = await post(
+      required,
+      body,
+      sign(SECRET, nowSec(), JSON.stringify(JSON.parse(body))),
+    );
     expect(bad.statusCode).toBe(401);
   });
 
