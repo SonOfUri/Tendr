@@ -58,7 +58,13 @@ interface Req {
   ciphertextCrc32c?: { value: string };
 }
 
-const ED_KEYS = new Set(['relayer-near', 'funding-near', 'solver-hot', 'verify-ed25519']);
+const ED_KEYS = new Set([
+  'relayer-near',
+  'funding-near',
+  'solver-hot',
+  'relayer-accounts',
+  'verify-ed25519',
+]);
 
 /** In-memory stand-in for Cloud KMS with correct CRC32C behaviour; `tamper` corrupts responses. */
 function stubClient(keys: Keys, tamper: Partial<Record<string, boolean>> = {}) {

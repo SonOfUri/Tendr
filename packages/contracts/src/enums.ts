@@ -16,7 +16,7 @@ export const ApiKeyKindValues = ['secret', 'publishable'] as const;
 export type ApiKeyKind = (typeof ApiKeyKindValues)[number];
 export const ApiKeyKindSchema = z.enum(ApiKeyKindValues);
 
-export const AccountKeyKindValues = ['passkey', 'fn_call'] as const;
+export const AccountKeyKindValues = ['passkey', 'fn_call', 'recovery'] as const;
 export type AccountKeyKind = (typeof AccountKeyKindValues)[number];
 export const AccountKeyKindSchema = z.enum(AccountKeyKindValues);
 

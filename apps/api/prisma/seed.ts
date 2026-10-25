@@ -2,8 +2,9 @@
 //
 //   npm run db:seed
 //
-// Creates the Demo Merchant with an owner user, secret + publishable keys for test and live
-// mode (raw keys are printed once and never stored), a test-mode settlement config, the
+// Creates the Demo Merchant with an owner (a `users` row plus an owner membership), secret +
+// publishable keys for test and live mode (raw keys are printed once and never stored), a
+// test-mode settlement config, the
 // default published checkout theme and a fee plan. A live-mode settlement config is created
 // only when SEED_PAYOUT_ADDRESS holds a valid, non-zero EVM address; live payments stay
 // disabled until one exists. A zero address is refused.
@@ -116,9 +117,17 @@ export async function seed(opts: SeedOptions = {}): Promise<SeedResult> {
   const dbFor = (livemode: boolean) => (livemode ? liveDb : testDb);
 
   // Each step only fills in what is missing, so a run interrupted halfway completes on rerun.
+  // People are global (not merchant-owned), so the owner's `users` row uses the unscoped client;
+  // the membership goes through the scoped one. No passkey exists yet, so the owner is not a
+  // signer.
+  const owner = await prisma.user.upsert({
+    where: { email: DEMO_OWNER_EMAIL },
+    create: { id: newId('per'), email: DEMO_OWNER_EMAIL },
+    update: {},
+  });
   await testDb.merchantUser.upsert({
-    where: { merchantId_email: { merchantId, email: DEMO_OWNER_EMAIL } },
-    create: { id: newId('usr'), merchantId, email: DEMO_OWNER_EMAIL, role: 'owner' },
+    where: { merchantId_userId: { merchantId, userId: owner.id } },
+    create: { id: newId('usr'), merchantId, userId: owner.id, role: 'owner' },
     update: {},
   });
 

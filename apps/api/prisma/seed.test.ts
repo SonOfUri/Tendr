@@ -5,7 +5,13 @@ import { buildApp } from '../src/app.js';
 import { flushLastUsed } from '../src/gateway/auth.js';
 import { prisma } from '../src/lib/prisma.js';
 import { resetDb } from '../src/test/helpers.js';
-import { DEMO_MERCHANT_NAME, isValidEvmAddress, PUBLISHABLE_KEY_SCOPES, seed } from './seed.js';
+import {
+  DEMO_MERCHANT_NAME,
+  DEMO_OWNER_EMAIL,
+  isValidEvmAddress,
+  PUBLISHABLE_KEY_SCOPES,
+  seed,
+} from './seed.js';
 
 const PAYOUT = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const silent = () => {};
@@ -36,8 +42,10 @@ describe('seed', () => {
     expect(await prisma.settlementConfig.findMany({ where: { livemode: false } })).toMatchObject([
       { payoutMode: 'wallet', destChain: 'base', isDefault: true },
     ]);
+    const owner = await prisma.user.findUniqueOrThrow({ where: { email: DEMO_OWNER_EMAIL } });
+    expect(owner.id).toMatch(/^per_[0-9A-Z]{26}$/);
     expect(await prisma.merchantUser.findMany()).toMatchObject([
-      { email: 'owner@demo.tendr.local', role: 'owner' },
+      { userId: owner.id, merchantId: result.merchantId, role: 'owner', isSigner: false },
     ]);
     expect(await prisma.checkoutTheme.findMany()).toMatchObject([
       { isDefault: true, status: 'published' },
@@ -85,6 +93,8 @@ describe('seed', () => {
     expect(await prisma.settlementConfig.count()).toBe(1);
     expect(await prisma.checkoutTheme.count()).toBe(1);
     expect(await prisma.feePlan.count()).toBe(1);
+    expect(await prisma.user.count()).toBe(1);
+    expect(await prisma.merchantUser.count()).toBe(1);
   });
 
   it('adds the live settlement config on a rerun once SEED_PAYOUT_ADDRESS is set', async () => {

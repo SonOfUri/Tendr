@@ -1,6 +1,7 @@
 export type Curve = 'ed25519' | 'secp256k1';
 
-export type KeyName = 'relayer-near' | 'relayer-evm' | 'gas-tron' | 'funding-near' | 'solver-hot';
+export type KeyName =
+  'relayer-near' | 'relayer-evm' | 'gas-tron' | 'funding-near' | 'solver-hot' | 'relayer-accounts';
 
 export type Signature =
   | { curve: 'ed25519'; signature: Uint8Array } // 64 bytes

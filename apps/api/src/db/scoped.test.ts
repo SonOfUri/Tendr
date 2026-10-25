@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import { createMerchant, createRow, minimalSession, resetDb } from '../test/helpers.js';
 import {
+  IDENTITY_MODELS,
   INFRA_MODELS,
   PER_MODE_MODELS,
   READ_ONLY_PER_MODE_MODELS,
@@ -435,6 +436,9 @@ describe('scoped data access', () => {
       () => db.webhookEndpoint.findMany({ where: { secret: { kek: 'local' } } }),
       () => db.apiKey.findMany({ include: { signingSecret: true } }),
       () => db.merchant.findMany({ include: { events: true } }),
+      () => db.merchantUser.findMany({ include: { user: true } }),
+      () => db.accountApproval.findMany({ include: { credential: true } }),
+      () => db.accountProposal.findMany({ where: { createdBy: { email: 'x@example.com' } } }),
       () =>
         db.webhookDelivery.update({
           where: { id: delivery.id },
@@ -444,7 +448,7 @@ describe('scoped data access', () => {
     for (const attempt of attempts) await expect(attempt()).rejects.toMatchObject(forbidden);
   });
 
-  it.each(INFRA_MODELS)(
+  it.each([...INFRA_MODELS, ...IDENTITY_MODELS])(
     '%s is not reachable through the scoped or read-only client',
     async (model) => {
       const m = await createMerchant();

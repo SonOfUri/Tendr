@@ -117,8 +117,20 @@ describe('LocalKeyVault', () => {
     }
   });
 
-  it('curveOf: relayer-evm and gas-tron are secp256k1, the other three are ed25519', () => {
-    expect(KEY_NAMES).toHaveLength(5);
+  it('relayer-accounts is an ed25519 key that verifies as NEAR', async () => {
+    const msg = sha256(utf8ToBytes('merchant account call'));
+    const sig = await kv.sign('relayer-accounts', msg);
+    const { curve, raw } = await kv.publicKey('relayer-accounts');
+    expect(curve).toBe('ed25519');
+    if (sig.curve !== 'ed25519') throw new Error('expected ed25519');
+    expect(ed25519.verify(sig.signature, msg, raw)).toBe(true);
+    const other = await kv.publicKey('relayer-near');
+    expect(bytesToHex(raw)).not.toBe(bytesToHex(other.raw));
+  });
+
+  it('curveOf: relayer-evm and gas-tron are secp256k1, the other four are ed25519', () => {
+    expect(KEY_NAMES).toHaveLength(6);
+    expect(curveOf('relayer-accounts')).toBe('ed25519');
     expect(curveOf('relayer-evm')).toBe('secp256k1');
     expect(curveOf('gas-tron')).toBe('secp256k1');
     expect(curveOf('relayer-near')).toBe('ed25519');

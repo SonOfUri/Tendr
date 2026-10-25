@@ -17,12 +17,17 @@ export const PER_MODE_MODELS = [
   'GasSponsorship',
   'ScreeningResult',
   'RevenueEntry',
+  'AccountKey',
+  'MerchantAccount',
+  'AccountProposal',
+  'AccountApproval',
+  'RecoveryRequest',
 ] as const;
 
 /** Merchant-owned models shared by both modes (no `livemode` column): scoped by `merchantId`. */
 export const SHARED_MODELS = [
   'MerchantUser',
-  'AccountKey',
+  'MerchantInvite',
   'FeePlan',
   'CheckoutTheme',
   'ThemeAsset',
@@ -42,7 +47,20 @@ export const READ_ONLY_PER_MODE_MODELS = ['Event'] as const;
  */
 export const INFRA_MODELS = ['EventOutbox', 'Secret', 'IdempotencyKey'] as const;
 
+/**
+ * People and their credentials: global, not owned by any merchant (a person can belong to several
+ * merchants). Never reachable through the scoped or read-only clients; only the dashboard auth
+ * code touches them, via the unscoped client.
+ */
+export const IDENTITY_MODELS = [
+  'User',
+  'WebauthnCredential',
+  'DashboardSession',
+  'EmailToken',
+] as const;
+
 export type PerModeModel = (typeof PER_MODE_MODELS)[number];
 export type ReadOnlyPerModeModel = (typeof READ_ONLY_PER_MODE_MODELS)[number];
 export type SharedModel = (typeof SHARED_MODELS)[number];
 export type InfraModel = (typeof INFRA_MODELS)[number];
+export type IdentityModel = (typeof IDENTITY_MODELS)[number];

@@ -3,7 +3,7 @@ import { ulid } from 'ulid';
 /** Resource id prefixes. Ids are `${prefix}_${ulid}`, so they sort by creation time. */
 export type IdPrefix =
   | 'mer'
-  | 'usr'
+  | 'usr' // merchant membership (merchant_users)
   | 'key'
   | 'akey'
   | 'stc'
@@ -26,7 +26,16 @@ export type IdPrefix =
   | 'thm'
   | 'tasset'
   | 'sec'
-  | 'idem';
+  | 'idem'
+  | 'per' // person (users); also their signer id on account contracts
+  | 'cred'
+  | 'dss'
+  | 'etok'
+  | 'inv'
+  | 'macc'
+  | 'prop'
+  | 'appr'
+  | 'rec';
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${ulid()}`;

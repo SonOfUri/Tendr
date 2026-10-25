@@ -52,6 +52,7 @@ enum ApiKeyKind {
 enum AccountKeyKind {
   passkey
   fn_call
+  recovery
 
   @@map("account_key_kind")
 }
@@ -225,6 +226,142 @@ enum IdempotencyStatus {
   @@map("idempotency_status")
 }
 
+enum EmailTokenPurpose {
+  verify
+  login
+  invite
+
+  @@map("email_token_purpose")
+}
+
+enum MerchantAccountStatus {
+  provisioning
+  active
+  failed
+
+  @@map("merchant_account_status")
+}
+
+/// The contract's `Action` variants in snake_case, in Borsh order (see @tendr/contracts).
+enum ProposalKind {
+  add_signer
+  remove_signer
+  add_signer_key
+  remove_signer_key
+  set_threshold
+  set_origins
+  rotate_recovery_key
+  add_saved_address
+  remove_saved_address
+  set_limits
+  set_refund_cap
+  set_auto_sweep
+  clear_auto_sweep
+  withdraw
+  refund
+  upgrade
+  set_settlement
+
+  @@map("proposal_kind")
+}
+
+enum ProposalStatus {
+  draft
+  pending
+  timelocked
+  executing
+  executed
+  cancelled
+  expired
+  failed
+
+  @@map("proposal_status")
+}
+
+enum RecoveryStatus {
+  pending
+  cancelled
+  executed
+  failed
+
+  @@map("recovery_status")
+}
+
+// ─── People (global; not owned by a merchant) ───────────────────────────────
+
+/// A person. `id` (`per_…`) is also their signer id on merchant account contracts.
+/// `email` is stored lower-cased (CHECK users_email_lowercase).
+model User {
+  id              String    @id
+  email           String    @unique
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  memberships       MerchantUser[]
+  credentials       WebauthnCredential[]
+  dashboardSessions DashboardSession[]
+  accountKeys       AccountKey[]
+  proposals         AccountProposal[]
+  approvals         AccountApproval[]
+
+  @@map("users")
+}
+
+/// A passkey. `public_key` is the contract's `SignerKey` JSON:
+/// `{ "P256": "<base64 33 bytes>" }` or `{ "Ed25519": "<base64 32 bytes>" }`.
+model WebauthnCredential {
+  id           String    @id
+  userId       String    @map("user_id")
+  credentialId String    @unique @map("credential_id")
+  publicKey    Json      @map("public_key")
+  signCount    BigInt    @default(0) @map("sign_count")
+  transports   String[]
+  deviceLabel  String?   @map("device_label")
+  lastUsedAt   DateTime? @map("last_used_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  approvals   AccountApproval[]
+  accountKeys AccountKey[]
+
+  // Lets approvals and account keys pin a credential to its owner (composite FKs).
+  @@unique([id, userId])
+  @@index([userId])
+  @@map("webauthn_credentials")
+}
+
+/// A dashboard login. Sliding expiry: each use moves `expires_at` (default 30 days).
+model DashboardSession {
+  id         String    @id
+  userId     String    @map("user_id")
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([userId])
+  @@map("dashboard_sessions")
+}
+
+/// One-time email links (verify, login, invite). `email` is lower-cased.
+model EmailToken {
+  id         String            @id
+  email      String
+  purpose    EmailTokenPurpose
+  tokenHash  String            @unique @map("token_hash")
+  expiresAt  DateTime          @map("expires_at")
+  consumedAt DateTime?         @map("consumed_at")
+  createdAt  DateTime          @default(now()) @map("created_at")
+
+  @@index([email, purpose])
+  @@map("email_tokens")
+}
+
 // ─── Merchant domain ────────────────────────────────────────────────────────
 
 model Merchant {
@@ -259,24 +396,51 @@ model Merchant {
   checkoutThemes    CheckoutTheme[]
   themeAssets       ThemeAsset[]
   idempotencyKeys   IdempotencyKey[]
+  invites           MerchantInvite[]
+  merchantAccounts  MerchantAccount[]
+  accountProposals  AccountProposal[]
+  accountApprovals  AccountApproval[]
+  recoveryRequests  RecoveryRequest[]
 
   @@map("merchants")
 }
 
+/// A person's membership of a merchant (prefix `usr`). `is_signer` mirrors whether the person
+/// is a signer on the merchant's account contracts.
 model MerchantUser {
-  id           String           @id
-  merchantId   String           @map("merchant_id")
-  email        String
-  role         MerchantUserRole
-  authProvider String?          @map("auth_provider")
-  mfaEnabled   Boolean          @default(false) @map("mfa_enabled")
-  createdAt    DateTime         @default(now()) @map("created_at")
-  updatedAt    DateTime         @updatedAt @map("updated_at")
+  id         String           @id
+  merchantId String           @map("merchant_id")
+  userId     String           @map("user_id")
+  role       MerchantUserRole
+  isSigner   Boolean          @default(false) @map("is_signer")
+  createdAt  DateTime         @default(now()) @map("created_at")
+  updatedAt  DateTime         @updatedAt @map("updated_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+  user     User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([merchantId, userId])
+  @@index([userId])
+  @@map("merchant_users")
+}
+
+/// An invitation to join a merchant. `email` is lower-cased; the raw token is never stored.
+model MerchantInvite {
+  id         String           @id
+  merchantId String           @map("merchant_id")
+  email      String
+  role       MerchantUserRole
+  makeSigner Boolean          @default(false) @map("make_signer")
+  tokenHash  String           @unique @map("token_hash")
+  expiresAt  DateTime         @map("expires_at")
+  acceptedAt DateTime?        @map("accepted_at")
+  createdAt  DateTime         @default(now()) @map("created_at")
+  updatedAt  DateTime         @updatedAt @map("updated_at")
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
 
-  @@unique([merchantId, email])
-  @@map("merchant_users")
+  @@index([merchantId])
+  @@map("merchant_invites")
 }
 
 model ApiKey {
@@ -302,20 +466,133 @@ model ApiKey {
   @@map("api_keys")
 }
 
+/// A public key registered on a merchant account contract. `user_id` is null for the recovery
+/// key; `credential_id`, when set, must be a passkey of that same person (composite FK).
 model AccountKey {
   id            String         @id
   merchantId    String         @map("merchant_id")
+  livemode      Boolean
   nearAccountId String         @map("near_account_id")
   publicKey     String         @map("public_key")
   kind          AccountKeyKind
+  userId        String?        @map("user_id")
+  credentialId  String?        @map("credential_id")
   revokedAt     DateTime?      @map("revoked_at")
   createdAt     DateTime       @default(now()) @map("created_at")
   updatedAt     DateTime       @updatedAt @map("updated_at")
 
-  merchant Merchant @relation(fields: [merchantId], references: [id])
+  merchant   Merchant            @relation(fields: [merchantId], references: [id])
+  user       User?               @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  credential WebauthnCredential? @relation(fields: [credentialId, userId], references: [id, userId], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([merchantId])
+  @@index([userId])
   @@map("account_keys")
+}
+
+// ─── Merchant accounts (on-chain threshold contracts) ───────────────────────
+
+/// The merchant's NEAR account for one mode. Postgres mirrors the contract; the contract is
+/// authoritative. Replaces the idea of `merchants.near_account_id`.
+model MerchantAccount {
+  id               String                @id
+  merchantId       String                @map("merchant_id")
+  livemode         Boolean
+  nearAccountId    String                @unique @map("near_account_id")
+  contractCodeHash String?               @map("contract_code_hash")
+  threshold        Int
+  signerEpoch      BigInt                @default(0) @map("signer_epoch")
+  status           MerchantAccountStatus @default(provisioning)
+  createdTx        String?               @map("created_tx")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+
+  merchant         Merchant          @relation(fields: [merchantId], references: [id])
+  proposals        AccountProposal[]
+  recoveryRequests RecoveryRequest[]
+
+  @@unique([merchantId, livemode])
+  @@unique([id, merchantId, livemode])
+  @@map("merchant_accounts")
+}
+
+/// A proposal on the account contract. `onchain_id` is the 32-byte proposal id as lower-case hex
+/// (sha256(borsh(action) ‖ salt)); `salt` is base64; `action` is the contract `Action` JSON.
+model AccountProposal {
+  id              String         @id
+  merchantId      String         @map("merchant_id")
+  livemode        Boolean
+  accountId       String         @map("account_id")
+  onchainId       String         @map("onchain_id")
+  kind            ProposalKind
+  action          Json
+  salt            String
+  status          ProposalStatus @default(draft)
+  createdByUserId String         @map("created_by_user_id")
+  readyAt         DateTime?      @map("ready_at")
+  executedAt      DateTime?      @map("executed_at")
+  lastTxHash      String?        @map("last_tx_hash")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  merchant  Merchant          @relation(fields: [merchantId], references: [id])
+  account   MerchantAccount   @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  createdBy User              @relation(fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  approvals AccountApproval[]
+
+  @@unique([accountId, onchainId])
+  @@unique([id, merchantId, livemode])
+  @@index([merchantId, livemode, status])
+  @@map("account_proposals")
+}
+
+/// One signer's approval of a proposal, with the passkey and signer epoch it was made under.
+/// The contract keeps at most one approval per signer (re-approving replaces it), so this does too.
+model AccountApproval {
+  id           String   @id
+  merchantId   String   @map("merchant_id")
+  livemode     Boolean
+  proposalId   String   @map("proposal_id")
+  userId       String   @map("user_id")
+  credentialId String   @map("credential_id")
+  signerEpoch  BigInt   @map("signer_epoch")
+  txHash       String?  @map("tx_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  merchant   Merchant           @relation(fields: [merchantId], references: [id])
+  proposal   AccountProposal    @relation(fields: [proposalId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  user       User               @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  credential WebauthnCredential @relation(fields: [credentialId, userId], references: [id, userId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([proposalId, userId])
+  @@index([merchantId])
+  @@index([userId])
+  @@map("account_approvals")
+}
+
+/// A recovery started with the recovery key: replaces the signer set after 72 h unless a signer
+/// cancels. `onchain_id` is the contract's recovery id (hex) once started.
+model RecoveryRequest {
+  id            String         @id
+  merchantId    String         @map("merchant_id")
+  livemode      Boolean
+  accountId     String         @map("account_id")
+  onchainId     String?        @map("onchain_id")
+  executesAt    DateTime       @map("executes_at")
+  status        RecoveryStatus @default(pending)
+  newSignerIds  String[]       @map("new_signer_ids")
+  startTxHash   String?        @map("start_tx_hash")
+  cancelTxHash  String?        @map("cancel_tx_hash")
+  executeTxHash String?        @map("execute_tx_hash")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  merchant Merchant        @relation(fields: [merchantId], references: [id])
+  account  MerchantAccount @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([merchantId, livemode, status])
+  @@map("recovery_requests")
 }
 
 // ─── Configuration ──────────────────────────────────────────────────────────

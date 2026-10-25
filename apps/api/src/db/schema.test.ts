@@ -1,12 +1,24 @@
 import { Prisma } from '@prisma/client';
+import {
+  AccountKeyKindValues,
+  EmailTokenPurposeValues,
+  MerchantAccountStatusValues,
+  MerchantUserRoleValues,
+  ProposalKindValues,
+  ProposalStatusValues,
+  RecoveryStatusValues,
+} from '@tendr/contracts';
 import { ulid } from 'ulid';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../lib/prisma.js';
+import { IDENTITY_MODELS, PER_MODE_MODELS, SHARED_MODELS } from './models.js';
 import {
   MERCHANT_OWNED_MODELS,
   createApiKey,
+  createCredential,
   createMerchant,
   createRow,
+  createUser,
   minimalSession,
   resetDb,
 } from '../test/helpers.js';
@@ -158,6 +170,172 @@ describe('foundation schema', () => {
     const pk = await createApiKey(m.id, { livemode: false, kind: 'publishable' });
     expect(pk.raw.startsWith('tdr_pk_test_')).toBe(true);
     expect(pk.record.kind).toBe('publishable');
+  });
+
+  describe('merchant accounts', () => {
+    it('Postgres enums match the @tendr/contracts value lists', () => {
+      const values = (name: string) =>
+        Prisma.dmmf.datamodel.enums.find((e) => e.name === name)?.values.map((v) => v.name);
+      expect(values('ProposalKind')).toEqual([...ProposalKindValues]);
+      expect(values('ProposalStatus')).toEqual([...ProposalStatusValues]);
+      expect(values('MerchantAccountStatus')).toEqual([...MerchantAccountStatusValues]);
+      expect(values('RecoveryStatus')).toEqual([...RecoveryStatusValues]);
+      expect(values('EmailTokenPurpose')).toEqual([...EmailTokenPurposeValues]);
+      expect(values('AccountKeyKind')).toEqual([...AccountKeyKindValues]);
+      expect(values('MerchantUserRole')).toEqual([...MerchantUserRoleValues]);
+    });
+
+    it('lists the new tables by tenancy', () => {
+      expect(PER_MODE_MODELS).toEqual(
+        expect.arrayContaining([
+          'AccountKey',
+          'MerchantAccount',
+          'AccountProposal',
+          'AccountApproval',
+          'RecoveryRequest',
+        ]),
+      );
+      expect(SHARED_MODELS).toEqual(expect.arrayContaining(['MerchantUser', 'MerchantInvite']));
+      expect(SHARED_MODELS).not.toContain('AccountKey');
+      expect(IDENTITY_MODELS).toEqual([
+        'User',
+        'WebauthnCredential',
+        'DashboardSession',
+        'EmailToken',
+      ]);
+    });
+
+    it('a person has one membership per merchant', async () => {
+      const m = await createMerchant();
+      const user = await createUser();
+      await createRow('MerchantUser', m.id, false, { userId: user.id });
+      await expect(
+        createRow('MerchantUser', m.id, false, { userId: user.id, role: 'viewer' }),
+      ).rejects.toSatisfy(isUniqueViolation);
+      const other = await createMerchant();
+      await expect(
+        createRow('MerchantUser', other.id, false, { userId: user.id }),
+      ).resolves.toMatchObject({
+        userId: user.id,
+      });
+    });
+
+    it('users.email is unique and stored lower-cased', async () => {
+      await createUser({ email: 'ada@example.com' });
+      await expect(createUser({ email: 'ada@example.com' })).rejects.toSatisfy(isUniqueViolation);
+      await expect(createUser({ email: 'Grace@Example.com' })).rejects.toThrow(
+        /users_email_lowercase/,
+      );
+    });
+
+    it('one merchant account per merchant and mode', async () => {
+      const m = await createMerchant();
+      await createRow('MerchantAccount', m.id, false);
+      await createRow('MerchantAccount', m.id, true);
+      await expect(createRow('MerchantAccount', m.id, false)).rejects.toSatisfy(isUniqueViolation);
+    });
+
+    it("a proposal cannot reference another merchant's or the other mode's account", async () => {
+      const a = await createMerchant();
+      const b = await createMerchant();
+      const accountB = await createRow('MerchantAccount', b.id, false);
+      const testAccountA = await createRow('MerchantAccount', a.id, false);
+      await expect(
+        createRow('AccountProposal', a.id, false, { accountId: accountB.id }),
+      ).rejects.toThrow(/Foreign key constraint/);
+      await expect(
+        createRow('AccountProposal', a.id, true, { accountId: testAccountA.id }),
+      ).rejects.toThrow(/Foreign key constraint/);
+    });
+
+    it('onchain proposal ids are unique per account', async () => {
+      const m = await createMerchant();
+      const first = await createRow('AccountProposal', m.id, false);
+      await expect(
+        createRow('AccountProposal', m.id, false, { onchainId: first.onchainId }),
+      ).rejects.toSatisfy(isUniqueViolation);
+      await expect(
+        createRow('AccountProposal', m.id, true, { onchainId: first.onchainId }),
+      ).resolves.toMatchObject({ onchainId: first.onchainId });
+    });
+
+    it("an approval cannot reference another merchant's or the other mode's proposal", async () => {
+      const a = await createMerchant();
+      const b = await createMerchant();
+      const proposalB = await createRow('AccountProposal', b.id, false);
+      const testProposalA = await createRow('AccountProposal', a.id, false);
+      await expect(
+        createRow('AccountApproval', a.id, false, { proposalId: proposalB.id }),
+      ).rejects.toThrow(/Foreign key constraint/);
+      await expect(
+        createRow('AccountApproval', a.id, true, { proposalId: testProposalA.id }),
+      ).rejects.toThrow(/Foreign key constraint/);
+      await expect(
+        createRow('AccountApproval', a.id, false, { proposalId: testProposalA.id }),
+      ).resolves.toMatchObject({ proposalId: testProposalA.id });
+    });
+
+    it("an approval's passkey must belong to the approving person", async () => {
+      const m = await createMerchant();
+      const alice = await createUser();
+      const bob = await createUser();
+      const bobKey = await createCredential(bob.id);
+      await expect(
+        createRow('AccountApproval', m.id, false, { userId: alice.id, credentialId: bobKey.id }),
+      ).rejects.toThrow(/Foreign key constraint/);
+    });
+
+    it('a person approves a proposal once', async () => {
+      const m = await createMerchant();
+      const first = await createRow('AccountApproval', m.id, false);
+      const again = createRow('AccountApproval', m.id, false, {
+        proposalId: first.proposalId,
+        userId: first.userId,
+        credentialId: first.credentialId,
+        signerEpoch: 1n,
+      });
+      await expect(again).rejects.toSatisfy(isUniqueViolation);
+    });
+
+    it("a recovery request cannot reference another merchant's account", async () => {
+      const a = await createMerchant();
+      const b = await createMerchant();
+      const accountB = await createRow('MerchantAccount', b.id, true);
+      await expect(
+        createRow('RecoveryRequest', a.id, true, { accountId: accountB.id }),
+      ).rejects.toThrow(/Foreign key constraint/);
+    });
+
+    it('stores a passkey public key as the contract SignerKey JSON', async () => {
+      const user = await createUser();
+      const p256 = Buffer.alloc(33, 2).toString('base64');
+      const cred = await createCredential(user.id, { publicKey: { P256: p256 } });
+      expect(cred.publicKey).toEqual({ P256: p256 });
+      expect(cred.signCount).toBe(0n);
+    });
+
+    it('account keys accept the recovery kind with no person', async () => {
+      const m = await createMerchant();
+      await expect(
+        createRow('AccountKey', m.id, true, { kind: 'recovery', userId: null }),
+      ).resolves.toMatchObject({ kind: 'recovery', userId: null, livemode: true });
+    });
+
+    it("an account key's passkey must belong to its person, who must be named", async () => {
+      const m = await createMerchant();
+      const alice = await createUser();
+      const bob = await createUser();
+      const bobKey = await createCredential(bob.id);
+      await expect(
+        createRow('AccountKey', m.id, true, { userId: alice.id, credentialId: bobKey.id }),
+      ).rejects.toThrow(/Foreign key constraint/);
+      await expect(
+        createRow('AccountKey', m.id, true, { userId: null, credentialId: bobKey.id }),
+      ).rejects.toThrow(/account_keys_credential_has_user/);
+      await expect(
+        createRow('AccountKey', m.id, true, { userId: bob.id, credentialId: bobKey.id }),
+      ).resolves.toMatchObject({ credentialId: bobKey.id });
+    });
   });
 
   it('resetDb clears events despite the append-only trigger', async () => {

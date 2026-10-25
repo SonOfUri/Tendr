@@ -1,6 +1,6 @@
 // Test-only DB helpers. Never import from application code.
 import { createHash, randomBytes } from 'node:crypto';
-import type { ApiKey, Merchant, Prisma } from '@prisma/client';
+import type { ApiKey, Merchant, Prisma, User, WebauthnCredential } from '@prisma/client';
 import { ALL_SCOPES, type Scope } from '@tendr/contracts';
 import { ulid } from 'ulid';
 import { PER_MODE_MODELS, READ_ONLY_PER_MODE_MODELS, SHARED_MODELS } from '../db/models.js';
@@ -38,6 +38,32 @@ export async function createMerchant(
 ): Promise<Merchant> {
   return prisma.merchant.create({
     data: { id: newId('mer'), name: 'Test Merchant', slug: unique('merchant'), ...overrides },
+  });
+}
+
+/** A person (`users` row) with a unique lower-case email. */
+export async function createUser(
+  overrides: Partial<Prisma.UserUncheckedCreateInput> = {},
+): Promise<User> {
+  return prisma.user.create({
+    data: { id: newId('per'), email: `${unique('person')}@example.com`, ...overrides },
+  });
+}
+
+/** A passkey for `userId`; the public key is a `SignerKey` JSON value as the contract uses. */
+export async function createCredential(
+  userId: string,
+  overrides: Partial<Prisma.WebauthnCredentialUncheckedCreateInput> = {},
+): Promise<WebauthnCredential> {
+  return prisma.webauthnCredential.create({
+    data: {
+      id: newId('cred'),
+      userId,
+      credentialId: unique('cred'),
+      publicKey: { P256: randomBytes(33).toString('base64') },
+      transports: ['internal'],
+      ...overrides,
+    },
   });
 }
 
@@ -124,22 +150,35 @@ async function createSecret(): Promise<{ id: string }> {
 }
 
 const builders: Record<MerchantOwnedModel, Builder> = {
-  MerchantUser: (merchantId, _l, o) =>
+  MerchantUser: async (merchantId, _l, o) =>
     prisma.merchantUser.create({
       data: {
         id: newId('usr'),
         merchantId,
-        email: `${unique('user')}@example.com`,
+        userId: (await createUser()).id,
         role: 'owner',
         ...o,
       },
     }),
+  MerchantInvite: (merchantId, _l, o) =>
+    prisma.merchantInvite.create({
+      data: {
+        id: newId('inv'),
+        merchantId,
+        email: `${unique('invitee')}@example.com`,
+        role: 'finance',
+        tokenHash: sha256(unique('invite')),
+        expiresAt: new Date(Date.now() + 7 * 24 * 3_600_000),
+        ...o,
+      },
+    }),
   ApiKey: async (merchantId, livemode) => (await createApiKey(merchantId, { livemode })).record,
-  AccountKey: (merchantId, _l, o) =>
+  AccountKey: (merchantId, livemode, o) =>
     prisma.accountKey.create({
       data: {
         id: newId('akey'),
         merchantId,
+        livemode,
         nearAccountId: 'merchant.testnet',
         publicKey: `ed25519:${unique('pk')}`,
         kind: 'passkey',
@@ -378,6 +417,59 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         ...o,
       },
     }),
+  MerchantAccount: (merchantId, livemode, o) =>
+    prisma.merchantAccount.create({
+      data: {
+        id: newId('macc'),
+        merchantId,
+        livemode,
+        nearAccountId: `${unique('m')}.tendr.${livemode ? 'near' : 'testnet'}`,
+        threshold: 1,
+        ...o,
+      },
+    }),
+  AccountProposal: async (merchantId, livemode, o) =>
+    prisma.accountProposal.create({
+      data: {
+        id: newId('prop'),
+        merchantId,
+        livemode,
+        accountId: (await accountFor(merchantId, livemode)).id,
+        onchainId: randomBytes(32).toString('hex'),
+        kind: 'set_threshold',
+        action: { set_threshold: 2 },
+        salt: randomBytes(32).toString('base64'),
+        createdByUserId: (await createUser()).id,
+        ...o,
+      },
+    }),
+  AccountApproval: async (merchantId, livemode, o) => {
+    const user = await createUser();
+    return prisma.accountApproval.create({
+      data: {
+        id: newId('appr'),
+        merchantId,
+        livemode,
+        proposalId: (await builders.AccountProposal(merchantId, livemode, {})).id,
+        userId: user.id,
+        credentialId: (await createCredential(user.id)).id,
+        signerEpoch: 0n,
+        ...o,
+      },
+    });
+  },
+  RecoveryRequest: async (merchantId, livemode, o) =>
+    prisma.recoveryRequest.create({
+      data: {
+        id: newId('rec'),
+        merchantId,
+        livemode,
+        accountId: (await accountFor(merchantId, livemode)).id,
+        executesAt: new Date(Date.now() + 72 * 3_600_000),
+        newSignerIds: [newId('per')],
+        ...o,
+      },
+    }),
   IdempotencyKey: (merchantId, livemode, o) =>
     prisma.idempotencyKey.create({
       data: {
@@ -393,6 +485,14 @@ const builders: Record<MerchantOwnedModel, Builder> = {
       },
     }),
 };
+
+/** The merchant's account in `livemode` (one per merchant and mode), created when missing. */
+async function accountFor(merchantId: string, livemode: boolean): Promise<CreatedRow> {
+  return (
+    (await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } })) ??
+    builders.MerchantAccount(merchantId, livemode, {})
+  );
+}
 
 /**
  * Creates a minimal valid row of `model` owned by `merchantId`, creating any required

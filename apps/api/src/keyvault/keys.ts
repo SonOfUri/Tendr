@@ -11,6 +11,7 @@ const REGISTRY: Record<KeyName, Curve> = {
   'gas-tron': 'secp256k1', // Tron gas wallet (energy/bandwidth sponsorship)
   'funding-near': 'ed25519', // pays storage deposits for merchant NEAR accounts (spend-capped)
   'solver-hot': 'ed25519', // phase 2
+  'relayer-accounts': 'ed25519', // gas-only relayer for merchant account contracts; never a signer
 };
 
 export const KEY_NAMES = Object.keys(REGISTRY) as KeyName[];
