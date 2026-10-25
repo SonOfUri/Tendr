@@ -23,9 +23,23 @@ pub const RECOVERY_DELAY: u64 = 72 * HOUR;
 /// Domain separator for recovery payloads.
 pub const RECOVERY_DOMAIN: &str = "tendr-merchant-account-recovery-v1";
 
-/// The proposal id a signer's cancel of the pending recovery is made over.
-/// Real proposal ids are sha256 outputs, so this never names a proposal.
-pub const RECOVERY_CANCEL_ID: ProposalId = ProposalId([0; 32]);
+/// Domain separator for [`recovery_id`].
+pub const RECOVERY_ID_DOMAIN: &str = "tendr-merchant-account-recovery-id-v1";
+
+/// The id of the recovery started with `nonce` on `contract_id`:
+/// `sha256(borsh((RECOVERY_ID_DOMAIN, contract_id, nonce)))`. A signer's
+/// cancel is an approval with intent `Cancel` over this id, so it cancels
+/// that one recovery on that one contract and cannot be replayed against a
+/// later one.
+pub fn recovery_id(contract_id: &str, nonce: u64) -> [u8; 32] {
+    let bytes = near_sdk::borsh::to_vec(&(
+        RECOVERY_ID_DOMAIN.to_string(),
+        contract_id.to_string(),
+        nonce,
+    ))
+    .expect("borsh");
+    env::sha256_array(bytes)
+}
 
 /// The struct whose borsh hash the recovery key signs.
 #[near(serializers = [borsh])]
@@ -69,6 +83,8 @@ pub struct PendingRecovery {
 #[near(serializers = [json])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecoveryView {
+    /// What a signer's cancel approval is made over (hex).
+    pub recovery_id: ProposalId,
     pub new_signer_ids: Vec<String>,
     pub new_threshold: u8,
     pub executes_at: U64,
@@ -171,10 +187,15 @@ impl MerchantAccount {
     }
 
     /// Any one current signer cancels the pending recovery, with a `Cancel`
-    /// approval over proposal id `[0; 32]` at the current epoch.
+    /// approval over its [`recovery_id`] at the current epoch.
     pub fn cancel_recovery(&mut self, approval: SignedApproval) {
-        require!(self.recovery.is_some(), "no recovery is pending");
-        self.verify_approval(&RECOVERY_CANCEL_ID, ApprovalIntent::Cancel, &approval);
+        let nonce = self
+            .recovery
+            .as_ref()
+            .unwrap_or_else(|| env::panic_str("no recovery is pending"))
+            .nonce;
+        let id = ProposalId(recovery_id(env::current_account_id().as_str(), nonce));
+        self.verify_approval(&id, ApprovalIntent::Cancel, &approval);
         self.recovery = None;
         Event::RecoveryCancelled {
             signer_id: &approval.signer_id,
@@ -207,6 +228,7 @@ impl MerchantAccount {
 
     pub fn get_recovery(&self) -> Option<RecoveryView> {
         self.recovery.as_ref().map(|r| RecoveryView {
+            recovery_id: ProposalId(recovery_id(env::current_account_id().as_str(), r.nonce)),
             new_signer_ids: r.new_signers.iter().map(|s| s.id.clone()).collect(),
             new_threshold: r.new_threshold,
             executes_at: U64(r.executes_at),

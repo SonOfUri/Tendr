@@ -7,7 +7,7 @@ use near_sdk::{test_vm_config, PromiseResult, RuntimeFeesConfig};
 
 use super::*;
 use crate::money::TIMELOCK_DELAY;
-use crate::recovery::{RecoveryPayload, RECOVERY_DELAY};
+use crate::recovery::{recovery_id, RecoveryPayload, RECOVERY_DELAY};
 
 /// The recovery kit's Ed25519 key.
 fn kit() -> ed25519_dalek::SigningKey {
@@ -39,15 +39,14 @@ fn start(c: &mut MerchantAccount, signers: &[Signer], threshold: u8, nonce: u64)
     c.start_recovery(signers.to_vec(), threshold, U64(nonce), sig);
 }
 
-/// A signer's cancel of the pending recovery (`proposal_id = [0; 32]`).
-fn recovery_cancel(p: &Person, epoch: u64) -> SignedApproval {
-    p.approval_for(
-        CONTRACT,
-        0,
-        &ProposalId([0; 32]),
-        epoch,
-        ApprovalIntent::Cancel,
-    )
+/// The recovery id of the recovery started with `nonce` on [`CONTRACT`].
+fn rid(nonce: u64) -> ProposalId {
+    ProposalId(recovery_id(CONTRACT, nonce))
+}
+
+/// A signer's cancel of the recovery started with `nonce`.
+fn recovery_cancel(p: &Person, epoch: u64, nonce: u64) -> SignedApproval {
+    p.approval_for(CONTRACT, 0, &rid(nonce), epoch, ApprovalIntent::Cancel)
 }
 
 fn event_names() -> Vec<String> {
@@ -65,7 +64,6 @@ fn last_event(name: &str) -> serde_json::Value {
         .unwrap_or_else(|| panic!("no {name} event"))
 }
 
-/// An approval made with the recovery kit's key, in `signer_id`'s name.
 /// Adds saved address `sav_1` with `a` and `b` (enough for a 2-of-N account).
 fn add_sav_1(c: &mut MerchantAccount, a: &Person, b: &Person) {
     let id = propose(c, a, add_saved("sav_1"), 200);
@@ -74,6 +72,7 @@ fn add_sav_1(c: &mut MerchantAccount, a: &Person, b: &Person) {
     assert_eq!(status(c, &id), ProposalStatus::Executed);
 }
 
+/// An approval made with the recovery kit's key, in `signer_id`'s name.
 fn kit_approval(signer_id: &str, id: &ProposalId, epoch: u64) -> SignedApproval {
     let challenge = ApprovalPayload::new(CONTRACT, id, epoch, ApprovalIntent::Approve).challenge();
     SignedApproval {
@@ -157,23 +156,21 @@ fn any_signer_cancels_recovery() {
     start(&mut c, &[d.signer()], 1, 1);
 
     // An approve intent, a stranger, or the wrong id cannot cancel.
-    let approve = b.approval_for(
-        CONTRACT,
-        0,
-        &ProposalId([0; 32]),
-        0,
-        ApprovalIntent::Approve,
-    );
+    let approve = b.approval_for(CONTRACT, 0, &rid(1), 0, ApprovalIntent::Approve);
     let msg = panics(|| c.cancel_recovery(approve));
     assert!(msg.contains("invalid approval"), "{msg}");
-    let msg = panics(|| c.cancel_recovery(recovery_cancel(&d, 0)));
+    let msg = panics(|| c.cancel_recovery(recovery_cancel(&d, 0, 1)));
     assert!(msg.contains("unknown signer"), "{msg}");
-    let wrong_id = b.approval_for(CONTRACT, 0, &ProposalId([1; 32]), 0, ApprovalIntent::Cancel);
-    let msg = panics(|| c.cancel_recovery(wrong_id));
-    assert!(msg.contains("invalid approval"), "{msg}");
+    for wrong in [ProposalId([0; 32]), ProposalId([1; 32])] {
+        let wrong_id = b.approval_for(CONTRACT, 0, &wrong, 0, ApprovalIntent::Cancel);
+        let msg = panics(|| c.cancel_recovery(wrong_id));
+        assert!(msg.contains("invalid approval"), "{msg}");
+    }
 
+    // The view names the id the cancel is made over.
+    assert_eq!(c.get_recovery().unwrap().recovery_id, rid(1));
     // One signer of a 3-of-3 account is enough.
-    c.cancel_recovery(recovery_cancel(&b, 0));
+    c.cancel_recovery(recovery_cancel(&b, 0, 1));
     assert!(c.get_recovery().is_none());
     assert_eq!(last_event("recovery_cancelled")["data"]["signer_id"], b.id);
 
@@ -181,8 +178,48 @@ fn any_signer_cancels_recovery() {
     let msg = panics(|| c.execute_recovery());
     assert!(msg.contains("no recovery"), "{msg}");
     assert_eq!(signer_ids(&c).len(), 3);
-    let msg = panics(|| c.cancel_recovery(recovery_cancel(&b, 0)));
+    let msg = panics(|| c.cancel_recovery(recovery_cancel(&b, 0, 1)));
     assert!(msg.contains("no recovery"), "{msg}");
+}
+
+#[test]
+fn old_cancel_cannot_cancel_a_later_recovery() {
+    let (mut c, a, b, _c) = with_kit(2);
+    let d = new_signer(4);
+    start(&mut c, &[d.signer()], 1, 1);
+    let old = recovery_cancel(&b, 0, 1);
+    c.cancel_recovery(old.clone());
+
+    // Recovery 2 at the same epoch: the captured cancel for 1 does not apply.
+    start(&mut c, &[d.signer()], 1, 2);
+    let msg = panics(|| c.cancel_recovery(old.clone()));
+    assert!(msg.contains("invalid approval"), "{msg}");
+    assert!(c.get_recovery().is_some());
+    // Nor does a cancel made in advance for a later nonce.
+    let msg = panics(|| c.cancel_recovery(recovery_cancel(&a, 0, 3)));
+    assert!(msg.contains("invalid approval"), "{msg}");
+
+    ctx(T0 + RECOVERY_DELAY);
+    c.execute_recovery();
+    assert_eq!(signer_ids(&c), vec![d.id.clone()]);
+}
+
+#[test]
+fn cancel_for_another_contracts_recovery_rejected() {
+    let (mut c, _a, b, _c) = with_kit(2);
+    let d = new_signer(4);
+    start(&mut c, &[d.signer()], 1, 1);
+    let other = ProposalId(recovery_id("b.tendr.testnet", 1));
+    assert_ne!(other, rid(1));
+    // Signed over the other contract's recovery id, for this contract.
+    let here = b.approval_for(CONTRACT, 0, &other, 0, ApprovalIntent::Cancel);
+    let msg = panics(|| c.cancel_recovery(here));
+    assert!(msg.contains("invalid approval"), "{msg}");
+    // A cancel made for the other contract entirely.
+    let there = b.approval_for("b.tendr.testnet", 0, &other, 0, ApprovalIntent::Cancel);
+    let msg = panics(|| c.cancel_recovery(there));
+    assert!(msg.contains("invalid approval"), "{msg}");
+    assert!(c.get_recovery().is_some());
 }
 
 #[test]
@@ -275,7 +312,7 @@ fn recovery_nonce_replay_rejected() {
     let msg = panics(|| start(&mut c, &signers, 1, 6));
     assert!(msg.contains("recovery already pending"), "{msg}");
 
-    c.cancel_recovery(recovery_cancel(&a, 0));
+    c.cancel_recovery(recovery_cancel(&a, 0, 5));
     // The cancelled recovery's signature cannot start it again.
     let msg = panics(|| c.start_recovery(signers.to_vec(), 1, U64(5), sig.clone()));
     assert!(msg.contains("nonce"), "{msg}");

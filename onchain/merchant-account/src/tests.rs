@@ -1190,6 +1190,30 @@ fn cannot_remove_address_current_settlement_points_to() {
     assert!(c.list_saved_addresses().is_empty());
 }
 
+/// `recovery_id(contract_id, nonce)` cases for the shared vectors, with the
+/// Cancel-intent challenge a signer signs to cancel that recovery.
+fn recovery_id_vectors(contract_id: &str) -> Vec<serde_json::Value> {
+    [1u64, 1_761_350_400_000]
+        .into_iter()
+        .map(|nonce| {
+            let id = ProposalId(crate::recovery::recovery_id(contract_id, nonce));
+            let payload = ApprovalPayload::new(contract_id, &id, 3, ApprovalIntent::Cancel);
+            serde_json::json!({
+                "note": "recovery_id = sha256(borsh((\"tendr-merchant-account-recovery-id-v1\", contract_id, nonce u64))); a recovery cancel is a Cancel approval with proposal_id = recovery_id at the current signer epoch (3 here).",
+                "contract_id": contract_id,
+                "nonce": nonce.to_string(),
+                "preimage_borsh_hex": hex(&near_sdk::borsh::to_vec(&(
+                    crate::recovery::RECOVERY_ID_DOMAIN.to_string(),
+                    contract_id.to_string(),
+                    nonce,
+                )).unwrap()),
+                "recovery_id_hex": hex(&id.0),
+                "cancel_challenge_hex": hex(&payload.challenge()),
+            })
+        })
+        .collect()
+}
+
 /// Writes (with `UPDATE_VECTORS=1`) or checks the shared Rust/TypeScript
 /// approval-encoding vectors.
 #[test]
@@ -1273,6 +1297,7 @@ fn write_test_vectors() {
         "salt_b64": b64(&salt_bytes),
         "signer_epoch": signer_epoch.to_string(),
         "cases": cases,
+        "recovery_ids": recovery_id_vectors(contract_id),
     });
     let rendered = format!("{}\n", serde_json::to_string_pretty(&doc).unwrap());
 
