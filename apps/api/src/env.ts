@@ -120,6 +120,10 @@ const EnvSchema = z
      * Base URL of the hosted checkout page; a session's `url` is
      * `${CHECKOUT_BASE_URL}/pay/{id}#cs={client_secret}`. No trailing slash needed.
      */
+    SCREENING_TEST_BLOCKLIST: z.preprocess(
+      blankAsUnset,
+      z.string().default('0x000000000000000000000000000000000000dead'),
+    ),
     CHECKOUT_BASE_URL: z.preprocess(
       blankAsUnset,
       z

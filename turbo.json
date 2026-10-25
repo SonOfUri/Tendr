@@ -48,7 +48,8 @@
     "FEE_ACCOUNT_TEST",
     "CHECKOUT_SLIPPAGE_BPS",
     "CHECKOUT_GAS_MAX_USD",
-    "CHECKOUT_BASE_URL"
+    "CHECKOUT_BASE_URL",
+    "SCREENING_TEST_BLOCKLIST"
   ],
   "tasks": {
     "build": {

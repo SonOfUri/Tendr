@@ -916,34 +916,40 @@ model Quote {
 }
 
 model Payment {
-  id                   String        @id
-  merchantId           String        @map("merchant_id")
-  livemode             Boolean
-  sessionId            String        @map("session_id")
-  quoteId              String        @map("quote_id")
-  originTxHash         String?       @map("origin_tx_hash")
-  amountReceived       Decimal       @map("amount_received") @db.Decimal(78, 0)
-  settleTx             String?       @map("settle_tx")
-  payoutTx             String?       @map("payout_tx")
-  feeAmount            Decimal?      @map("fee_amount") @db.Decimal(78, 0)
-  networkFee           Decimal?      @map("network_fee") @db.Decimal(78, 0)
-  gasSponsored         Boolean       @default(false) @map("gas_sponsored")
-  status               PaymentStatus @default(DETECTED)
-  isLate               Boolean       @default(false) @map("is_late")
-  senderAddress        String?       @map("sender_address")
-  senderChain          String?       @map("sender_chain")
-  overpaidAmount       Decimal?      @map("overpaid_amount") @db.Decimal(78, 0)
-  refundedAmount       Decimal?      @map("refunded_amount") @db.Decimal(78, 0)
+  id                    String        @id
+  merchantId            String        @map("merchant_id")
+  livemode              Boolean
+  sessionId             String        @map("session_id")
+  quoteId               String        @map("quote_id")
+  originTxHash          String?       @map("origin_tx_hash")
+  amountReceived        Decimal       @map("amount_received") @db.Decimal(78, 0)
+  settleTx              String?       @map("settle_tx")
+  payoutTx              String?       @map("payout_tx")
+  feeAmount             Decimal?      @map("fee_amount") @db.Decimal(78, 0)
+  networkFee            Decimal?      @map("network_fee") @db.Decimal(78, 0)
+  gasSponsored          Boolean       @default(false) @map("gas_sponsored")
+  status                PaymentStatus @default(DETECTED)
+  isLate                Boolean       @default(false) @map("is_late")
+  senderAddress         String?       @map("sender_address")
+  senderChain           String?       @map("sender_chain")
+  overpaidAmount        Decimal?      @map("overpaid_amount") @db.Decimal(78, 0)
+  refundedAmount        Decimal?      @map("refunded_amount") @db.Decimal(78, 0)
   /// The last 1Click status seen for this payment's quote.
-  oneclickStatus       String?       @map("oneclick_status")
-  heldReason           HeldReason?   @map("held_reason")
+  oneclickStatus        String?       @map("oneclick_status")
+  heldReason            HeldReason?   @map("held_reason")
   /// The overpayment was worth less than SMALL_OVERPAY_USD and stays with the merchant.
-  keptSmallOverpayment Boolean       @default(false) @map("kept_small_overpayment")
-  amountOut            Decimal?      @map("amount_out") @db.Decimal(78, 0)
-  amountInUsd          Decimal?      @map("amount_in_usd") @db.Decimal(18, 6)
-  settledAt            DateTime?     @map("settled_at")
-  createdAt            DateTime      @default(now()) @map("created_at")
-  updatedAt            DateTime      @updatedAt @map("updated_at")
+  keptSmallOverpayment  Boolean       @default(false) @map("kept_small_overpayment")
+  amountOut             Decimal?      @map("amount_out") @db.Decimal(78, 0)
+  amountInUsd           Decimal?      @map("amount_in_usd") @db.Decimal(18, 6)
+  settledAt             DateTime?     @map("settled_at")
+  /// Sanctions-screening retries done while SCREENING_PENDING.
+  screeningAttempts     Int           @default(0) @map("screening_attempts")
+  /// When the next screening retry is due; null = first retry (1 min after creation).
+  screeningNextAt       DateTime?     @map("screening_next_at")
+  /// Set when screening was still unavailable after 6 h: a merchant review item (not a hold).
+  screeningUnresolvedAt DateTime?     @map("screening_unresolved_at")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
 
   merchant                 Merchant         @relation(fields: [merchantId], references: [id])
   session                  Session          @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)

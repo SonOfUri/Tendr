@@ -14,6 +14,7 @@ import {
   RECONCILE_JOB,
   setAccountJobs,
 } from './jobs/account-notices.js';
+import { retryPendingScreenings } from './checkout/screening.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
 // Registers every event handler; must load before the dispatcher runs (see dispatchOnce).
@@ -35,6 +36,8 @@ import { prisma } from './lib/prisma.js';
 import { closeClient, createRedis, whenReady } from './lib/redis.js';
 
 const HEALTH_CHECK_TIMEOUT_MS = 1000;
+/** Re-screens SCREENING_PENDING payments (backoff is per payment); runs every minute. */
+export const RETRY_SCREENINGS_JOB = 'retry-pending-screenings';
 
 /** Loads the event and runs the handler named by the job. Throwing makes BullMQ retry. */
 async function processEventJob(job: Job<EventJobData>): Promise<void> {
@@ -46,6 +49,11 @@ async function processEventJob(job: Job<EventJobData>): Promise<void> {
 }
 
 async function processMaintenanceJob(job: Job): Promise<void> {
+  if (job.name === RETRY_SCREENINGS_JOB) {
+    const n = await retryPendingScreenings();
+    if (n > 0) log('info', 'retried pending screenings', { count: n });
+    return;
+  }
   if (job.name !== PURGE_IDEMPOTENCY_JOB) throw new Error(`unknown maintenance job ${job.name}`);
   const purged = await purgeExpiredIdempotencyKeys();
   log('info', 'purged expired idempotency keys', { purged });
@@ -172,6 +180,12 @@ export async function startWorker(
     PURGE_IDEMPOTENCY_JOB,
     { pattern: '0 * * * *' },
     { name: PURGE_IDEMPOTENCY_JOB },
+  );
+
+  await maintenanceQueue.upsertJobScheduler(
+    RETRY_SCREENINGS_JOB,
+    { every: 60_000 },
+    { name: RETRY_SCREENINGS_JOB },
   );
 
   await accountsQueue.upsertJobScheduler(
