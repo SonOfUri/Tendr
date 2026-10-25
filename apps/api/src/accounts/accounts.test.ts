@@ -1,9 +1,13 @@
 import { randomBytes } from 'node:crypto';
+import { ed25519 } from '@noble/curves/ed25519';
 import type { Merchant, User, WebauthnCredential } from '@prisma/client';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getEventHandler } from '../jobs/handlers.js';
 import '../jobs/register-handlers.js';
+import { providerNotConfigured } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
+import { FundingCapError, ProvisionRequestError } from '../near/provision.js';
+import { NotBroadcastError } from '../near/rpc.js';
 import { closeRedis, getRedis, whenReady } from '../lib/redis.js';
 import { createStore, MAX_OWNED_STORES } from '../merchants/signup.js';
 import { fakeNearClient, resetNearClients } from '../near/client.js';
@@ -18,12 +22,14 @@ import {
   provisionMerchantAccount,
   provisionTestAccount,
   PROVISION_HANDLER,
+  PROVISION_LEASE_MS,
   PROVISION_REQUESTED,
   registerRecoveryKey,
   retryProvisioning,
 } from './accounts.js';
 
-const ed25519Key = () => randomBytes(32).toString('base64');
+const ed25519Key = () =>
+  Buffer.from(ed25519.getPublicKey(ed25519.utils.randomPrivateKey())).toString('base64');
 
 type Owner = { user: User; cred: WebauthnCredential; merchant: Merchant };
 
@@ -347,8 +353,8 @@ describe('merchant accounts', () => {
         orderBy: { createdAt: 'asc' },
       });
       expect(rows.map((r) => [r.publicKey, r.revokedAt === null])).toEqual([
-        [first, false],
-        [second, true],
+        [`ed25519:${first}`, false],
+        [`ed25519:${second}`, true],
       ]);
       expect(rows[1]).toMatchObject({ livemode: true, nearAccountId: 'acme-coffee.tendr.near' });
     });
@@ -374,7 +380,178 @@ describe('merchant accounts', () => {
       const active = await prisma.accountKey.findMany({
         where: { merchantId: merchant.id, kind: 'recovery', revokedAt: null },
       });
-      expect(active.map((r) => r.publicKey)).toEqual([original]);
+      expect(active.map((r) => r.publicKey)).toEqual([`ed25519:${original}`]);
+    });
+
+    it('rejects 32 bytes that are not a valid Ed25519 point', async () => {
+      const { merchant, user } = await owner();
+      const actor = { merchantId: merchant.id, userId: user.id };
+      // The first small y with no x on the curve, and the identity (0, 1), which has small order.
+      let notOnCurve = Buffer.alloc(32);
+      for (let y = 2; ; y++) {
+        notOnCurve = Buffer.alloc(32);
+        notOnCurve[0] = y;
+        try {
+          ed25519.ExtendedPoint.fromHex(notOnCurve);
+        } catch {
+          break;
+        }
+      }
+      const identity = Buffer.alloc(32);
+      identity[0] = 1;
+      expect(ed25519.ExtendedPoint.fromHex(identity).isSmallOrder()).toBe(true);
+      for (const bad of [notOnCurve, identity]) {
+        await expect(registerRecoveryKey(actor, bad.toString('base64'))).rejects.toMatchObject({
+          status: 400,
+        });
+      }
+    });
+
+    it('is refused while a live account is provisioning or failed', async () => {
+      const { merchant, user } = await owner();
+      const actor = { merchantId: merchant.id, userId: user.id };
+      await registerRecoveryKey(actor, ed25519Key());
+      await goLive(actor);
+      await expect(registerRecoveryKey(actor, ed25519Key())).rejects.toMatchObject({
+        status: 409,
+      });
+      await prisma.merchantAccount.updateMany({
+        where: { merchantId: merchant.id, livemode: true },
+        data: { status: 'failed' },
+      });
+      await expect(registerRecoveryKey(actor, ed25519Key())).rejects.toMatchObject({
+        status: 409,
+      });
+      expect(
+        await prisma.accountKey.count({
+          where: { merchantId: merchant.id, kind: 'recovery', revokedAt: null },
+        }),
+      ).toBe(1);
+    });
+  });
+
+  describe('fix round 1', () => {
+    it('a failed live attempt that later lands with other keys is reconciled from the chain', async () => {
+      const { merchant, user, cred } = await owner();
+      const actor = { merchantId: merchant.id, userId: user.id };
+      const r1 = ed25519Key();
+      await registerRecoveryKey(actor, r1);
+      const second = await addMember(merchant.id, true);
+      await goLive(actor, { threshold: 2 });
+      const liveId = 'acme-coffee.tendr.near';
+
+      // The provisioning times out and the tx has not executed yet: the row is marked failed.
+      live.throwNext('provision', new Error('timeout'));
+      await expect(provisionMerchantAccount(merchant.id, true)).rejects.toThrow(/timeout/);
+      expect((await accountRow(merchant.id, true))!.status).toBe('failed');
+      // The recovery key cannot be swapped under the in-flight attempt.
+      await expect(registerRecoveryKey(actor, ed25519Key())).rejects.toMatchObject({
+        status: 409,
+      });
+
+      // The timed-out tx lands — with only the owner as signer, threshold 1, no recovery key —
+      // e.g. a set that differs from what Postgres now intends.
+      await live.provisionAccount({
+        merchantId: merchant.id,
+        livemode: true,
+        accountId: liveId,
+        initialBalanceYocto: 1n,
+        init: {
+          signers: [{ id: user.id, keys: [cred.publicKey as { p256: string }] }],
+          threshold: 1,
+          recovery_key: null,
+          rp_id: 'localhost',
+          origins: ['http://localhost:3000'],
+          intents_contract: 'intents.near',
+          poa_suffix: null,
+          testnet_admin: null,
+        },
+      });
+
+      // The retry hits "already exists" and activates from the chain's config.
+      const row = await provisionMerchantAccount(merchant.id, true);
+      expect(row).toMatchObject({ status: 'active', threshold: 1, signerEpoch: 0n });
+      const keys = await prisma.accountKey.findMany({
+        where: { merchantId: merchant.id, livemode: true, kind: 'passkey' },
+      });
+      expect(keys.map((k) => k.userId)).toEqual([user.id]);
+      const mismatch = await prisma.event.findFirst({
+        where: { type: 'merchant_account.provision_mismatch', merchantId: merchant.id },
+      });
+      expect(mismatch?.payload).toMatchObject({
+        nearAccountId: liveId,
+        recoveryKeySet: { intended: true, onChain: false },
+        threshold: { intended: 2, onChain: 1 },
+        signers: {
+          intended: [user.id, second.user.id].sort(),
+          onChain: [user.id],
+        },
+      });
+      expect(
+        await prisma.event.count({ where: { type: 'merchant_account.activated', livemode: true } }),
+      ).toBe(1);
+    });
+
+    it('concurrent attempts: only the claimant provisions and activates', async () => {
+      const { merchant } = await owner();
+      const [a, b] = await Promise.all([
+        provisionTestAccount(merchant.id),
+        provisionTestAccount(merchant.id),
+      ]);
+      // The loser returns the row as the winner left it (claimed, or already active).
+      expect([a.status, b.status]).toContain('active');
+      for (const r of [a, b]) expect(['active', 'provisioning']).toContain(r.status);
+      expect(test.calls.filter((c) => c.kind === 'provision')).toHaveLength(1);
+      expect(await prisma.event.count({ where: { type: 'merchant_account.activated' } })).toBe(1);
+      // A late attempt on the active row changes nothing.
+      await provisionTestAccount(merchant.id);
+      expect(await prisma.event.count({ where: { type: 'merchant_account.activated' } })).toBe(1);
+      const row = await accountRow(merchant.id, false);
+      expect(row).toMatchObject({
+        status: 'active',
+        provisionAttemptId: null,
+        provisionClaimedAt: null,
+      });
+    });
+
+    it('a held claim blocks other attempts and the retry route; a stale one is taken over', async () => {
+      const { merchant } = await owner();
+      await prisma.merchantAccount.updateMany({
+        where: { merchantId: merchant.id, livemode: false },
+        data: { status: 'failed', provisionAttemptId: 'other', provisionClaimedAt: new Date() },
+      });
+      expect((await provisionTestAccount(merchant.id)).status).toBe('failed');
+      expect(test.calls).toHaveLength(0);
+      await expect(
+        retryProvisioning({ merchantId: merchant.id, livemode: false }),
+      ).rejects.toMatchObject({ status: 409 });
+
+      await prisma.merchantAccount.updateMany({
+        where: { merchantId: merchant.id, livemode: false },
+        data: { provisionClaimedAt: new Date(Date.now() - PROVISION_LEASE_MS - 1000) },
+      });
+      expect((await provisionTestAccount(merchant.id)).status).toBe('active');
+    });
+
+    it('deterministic errors fail the row without a retry', async () => {
+      const { merchant } = await owner();
+      for (const err of [
+        new FundingCapError('daily', 'funding daily cap reached'),
+        new ProvisionRequestError('not a sub-account'),
+        new NotBroadcastError(providerNotConfigured('MERCHANT_ACCOUNT_CODE_HASH_TEST is not set')),
+      ]) {
+        await prisma.merchantAccount.updateMany({
+          where: { merchantId: merchant.id, livemode: false },
+          data: { status: 'provisioning' },
+        });
+        test.throwNext('provision', err);
+        // Resolves (no throw → no BullMQ retry) with the row failed.
+        const row = await provisionTestAccount(merchant.id);
+        expect(row.status).toBe('failed');
+      }
+      // A transient not-broadcast error still throws, so the job retries.
+      test.throwNext('provision', new NotBroadcastError(new Error('kms unavailable')));
+      await expect(provisionTestAccount(merchant.id)).rejects.toThrow(/kms unavailable/);
     });
   });
 

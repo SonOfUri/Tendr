@@ -530,17 +530,22 @@ model AccountKey {
 /// The merchant's NEAR account for one mode. Postgres mirrors the contract; the contract is
 /// authoritative. Replaces the idea of `merchants.near_account_id`.
 model MerchantAccount {
-  id               String                @id
-  merchantId       String                @map("merchant_id")
-  livemode         Boolean
-  nearAccountId    String                @unique @map("near_account_id")
-  contractCodeHash String?               @map("contract_code_hash")
-  threshold        Int
-  signerEpoch      BigInt                @default(0) @map("signer_epoch")
-  status           MerchantAccountStatus @default(provisioning)
-  createdTx        String?               @map("created_tx")
-  createdAt        DateTime              @default(now()) @map("created_at")
-  updatedAt        DateTime              @updatedAt @map("updated_at")
+  id                 String                @id
+  merchantId         String                @map("merchant_id")
+  livemode           Boolean
+  nearAccountId      String                @unique @map("near_account_id")
+  contractCodeHash   String?               @map("contract_code_hash")
+  threshold          Int
+  signerEpoch        BigInt                @default(0) @map("signer_epoch")
+  status             MerchantAccountStatus @default(provisioning)
+  createdTx          String?               @map("created_tx")
+  /// The provisioning attempt holding the row (see accounts/accounts.ts): set with
+  /// `provision_claimed_at` when an attempt claims it, cleared when that attempt ends. A claim
+  /// older than the lease (5 minutes) is stale and may be taken over.
+  provisionAttemptId String?               @map("provision_attempt_id")
+  provisionClaimedAt DateTime?             @map("provision_claimed_at")
+  createdAt          DateTime              @default(now()) @map("created_at")
+  updatedAt          DateTime              @updatedAt @map("updated_at")
 
   merchant         Merchant          @relation(fields: [merchantId], references: [id])
   proposals        AccountProposal[]
@@ -575,7 +580,7 @@ model AccountProposal {
   updatedAt       DateTime       @updatedAt @map("updated_at")
 
   merchant  Merchant          @relation(fields: [merchantId], references: [id])
-  account   MerchantAccount  @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  account   MerchantAccount   @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   createdBy User              @relation(fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   approvals AccountApproval[]
 

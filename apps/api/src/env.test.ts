@@ -172,3 +172,21 @@ describe('loadEnv dashboard auth and mail', () => {
     );
   });
 });
+
+describe('loadEnv merchant account seed balance', () => {
+  it('defaults within the per-account funding cap', () => {
+    const e = loadEnv({ ...base, NODE_ENV: 'test' });
+    expect(e.MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO).toBe(5n * 10n ** 23n);
+  });
+
+  it('rejects a seed balance above FUNDING_PER_ACCOUNT_YOCTO', () => {
+    expect(() =>
+      loadEnv({
+        ...base,
+        NODE_ENV: 'test',
+        FUNDING_PER_ACCOUNT_YOCTO: '100',
+        MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO: '101',
+      }),
+    ).toThrow(/MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO/);
+  });
+});

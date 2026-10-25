@@ -74,6 +74,13 @@ const EnvSchema = z
     MAIL_DRIVER: z.enum(['log', 'memory', 'unconfigured']).optional(),
   })
   .superRefine((e, ctx) => {
+    if (e.MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO > e.FUNDING_PER_ACCOUNT_YOCTO) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO'],
+        message: 'must not exceed FUNDING_PER_ACCOUNT_YOCTO',
+      });
+    }
     if (e.NODE_ENV === 'production' && e.KEYVAULT_DRIVER === 'local') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -16,6 +16,14 @@ export interface ProvisionScope {
 
 const LABEL = /^[a-z0-9]+([-_][a-z0-9]+)*$/;
 
+/** A provisioning request the funding key refuses to sign; retrying it fails the same way. */
+export class ProvisionRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProvisionRequestError';
+  }
+}
+
 /**
  * Rejects a request the funding key must never sign: wrong mode, an account that is not a direct
  * sub-account of this mode's parent (`<slug>.tendr.near` / `<slug>.tendr.testnet`), an init
@@ -23,22 +31,24 @@ const LABEL = /^[a-z0-9]+([-_][a-z0-9]+)*$/;
  */
 export function assertProvisionable(p: ProvisionParams, scope: ProvisionScope): void {
   if (p.livemode !== scope.livemode) {
-    throw new Error(`provisioning livemode=${p.livemode} on a livemode=${scope.livemode} client`);
+    throw new ProvisionRequestError(
+      `provisioning livemode=${p.livemode} on a livemode=${scope.livemode} client`,
+    );
   }
   const suffix = `.${scope.parentAccountId}`;
   const label = p.accountId.endsWith(suffix) ? p.accountId.slice(0, -suffix.length) : '';
   if (!LABEL.test(label) || p.accountId.length > 64) {
-    throw new Error(
+    throw new ProvisionRequestError(
       `account ${p.accountId} is not a direct sub-account of ${scope.parentAccountId}`,
     );
   }
   if (p.init.intents_contract !== scope.intentsContractId) {
-    throw new Error(
+    throw new ProvisionRequestError(
       `init intents_contract ${p.init.intents_contract} is not ${scope.intentsContractId}`,
     );
   }
   if (scope.livemode && p.init.testnet_admin !== null) {
-    throw new Error('a live merchant account must not have a testnet_admin');
+    throw new ProvisionRequestError('a live merchant account must not have a testnet_admin');
   }
 }
 

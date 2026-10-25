@@ -47,11 +47,12 @@ export const accountRoutes: FastifyPluginAsync = async (app) => {
       .object({ threshold: Threshold.optional() })
       .strict()
       .parse(req.body ?? {});
-    const { account, created } = await goLiveOutcome(
+    const { created } = await goLiveOutcome(
       { merchantId: p.merchantId, userId: p.userId },
       { threshold },
     );
-    return reply.status(created ? 202 : 200).send(accountJson(account));
+    // The same trimmed shape as the GET: the live account's status and id only.
+    return reply.status(created ? 202 : 200).send(await goLiveStatus(p.merchantId, threshold));
   });
 
   app.post('/v1/account/recovery-key', { config: { auth: owner } }, async (req, reply) => {

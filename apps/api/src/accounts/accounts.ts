@@ -22,6 +22,8 @@ import {
   type MerchantUserRole,
   type SignerKey,
 } from '@tendr/contracts';
+import { randomUUID } from 'node:crypto';
+import { ed25519 } from '@noble/curves/ed25519';
 import { Prisma, type MerchantAccount } from '@prisma/client';
 import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
@@ -39,6 +41,7 @@ import {
   type SignerKeyJson,
   type TxResult,
 } from '../near/client.js';
+import { FundingCapError, ProvisionRequestError } from '../near/provision.js';
 import { NotBroadcastError } from '../near/rpc.js';
 import { createDraft, type ProposalView } from './proposals.js';
 
@@ -118,8 +121,14 @@ async function activeRecoveryKey(db: Db, merchantId: string): Promise<string | n
     where: { merchantId, livemode: true, kind: 'recovery', revokedAt: null },
     orderBy: { createdAt: 'desc' },
   });
-  return row?.publicKey ?? null;
+  if (!row) return null;
+  // Every account_keys row stores `<curve>:<base64>`.
+  return row.publicKey.startsWith(RECOVERY_PREFIX)
+    ? row.publicKey.slice(RECOVERY_PREFIX.length)
+    : row.publicKey;
 }
+
+const RECOVERY_PREFIX = 'ed25519:';
 
 const keyId = (k: SignerKeyJson | SignerKey) =>
   'p256' in k ? `p256:${k.p256}` : `ed25519:${k.ed25519}`;
@@ -242,30 +251,87 @@ async function onChainConfig(
 
 const isAlreadyExists = (r: TxResult) => /already exists/i.test(r.failure ?? '');
 
+/** How long a provisioning claim holds; an older claim is stale and may be taken over. */
+export const PROVISION_LEASE_MS = 5 * 60_000;
+
 /**
- * Provisions the store's account in `livemode` if it is `provisioning` or `failed`; an `active`
- * account is returned untouched (so a replayed job is a no-op).
+ * Errors that will recur on every retry: a request the funding key refuses, a missing code hash,
+ * or a funding cap. They fail the row without a BullMQ retry (the owner retries once fixed).
+ */
+function isDeterministic(err: unknown): boolean {
+  const e = err instanceof NotBroadcastError ? err.cause : err;
+  return (
+    e instanceof ProvisionRequestError ||
+    e instanceof FundingCapError ||
+    (e instanceof AppError && e.code === 'PROVIDER_NOT_CONFIGURED')
+  );
+}
+
+/** A claimed provisioning attempt on one row. */
+interface Attempt {
+  account: MerchantAccount;
+  attemptId: string;
+}
+
+/**
+ * Claims `account` for one provisioning attempt: `provisioning` or `failed`, and not held by a
+ * live claim of another attempt. Returns null when another attempt holds it (or it is active).
+ */
+async function claim(account: MerchantAccount): Promise<Attempt | null> {
+  const attemptId = randomUUID();
+  const now = new Date();
+  const claimed = await prisma.merchantAccount.updateMany({
+    where: {
+      id: account.id,
+      merchantId: account.merchantId,
+      livemode: account.livemode,
+      status: { in: ['provisioning', 'failed'] },
+      OR: [
+        { provisionClaimedAt: null },
+        { provisionClaimedAt: { lt: new Date(now.getTime() - PROVISION_LEASE_MS) } },
+      ],
+    },
+    data: { status: 'provisioning', provisionAttemptId: attemptId, provisionClaimedAt: now },
+  });
+  if (claimed.count !== 1) return null;
+  return {
+    account: await prisma.merchantAccount.findFirstOrThrow({ where: { id: account.id } }),
+    attemptId,
+  };
+}
+
+/**
+ * Provisions the store's account in `livemode`. Only one attempt runs at a time: it first claims
+ * the row (see `claim`); an attempt that cannot claim it (another one holds it, or it is already
+ * active) returns the row untouched, so replayed and concurrent jobs are no-ops.
  *
- * - success (or an earlier attempt found on chain) → `active`, threshold and epoch from chain,
- *   signer keys mirrored into `account_keys`;
- * - a definite failure (failed on chain, init not buildable) → `failed`, returned (not thrown:
- *   retrying the same thing would fail the same way; the owner retries after fixing it);
- * - a thrown error (not broadcast, funding cap, unknown outcome not found on chain) → `failed`,
- *   then rethrown so the job retries.
+ * - success → `active`, signer keys mirrored into `account_keys`;
+ * - an earlier attempt found on chain (unknown outcome, or "already exists") → `active`,
+ *   reconciled from the chain's config (see `activateFromChain`);
+ * - a definite failure (failed on chain, init not buildable, a deterministic error such as a
+ *   refused request, missing code hash or funding cap) → `failed`, returned, not retried;
+ * - any other thrown error (not broadcast, unknown outcome not found on chain) → `failed`, then
+ *   rethrown so the job retries.
  */
 export async function provisionMerchantAccount(
   merchantId: string,
   livemode: boolean,
 ): Promise<MerchantAccount> {
-  const account = await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } });
-  if (!account) throw notFound('No account to provision');
-  if (account.status === 'active') return account;
+  const row = await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } });
+  if (!row) throw notFound('No account to provision');
+  if (row.status === 'active') return row;
+  const attempt = await claim(row);
+  if (!attempt) {
+    return prisma.merchantAccount.findFirstOrThrow({ where: { id: row.id } });
+  }
+  const { account } = attempt;
 
   let built: Awaited<ReturnType<typeof initConfigFor>>;
   try {
     built = await initConfigFor(account);
   } catch (err) {
-    if (err instanceof NotProvisionable) return markFailed(account, err.message);
+    if (err instanceof NotProvisionable) return markFailed(attempt, err.message);
+    await markFailed(attempt, String(err));
     throw err;
   }
 
@@ -280,18 +346,19 @@ export async function provisionMerchantAccount(
       initialBalanceYocto: env().MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO,
     });
   } catch (err) {
+    if (isDeterministic(err)) return markFailed(attempt, String(err));
     // Nothing reached the chain for these; anything else may have landed.
     const definitelyNotSent = err instanceof NotBroadcastError || err instanceof AppError;
     if (!definitelyNotSent) {
       const config = await onChainConfig(client, account);
-      if (config) return activateFromChain(account, config, null);
+      if (config) return activateFromChain(attempt, config);
     }
-    await markFailed(account, String(err));
+    await markFailed(attempt, String(err));
     throw err;
   }
 
   if (result.status === 'success') {
-    return activate(account, {
+    return activate(attempt, {
       signers: built.signers,
       threshold: built.init.threshold,
       signerEpoch: 0n,
@@ -300,9 +367,9 @@ export async function provisionMerchantAccount(
   }
   if (isAlreadyExists(result)) {
     const config = await onChainConfig(client, account);
-    if (config) return activateFromChain(account, config, null);
+    if (config) return activateFromChain(attempt, config);
   }
-  return markFailed(account, result.failure ?? 'provisioning failed on chain', result.txHash);
+  return markFailed(attempt, result.failure ?? 'provisioning failed on chain', result.txHash);
 }
 
 /** Test mode's `provisionMerchantAccount`. */
@@ -310,12 +377,16 @@ export function provisionTestAccount(merchantId: string): Promise<MerchantAccoun
   return provisionMerchantAccount(merchantId, false);
 }
 
-/** Maps the chain's signer set onto credential rows, then activates. */
-async function activateFromChain(
-  account: MerchantAccount,
-  config: ConfigView,
-  txHash: string | null,
-): Promise<MerchantAccount> {
+/**
+ * Activates from the chain's own config, for an account an earlier attempt created: threshold and
+ * epoch come from `get_config`, and so do the signers' key sets mirrored into `account_keys`. The
+ * chain is authoritative, so the account is activated even when it differs from what Postgres
+ * intended (a different signer set, threshold, or recovery key presence — e.g. the members
+ * changed between the attempt that landed and the one that found it); such a difference is
+ * recorded as `merchant_account.provision_mismatch` for follow-up.
+ */
+async function activateFromChain(attempt: Attempt, config: ConfigView): Promise<MerchantAccount> {
+  const { account } = attempt;
   const known = new Set(
     (
       await prisma.user.findMany({
@@ -342,37 +413,88 @@ async function activateFromChain(
         };
       }),
   );
-  return activate(account, {
-    signers,
-    threshold: config.threshold,
-    signerEpoch: BigInt(config.signer_epoch),
-    txHash,
-  });
+
+  // What Postgres intends now, compared with what the chain holds.
+  const intendedSigners = (await signerSet(prisma, account.merchantId)).map((s) => s.id).sort();
+  const chainSigners = config.signers.map((s) => s.id).sort();
+  const intendedRecovery = account.livemode
+    ? (await activeRecoveryKey(prisma, account.merchantId)) !== null
+    : false;
+  const intendedThreshold = account.livemode ? account.threshold : 1;
+  const mismatch: Record<string, unknown> = {};
+  if (JSON.stringify(intendedSigners) !== JSON.stringify(chainSigners)) {
+    mismatch.signers = { intended: intendedSigners, onChain: chainSigners };
+  }
+  if (intendedRecovery !== config.recovery_key_set) {
+    mismatch.recoveryKeySet = { intended: intendedRecovery, onChain: config.recovery_key_set };
+  }
+  if (intendedThreshold !== config.threshold) {
+    mismatch.threshold = { intended: intendedThreshold, onChain: config.threshold };
+  }
+
+  return activate(
+    attempt,
+    {
+      signers,
+      threshold: config.threshold,
+      signerEpoch: BigInt(config.signer_epoch),
+      txHash: null,
+    },
+    Object.keys(mismatch).length > 0 ? mismatch : null,
+  );
 }
 
+/**
+ * Marks the claimed row `active` — only if this attempt still holds it and it is not active yet —
+ * mirrors the signer keys and records `merchant_account.activated` (plus
+ * `merchant_account.provision_mismatch` when given). An attempt that lost the row changes nothing.
+ */
 async function activate(
-  account: MerchantAccount,
+  attempt: Attempt,
   s: { signers: SignerEntry[]; threshold: number; signerEpoch: bigint; txHash: string | null },
+  mismatch: Record<string, unknown> | null = null,
 ): Promise<MerchantAccount> {
+  const { account } = attempt;
   const ctx = { merchantId: account.merchantId, livemode: account.livemode };
   return tenantTransaction(ctx, async (tx) => {
     const updated = await tx.merchantAccount.updateMany({
-      where: { id: account.id, merchantId: ctx.merchantId, livemode: ctx.livemode },
+      where: {
+        id: account.id,
+        merchantId: ctx.merchantId,
+        livemode: ctx.livemode,
+        status: { not: 'active' },
+        provisionAttemptId: attempt.attemptId,
+      },
       data: {
         status: 'active',
         threshold: s.threshold,
         signerEpoch: s.signerEpoch,
+        provisionAttemptId: null,
+        provisionClaimedAt: null,
         ...(s.txHash ? { createdTx: s.txHash } : {}),
       },
     });
-    if (updated.count !== 1) throw notFound('Account not found');
-    await mirrorSignerKeys(tx, account, s.signers);
-    await recordEvent(tx, ctx, {
-      aggregateType: 'merchant_account',
-      aggregateId: account.id,
-      type: 'merchant_account.activated',
-      payload: { nearAccountId: account.nearAccountId, txHash: s.txHash },
-    });
+    if (updated.count === 1) {
+      await mirrorSignerKeys(tx, account, s.signers);
+      await recordEvent(tx, ctx, {
+        aggregateType: 'merchant_account',
+        aggregateId: account.id,
+        type: 'merchant_account.activated',
+        payload: { nearAccountId: account.nearAccountId, txHash: s.txHash },
+      });
+      if (mismatch) {
+        log('warn', 'merchant account differs from its intended config', {
+          accountId: account.id,
+          nearAccountId: account.nearAccountId,
+        });
+        await recordEvent(tx, ctx, {
+          aggregateType: 'merchant_account',
+          aggregateId: account.id,
+          type: 'merchant_account.provision_mismatch',
+          payload: { nearAccountId: account.nearAccountId, ...mismatch },
+        });
+      }
+    }
     return tx.merchantAccount.findFirstOrThrow({ where: { id: account.id } });
   });
 }
@@ -407,11 +529,13 @@ async function mirrorSignerKeys(
   });
 }
 
+/** Marks the claimed row `failed` and releases the claim (only while this attempt holds it). */
 async function markFailed(
-  account: MerchantAccount,
+  attempt: Attempt,
   reason: string,
   txHash?: string,
 ): Promise<MerchantAccount> {
+  const { account } = attempt;
   const ctx = { merchantId: account.merchantId, livemode: account.livemode };
   log('warn', 'merchant account provisioning failed', {
     accountId: account.id,
@@ -425,8 +549,9 @@ async function markFailed(
         merchantId: ctx.merchantId,
         livemode: ctx.livemode,
         status: { not: 'active' },
+        provisionAttemptId: attempt.attemptId,
       },
-      data: { status: 'failed' },
+      data: { status: 'failed', provisionAttemptId: null, provisionClaimedAt: null },
     });
     if (updated.count === 1) {
       await recordEvent(tx, ctx, {
@@ -444,7 +569,10 @@ async function markFailed(
   });
 }
 
-/** Re-queues a `failed` account's provisioning (409 for any other status). */
+/**
+ * Re-queues a `failed` account's provisioning (409 for any other status, or while an attempt
+ * still holds it).
+ */
 export async function retryProvisioning(ctx: ScopeContext): Promise<MerchantAccount> {
   return tenantTransaction(ctx, async (tx) => {
     const account = await tx.merchantAccount.findFirst({
@@ -452,11 +580,20 @@ export async function retryProvisioning(ctx: ScopeContext): Promise<MerchantAcco
     });
     if (!account) throw notFound('No account in this mode');
     const updated = await tx.merchantAccount.updateMany({
-      where: { id: account.id, merchantId: ctx.merchantId, status: 'failed' },
+      where: {
+        id: account.id,
+        merchantId: ctx.merchantId,
+        status: 'failed',
+        OR: [
+          { provisionClaimedAt: null },
+          { provisionClaimedAt: { lt: new Date(Date.now() - PROVISION_LEASE_MS) } },
+        ],
+      },
       data: { status: 'provisioning' },
     });
-    if (updated.count !== 1)
+    if (updated.count !== 1) {
       throw conflict(`The account is ${account.status}; only a failed one is retried`);
+    }
     const row = await tx.merchantAccount.findFirstOrThrow({ where: { id: account.id } });
     await requestProvisioning(tx, ctx, row);
     return row;
@@ -497,7 +634,11 @@ export async function goLiveCheck(
 }
 
 /** What the go-live checklist shows. */
-export async function goLiveStatus(merchantId: string, threshold = 1) {
+/**
+ * The go-live checklist, readable by every member in either mode: the rule's result and counts,
+ * and only the live account's status and id (never its internals: threshold, epoch, tx).
+ */
+export async function goLiveStatus(merchantId: string, threshold = 1): Promise<GoLiveStatus> {
   const [signers, recovery, live, check] = await Promise.all([
     signerSet(prisma, merchantId),
     activeRecoveryKey(prisma, merchantId),
@@ -505,11 +646,19 @@ export async function goLiveStatus(merchantId: string, threshold = 1) {
     goLiveCheck(merchantId, threshold),
   ]);
   return {
-    ...check,
-    signerCount: signers.length,
-    recoveryKeySet: recovery !== null,
-    liveAccount: live ? accountJson(live) : null,
+    checklist: { ...check, signerCount: signers.length, recoveryKeySet: recovery !== null },
+    live: live ? { status: live.status, nearAccountId: live.nearAccountId } : null,
   };
+}
+
+export interface GoLiveStatus {
+  checklist: {
+    ok: boolean;
+    missing: GoLiveMissing[];
+    signerCount: number;
+    recoveryKeySet: boolean;
+  };
+  live: { status: MerchantAccount['status']; nearAccountId: string } | null;
 }
 
 /** Actor of the owner-only account actions (go-live, recovery key). */
@@ -601,23 +750,35 @@ export async function goLive(
 
 const STD_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
+/** A valid Ed25519 public key: a canonical encoding of a curve point that is not of small order. */
+function isEd25519Point(bytes: Uint8Array): boolean {
+  try {
+    return !ed25519.ExtendedPoint.fromHex(bytes).isSmallOrder();
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Registers the store's recovery public key (32-byte Ed25519, standard padded base64). It must
- * differ from every signer key.
- * - Before go-live (no live account, or a failed one): stored as the active `recovery` account key
- *   (replacing any earlier one) and used in the live init.
- * - After go-live: becomes a `rotate_recovery_key` proposal draft on the live account; nothing is
- *   written until the contract executes it.
- * - While go-live is provisioning: 409 (the live init is being built).
+ * Registers the store's recovery public key (a valid 32-byte Ed25519 point, standard padded
+ * base64). It must differ from every signer key.
+ * - Before go-live starts (no live account row): stored as the active `recovery` account key
+ *   (`ed25519:<base64>`, replacing any earlier one) and used in the live init.
+ * - After go-live (live account active): becomes a `rotate_recovery_key` proposal draft on the live
+ *   account; nothing is written until the contract executes it.
+ * - While a live account is provisioning OR failed: 409. A failed attempt may still land on chain
+ *   with the key it was sent with, so the key cannot be swapped under it.
  */
 export async function registerRecoveryKey(
   actor: OwnerActor,
   publicKeyB64: string,
 ): Promise<{ stored: true } | { stored: false; proposal: ProposalView }> {
   const membership = await requireOwner(actor);
-  if (!STD_BASE64.test(publicKeyB64) || Buffer.from(publicKeyB64, 'base64').length !== 32) {
+  const bytes = STD_BASE64.test(publicKeyB64) ? Buffer.from(publicKeyB64, 'base64') : null;
+  if (!bytes || bytes.length !== 32) {
     throw invalid('The recovery key must be a 32-byte Ed25519 public key in standard base64');
   }
+  if (!isEd25519Point(bytes)) throw invalid('The recovery key is not a valid Ed25519 public key');
   const signers = await signerSet(prisma, actor.merchantId);
   if (signers.some((s) => s.keys.some((k) => keyId(k) === `ed25519:${publicKeyB64}`))) {
     throw invalid('The recovery key must differ from every signer key');
@@ -646,8 +807,12 @@ export async function registerRecoveryKey(
     const current = await tx.merchantAccount.findFirst({
       where: { merchantId: ctx.merchantId, livemode: true },
     });
-    if (current && current.status !== 'failed') {
-      throw conflict('Go-live is in progress; set the recovery key once the live account is ready');
+    if (current) {
+      throw conflict(
+        current.status === 'active'
+          ? 'The account is live; the recovery key changes by proposal'
+          : 'Go-live has started; set the recovery key once the live account is ready',
+      );
     }
     const merchant = await tx.merchant.findUniqueOrThrow({ where: { id: ctx.merchantId } });
     const now = new Date();
@@ -662,7 +827,7 @@ export async function registerRecoveryKey(
         merchantId: ctx.merchantId,
         livemode: true,
         nearAccountId: nearAccountIdFor(merchant.slug, true),
-        publicKey: publicKeyB64,
+        publicKey: `${RECOVERY_PREFIX}${publicKeyB64}`,
         kind: 'recovery',
       },
     });

@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { ed25519 } from '@noble/curves/ed25519';
 import type { MerchantUserRole } from '@tendr/contracts';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -118,12 +119,10 @@ describe('account routes', () => {
   it('go-live: check, owner only, step-up, the two-key rule', async () => {
     const check = await get('/v1/account/go-live', ownerLogin);
     expect(check.statusCode).toBe(200);
-    expect(check.json()).toMatchObject({
-      ok: false,
-      missing: ['second_key'],
-      signerCount: 1,
-      recoveryKeySet: false,
-      liveAccount: null,
+    // Only the checklist and the live account's status and id: no live internals.
+    expect(check.json()).toEqual({
+      checklist: { ok: false, missing: ['second_key'], signerCount: 1, recoveryKeySet: false },
+      live: null,
     });
 
     const blocked = await post('/v1/account/go-live', ownerLogin);
@@ -142,18 +141,29 @@ describe('account routes', () => {
 
     const ok = await post('/v1/account/go-live', ownerLogin, { threshold: 2 });
     expect(ok.statusCode, ok.body).toBe(202);
-    expect(ok.json()).toMatchObject({
-      nearAccountId: 'acme.tendr.near',
-      status: 'provisioning',
-      threshold: 2,
+    expect(ok.json()).toEqual({
+      checklist: expect.objectContaining({ signerCount: 2 }),
+      live: { nearAccountId: 'acme.tendr.near', status: 'provisioning' },
     });
     const again = await post('/v1/account/go-live', ownerLogin, { threshold: 1 });
     expect(again.statusCode).toBe(200);
-    expect(again.json()).toMatchObject({ id: ok.json().id, threshold: 2 });
+    expect(again.json().live).toEqual({ nearAccountId: 'acme.tendr.near', status: 'provisioning' });
+    expect(
+      await prisma.merchantAccount.findFirst({ where: { merchantId, livemode: true } }),
+    ).toMatchObject({ threshold: 2 });
+
+    // A viewer in test mode reads the same trimmed checklist.
+    const viewer = await member('viewer');
+    const seen = await get('/v1/account/go-live', viewer);
+    expect(seen.statusCode).toBe(200);
+    expect(Object.keys(seen.json().live).sort()).toEqual(['nearAccountId', 'status']);
+    expect(seen.body).not.toMatch(/threshold"?:\s*2|signerEpoch|createdTx/);
   });
 
   it('recovery key: owner only, with step-up; stored before go-live', async () => {
-    const key = randomBytes(32).toString('base64');
+    const key = Buffer.from(ed25519.getPublicKey(ed25519.utils.randomPrivateKey())).toString(
+      'base64',
+    );
     const admin = await member('admin', true);
     expect((await post('/v1/account/recovery-key', admin, { publicKey: key })).statusCode).toBe(
       403,
@@ -165,7 +175,7 @@ describe('account routes', () => {
     const res = await post('/v1/account/recovery-key', ownerLogin, { publicKey: key });
     expect(res.statusCode, res.body).toBe(201);
     expect(res.json()).toMatchObject({ stored: true });
-    expect((await get('/v1/account/go-live', ownerLogin)).json()).toMatchObject({
+    expect((await get('/v1/account/go-live', ownerLogin)).json().checklist).toMatchObject({
       ok: true,
       recoveryKeySet: true,
     });
