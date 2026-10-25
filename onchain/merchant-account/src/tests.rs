@@ -1320,4 +1320,6 @@ fn write_test_vectors() {
 }
 
 mod money;
+#[cfg(feature = "probe")]
+mod probe;
 mod recovery;

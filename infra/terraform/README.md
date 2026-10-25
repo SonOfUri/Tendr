@@ -36,7 +36,9 @@ docker run --rm -v "$PWD/infra/terraform:/tf" -w /tf/gcp hashicorp/terraform:1.9
 - `tendr-kek`: symmetric `ENCRYPT_DECRYPT`, rotated every 90 days. Envelope encryption for stored
   secrets.
 - Signing keys (`ASYMMETRIC_SIGN`, never exported):
-  - `relayer-near`, `funding-near`, `solver-hot` — `EC_SIGN_ED25519`
+  - `relayer-near`, `funding-near`, `relayer-accounts`, `solver-hot` — `EC_SIGN_ED25519`
+    (`relayer-accounts` pays gas for merchant account contract calls and can move no funds; its
+    NEAR implicit account, the hex of its public key, is funded out of band)
   - `relayer-evm`, `gas-tron` — `EC_SIGN_SECP256K1_SHA256`
   - No EVM or Solana gas keys: that sponsorship goes through Pimlico (an API key stored as a secret).
 - `protection_level` defaults to `HSM`. If Cloud KMS rejects an algorithm at HSM level in the chosen

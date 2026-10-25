@@ -2,9 +2,10 @@
 title: Troubleshooting
 ---
 
-| Symptom                            | Fix                                                                                                                                                                                                         |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `401 UNAUTHORIZED` from `/v1/ping` | Use a key printed by `npm run db:seed`. Raw keys are shown once; to get new ones, reset the dev database (`npx dotenv -e ../../.env -- prisma migrate reset` in `apps/api`) and run `npm run db:seed` again |
-| Database connection failed         | Start Docker Compose Postgres (`docker compose -f infra/docker/docker-compose.yml up -d`)                                                                                                                   |
-| Redis connection errors            | Start Docker Compose Redis (host port 6380)                                                                                                                                                                 |
-| `409 IDEMPOTENCY_CONFLICT`         | An `Idempotency-Key` was reused with a different request; use a new key                                                                                                                                     |
+| Symptom                                      | Fix                                                                                                                                                                                                         |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `401 UNAUTHORIZED` from `/v1/ping`           | Use a key printed by `npm run db:seed`. Raw keys are shown once; to get new ones, reset the dev database (`npx dotenv -e ../../.env -- prisma migrate reset` in `apps/api`) and run `npm run db:seed` again |
+| Database connection failed                   | Start Docker Compose Postgres (`docker compose -f infra/docker/docker-compose.yml up -d`)                                                                                                                   |
+| Redis connection errors                      | Start Docker Compose Redis (host port 6380)                                                                                                                                                                 |
+| `409 IDEMPOTENCY_CONFLICT`                   | An `Idempotency-Key` was reused with a different request; use a new key                                                                                                                                     |
+| `401 UNAUTHENTICATED` from the dashboard API | The dashboard session is missing or expired, or a passkey ceremony failed (a failed ceremony does not sign you out). Sign in again with your passkey or a magic link.                                       |

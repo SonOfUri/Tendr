@@ -442,6 +442,32 @@ impl MerchantAccount {
     }
 }
 
+/// Mainnet verification probe (feature `probe` only): checks one P-256
+/// signature with the same host function the WebAuthn path uses. It is an
+/// associated function with no `self`, so it needs no contract state and works
+/// on an account that never ran `new`. Returns `false` for a wrong length or a
+/// signature that does not verify.
+#[cfg(feature = "probe")]
+#[near]
+impl MerchantAccount {
+    /// `signature` is 64 bytes `r‖s`, `prehash` the 32-byte digest that was
+    /// signed, `public_key` the 33-byte compressed point; all base64.
+    pub fn probe_p256(
+        signature: near_sdk::json_types::Base64VecU8,
+        prehash: near_sdk::json_types::Base64VecU8,
+        public_key: near_sdk::json_types::Base64VecU8,
+    ) -> bool {
+        let (Ok(sig), Ok(hash), Ok(pk)) = (
+            <[u8; 64]>::try_from(signature.0.as_slice()),
+            <[u8; 32]>::try_from(prehash.0.as_slice()),
+            <[u8; 33]>::try_from(public_key.0.as_slice()),
+        ) else {
+            return false;
+        };
+        env::p256_verify(&sig, &hash, &pk)
+    }
+}
+
 #[derive(near_sdk::BorshStorageKey)]
 #[near(serializers = [borsh])]
 enum StorageKey {

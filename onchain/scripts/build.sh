@@ -16,6 +16,9 @@
 # Usage: onchain/scripts/build.sh [--features <list>] [crate ...]
 #        (default: all contract crates, default features)
 #   e.g. onchain/scripts/build.sh --features testnet-admin merchant-account
+#        onchain/scripts/build.sh --features probe merchant-account
+#   The `probe` build adds the probe_p256 view for the mainnet check script
+#   only; it is never published or deployed for a merchant.
 set -euo pipefail
 
 ONCHAIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

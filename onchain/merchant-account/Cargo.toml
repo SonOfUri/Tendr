@@ -13,6 +13,11 @@ crate-type = ["cdylib", "rlib"]
 default = []
 # Testnet-only admin escape hatch (Task 5). Never enabled for live builds.
 testnet-admin = []
+# Adds the `probe_p256` view, used only by the mainnet verification script
+# (apps/api/scripts/verify-merchant-account-mainnet.ts) to prove the
+# `p256_verify` host function works on mainnet. Never enabled for a build that
+# is published or deployed for a merchant.
+probe = []
 
 [dependencies]
 near-sdk.workspace = true

@@ -90,6 +90,77 @@ not collide with other local services.
 - Worker health: http://localhost:4100/health
 - Docs: `npm run dev:docs` (Mintlify via `npx`)
 
+### Merchant accounts (NEAR)
+
+Each store gets a NEAR account (`<slug>.tendr.near` live, `<slug>.tendr.testnet` test) with **zero
+access keys**. A threshold contract (`onchain/merchant-account`) is the only thing that can act for
+it, and signers are passkeys verified inside the contract. Design:
+`docs/superpowers/specs/2026-10-25-merchant-accounts-design.md`.
+
+**Local development needs no NEAR node, GCP or contract build.** Outside production
+`NEAR_CLIENT_DRIVER` defaults to `fake`, an in-memory NEAR client. Set `NEAR_FAKE_SIMULATE=1` (e2e
+and offline demos only; refused with any other driver) to also run the contract's rules in memory.
+`npm run e2e:serve --workspace=@tendr/api` starts the API and worker in one process for the
+Playwright dashboard tests. Keep `MAIL_DRIVER=log` (the default in development): sign-in and
+recovery emails are written to the log and to `apps/api/.mail/`.
+
+**Testnet publish** (manual, never run by CI). Needs Docker and a funded `tendr.testnet` key:
+
+```bash
+export NEAR_PUBLISH_PRIVATE_KEY=ed25519:...        # full-access key of tendr.testnet
+npm run onchain:publish:testnet --workspace=@tendr/api -- --network testnet
+```
+
+It builds `onchain/` in Docker (`onchain/scripts/build.sh`), publishes the `testnet-admin` build of
+the merchant-account contract as a global contract, deploys `mock-intents` to
+`intents-mock.tendr.testnet`, and prints the code hash. Put that in `MERCHANT_ACCOUNT_CODE_HASH_TEST`
+and confirm the testnet asset ids it lists against `apps/web/src/lib/asset-registry.ts`. Any
+`--network` other than `testnet` is refused.
+
+**Mainnet checks** (manual, spends real funds, never run by CI). Verifies the spec's "Assumptions to
+verify early" with a funded mainnet account of your own: `p256_verify` on mainnet, a 1Click swap
+delivered to a contract account (`recipientType INTENTS`, `refundType INTENTS`), a threshold-approved
+`ft_withdraw` with a `WITHDRAW_TO:` memo to an EVM address you control, sub-account creation without
+`AddKey`, and NEP-145 storage needs. It also prints the observed omft token account names (to
+confirm `POA_CHAIN_PREFIXES` in `money.rs` and `poa_suffix`), the real verifier's return values, and
+the shape of RPC `InvalidNonce` and timeout errors. The saved-address delay is 24 h, so it runs in
+two phases:
+
+```bash
+onchain/scripts/build.sh && onchain/scripts/build.sh --features probe merchant-account
+export VERIFY_FUNDER_ACCOUNT_ID=you.near VERIFY_FUNDER_PRIVATE_KEY=ed25519:...
+npm run onchain:verify:mainnet --workspace=@tendr/api -- \
+  --yes-i-understand-this-spends-mainnet-funds --evm-address 0x... --phase prepare
+# 24 hours later:
+npm run onchain:verify:mainnet --workspace=@tendr/api -- \
+  --yes-i-understand-this-spends-mainnet-funds --evm-address 0x... --phase finish --cleanup
+```
+
+It prints PASS / FAIL / INFO per check and stops at the first FAIL. The `probe` build adds a
+`probe_p256` view and exists only for this script; it is never published.
+
+**Audit gate.** The contract must be independently audited before any live merchant holds funds.
+Do not set `MERCHANT_ACCOUNT_CODE_HASH_LIVE` (and do not publish a global contract on mainnet) until
+the audit is done: provisioning a live account is refused while it is unset.
+
+**Production checklist for merchant accounts**
+
+- Fund the `relayer-accounts` NEAR account out of band. It is the implicit account whose id is the
+  lower-case hex of the key's 32-byte Ed25519 public key (`implicitAccountId` in
+  `apps/api/src/near/tx.ts`; read the public key from Cloud KMS). It only needs gas money.
+  `funding-near` creates accounts and is capped by `FUNDING_PER_ACCOUNT_YOCTO` and
+  `FUNDING_DAILY_CAP_YOCTO`; keep its balance low.
+- `MAIL_DRIVER` has no working default in production (`unconfigured` makes sending fail loudly).
+  Configure a real mail provider before enabling signup: until then no one can verify an email.
+- The API answers `401 UNAUTHENTICATED` for a missing or expired dashboard session and for a failed
+  passkey ceremony (the dashboard does not sign the user out on a failed ceremony). See
+  `apps/docs` troubleshooting.
+- The API and the dashboard may live on different subdomains. The CSRF value is returned as
+  `csrfToken` in the body of every response that starts or describes a session and is sent back as
+  the `Tendr-CSRF` header, so the dashboard does not depend on reading the API's cookie. Set
+  `WEBAUTHN_RP_ID` to the parent domain (`usetendr.tech`) and list every dashboard origin in
+  `WEBAUTHN_ORIGINS`.
+
 ### Cloud KMS check
 
 Production keeps keys in Google Cloud KMS. To check that the GCP project supports both curves

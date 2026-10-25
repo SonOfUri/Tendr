@@ -10,11 +10,11 @@ Source of truth: the four Excalidraw diagrams in the repo root (`checkout-fx-arc
 Tendr is being built in full, as the diagrams describe. The work is split into ordered projects, each with its own design:
 
 1. **Foundation** (this document)
-2. Checkout core: checkout service, 1Click quotes, fee, screening, payment watcher, refunds, webhooks, hosted checkout screens
-3. Merchant accounts: merchant + account services, dashboard login/roles, merchant NEAR account (multi-passkey, multisig + guardian, 72h recovery), allowlist, auto-sweep
+2. Merchant accounts: merchant + account services, dashboard login/roles, merchant NEAR account (multi-passkey, multisig + guardian, 72h recovery), allowlist, auto-sweep *(swapped with checkout core; see Amendments)*
+3. Checkout core: checkout service, 1Click quotes, fee, screening, payment watcher, refunds, webhooks, hosted checkout screens, JS widget *(swapped with merchant accounts; the JS widget moved here from 6; see Amendments)*
 4. WooCommerce plugin — **first milestone: a pilot WooCommerce merchant takes a real payment end to end**
 5. Gas service, relayer/`onTendrDeposit`, payment links, theme editor, full dashboard
-6. JS widget, Shopify app, AI-agent API
+6. Shopify app, AI-agent API *(the JS widget moved to project 3)*
 7. FX solver (phase 2)
 
 **AI layer** (from the user's brief; added to the backend services layer, not yet on the diagrams). Each lands in the project that owns its surface:
@@ -180,6 +180,7 @@ A small interface in `apps/api` with two implementations: `GcpKeyVault` (product
   - Keys use HSM protection where Cloud KMS supports that algorithm at HSM level, otherwise software.
 - **Named keys, declared now so later projects don't add unplanned ones:**
   - `relayer-near` (Ed25519) and `relayer-evm` (secp256k1) — notify-only; project 5.
+  - `relayer-accounts` (Ed25519) — gas-only relayer for merchant account contracts; added by the merchant-accounts project (see Amendments).
   - `gas-tron` (secp256k1) — Tron gas wallet (energy/bandwidth sponsorship); project 5. The only self-run gas key (user's decision).
   - EVM and Solana gas sponsorship go through Pimlico (user's decision), whose API key is a stored secret, not a signing key. `relayer-evm` also submits EIP-3009 transfers.
   - `funding-near` (Ed25519) — pays storage deposits when creating merchant NEAR accounts; project 3. **Spend-capped**: Cloud KMS cannot limit spending, so the cap is enforced by the account service (per-account and daily limits) and by keeping the account's on-chain balance low with monitored top-ups.
@@ -253,3 +254,11 @@ Decisions taken while implementing, superseding the text above where they differ
 - **Events** are readable (never writable) through scoped and read-only clients; `event_outbox` stays infrastructure-only.
 - **Dispatch** only claims outbox rows whose event type has a registered handler; unhandled rows wait (no silent drop). Handlers are registered in one module, `src/jobs/register-handlers.ts`.
 - **KMS** location defaults to `us-east4` (HSM keys are not offered in `global`); every Cloud KMS call verifies CRC32C checksums; the local vault is refused in production at boot.
+
+## Amendments made during merchant accounts (2026-10-25)
+
+Decisions taken while designing and building the merchant-accounts project (`docs/superpowers/specs/2026-10-25-merchant-accounts-design.md`), superseding the text above where they differ:
+
+- **New named key `relayer-accounts` (Ed25519).** It submits `propose` / `approve` / `cancel` / `execute` and recovery calls to merchant account contracts and pays only their gas. It is not a signer on any account and can move no funds; a compromised key can delay things, not redirect money. It is distinct from `relayer-near` (notify-only, project 5) and `funding-near` (account creation only). Terraform declares it next to the other signing keys (`prevent_destroy`, `signerVerifier` and `publicKeyViewer` for the API service account), and its NEAR implicit account (the hex of its public key) is funded out of band.
+- **Project order: 2 and 3 are swapped.** Merchant accounts is now project 2 and checkout core is project 3, because checkout settles into the merchant's intents account and needs it first. The list under "Where this sits" reads accordingly. Elsewhere in this document "project 2" and "project 3" keep their original meaning (checkout core and merchant accounts respectively) unless the context says otherwise.
+- **The JS widget moves to project 3** (checkout core), with the hosted page and modal. Project 6 keeps the Shopify app and the AI-agent API.

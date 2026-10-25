@@ -694,6 +694,33 @@ async fn default_build_has_no_admin_method() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The `probe` feature adds `probe_p256` for the mainnet check script. The
+/// build that is published and deployed must not export it.
+#[tokio::test]
+async fn default_build_has_no_probe_method() -> anyhow::Result<()> {
+    let env = setup().await?;
+    let res = env
+        .call_shop(
+            &env.root,
+            "probe_p256",
+            json!({ "signature": "", "prehash": "", "public_key": "" }),
+        )
+        .await?;
+    let err = failure_text(res);
+    assert!(err.contains("MethodNotFound"), "{err}");
+    // The Wasm itself, not just the sandbox call: the name must not appear.
+    for (name, code) in [
+        ("default", merchant_wasm()),
+        ("testnet-admin", merchant_admin_wasm()),
+    ] {
+        assert!(
+            !code.windows(10).any(|w| w == b"probe_p256"),
+            "{name} build exports probe_p256"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn upgrade_via_proposal_switches_code_hash() -> anyhow::Result<()> {
     let env = setup().await?;

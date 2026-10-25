@@ -32,3 +32,6 @@ onchain/target/
 
 # Local agent workspace
 .superpowers/
+
+# Mainnet verify script state (throwaway passkey)
+.verify-merchant-account-state.json
