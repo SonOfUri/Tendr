@@ -277,7 +277,7 @@ apps/web/src/
 - [ ] **Step 2: Run** the tests and expect FAIL.
 
 - [ ] **Step 3: Implement.**
-  - Timelock rule: `Withdraw` with `Swap`, `Refund` whose amount pushes `refunded_24h` over `refund_cap`, and `SetLimits` that raises any value all get `ready_at = now + TIMELOCK_DELAY`. Everything else executes on the threshold.
+  - Timelock rule: `Withdraw` with `Swap`, `Refund` whose amount pushes `refunded_24h` over `refund_cap`, and `SetLimits` that raises any value all get `ready_at = now + TIMELOCK_DELAY`. Everything else executes on the threshold. *(Amended by R34, final review: `AddSigner`, `AddSignerKey`, `RotateRecoveryKey` (including clearing it), `SetThreshold` that lowers the threshold, and `SetOrigins` are also timelocked 24 h, cancellable by any signer, re-validated at execute and announced by `timelock_started`. Removals and threshold raises stay instant. See the spec's Amendments section.)*
   - Execution re-validates limits, saved addresses and the cap at execute time.
   - The rolling windows keep per-asset `(timestamp, amount)` entries pruned to 24 h. *(Ruling: no fixed day buckets.)*
   - The balance for a sweep is read with a cross-contract `mt_batch_balance_of` call, and the callback sends the transfer.

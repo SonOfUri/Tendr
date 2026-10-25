@@ -427,7 +427,13 @@ fn timelock_restarts_when_signer_epoch_changes() {
     // A signer change voids the approvals that started the timelock.
     let t = T1 + HOUR;
     ctx(t);
-    pass(&mut c, &a, &b, Action::AddSigner(new_signer(4).signer()), 2);
+    pass(
+        &mut c,
+        &a,
+        &b,
+        Action::RemoveSigner { id: cc.id.clone() },
+        2,
+    );
     assert_eq!(c.get_config().signer_epoch, U64(1));
 
     // Past the old ready_at, the stale approvals cannot execute it.
@@ -440,7 +446,7 @@ fn timelock_restarts_when_signer_epoch_changes() {
     ctx(t2);
     c.approve(id, b.approve(&id, 1));
     assert_eq!(status(&c, &id), ProposalStatus::Pending);
-    c.approve(id, cc.approve(&id, 1));
+    c.approve(id, a.approve(&id, 1));
     assert_eq!(status(&c, &id), ProposalStatus::Pending);
     assert_eq!(ready_at(&c, &id), Some(t2 + TIMELOCK_DELAY));
     let ev = last_event("timelock_started");

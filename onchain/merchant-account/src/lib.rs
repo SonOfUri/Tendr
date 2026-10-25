@@ -637,13 +637,23 @@ impl MerchantAccount {
 
     /// Whether `action`, reaching the threshold now, must wait
     /// [`money::TIMELOCK_DELAY`]: upgrades (new code could do anything with
-    /// the funds), swap withdrawals, refunds crossing the refund cap, and
-    /// raises of a limit or the refund cap.
+    /// the funds), swap withdrawals, refunds crossing the refund cap, raises
+    /// of a limit or the refund cap, and security changes that widen who can
+    /// sign or how (R34): adding a signer or key, replacing or clearing the
+    /// recovery key, lowering the threshold and changing the origins.
+    /// Removals and threshold raises only narrow access and stay instant.
     fn needs_timelock(&self, action: &Action, now: u64) -> bool {
-        match action.kind() {
-            ActionKind::Upgrade => true,
-            ActionKind::Money | ActionKind::Limits => self.money_needs_timelock(action, now),
-            _ => false,
+        match action {
+            Action::AddSigner(_)
+            | Action::AddSignerKey { .. }
+            | Action::RotateRecoveryKey(_)
+            | Action::SetOrigins(_) => true,
+            Action::SetThreshold(t) => *t < self.threshold,
+            _ => match action.kind() {
+                ActionKind::Upgrade => true,
+                ActionKind::Money | ActionKind::Limits => self.money_needs_timelock(action, now),
+                _ => false,
+            },
         }
     }
 

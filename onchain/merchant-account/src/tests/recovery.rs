@@ -397,6 +397,8 @@ fn rotation_recovers_from_a_max_nonce_and_voids_old_key_epochs() {
     let pk2 = kit2.verifying_key().to_bytes();
     let rot = propose(&mut c, &a, Action::RotateRecoveryKey(Some(pk2)), 1);
     c.approve(rot, b.approve(&rot, 0));
+    assert_eq!(key_epoch(&c), 0, "rotation waits for its timelock");
+    run_timelock(&mut c, &rot);
     assert_eq!(key_epoch(&c), 1);
     assert_eq!(c.get_recovery_nonce(), U64(0));
     let sig = sign_with(&kit2, CONTRACT, &signers, 1, 1, 1, VALID_UNTIL);
@@ -414,6 +416,7 @@ fn rotation_recovers_from_a_max_nonce_and_voids_old_key_epochs() {
     // Rotating back to the first kit: epoch 2. Its epoch-0 payload is dead.
     let back = propose(&mut c, &a, Action::RotateRecoveryKey(Some(kit_pk())), 2);
     c.approve(back, b.approve(&back, epoch));
+    run_timelock(&mut c, &back);
     assert_eq!(key_epoch(&c), 2);
     let msg = panics(|| {
         c.start_recovery(
@@ -521,6 +524,7 @@ fn rotating_the_recovery_key_drops_a_pending_recovery() {
     let new_kit = ed25519_key(10).verifying_key().to_bytes();
     let id = propose(&mut c, &a, Action::RotateRecoveryKey(Some(new_kit)), 1);
     c.approve(id, b.approve(&id, 0));
+    run_timelock(&mut c, &id);
     assert_eq!(status(&c, &id), ProposalStatus::Executed);
     assert!(c.get_recovery().is_none());
     let ev = last_event("recovery_cancelled");

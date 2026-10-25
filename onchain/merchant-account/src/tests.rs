@@ -138,6 +138,18 @@ fn new_signer(n: u8) -> Person {
     person(n, 1)
 }
 
+/// Moves the clock to the end of `id`'s running timelock and executes it.
+fn run_timelock(c: &mut MerchantAccount, id: &ProposalId) {
+    let ready = c
+        .get_proposal(*id)
+        .unwrap()
+        .ready_at
+        .expect("proposal is timelocked")
+        .0;
+    ctx(ready);
+    c.execute(*id);
+}
+
 fn events(logs: &[String]) -> Vec<serde_json::Value> {
     logs.iter()
         .filter_map(|l| l.strip_prefix("EVENT_JSON:"))
@@ -197,9 +209,9 @@ fn threshold_approvals_execute_and_emit_events() {
     let id = propose(&mut c, &a, Action::AddSigner(d.signer()), 1);
     c.approve(id, b.approve(&id, 0));
 
-    assert_eq!(status(&c, &id), ProposalStatus::Executed);
-    assert_eq!(signer_ids(&c).len(), 4);
-    assert_eq!(c.get_config().signer_epoch, U64(1));
+    // Adding a signer waits out the 24 h timelock (R34).
+    assert_eq!(status(&c, &id), ProposalStatus::Pending);
+    assert_eq!(signer_ids(&c).len(), 3);
     let evs = events(&get_logs());
     let names: Vec<_> = evs.iter().map(|e| e["event"].as_str().unwrap()).collect();
     assert_eq!(
@@ -208,12 +220,23 @@ fn threshold_approvals_execute_and_emit_events() {
             "proposal_created",
             "proposal_approved",
             "proposal_approved",
-            "proposal_executed",
-            "signers_changed"
+            "timelock_started",
         ]
     );
-    assert_eq!(evs[4]["data"]["signer_epoch"], "1");
-    assert_eq!(evs[4]["data"]["proposal_id"], hex(&id.0));
+    assert_eq!(
+        evs[3]["data"]["ready_at"],
+        (T0 + crate::money::TIMELOCK_DELAY).to_string()
+    );
+
+    run_timelock(&mut c, &id);
+    assert_eq!(status(&c, &id), ProposalStatus::Executed);
+    assert_eq!(signer_ids(&c).len(), 4);
+    assert_eq!(c.get_config().signer_epoch, U64(1));
+    let evs = events(&get_logs());
+    let names: Vec<_> = evs.iter().map(|e| e["event"].as_str().unwrap()).collect();
+    assert_eq!(names, ["proposal_executed", "signers_changed"]);
+    assert_eq!(evs[1]["data"]["signer_epoch"], "1");
+    assert_eq!(evs[1]["data"]["proposal_id"], hex(&id.0));
 }
 
 #[test]
@@ -318,8 +341,10 @@ fn signer_change_bumps_epoch_and_voids_pending_approvals() {
     c.approve(p1, b.approve(&p1, 1));
     assert_eq!(valid(&c, &p1), 1);
     assert_eq!(status(&c, &p1), ProposalStatus::Pending);
-    // A re-approves at epoch 1 and P1 executes.
+    // A re-approves at epoch 1; P1 executes after its timelock.
     c.approve(p1, a.approve(&p1, 1));
+    assert_eq!(status(&c, &p1), ProposalStatus::Pending);
+    run_timelock(&mut c, &p1);
     assert_eq!(status(&c, &p1), ProposalStatus::Executed);
     assert_eq!(
         signer_ids(&c),
@@ -353,6 +378,7 @@ fn key_only_and_origin_changes_keep_epoch() {
         1,
     );
     c.approve(id, b.approve(&id, 0));
+    run_timelock(&mut c, &id);
     assert_eq!(status(&c, &id), ProposalStatus::Executed);
     let id = propose(
         &mut c,
@@ -361,6 +387,7 @@ fn key_only_and_origin_changes_keep_epoch() {
         2,
     );
     c.approve(id, b.approve(&id, 0));
+    run_timelock(&mut c, &id);
     let id = propose(
         &mut c,
         &a,
@@ -847,6 +874,7 @@ fn action_field_bounds_enforced() {
         .collect();
     let id = propose(&mut c, &a, Action::SetOrigins(origins), 200);
     c.approve(id, b.approve(&id, 0));
+    run_timelock(&mut c, &id);
     assert_eq!(status(&c, &id), ProposalStatus::Executed);
 }
 
@@ -1317,6 +1345,157 @@ fn write_test_vectors() {
         committed, rendered,
         "approval vectors changed; regenerate with UPDATE_VECTORS=1 and update the TypeScript encoder"
     );
+}
+
+/// R34: changes that widen who can sign, or how, wait 24 h; removals and
+/// threshold raises do not.
+#[test]
+fn widening_security_changes_wait_for_the_timelock() {
+    let delay = crate::money::TIMELOCK_DELAY;
+    let widening = [
+        Action::AddSigner(new_signer(4).signer()),
+        Action::AddSignerKey {
+            id: person_id(1),
+            key: p256_signer(&p256_key(99)),
+        },
+        Action::RotateRecoveryKey(Some([7; 32])),
+        Action::SetThreshold(1),
+        Action::SetOrigins(vec![ORIGIN.into(), "https://other.example".into()]),
+    ];
+    for action in widening {
+        let (mut c, a, b, _c) = three_of(2);
+        let before = c.get_config();
+        let name = format!("{action:?}");
+        let id = propose(&mut c, &a, action, 1);
+        c.approve(id, b.approve(&id, 0));
+        let p = c.get_proposal(id).unwrap();
+        assert_eq!(p.status, ProposalStatus::Pending, "{name}");
+        assert_eq!(p.ready_at, Some(U64(T0 + delay)), "{name}");
+        assert_eq!(c.get_config(), before, "{name} applied early");
+
+        ctx(T0 + delay - 1);
+        let msg = panics(|| c.execute(id));
+        assert!(msg.contains("timelocked"), "{name}: {msg}");
+        assert_eq!(c.get_config(), before, "{name} applied early");
+
+        ctx(T0 + delay);
+        c.execute(id);
+        assert_eq!(status(&c, &id), ProposalStatus::Executed, "{name}");
+        assert_ne!(c.get_config(), before, "{name} did not apply");
+    }
+
+    // Clearing the recovery key waits too.
+    ctx(T0);
+    let (a, b) = (person(1, 1), person(2, 1));
+    let mut cfg = config(&[&a, &b], 2);
+    cfg.recovery_key = Some([7; 32]);
+    let mut c = MerchantAccount::new(cfg);
+    let id = propose(&mut c, &a, Action::RotateRecoveryKey(None), 1);
+    c.approve(id, b.approve(&id, 0));
+    assert!(c.get_config().recovery_key_set);
+    run_timelock(&mut c, &id);
+    assert!(!c.get_config().recovery_key_set);
+}
+
+#[test]
+fn narrowing_security_changes_stay_instant() {
+    // Threshold raise (and an unchanged threshold).
+    let (mut c, a, b, _c) = three_of(2);
+    let same = propose(&mut c, &a, Action::SetThreshold(2), 1);
+    c.approve(same, b.approve(&same, 0));
+    assert_eq!(status(&c, &same), ProposalStatus::Executed);
+    let raise = propose(&mut c, &a, Action::SetThreshold(3), 2);
+    c.approve(raise, b.approve(&raise, 1));
+    assert_eq!(status(&c, &raise), ProposalStatus::Executed);
+    assert_eq!(c.get_config().threshold, 3);
+
+    // Signer removal.
+    let (mut c, a, b, cc) = three_of(2);
+    let remove = propose(&mut c, &a, Action::RemoveSigner { id: cc.id.clone() }, 1);
+    c.approve(remove, b.approve(&remove, 0));
+    assert_eq!(status(&c, &remove), ProposalStatus::Executed);
+
+    // Key removal.
+    ctx(T0);
+    let (a2, b) = (person(1, 2), person(2, 1));
+    let mut c = MerchantAccount::new(config(&[&a2, &b], 2));
+    let remove_key = propose(
+        &mut c,
+        &a2,
+        Action::RemoveSignerKey {
+            id: a2.id.clone(),
+            key: a2.signer().keys[1].clone(),
+        },
+        1,
+    );
+    c.approve(remove_key, b.approve(&remove_key, 0));
+    assert_eq!(status(&c, &remove_key), ProposalStatus::Executed);
+    assert_eq!(c.get_config().signers[0].keys.len(), 1);
+}
+
+/// The C1 attack: a hostile dashboard gets a 1-of-1 owner to sign an
+/// AddSigner for the attacker. The owner sees the notice and cancels inside
+/// the 24 h window; the attacker never becomes a signer.
+#[test]
+fn owner_cancels_a_blind_signed_add_signer_during_its_timelock() {
+    ctx(T0);
+    let owner = person(1, 1);
+    let mut c = MerchantAccount::new(config(&[&owner], 1));
+    let attacker = new_signer(9);
+    let id = propose(&mut c, &owner, Action::AddSigner(attacker.signer()), 1);
+    assert_eq!(status(&c, &id), ProposalStatus::Pending);
+    assert_eq!(signer_ids(&c), vec![owner.id.clone()]);
+    let evs = events(&get_logs());
+    assert!(evs.iter().any(|e| e["event"] == "timelock_started"));
+
+    ctx(T0 + HOUR);
+    c.cancel(id, owner.cancel(&id, 0));
+    assert_eq!(status(&c, &id), ProposalStatus::Cancelled);
+    ctx(T0 + crate::money::TIMELOCK_DELAY);
+    let msg = panics(|| c.execute(id));
+    assert!(msg.contains("not pending"), "{msg}");
+    assert_eq!(signer_ids(&c), vec![owner.id.clone()]);
+}
+
+/// A timelocked security change is re-checked when it runs: one that became
+/// invalid during the wait fails instead of applying.
+#[test]
+fn timelocked_security_change_is_revalidated_at_execute() {
+    let (mut c, a, b, _c) = three_of(2);
+    let key = p256_signer(&p256_key(99));
+    let to_a = propose(
+        &mut c,
+        &a,
+        Action::AddSignerKey {
+            id: a.id.clone(),
+            key: key.clone(),
+        },
+        1,
+    );
+    c.approve(to_a, b.approve(&to_a, 0));
+    let to_b = propose(
+        &mut c,
+        &a,
+        Action::AddSignerKey {
+            id: b.id.clone(),
+            key: key.clone(),
+        },
+        2,
+    );
+    c.approve(to_b, b.approve(&to_b, 0));
+
+    run_timelock(&mut c, &to_a);
+    assert_eq!(status(&c, &to_a), ProposalStatus::Executed);
+    // Key changes keep the epoch, so `to_b`'s timelock still holds; it fails.
+    run_timelock(&mut c, &to_b);
+    assert_eq!(status(&c, &to_b), ProposalStatus::Failed);
+    let evs = events(&get_logs());
+    let failed = evs
+        .iter()
+        .find(|e| e["event"] == "proposal_failed")
+        .expect("proposal_failed");
+    assert_eq!(failed["data"]["reason"], "key already registered");
+    assert_eq!(c.get_config().signers[1].keys, b.signer().keys);
 }
 
 mod money;

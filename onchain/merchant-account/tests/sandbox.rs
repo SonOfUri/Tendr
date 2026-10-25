@@ -951,3 +951,108 @@ async fn near_chain_withdraw_has_no_memo() -> anyhow::Result<()> {
     assert_eq!(env.balance(asset).await?, 750);
     Ok(())
 }
+
+#[tokio::test]
+async fn add_signer_waits_for_timelock_and_can_be_cancelled() -> anyhow::Result<()> {
+    let env = setup().await?;
+    let add = Action::AddSigner(person(3).signer());
+
+    // A cancelled AddSigner never applies.
+    let cancelled = env.pass(&add, 1).await?;
+    let p = env.proposal(&cancelled).await?;
+    assert_eq!(p.status, ProposalStatus::Pending);
+    assert!(p.ready_at.is_some(), "timelock started");
+    let cancel = env.a.sign(
+        &env.shop,
+        &cancelled,
+        env.epoch().await?,
+        ApprovalIntent::Cancel,
+    );
+    env.call_shop(
+        &env.relayer,
+        "cancel",
+        json!({ "proposal_id": cancelled, "approval": cancel }),
+    )
+    .await?
+    .into_result()?;
+    assert_eq!(
+        env.proposal(&cancelled).await?.status,
+        ProposalStatus::Cancelled
+    );
+
+    // An uncancelled one applies only after 24 h.
+    let id = env.pass(&add, 2).await?;
+    let res = env
+        .call_shop(&env.relayer, "execute", json!({ "proposal_id": id }))
+        .await?;
+    let err = failure_text(res);
+    assert!(err.contains("proposal is timelocked"), "{err}");
+    assert_eq!(env.config().await?.signers.len(), 2);
+
+    env.advance(DAY_AND_A_BIT_S).await?;
+    env.call_shop(&env.relayer, "execute", json!({ "proposal_id": id }))
+        .await?
+        .into_result()?;
+    assert_eq!(env.proposal(&id).await?.status, ProposalStatus::Executed);
+    let cfg = env.config().await?;
+    assert_eq!(cfg.signers.len(), 3);
+    assert_eq!(cfg.signer_epoch.0, 1);
+    Ok(())
+}
+
+/// R35a: storage one proposal leaves behind (create -> approve -> execute).
+/// Proposals are never pruned, so this is what each one costs the account.
+#[tokio::test]
+async fn storage_per_proposal() -> anyhow::Result<()> {
+    let env = setup().await?;
+    env.deposit(ETH_ASSET, 1_000).await?;
+    env.add_active_saved_address("sa_1", "eth", ETH_ADDRESS, 1)
+        .await?;
+
+    // The first withdrawal of an asset also creates its limits/window state.
+    let before = storage_usage(&env).await?;
+    let id = env.pass(&eth_withdraw(10, "sa_1"), 2).await?;
+    assert_eq!(env.proposal(&id).await?.status, ProposalStatus::Executed);
+    let first_withdraw = storage_usage(&env).await? - before;
+
+    let before = storage_usage(&env).await?;
+    let id = env.pass(&eth_withdraw(10, "sa_1"), 3).await?;
+    assert_eq!(env.proposal(&id).await?.status, ProposalStatus::Executed);
+    let withdraw = storage_usage(&env).await? - before;
+
+    // A small settings proposal that executes at once.
+    let before = storage_usage(&env).await?;
+    let cap = Action::SetRefundCap {
+        asset: ETH_ASSET.to_string(),
+        daily: U128(0),
+    };
+    let id = env.pass(&cap, 4).await?;
+    assert_eq!(env.proposal(&id).await?.status, ProposalStatus::Executed);
+    let small = storage_usage(&env).await? - before;
+
+    // AddSigner carrying a passkey, through its timelock (includes the new
+    // signer's own record).
+    let before = storage_usage(&env).await?;
+    let id = env.pass(&Action::AddSigner(person(3).signer()), 5).await?;
+    env.advance(DAY_AND_A_BIT_S).await?;
+    env.call_shop(&env.relayer, "execute", json!({ "proposal_id": id }))
+        .await?
+        .into_result()?;
+    assert_eq!(env.proposal(&id).await?.status, ProposalStatus::Executed);
+    let add_signer = storage_usage(&env).await? - before;
+
+    println!(
+        "STORAGE_PER_PROPOSAL bytes: first_withdraw={first_withdraw} withdraw={withdraw} \
+         set_refund_cap={small} add_signer={add_signer}"
+    );
+    // Guards the figure the API's storage top-up is sized from
+    // (apps/api STORAGE_BYTES_PER_PROPOSAL).
+    for n in [first_withdraw, withdraw, small, add_signer] {
+        assert!(n <= 600, "a proposal used {n} bytes");
+    }
+    Ok(())
+}
+
+async fn storage_usage(env: &Env) -> anyhow::Result<u64> {
+    Ok(env.worker.view_account(&env.shop).await?.storage_usage)
+}
