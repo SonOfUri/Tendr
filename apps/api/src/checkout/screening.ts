@@ -176,67 +176,108 @@ async function holdPayment(ctx: ScopeContext, paymentId: string, sessionId: stri
   });
 }
 
+/** Flagged payments keep being re-screened hourly until this long after creation. */
+export const SCREENING_STOP_MS = 7 * 24 * 3_600_000;
+/** A claimed row is not picked up by another run for this long. */
+const CLAIM_LEASE_MS = 5 * 60_000;
+
 /**
  * Scheduled every minute: re-screens due SCREENING_PENDING payments. Backoff 1, 5, 15, 30 min,
- * then hourly, for up to 6 h from the payment's creation. `allow` hands the payment to the
- * registered hook, `block` holds payment and session, and past 6 h the payment is flagged
- * (`screening_unresolved_at` + `payment.screening_unresolved`) and stays SCREENING_PENDING.
- * Returns how many payments were processed.
+ * then hourly. At 6 h from creation an unresolved payment is flagged (`screening_unresolved_at` +
+ * `payment.screening_unresolved`, a merchant review item) and stays SCREENING_PENDING; hourly
+ * retries continue until 7 days. `allow` hands the payment to the registered hook, `block` holds
+ * payment and session. Each row is claimed with a lease before it is processed, so overlapping
+ * runs never process a payment twice. Returns how many payments were processed.
  */
 export async function retryPendingScreenings(now = new Date()): Promise<number> {
   const pending = await prisma.payment.findMany({
-    where: { status: 'SCREENING_PENDING', screeningUnresolvedAt: null },
-    orderBy: { createdAt: 'asc' },
+    where: {
+      status: 'SCREENING_PENDING',
+      createdAt: { gt: new Date(now.getTime() - SCREENING_STOP_MS) },
+      OR: [
+        { screeningNextAt: { lte: now } },
+        { screeningNextAt: null, createdAt: { lte: new Date(now.getTime() - FIRST_RETRY_MS) } },
+      ],
+    },
+    orderBy: [{ screeningNextAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }],
     take: 500,
   });
   let processed = 0;
   for (const p of pending) {
-    const dueAt = p.screeningNextAt ?? new Date(p.createdAt.getTime() + FIRST_RETRY_MS);
-    if (dueAt > now) continue;
+    const claim = await prisma.payment.updateMany({
+      where: { id: p.id, status: 'SCREENING_PENDING', screeningNextAt: p.screeningNextAt },
+      data: { screeningNextAt: new Date(now.getTime() + CLAIM_LEASE_MS) },
+    });
+    if (claim.count === 0) continue;
     processed++;
     const ctx = { merchantId: p.merchantId, livemode: p.livemode };
-    try {
-      if (!p.senderAddress || !p.senderChain) {
-        log('warn', 'screening retry: payment has no sender address', { paymentId: p.id });
-        continue;
-      }
-      const { decision } = await screenAddress(ctx, {
-        sessionId: p.sessionId,
-        address: p.senderAddress,
-        chain: p.senderChain,
+    const giveUpAt = p.createdAt.getTime() + SCREENING_GIVE_UP_MS;
+    const backoff = async (flagged = Boolean(p.screeningUnresolvedAt)) => {
+      const attempts = p.screeningAttempts + 1;
+      let next = now.getTime() + (flagged ? HOURLY_MS : retryDelayMs(attempts));
+      // The 6 h give-up fires at createdAt + 6 h, not on the next backoff tick after it.
+      if (!flagged && now.getTime() < giveUpAt) next = Math.min(next, giveUpAt);
+      await prisma.payment.update({
+        where: { id: p.id },
+        data: { screeningAttempts: attempts, screeningNextAt: new Date(next) },
       });
+    };
+    try {
+      let decision: 'allow' | 'block' | 'unavailable' = 'unavailable';
+      if (p.senderAddress && p.senderChain) {
+        ({ decision } = await screenAddress(ctx, {
+          sessionId: p.sessionId,
+          address: p.senderAddress,
+          chain: p.senderChain,
+        }));
+      } else {
+        log('warn', 'screening retry: payment has no sender address', { paymentId: p.id });
+      }
       if (decision === 'block') {
         await holdPayment(ctx, p.id, p.sessionId);
       } else if (decision === 'allow') {
-        if (allowedHook) await allowedHook(p.id, ctx);
-        else
+        let settled = false;
+        if (allowedHook) {
+          try {
+            await allowedHook(p.id, ctx);
+            const after = await prisma.payment.findUnique({
+              where: { id: p.id },
+              select: { status: true },
+            });
+            settled = after?.status !== 'SCREENING_PENDING';
+          } catch (err) {
+            log('error', 'screening allowed hook failed', { paymentId: p.id, err: String(err) });
+          }
+        } else {
           log('warn', 'screening allowed but no settlement hook registered', { paymentId: p.id });
-      } else if (now.getTime() - p.createdAt.getTime() >= SCREENING_GIVE_UP_MS) {
-        await tenantTransaction(ctx, async (tx) => {
-          await tx.payment.updateMany({
-            where: { id: p.id, merchantId: ctx.merchantId, livemode: ctx.livemode },
-            data: { screeningUnresolvedAt: now, screeningAttempts: { increment: 1 } },
-          });
-          await recordEvent(tx, ctx, {
-            aggregateType: 'payment',
-            aggregateId: p.id,
-            type: 'payment.screening_unresolved',
-            payload: {
-              payment_id: p.id,
-              session_id: p.sessionId,
-              attempts: p.screeningAttempts + 1,
-            },
-          });
-        });
+        }
+        if (!settled) await backoff();
       } else {
-        const attempts = p.screeningAttempts + 1;
-        await prisma.payment.update({
-          where: { id: p.id },
-          data: {
-            screeningAttempts: attempts,
-            screeningNextAt: new Date(now.getTime() + retryDelayMs(attempts)),
-          },
-        });
+        if (!p.screeningUnresolvedAt && now.getTime() >= giveUpAt) {
+          await tenantTransaction(ctx, async (tx) => {
+            const { count } = await tx.payment.updateMany({
+              where: {
+                id: p.id,
+                merchantId: ctx.merchantId,
+                livemode: ctx.livemode,
+                screeningUnresolvedAt: null,
+              },
+              data: { screeningUnresolvedAt: now },
+            });
+            if (count === 0) return;
+            await recordEvent(tx, ctx, {
+              aggregateType: 'payment',
+              aggregateId: p.id,
+              type: 'payment.screening_unresolved',
+              payload: {
+                payment_id: p.id,
+                session_id: p.sessionId,
+                attempts: p.screeningAttempts + 1,
+              },
+            });
+          });
+        }
+        await backoff(Boolean(p.screeningUnresolvedAt) || now.getTime() >= giveUpAt);
       }
     } catch (err) {
       log('error', 'screening retry failed', { paymentId: p.id, err: String(err) });

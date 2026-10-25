@@ -202,18 +202,86 @@ describe('retryPendingScreenings', () => {
     expect((await events(p.id)).map((e) => e.type)).toContain('payment.held');
   });
 
-  it('after 6 h creates a review item and keeps the payment pending', async () => {
+  it('after 6 h creates one review item, keeps the payment pending, and keeps retrying hourly', async () => {
     await putSecret('k', 'chainalysis');
     const p = await pending(true, ADDR, 6 * 3_600_000 + 1000);
     setScreeningFetch(async () => json({}, 503));
-    expect(await retryPendingScreenings()).toBe(1);
+    const t = new Date();
+    expect(await retryPendingScreenings(t)).toBe(1);
     const pay = await reload(p.id);
     expect(pay.status).toBe('SCREENING_PENDING');
     expect(pay.screeningUnresolvedAt).not.toBeNull();
+    expect(pay.screeningNextAt!.getTime() - t.getTime()).toBe(3_600_000);
     expect((await events(p.id)).map((e) => e.type)).toEqual(['payment.screening_unresolved']);
-    // Flagged payments are not retried or flagged again.
-    expect(await retryPendingScreenings()).toBe(0);
+    // Hourly re-screen: an allow now reaches the hook; no second review item.
+    const hook = vi.fn(async () => {});
+    onScreeningAllowed(hook);
+    setScreeningFetch(async () => json({ identifications: [] }));
+    expect(await retryPendingScreenings(new Date(t.getTime() + 3_600_000))).toBe(1);
+    expect(hook).toHaveBeenCalledTimes(1);
     expect(await events(p.id)).toHaveLength(1);
+  });
+
+  it('stops retrying 7 days after creation', async () => {
+    await pending(true, ADDR, 7 * 24 * 3_600_000 + 1000);
+    expect(await retryPendingScreenings()).toBe(0);
+  });
+
+  it('clamps the backoff so the give-up fires at createdAt + 6 h', async () => {
+    await putSecret('k', 'chainalysis');
+    const p = await pending(true, ADDR, 5.5 * 3_600_000);
+    await prisma.payment.update({ where: { id: p.id }, data: { screeningAttempts: 9 } });
+    setScreeningFetch(async () => json({}, 503));
+    const t = new Date();
+    await retryPendingScreenings(t);
+    const pay = await reload(p.id);
+    const created = pay.createdAt.getTime();
+    expect(pay.screeningNextAt!.getTime()).toBe(created + 6 * 3_600_000);
+  });
+
+  it('treats a payment without a sender address as unavailable', async () => {
+    const p = await pending(false, ADDR, 6 * 3_600_000 + 1000);
+    await prisma.payment.update({ where: { id: p.id }, data: { senderAddress: null } });
+    expect(await retryPendingScreenings()).toBe(1);
+    const pay = await reload(p.id);
+    expect(pay.screeningUnresolvedAt).not.toBeNull();
+    expect(pay.screeningNextAt).not.toBeNull();
+  });
+
+  it('overlapping runs process a payment once', async () => {
+    await putSecret('k', 'chainalysis');
+    const old = await pending(true, ADDR, 6 * 3_600_000 + 1000);
+    const ok = await pending(false, ADDR, 5 * 60_000);
+    setScreeningFetch(async () => json({}, 503));
+    const hook = vi.fn(async () => {});
+    onScreeningAllowed(hook);
+    const t = new Date();
+    await Promise.all([retryPendingScreenings(t), retryPendingScreenings(t)]);
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(hook).toHaveBeenCalledWith(ok.id, expect.anything());
+    expect(
+      (await events(old.id)).filter((e) => e.type === 'payment.screening_unresolved'),
+    ).toHaveLength(1);
+    expect((await reload(old.id)).screeningAttempts).toBe(1);
+  });
+
+  it('backs off after an allow whose hook fails or does not transition', async () => {
+    const p = await pending(false, ADDR, 5 * 60_000);
+    const t = new Date();
+    onScreeningAllowed(async () => {
+      throw new Error('boom');
+    });
+    await retryPendingScreenings(t);
+    let pay = await reload(p.id);
+    expect(pay.screeningAttempts).toBe(1);
+    expect(pay.screeningNextAt!.getTime() - t.getTime()).toBe(5 * 60_000);
+    // A hook that returns without transitioning also backs off (attempt 2 -> 15 min).
+    onScreeningAllowed(async () => {});
+    const t2 = new Date(t.getTime() + 5 * 60_000);
+    expect(await retryPendingScreenings(t2)).toBe(1);
+    pay = await reload(p.id);
+    expect(pay.screeningNextAt!.getTime() - t2.getTime()).toBe(15 * 60_000);
+    expect(await retryPendingScreenings(new Date(t2.getTime() + 60_000))).toBe(0);
   });
 
   it('skips payments that are not due yet', async () => {
