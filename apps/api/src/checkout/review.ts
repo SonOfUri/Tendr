@@ -36,6 +36,7 @@ import {
   lockRefund,
   netOfReturnFee,
   oneclickChainOf,
+  queueExcessReturn,
   queueHeldReturn,
   returnChainsOf,
   returnRoute,
@@ -426,6 +427,9 @@ export async function refundFromReview(
     }
     assetId = verified.assetId;
     gross = verified.amount;
+    // The re-size covers the swapped part; an excess 1Click refunded into the account is its own
+    // (equally gated) `overpaid` return (M-2).
+    await queueExcessReturn(ctx, p.id);
   }
   let amount = BigInt(r.amount.toFixed(0));
   let returnFee: bigint | null = r.returnFee ? BigInt(r.returnFee.toFixed(0)) : null;

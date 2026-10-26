@@ -64,6 +64,7 @@ import { registerEventHandler, handlerNamesFor } from '../jobs/handlers.js';
 import { isValidAddress } from './address-format.js';
 import { isExchangeAddress } from './exchanges.js';
 import { gasEstimateUsd } from './gas-estimates.js';
+import { netOfReturnFee, usdPerUnit } from './return-fee.js';
 import { HOLD_NOTICE } from './hold.js';
 import { screenAddress, type ScreeningOutcome } from './screening.js';
 import type { ShopperCtx } from './quotes.js';
@@ -72,7 +73,6 @@ import { tokenInfo } from './tokens.js';
 import { onReturnNeeded, type ReturnReason } from './watcher.js';
 
 type Tx = Prisma.TransactionClient;
-type Dec = Prisma.Decimal;
 const D = (v: Prisma.Decimal.Value) => new Prisma.Decimal(v);
 
 export type ReturnInfo = { reason: ReturnReason; assetId: string; amount: string };
@@ -160,37 +160,7 @@ export function returnChainsOf(asset: string): string[] {
 
 // ─── amounts ─────────────────────────────────────────────────────────────────
 
-/** USD per base unit of `assetId`: the token list's price, else the quote's own in/out ratio. */
-export async function usdPerUnit(
-  livemode: boolean,
-  assetId: string,
-  quote: Pick<Quote, 'originAssetId' | 'amountIn' | 'amountInUsd'>,
-): Promise<Dec | null> {
-  try {
-    const t = await tokenInfo(livemode, assetId);
-    if (t.priceUsd && D(t.priceUsd).gt(0)) return D(t.priceUsd).div(D(10).pow(t.decimals));
-  } catch {
-    // Unlisted or the provider is down: fall back to the quote.
-  }
-  if (assetId === quote.originAssetId && quote.amountInUsd && quote.amountIn.gt(0)) {
-    return quote.amountInUsd.div(quote.amountIn);
-  }
-  return null;
-}
-
-/**
- * `amount` less the estimated return fee (`feeUsd` converted at `perUnit`, rounded up): the net
- * sent back and its USD value.
- */
-export function netOfReturnFee(
-  amount: bigint,
-  perUnit: Dec,
-  feeUsd: Dec,
-): { fee: bigint; net: bigint; netUsd: Dec } {
-  const fee = perUnit.gt(0) ? BigInt(feeUsd.div(perUnit).ceil().toFixed(0)) : 0n;
-  const net = amount > fee ? amount - fee : 0n;
-  return { fee: fee > amount ? amount : fee, net, netUsd: perUnit.mul(net.toString()) };
-}
+export { netOfReturnFee, usdPerUnit } from './return-fee.js';
 
 // ─── queueing ────────────────────────────────────────────────────────────────
 
@@ -643,6 +613,30 @@ export async function heldAmount(
 }
 
 /**
+ * The overpaid excess of a late or held deposit (M-2): 1Click swapped the quoted amount into the
+ * merchant account and refunded the excess there too (an INTENTS refund type). That excess goes
+ * back as its own `overpaid` return, in the origin asset, through `queueReturn`: once per
+ * (payment, reason), screened right before drafting, and — for a held payment — drafted only after
+ * the legal acknowledgement, to a destination that is not the sanctioned sender. A settled payment's
+ * excess is `settle()`'s (`overpaid_amount`); a direct (ORIGIN_CHAIN) refund is 1Click's.
+ */
+export async function queueExcessReturn(
+  ctx: ScopeContext,
+  paymentId: string,
+): Promise<Refund | null> {
+  const p = await prisma.payment.findFirst({ where: { id: paymentId, ...tenantOf(ctx) } });
+  if (!p || p.status === 'SETTLED' || p.oneclickStatus !== 'SUCCESS') return null;
+  if (!p.refundedAmount?.gt(0)) return null;
+  const q = await prisma.quote.findFirstOrThrow({ where: { id: p.quoteId, ...tenantOf(ctx) } });
+  if (q.refundType === 'ORIGIN_CHAIN') return null;
+  return queueReturn(ctx, p, {
+    reason: 'overpaid',
+    assetId: q.originAssetId,
+    amount: p.refundedAmount.toFixed(0),
+  });
+}
+
+/**
  * Queues the return of a HELD (sanctions) payment's funds that reached the merchant account,
  * sized from the verified delivered amount (`heldAmount`) less the estimated return fee. An
  * unknown amount is a review item (`amount_unknown`, amount 0); a net under SMALL_OVERPAY_USD is
@@ -656,6 +650,8 @@ export async function queueHeldReturn(
   const p = await prisma.payment.findFirst({ where: { id: paymentId, ...tenantOf(ctx) } });
   if (!p) throw notFound('Payment not found');
   if (p.status !== 'HELD') throw conflict('Only a held payment is returned this way');
+  // The excess 1Click refunded into the account is its own (equally gated) return (M-2).
+  await queueExcessReturn(ctx, p.id);
   const existing = await prisma.refund.findFirst({
     where: { paymentId: p.id, reason: 'sanctions', ...tenantOf(ctx) },
   });
@@ -1031,6 +1027,9 @@ async function detachedRefundFor(ctx: ScopeContext, proposalId: string): Promise
     select: { kind: true, refundId: true },
   });
   if (!prop || prop.kind !== 'refund') return null;
+  // A refund proposal a person drafted (project 2, money:request) links no refund: it is not a
+  // system draft, so it is none of checkout's business — no alert, no review item (M-5).
+  if (!prop.refundId) return null;
   const r = prop.refundId
     ? await prisma.refund.findFirst({ where: { id: prop.refundId, ...tenantOf(ctx) } })
     : null;
@@ -1311,6 +1310,25 @@ export async function sweepReturns(): Promise<number> {
         amount: p.amountOut!.toFixed(0),
       }),
     );
+  }
+
+  // The excess of a late deposit swapped into the merchant account (M-2): its own return.
+  const lateExcess = await prisma.payment.findMany({
+    where: {
+      isLate: true,
+      status: { in: ['REFUNDING', 'REFUNDED'] },
+      oneclickStatus: 'SUCCESS',
+      refundedAmount: { gt: 0 },
+      keptSmallOverpayment: false,
+      quote: viaStore,
+      settlementClaims: { some: {} },
+      refunds: { none: { reason: 'overpaid' } },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: SWEEP_BATCH,
+  });
+  for (const p of lateExcess) {
+    await run('late-excess', p.id, () => queueExcessReturn(ctxOf(p), p.id));
   }
 
   // 1Click refunded straight to the shopper's own address: recorded only.

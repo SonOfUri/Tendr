@@ -384,6 +384,8 @@ describe('review queue', () => {
 
   it('an amount_unknown held return is re-sized from the verified delivered amount', async () => {
     const { q, p } = await held();
+    // Held before the swap's transfer was verified (no claim; M-3 claims one when it can).
+    await prisma.settlementClaim.deleteMany({ where: { paymentId: p.id } });
     const real = await sim.status(q.deposit_address);
     const spy = vi.spyOn(sim, 'status').mockResolvedValue({
       ...real,

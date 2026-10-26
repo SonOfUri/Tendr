@@ -18,7 +18,7 @@
 // the payment (non-custodial notice, hold.ts); `unavailable` leaves it SCREENING_PENDING at
 // settlement time, retried by screening.ts, whose `allow` hook re-runs this settlement path.
 import { Prisma, type Payment, type Quote, type Session } from '@prisma/client';
-import { SMALL_OVERPAY_USD, type SessionStatus } from '@tendr/contracts';
+import type { SessionStatus } from '@tendr/contracts';
 import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
@@ -39,6 +39,7 @@ import {
   type OneClickProvider,
   type StatusResponse,
 } from './oneclick/index.js';
+import { keptSmallNetOfFee } from './return-fee.js';
 import { recordRevenue } from './revenue.js';
 import { liveSenderResolvers } from './senders/index.js';
 import { onScreeningAllowed, screenAddress, type ScreeningOutcome } from './screening.js';
@@ -97,8 +98,9 @@ export function depositSeen(status: StatusResponse): boolean {
  * - `session.status` is the session's status as this payment sees it: `PENDING_DEPOSIT` /
  *   `PROCESSING` when the session is (still) waiting on it; anything else makes the deposit late.
  * - `late`: the session is closed for this payment, or the deposit was first observed
- *   (`observedAt`) after the quote deadline and 1Click did not swap it, or 1Click refunded a full
- *   deposit (only a deposit after the deadline is refunded whole).
+ *   (`observedAt`) after the quote deadline and 1Click did not swap it.
+ * - `failed`: 1Click's swap FAILED, or it refunded a full deposit observed before the deadline
+ *   (it could not swap it, e.g. slippage; M-1): reopened while unexpired, like a failed swap.
  * - `overpaid`: `SUCCESS` with `refundedAmount > 0`; `underpaid`: `INCOMPLETE_DEPOSIT`, or a
  *   short deposit refunded.
  */
@@ -120,7 +122,8 @@ export function classify(
     case 'INCOMPLETE_DEPOSIT':
       return afterDeadline ? 'late' : 'underpaid';
     case 'REFUNDED':
-      return afterDeadline || deposited >= toBig(quote.amountIn) ? 'late' : 'underpaid';
+      if (afterDeadline) return 'late';
+      return deposited >= toBig(quote.amountIn) ? 'failed' : 'underpaid';
     default:
       return 'pending';
   }
@@ -665,6 +668,8 @@ async function advance(
     if (status.status === 'REFUNDED' && q.refundType === 'ORIGIN_CHAIN') {
       await refund(l, payment, 'sanctions', status);
     }
+    // A held SUCCESS: claim the verified transfer (M-3) so the held return is sized from it.
+    if (status.status === 'SUCCESS') await claimHeld(l, payment, status);
     return { outcome, done: !watchHeld(q, payment) };
   }
   if (DONE_PAYMENT.has(payment.status)) return { outcome, done: true };
@@ -684,6 +689,12 @@ async function advance(
       return { outcome, done: false };
     case 'failed':
       await failed(l, payment);
+      if (status.status === 'REFUNDED') {
+        // A full deposit 1Click already refunded (M-1): record the refund now.
+        payment = await prisma.payment.findUniqueOrThrow({ where: { id: paymentId } });
+        await refund(l, payment, 'failed', status);
+        return { outcome, done: true };
+      }
       return { outcome, done: false };
     case 'underpaid':
       if (status.status === 'REFUNDED') {
@@ -973,6 +984,17 @@ async function late(l: Loaded, payment: Payment, status: StatusResponse): Promis
       assetId: session.destAsset,
       amount: amountOut.toString(),
     });
+    // An overpaid late deposit: 1Click refunded the excess into the merchant account too (an
+    // INTENTS refund). It goes back as its own `overpaid` return, in the origin asset (M-2);
+    // queued once per (payment, reason), screened before drafting like every return.
+    const excess = big(status.swapDetails.refundedAmount);
+    if (excess > 0n && q.refundType !== 'ORIGIN_CHAIN') {
+      await returnNeeded(payment.id, {
+        reason: 'overpaid',
+        assetId: q.originAssetId,
+        amount: excess.toString(),
+      });
+    }
   }
   return true;
 }
@@ -1198,6 +1220,27 @@ async function senderDecision(
   return combineDecisions(decisions);
 }
 
+/**
+ * A HELD payment whose swap 1Click reports SUCCESS: claims its verified transfer event (once), so
+ * `heldAmount` sizes the return from what verifiably reached the account (C21, M-3). An event
+ * another payment already claimed is left alone (`verify` reports it blocked).
+ */
+async function claimHeld(l: Loaded, payment: Payment, status: StatusResponse): Promise<void> {
+  const { ctx } = l;
+  if (await prisma.settlementClaim.findFirst({ where: { paymentId: payment.id } })) return;
+  const r = await verify(l, payment, status);
+  if (!r || !('ok' in r)) return;
+  try {
+    await tenantTransaction(ctx, async (tx) => {
+      await lockRow(tx, 'payments', payment.id);
+      const p = await tx.payment.findUniqueOrThrow({ where: { id: payment.id } });
+      if (p.status === 'HELD') await claimInTx(tx, ctx, p.id, r.ok);
+    });
+  } catch (err) {
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) throw err;
+  }
+}
+
 /** SUCCESS: verify the transfer, gate on screening, settle. Returns true when done. */
 async function trySettle(l: Loaded, payment: Payment, status: StatusResponse): Promise<boolean> {
   const { ctx, session } = l;
@@ -1205,7 +1248,20 @@ async function trySettle(l: Loaded, payment: Payment, status: StatusResponse): P
   if (!v) return false;
   const decision = await senderDecision(l, payment, status);
   if (decision === 'block') {
-    await tenantTransaction(ctx, (tx) => holdPaymentInTx(tx, ctx, payment.id));
+    // The verified transfer is claimed with the hold (M-3), so the held return is sized from the
+    // verified delivered amount (heldAmount reads the claim), never 1Click's reported number.
+    try {
+      await tenantTransaction(ctx, async (tx) => {
+        await lockRow(tx, 'payments', payment.id);
+        const p = await tx.payment.findUniqueOrThrow({ where: { id: payment.id } });
+        if (SCREENABLE.has(p.status)) await claimInTx(tx, ctx, p.id, v);
+        await holdPaymentInTx(tx, ctx, payment.id);
+      });
+    } catch (err) {
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) throw err;
+      // The event is another payment's: hold anyway (the sender is sanctioned), unclaimed.
+      await tenantTransaction(ctx, (tx) => holdPaymentInTx(tx, ctx, payment.id));
+    }
     return true;
   }
   if (decision === 'unavailable') {
@@ -1247,15 +1303,18 @@ async function settle(
   const sd = status.swapDetails;
   const refunded = big(sd.refundedAmount);
   const overpaid = refunded > 0n;
-  const refundedUsd =
-    overpaid && q.amountInUsd && q.amountIn.gt(0)
-      ? q.amountInUsd.mul(refunded.toString()).div(q.amountIn)
-      : null;
   // 1Click returns an excess straight to an ORIGIN_CHAIN refund address; an INTENTS refund lands
-  // in the merchant account, where a return worth under SMALL_OVERPAY_USD is kept.
+  // in the merchant account, where a return worth under SMALL_OVERPAY_USD NET of the estimated
+  // return fee is kept — decided here with the return path's own arithmetic (return-fee.ts), so
+  // the first payment.succeeded already carries the right kept_small_overpayment (M-8).
   const viaStore = q.refundType !== 'ORIGIN_CHAIN';
   const keptSmall =
-    overpaid && viaStore && refundedUsd !== null && refundedUsd.lt(SMALL_OVERPAY_USD);
+    overpaid &&
+    viaStore &&
+    !!payment.senderAddress &&
+    !!payment.senderChain &&
+    (await keptSmallNetOfFee(ctx.livemode, q.originAssetId, refunded, payment.senderChain, q)) ===
+      true;
   const needsReturn = overpaid && viaStore && !keptSmall;
   const amountOut = big(sd.amountOut) || toBig(q.amountOut);
 

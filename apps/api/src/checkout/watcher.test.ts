@@ -69,10 +69,14 @@ describe('classify', () => {
     expect(classify(quote, open, st('FAILED'), before)).toBe('failed');
   });
 
-  it('is late after the deadline, for a full refunded deposit, or with the session closed', () => {
+  it('is late after the deadline or with the session closed', () => {
     expect(classify(quote, open, st('INCOMPLETE_DEPOSIT'), after)).toBe('late');
     expect(classify(quote, open, st('REFUNDED', { depositedAmount: '500' }), after)).toBe('late');
-    expect(classify(quote, open, st('REFUNDED', { depositedAmount: '1000' }), before)).toBe('late');
+    // M-1: a full deposit refunded before the deadline is a failed swap (e.g. slippage), not late.
+    expect(classify(quote, open, st('REFUNDED', { depositedAmount: '1000' }), before)).toBe(
+      'failed',
+    );
+    expect(classify(quote, open, st('REFUNDED', { depositedAmount: '1000' }), after)).toBe('late');
     for (const status of ['SETTLED', 'EXPIRED', 'LATE_DEPOSIT', 'HELD', 'REFUNDED']) {
       expect(classify(quote, { status }, st('SUCCESS'), before)).toBe('late');
     }
@@ -598,6 +602,26 @@ describe('payment watcher', () => {
     expect((await sessionOf(s.id)).status).toBe('REFUNDED');
   });
 
+  it('M-1: a full deposit refunded before the deadline is a failed swap: reopened, not late', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret, { origin_asset: ETH, refund_address: WALLET });
+    // 1Click refunds the whole deposit while the quote is live (it could not swap it).
+    await sim.simulate(q.deposit_address, 'late');
+    await poll(q.deposit_address);
+    const p = await paymentOf(q.id);
+    expect(p.isLate).toBe(false);
+    expect(p.status).toBe('REFUNDED');
+    const types = await eventTypes();
+    expect(types).not.toContain('payment.late');
+    expect(types).not.toContain('payment.succeeded');
+    const [refunded] = await eventsOf('payment.refunded');
+    expect(refunded!.payload).toMatchObject({ reason: 'failed' });
+    // Reopened while unexpired, as for a failed swap; the old quote is superseded (C34).
+    expect((await sessionOf(s.id)).status).toBe('PENDING_DEPOSIT');
+    const row = await prisma.quote.findUniqueOrThrow({ where: { id: q.id } });
+    expect(row.supersededAt).not.toBeNull();
+  });
+
   it('a deposit after the session expired → LATE_DEPOSIT → REFUNDED', async () => {
     const s = await newSession();
     const q = await quote(s.client_secret);
@@ -668,6 +692,36 @@ describe('payment watcher', () => {
     expect((await eventsOf('payment.succeeded')).length).toBe(1);
     expect((await eventsOf('payment.late')).length).toBe(1);
     expect(await prisma.payment.count({ where: { sessionId: s.id, status: 'SETTLED' } })).toBe(1);
+  });
+
+  it('M-2: a late overpaid deposit swapped into the store also returns the excess (origin asset)', async () => {
+    const s = await newSession();
+    const q1 = await quote(s.client_secret, { origin_asset: ETH }); // no refund address: INTENTS
+    const q2 = await quote(s.client_secret, { origin_asset: 'nep141:wrap.testnet' });
+    await sim.simulate(q2.deposit_address, 'exact');
+    await poll(q2.deposit_address);
+    expect((await sessionOf(s.id)).status).toBe('SETTLED');
+
+    await sim.simulate(q1.deposit_address, 'overpay');
+    await poll(q1.deposit_address);
+    const late = await paymentOf(q1.id);
+    expect(late.isLate).toBe(true);
+    expect(late.status).toBe('REFUNDING');
+    const excess = (await sim.status(q1.deposit_address)).swapDetails.refundedAmount!;
+    expect(BigInt(excess)).toBeGreaterThan(0n);
+    expect(returns).toHaveBeenCalledWith(
+      expect.objectContaining({ id: late.id }),
+      expect.objectContaining({ reason: 'late', assetId: USDC }),
+    );
+    expect(returns).toHaveBeenCalledWith(expect.objectContaining({ id: late.id }), {
+      reason: 'overpaid',
+      assetId: ETH,
+      amount: excess,
+    });
+    // Once: another poll queues nothing more.
+    const n = returns.mock.calls.length;
+    await poll(q1.deposit_address);
+    expect(returns.mock.calls.length).toBe(n);
   });
 
   it('two concurrent polls of one address create one payment and settle once', async () => {

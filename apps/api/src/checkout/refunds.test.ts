@@ -259,6 +259,9 @@ describe('return to sender', () => {
     // $12 session: the excess is ≈ $1.20 gross (the watcher queues it), $0.70 net of the $0.50
     // return fee → kept by the merchant.
     const { p } = await overpaid({ amount: '12.00' });
+    // M-8: decided in settle(), net of the return fee, so the first payment.succeeded says so.
+    const [succeeded] = await eventsOf('payment.succeeded');
+    expect(succeeded!.payload).toMatchObject({ kept_small_overpayment: true });
     expect(await refundsOf(p.id)).toEqual([]);
     expect(await prisma.accountProposal.count()).toBe(0);
     expect(
@@ -486,6 +489,66 @@ describe('return to sender', () => {
       proposalId: null,
     });
     await sweepReturns();
+    expect(await prisma.accountProposal.count()).toBe(0);
+  });
+
+  /** A second, late, overpaying manual send into a settled session: swapped into the account. */
+  async function lateOverpaid() {
+    const s = await newSession();
+    const q1 = await quote(s.client_secret, { origin_asset: ETH });
+    const q2 = await quote(s.client_secret, { origin_asset: 'nep141:wrap.testnet' });
+    await sim.simulate(q2.deposit_address, 'exact');
+    await poll(q2.deposit_address);
+    await sim.simulate(q1.deposit_address, 'overpay');
+    await poll(q1.deposit_address);
+    const p = await paymentOf(q1.id);
+    expect(p).toMatchObject({ status: 'REFUNDING', isLate: true });
+    const excess = BigInt((await sim.status(q1.deposit_address)).swapDetails.refundedAmount!);
+    expect(excess).toBeGreaterThan(0n);
+    return { p, excess };
+  }
+
+  it('M-2: a late overpaid deposit queues the late return and an overpaid return of the excess', async () => {
+    const { p, excess } = await lateOverpaid();
+    const refunds = await refundsOf(p.id);
+    expect(refunds.map((r) => r.reason).sort()).toEqual(['late', 'overpaid']);
+    const over = refunds.find((r) => r.reason === 'overpaid')!;
+    expect(over).toMatchObject({ assetId: ETH, destination: p.senderAddress });
+    expect(over.amount.toFixed()).toBe((excess - ETH_FEE_WEI).toString());
+    // Screened and drafted like every return; repeats are no-ops.
+    expect(over.proposalId).not.toBeNull();
+    await sweepReturns();
+    await queueReturn(ctx(), p, { reason: 'overpaid', assetId: ETH, amount: excess.toString() });
+    expect(await refundsOf(p.id)).toHaveLength(2);
+  });
+
+  it('M-2: the sweeper queues the late excess the post-commit hook missed', async () => {
+    onReturnNeeded(null);
+    const { p } = await lateOverpaid();
+    expect(await refundsOf(p.id)).toEqual([]);
+    await sweepReturns();
+    expect((await refundsOf(p.id)).map((r) => r.reason).sort()).toEqual(['late', 'overpaid']);
+  });
+
+  it('M-2: a held overpaid deposit also queues the excess, gated on the legal acknowledgement', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'overpay', { senderAddress: SANCTIONED });
+    await poll(q.deposit_address);
+    const p = await paymentOf(q.id);
+    expect(p.status).toBe('HELD');
+    const excess = BigInt((await sim.status(q.deposit_address)).swapDetails.refundedAmount!);
+    await queueHeldReturn(ctx(), p.id);
+    const refunds = await refundsOf(p.id);
+    expect(refunds.map((r) => r.reason).sort()).toEqual(['overpaid', 'sanctions']);
+    const over = refunds.find((r) => r.reason === 'overpaid')!;
+    expect(over).toMatchObject({ assetId: ETH, proposalId: null });
+    expect(over.amount.toFixed()).toBe((excess - ETH_FEE_WEI).toString());
+    await expect(draftReturn(ctx(), over.id)).rejects.toMatchObject({
+      code: 'LEGAL_ACK_REQUIRED',
+    });
+    await queueHeldReturn(ctx(), p.id);
+    expect(await refundsOf(p.id)).toHaveLength(2);
     expect(await prisma.accountProposal.count()).toBe(0);
   });
 
@@ -745,6 +808,37 @@ describe('return to sender', () => {
     });
   });
 
+  it('M-5: a human refund proposal (no linked refund) executing raises no alert and no review', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    const accountId = (
+      await prisma.accountProposal.findUniqueOrThrow({ where: { id: r!.proposalId! } })
+    ).accountId;
+    // Drafted by a person with money:request through project 2: not a system draft.
+    const human = await prisma.accountProposal.create({
+      data: {
+        id: newId('prop'),
+        merchantId: merchant.id,
+        livemode: false,
+        accountId,
+        onchainId: 'e'.repeat(64),
+        kind: 'refund',
+        action: {},
+        salt: '',
+        status: 'executed',
+        refundId: null,
+      },
+    });
+    logSpy.mockClear();
+    await onRefundProposalExecuted(await proposalEvent('account.proposal.executed', human.id));
+    expect(await eventsOf('refund.needs_review')).toEqual([]);
+    expect(await eventsOf('refund.sent')).toEqual([]);
+    expect(logSpy.mock.calls.map((c) => String(c[0])).join('\n')).not.toMatch(/OPS ALERT/);
+    expect(await prisma.refund.findUniqueOrThrow({ where: { id: r!.id } })).toMatchObject({
+      status: 'pending',
+    });
+  });
+
   it('a held return whose delivered amount is unknown is refused for review', async () => {
     const s = await newSession();
     const q = await quote(s.client_secret);
@@ -752,6 +846,8 @@ describe('return to sender', () => {
     await poll(q.deposit_address);
     const p = await paymentOf(q.id);
     expect(p.status).toBe('HELD');
+    // Held before the swap's transfer was verified (no claim; M-3 claims one when it can).
+    await prisma.settlementClaim.deleteMany({ where: { paymentId: p.id } });
     const real = await sim.status(q.deposit_address);
     vi.spyOn(sim, 'status').mockResolvedValue({
       ...real,
@@ -763,6 +859,28 @@ describe('return to sender', () => {
     await prisma.refund.update({ where: { id: r.id }, data: { acknowledgedLegalAt: new Date() } });
     expect(await draftReturn(ctx(), r.id)).toMatchObject({ proposalId: null });
     expect(await prisma.accountProposal.count()).toBe(0);
+  });
+
+  it('M-3: a held payment claims its verified transfer, and its return is sized from the claim', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'exact', { senderAddress: SANCTIONED });
+    await poll(q.deposit_address);
+    const p = await paymentOf(q.id);
+    expect(p.status).toBe('HELD');
+    const claim = await prisma.settlementClaim.findFirstOrThrow({ where: { paymentId: p.id } });
+    const real = await sim.status(q.deposit_address);
+    expect(claim.amount.toFixed()).toBe(real.swapDetails.amountOut);
+    // 1Click now reports more than was verifiably delivered: the claim wins.
+    vi.spyOn(sim, 'status').mockResolvedValue({
+      ...real,
+      swapDetails: {
+        ...real.swapDetails,
+        amountOut: (BigInt(real.swapDetails.amountOut!) * 2n).toString(),
+      },
+    });
+    const r = (await queueHeldReturn(ctx(), p.id))!;
+    expect(r.amount.toFixed()).toBe((BigInt(claim.amount.toFixed()) - 500_000n).toString());
   });
 
   it('setShopperEmail mails only when it set the email', async () => {
