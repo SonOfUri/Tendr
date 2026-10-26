@@ -15,6 +15,7 @@ import {
   setAccountJobs,
 } from './jobs/account-notices.js';
 import { retryPendingScreenings } from './checkout/screening.js';
+import { sweepReturns } from './checkout/refunds.js';
 import { expireSessions, pollDeposit, scanDueDeposits } from './checkout/watcher.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
@@ -44,6 +45,9 @@ export const CHECKOUT_QUEUE = 'tendr-checkout';
 export const SCAN_DEPOSITS_JOB = 'scan-deposits';
 export const POLL_DEPOSIT_JOB = 'poll-deposit';
 export const EXPIRE_SESSIONS_JOB = 'expire-sessions';
+/** Queues returns the post-commit watcher hook missed and retries undrafted returns. */
+export const SWEEP_RETURNS_JOB = 'sweep-returns';
+export const SWEEP_RETURNS_EVERY_MS = 60_000;
 export const SCAN_DEPOSITS_EVERY_MS = 5_000;
 export const EXPIRE_SESSIONS_EVERY_MS = 60_000;
 
@@ -76,6 +80,11 @@ export async function processCheckoutJob(
   if (job.name === EXPIRE_SESSIONS_JOB) {
     const n = await expireSessions();
     if (n > 0) log('info', 'expired checkout sessions', { count: n });
+    return;
+  }
+  if (job.name === SWEEP_RETURNS_JOB) {
+    const n = await sweepReturns();
+    if (n > 0) log('info', 'return sweep', { count: n });
     return;
   }
   throw new Error(`unknown checkout job ${job.name}`);
@@ -266,6 +275,11 @@ export async function startWorker(
     EXPIRE_SESSIONS_JOB,
     { every: EXPIRE_SESSIONS_EVERY_MS },
     { name: EXPIRE_SESSIONS_JOB },
+  );
+  await checkoutQueue.upsertJobScheduler(
+    SWEEP_RETURNS_JOB,
+    { every: SWEEP_RETURNS_EVERY_MS },
+    { name: SWEEP_RETURNS_JOB },
   );
 
   const stopDispatcher =

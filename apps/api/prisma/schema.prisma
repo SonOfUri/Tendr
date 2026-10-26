@@ -1059,6 +1059,11 @@ model Refund {
   needsAddress        Boolean          @default(false) @map("needs_address")
   /// A signer typed the legal-clearance acknowledgement (required to refund a held payment).
   acknowledgedLegalAt DateTime?        @map("acknowledged_legal_at")
+  /// Estimated cross-chain return fee deducted from the gross return (`amount` is net).
+  returnFee           Decimal?         @map("return_fee") @db.Decimal(78, 0)
+  /// Set when the return needs a person before a draft: `sanctions`, `needs_swap_route`,
+  /// `price_unavailable` or `no_sender`.
+  reviewReason        String?          @map("review_reason")
   createdAt           DateTime         @default(now()) @map("created_at")
   updatedAt           DateTime         @updatedAt @map("updated_at")
 
@@ -1066,6 +1071,8 @@ model Refund {
   payment  Payment          @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   proposal AccountProposal? @relation(fields: [proposalId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
 
+  /// One return per payment and reason (the watcher hook and the sweeper are idempotent on it).
+  @@unique([paymentId, reason])
   @@index([merchantId])
   @@index([paymentId])
   @@index([proposalId])

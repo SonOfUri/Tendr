@@ -40,6 +40,8 @@ export const ErrorCodes = [
   'WALLET_NOT_ALLOWED',
   /** A deposit for the current quote is on its way; a new quote would orphan its address. */
   'DEPOSIT_IN_PROGRESS',
+  /** Returning a held (sanctions) payment's funds needs the typed legal-clearance acknowledgement. */
+  'LEGAL_ACK_REQUIRED',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

@@ -16,6 +16,7 @@ import {
   submitDeposit,
   type ShopperCtx,
 } from '../checkout/quotes.js';
+import { provideRefundAddress, RefundAddressInputSchema } from '../checkout/refunds.js';
 import { requirePrincipal } from '../gateway/principal.js';
 import { notFound, unauthorized } from '../lib/errors.js';
 
@@ -71,6 +72,18 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
     await setShopperEmail(ctx, email);
     return { ok: true };
   });
+
+  // Ruling C3: the shopper says where an exchange-sent return goes (screened; block → 403).
+  // Each attempt screens an address, so it shares the per-session quote limiter.
+  app.post(
+    `${CHECKOUT_CLIENT_PREFIX}refund-address`,
+    { ...shopper, preHandler: opts.quoteRateLimit },
+    async (req) => {
+      const ctx = ctxOf(req);
+      const input = RefundAddressInputSchema.parse(req.body);
+      return provideRefundAddress(ctx, input);
+    },
+  );
 
   app.post(`${CHECKOUT_CLIENT_PREFIX}simulate`, shopper, async (req) => {
     const ctx = ctxOf(req);

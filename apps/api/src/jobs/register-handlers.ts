@@ -9,6 +9,7 @@ import {
   PROVISION_REQUESTED,
   provisionMerchantAccount,
 } from '../accounts/accounts.js';
+import { registerRefundHooks } from '../checkout/refunds.js';
 import { registerWatcherHooks } from '../checkout/watcher.js';
 import { registerAccountHandlers } from './account-notices.js';
 import { registerEventHandler } from './handlers.js';
@@ -33,3 +34,7 @@ registerAccountHandlers();
 
 // Payment watcher: a SCREENING_PENDING payment that screens `allow` re-runs settlement.
 registerWatcherHooks();
+
+// Return to sender: the watcher's `onReturnNeeded` hook queues refund drafts; executed / failed
+// refund proposals complete or flag the return.
+registerRefundHooks();

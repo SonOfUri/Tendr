@@ -50,6 +50,7 @@ import {
   challengeB64u,
   kindOf,
   normalizeP256Signature,
+  poaRouteError,
   proposalId as computeProposalId,
   type ActionJson,
   type ActionOf,
@@ -245,6 +246,55 @@ export async function createDraft(
     }),
   );
   return view(created);
+}
+
+/** Kinds the system (no person) may draft: only returns of a shopper's money (Ruling C2). */
+const SYSTEM_KINDS: ReadonlySet<ProposalKind> = new Set(['refund']);
+
+/**
+ * A draft created by Tendr itself, not a person (checkout return-to-sender, Ruling C2): the
+ * creator is null and no permission check applies (those are for humans). The action is still
+ * parsed and checked locally like any draft, and a signer must still approve it. Runs inside the
+ * caller's `tenantTransaction` (same `ctx`) so the draft and whatever links to it commit together.
+ * `reason` is logged with the draft (the refund row that links to it carries the detail).
+ */
+export async function createSystemDraftInTx(
+  tx: Prisma.TransactionClient,
+  ctx: ScopeContext,
+  input: { kind: ProposalKind; action: unknown; reason: string },
+): Promise<AccountProposal> {
+  const action = ActionSchema.parse(input.action);
+  const kind = kindOf(action);
+  if (kind !== input.kind) throw invalid(`kind ${input.kind} does not match the action (${kind})`);
+  if (!SYSTEM_KINDS.has(kind)) throw invalid(`the system cannot draft a ${kind} proposal`);
+  const account = await activeAccount(ctx);
+  await validateLocally(ctx, action);
+  const salt = randomBytes(32);
+  const created = await tx.accountProposal.create({
+    data: {
+      id: newId('prop'),
+      merchantId: ctx.merchantId,
+      livemode: ctx.livemode,
+      accountId: account.id,
+      onchainId: computeProposalId(action, salt),
+      kind,
+      action: action as Prisma.InputJsonValue,
+      salt: salt.toString('base64'),
+      status: 'draft',
+      createdByUserId: null,
+    },
+  });
+  log('info', 'system draft created', { proposalId: created.id, kind, reason: input.reason });
+  return created;
+}
+
+/** `createSystemDraftInTx` in its own transaction. */
+export async function createSystemDraft(
+  ctx: ScopeContext,
+  input: { kind: ProposalKind; action: unknown; reason: string },
+): Promise<ProposalView> {
+  const created = await tenantTransaction(ctx, (tx) => createSystemDraftInTx(tx, ctx, input));
+  return getProposal(ctx, created.id);
 }
 
 // ─── local validation ────────────────────────────────────────────────────────
@@ -447,6 +497,8 @@ export async function validateLocally(ctx: ScopeContext, action: ActionJson): Pr
       const v = a.refund as ActionOf<'refund'>;
       positive(v.amount);
       if (!SUPPORTED_CHAINS.includes(v.destination_chain)) throw invalid('unsupported chain');
+      const routeError = poaRouteError(v.asset, v.route, v.destination_chain, v.destination);
+      if (routeError) throw invalid(routeError);
       return;
     }
     case 'set_auto_sweep': {

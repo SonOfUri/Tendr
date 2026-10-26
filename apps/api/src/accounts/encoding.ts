@@ -51,6 +51,68 @@ const WithdrawRouteSchema = z.union([
 ]);
 export type WithdrawRoute = z.infer<typeof WithdrawRouteSchema>;
 
+/** The contract's default PoA token suffix (`DEFAULT_POA_SUFFIX`; accounts init `poa_suffix: null`). */
+export const DEFAULT_POA_SUFFIX = 'omft.near';
+/**
+ * Mirror of the contract's `POA_CHAIN_PREFIXES` (onchain/merchant-account/src/money.rs): the
+ * chain prefix of a PoA token account (`<prefix>-….omft.near` or `<prefix>.omft.near`) → the
+ * destination chain it bridges to. The prefixes are also 1Click's `blockchain` ids.
+ */
+export const POA_CHAIN_PREFIXES: Readonly<Record<string, string>> = {
+  eth: 'eth',
+  base: 'base',
+  arb: 'arbitrum',
+  sol: 'sol',
+  tron: 'tron',
+  btc: 'btc',
+  bsc: 'bsc',
+  pol: 'polygon',
+  op: 'optimism',
+  avax: 'avalanche',
+};
+
+/** The NEP-141 token account behind a `nep141:` asset id, or null. */
+export function poaTokenOf(asset: string): string | null {
+  const t = asset.startsWith('nep141:') ? asset.slice('nep141:'.length) : '';
+  return AccountIdSchema.safeParse(t).success ? t : null;
+}
+
+/**
+ * Mirrors the contract's `check_route` for a `Poa` route (`poa_target`): returns null when a Poa
+ * `ft_withdraw` of `asset` can reach `address` on `chain`, else the contract's refusal message.
+ * - `near`: any `nep141:` asset to a valid NEAR account id (a plain transfer);
+ * - any other chain: the asset must be a PoA bridge token whose prefix maps to `chain`, and the
+ *   route must name the asset's own token contract.
+ * A `Swap` route is not checked here (the contract accepts any deposit account).
+ */
+export function poaRouteError(
+  asset: string,
+  route: WithdrawRoute,
+  chain: string,
+  address: string,
+  poaSuffix = DEFAULT_POA_SUFFIX,
+): string | null {
+  if (!('poa' in route)) return null;
+  const token = poaTokenOf(asset);
+  if (!token) return 'poa route needs a nep141 asset';
+  if (route.poa.token_contract !== token) {
+    return "poa route must withdraw through the asset's token contract";
+  }
+  if (chain === 'near') {
+    return AccountIdSchema.safeParse(address).success
+      ? null
+      : 'near destination must be a valid NEAR account id';
+  }
+  const suffix = `.${poaSuffix}`;
+  const prefix = token.endsWith(suffix) ? token.slice(0, -suffix.length) : '';
+  const label = prefix.split(/[-.]/)[0] ?? '';
+  const bridged =
+    prefix && Object.hasOwn(POA_CHAIN_PREFIXES, label) ? POA_CHAIN_PREFIXES[label] : undefined;
+  if (!bridged) return 'asset is not a PoA bridge token';
+  if (bridged !== chain) return "asset's PoA bridge does not serve the destination chain";
+  return null;
+}
+
 export const SignerSchema = z.object({ id: Str, keys: z.array(SignerKeySchema).max(64) }).strict();
 export type SignerJson = z.infer<typeof SignerSchema>;
 

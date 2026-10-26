@@ -28,6 +28,7 @@ import {
   type StatusResponse,
 } from './oneclick/index.js';
 import { assertWithinMinimum, assertWithinTarget, buildQuoteRequests } from './pricing.js';
+import { emailWaitingReturns, shopperRefunds } from './refunds.js';
 import { screenAddress } from './screening.js';
 import type { CheckoutCtx } from './sessions.js';
 import { tokenInfo, tokenList } from './tokens.js';
@@ -272,11 +273,12 @@ export async function shopperSessionView(ctx: ShopperCtx) {
   // The page is open: the watcher polls this session's addresses every 5 s for a minute.
   await markSessionViewed(s.id);
   const feePayer = feePayerFromDb(s.feePayer);
-  const [merchant, quote, payments, emailNeeded] = await Promise.all([
+  const [merchant, quote, payments, emailNeeded, refunds] = await Promise.all([
     merchantDisplay(ctx, s),
     currentQuote(ctx),
     ctx.db.payment.findMany({ where: { sessionId: s.id }, orderBy: { createdAt: 'asc' } }),
     needsEmail(ctx, s),
+    shopperRefunds(ctx),
   ]);
   return {
     id: s.id,
@@ -302,6 +304,8 @@ export async function shopperSessionView(ctx: ShopperCtx) {
       origin_tx_hash: p.originTxHash,
       created_at: p.createdAt.toISOString(),
     })),
+    /** Returns to the shopper; one with `needs_address` waits for "Tell us where to send it". */
+    refunds,
     needs_email: emailNeeded,
     topup: await topupOffer(ctx, payments, watcherNow()),
   };
@@ -631,6 +635,8 @@ export async function setShopperEmail(ctx: ShopperCtx, email: string): Promise<v
     where: { id: s.id, customerEmail: null },
     data: { customerEmail: email.toLowerCase() },
   });
+  // The email is for refund contact: send the return-address link now.
+  await emailWaitingReturns(ctx);
 }
 
 /**
