@@ -32,6 +32,7 @@ import {
   ENDED_REVIEW,
   heldAmount,
   isClosedMerchantRefund,
+  NOT_CLOSED_MERCHANT,
   isOpenReturn,
   keepSmall,
   legalAckRequired,
@@ -250,6 +251,9 @@ export const RefundFromReviewSchema = z
     path: ['chain'],
   });
 
+const storeRefundClosed = () =>
+  conflict('This store refund was cancelled; start a new refund from the store');
+
 const proposalStillLive = () =>
   new AppError(
     'PROPOSAL_STILL_LIVE',
@@ -363,9 +367,7 @@ export async function refundFromReview(
   if (r.status === 'confirmed') throw conflict('This return was already sent');
   // A store refund whose proposal ended was undone by the store (refund.cancelled / .failed):
   // never drafted again from here — the store starts a new refund.
-  if (isClosedMerchantRefund(r)) {
-    throw conflict('This store refund was cancelled; start a new refund from the store');
-  }
+  if (isClosedMerchantRefund(r)) throw storeRefundClosed();
   const merchant = r.reason === 'merchant';
   const sanctioned = held || r.reason === 'sanctions' || r.reviewReason === REVIEW.sanctions;
   if (sanctioned && !p.legalAckAt) throw legalAckRequired();
@@ -381,6 +383,9 @@ export async function refundFromReview(
   r = await prisma.refund.findFirstOrThrow({ where: { id: r.id, ...tenantOf(ctx) } });
   if (r.proposalId || r.status === 'confirmed')
     throw conflict('This return already has a proposal');
+  // Detaching its ended proposal (just above) closes a store refund too; so does a concurrent
+  // cancel. Either way it is never drafted again.
+  if (isClosedMerchantRefund(r)) throw storeRefundClosed();
 
   // The destination: the merchant's (checked here) or the one on file.
   let dest: { address: string; chain: string } | null =
@@ -494,8 +499,18 @@ export async function refundFromReview(
   // re-linking it makes this a 409), so two requests can never leave two live proposals.
   await tenantTransaction(ctx, async (tx) => {
     await lockRefund(tx, ctx, r.id);
+    // A store refund cancelled (or its proposal ended) while this request screened and priced is
+    // closed for good: the store was told. Re-read under the lock, and the write refuses it too.
+    const cur = await tx.refund.findFirstOrThrow({ where: { id: r.id, ...tenantOf(ctx) } });
+    if (isClosedMerchantRefund(cur)) throw storeRefundClosed();
     const { count } = await tx.refund.updateMany({
-      where: { id: r.id, ...tenantOf(ctx), proposalId: null, status: { not: 'confirmed' } },
+      where: {
+        id: r.id,
+        ...tenantOf(ctx),
+        proposalId: null,
+        status: { not: 'confirmed' },
+        ...NOT_CLOSED_MERCHANT,
+      },
       data: {
         destination: dest.address,
         destinationChain: dest.chain,

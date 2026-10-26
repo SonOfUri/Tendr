@@ -10,6 +10,7 @@ import { CHAINS, chainLabel, formatAmount } from '@/lib/assets';
 import { api } from '@/lib/api';
 import {
   heldReturnForms,
+  canCancelStoreRefund,
   isClosedMerchantRefund,
   refundStateWords,
   returnLabel,
@@ -137,6 +138,28 @@ function RefundLine({ r, livemode }: { r: Refund; livemode: boolean }) {
   );
 }
 
+/** "Cancel refund" for a store refund with no proposal yet (W14; dashboard route, step-up). */
+function CancelStoreRefund({ r, onChanged }: { r: Refund; onChanged: () => void }) {
+  const cancel = useAction();
+  if (!canCancelStoreRefund(r)) return null;
+  async function run() {
+    const ok = await cancel.run(() =>
+      withStepUp(() =>
+        api(`/v1/review/refunds/${encodeURIComponent(r.id)}/cancel`, { method: 'POST', json: {} }),
+      ),
+    );
+    if (ok !== undefined) onChanged();
+  }
+  return (
+    <>
+      {cancel.error && <Alert tone="danger">{cancel.error}</Alert>}
+      <Button variant="secondary" onClick={() => void run()} disabled={cancel.busy}>
+        {cancel.busy ? 'Cancelling…' : 'Cancel refund'}
+      </Button>
+    </>
+  );
+}
+
 function HeldCard({
   item,
   isOwner,
@@ -187,6 +210,7 @@ function HeldCard({
               <span className="grow">
                 <strong>{returnLabel(r.reason)}</strong> · <RefundLine r={r} livemode={livemode} />
               </span>
+              <CancelStoreRefund r={r} onChanged={onChanged} />
             </li>
           ))}
         </ul>
@@ -251,21 +275,9 @@ function ReturnRow({
   onChanged: () => void;
 }) {
   const redo = useAction();
-  const cancel = useAction();
   const [give, setGive] = useState(false);
   const canRedraft =
     !r.proposal_id && !!r.review_reason && !!r.destination && !isClosedMerchantRefund(r);
-  // A store refund (POST /v1/refunds) with no proposal yet can be cancelled (W14).
-  const canCancel = r.reason === 'merchant' && !r.proposal_id && !isClosedMerchantRefund(r);
-
-  async function cancelRefund() {
-    const ok = await cancel.run(() =>
-      withStepUp(() =>
-        api(`/v1/review/refunds/${encodeURIComponent(r.id)}/cancel`, { method: 'POST', json: {} }),
-      ),
-    );
-    if (ok !== undefined) onChanged();
-  }
 
   async function redraft() {
     const ok = await redo.run(() =>
@@ -291,7 +303,6 @@ function ReturnRow({
             : 'No destination yet'}
         </span>
         {redo.error && <Alert tone="danger">{redo.error}</Alert>}
-        {cancel.error && <Alert tone="danger">{cancel.error}</Alert>}
         {give && (
           <DestinationForm
             paymentId={r.payment_id}
@@ -306,11 +317,7 @@ function ReturnRow({
           {redo.busy ? 'Drafting…' : 'Draft again'}
         </Button>
       )}
-      {canCancel && (
-        <Button variant="secondary" onClick={() => void cancelRefund()} disabled={cancel.busy}>
-          {cancel.busy ? 'Cancelling…' : 'Cancel refund'}
-        </Button>
-      )}
+      <CancelStoreRefund r={r} onChanged={onChanged} />
       {!r.proposal_id && !give && (
         <button type="button" className="link-button small" onClick={() => setGive(true)}>
           Send to another address

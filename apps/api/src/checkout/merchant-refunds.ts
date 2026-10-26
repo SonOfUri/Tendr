@@ -21,7 +21,6 @@
 //   exceed what is left (`refundableRemaining`).
 import { Prisma, type Payment, type Refund, type Session } from '@prisma/client';
 import { z } from 'zod';
-import { getBalances } from '../accounts/accounts.js';
 import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { recordEvent } from '../events/record.js';
@@ -33,6 +32,7 @@ import { isExchangeAddress } from './exchanges.js';
 import { convertToUsd, minorUnits, unsupportedCurrency } from './fx.js';
 import { gasEstimateUsd } from './gas-estimates.js';
 import {
+  accountBalance,
   contractChainOf,
   draftIfReady,
   emailNeedsAddress,
@@ -354,24 +354,6 @@ function sameOrConflict(existing: Refund, asked: { usd: Dec; converted: boolean 
     refund_id: existing.id,
     amount_usd: existing.requestedAmountUsd?.toFixed(2) ?? null,
   });
-}
-
-/**
- * The merchant account's balance of `asset` (base units), or null when it cannot be read: the
- * check is then left to the chain (an underfunded proposal fails when it executes, and the store
- * is told with `refund.failed`). Advisory either way: other proposals may spend the balance before
- * the signers approve this one.
- */
-async function accountBalance(ctx: ScopeContext, asset: string): Promise<bigint | null> {
-  try {
-    const { balances } = await getBalances(ctx.merchantId, ctx.livemode);
-    const b = balances.find((x) => x.asset === asset);
-    // An asset the account does not list holds nothing: refused, never waved through.
-    return b ? BigInt(b.amount) : 0n;
-  } catch (err) {
-    log('warn', 'merchant refund: account balance unavailable; not checked', { err: String(err) });
-    return null;
-  }
 }
 
 /**

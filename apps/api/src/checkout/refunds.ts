@@ -46,6 +46,7 @@ import {
   SUPPORTED_CHAINS,
   type ContractProposalView,
 } from '../accounts/proposals.js';
+import { getBalances } from '../accounts/accounts.js';
 import { nearClient } from '../near/client.js';
 import {
   poaRouteError,
@@ -380,10 +381,29 @@ export const PROPOSAL_ENDED_REVIEW: ReadonlySet<string> = new Set([
 ]);
 
 /** Review reasons that close a merchant refund (`isClosedMerchantRefund`). */
-export const MERCHANT_CLOSED_REVIEW: ReadonlySet<string> = new Set([
+const MERCHANT_CLOSED_REVIEW_LIST: readonly string[] = [
   ...PROPOSAL_ENDED_REVIEW,
   REVIEW.storeCancelled,
-]);
+];
+export const MERCHANT_CLOSED_REVIEW: ReadonlySet<string> = new Set(MERCHANT_CLOSED_REVIEW_LIST);
+
+/**
+ * A `where` fragment that leaves closed merchant refunds out (`isClosedMerchantRefund` in SQL), so
+ * a write that would reopen or redirect a refund is refused by the database itself if the row was
+ * closed after it was read. NULL-safe: an open row with no review reason still matches.
+ */
+export const NOT_CLOSED_MERCHANT = {
+  AND: [
+    {
+      OR: [
+        { reason: { not: 'merchant' as const } },
+        { status: 'confirmed' as const },
+        { reviewReason: null },
+        { reviewReason: { notIn: [...MERCHANT_CLOSED_REVIEW_LIST] } },
+      ],
+    },
+  ],
+} satisfies Prisma.RefundWhereInput;
 
 /**
  * A merchant-initiated refund that is closed: its proposal ended without executing (rejected,
@@ -717,6 +737,8 @@ export async function holdMerchantRefund(ctx: ScopeContext, refundId: string): P
         status: 'pending',
         proposalId: null,
         reviewReason: null,
+        // Never undoes an acknowledged review action (the legal ack and a merchant destination).
+        acknowledgedLegalAt: null,
       },
       data: {
         reviewReason: REVIEW.sanctions,
@@ -732,9 +754,28 @@ export async function holdMerchantRefund(ctx: ScopeContext, refundId: string): P
   });
 }
 
+/**
+ * The merchant account's balance of `asset` (base units) for the advisory check on store refunds
+ * (the merchant pays the network cost on top). An asset the account does not list holds nothing
+ * (0: refused, never waved through). Null only when the balance cannot be read: the check is then
+ * left to the chain (an underfunded proposal fails when it executes, and the store is told with
+ * `refund.failed`). Advisory either way: other proposals may spend the balance first.
+ */
+export async function accountBalance(ctx: ScopeContext, asset: string): Promise<bigint | null> {
+  try {
+    const { balances } = await getBalances(ctx.merchantId, ctx.livemode);
+    const b = balances.find((x) => x.asset === asset);
+    return b ? BigInt(b.amount) : 0n;
+  } catch (err) {
+    log('warn', 'merchant refund: account balance unavailable; not checked', { err: String(err) });
+    return null;
+  }
+}
+
 async function markReview(ctx: ScopeContext, refundId: string, reason: string): Promise<Refund> {
   await prisma.refund.updateMany({
-    where: { id: refundId, ...tenantOf(ctx), proposalId: null },
+    // A store refund closed meanwhile (cancelled while this one was screened) stays closed.
+    where: { id: refundId, ...tenantOf(ctx), proposalId: null, ...NOT_CLOSED_MERCHANT },
     data: { reviewReason: reason },
   });
   log('warn', 'return to sender needs review', { refundId, reason });
@@ -751,8 +792,16 @@ async function blockReturn(ctx: ScopeContext, refundId: string): Promise<Refund>
     await lockRefund(tx, ctx, refundId);
     const r = await tx.refund.findFirstOrThrow({ where: { id: refundId, ...tenantOf(ctx) } });
     if (r.status !== 'pending' || r.proposalId !== null) return r;
+    // A closed store refund keeps its closed state (the hold is still recorded below: the
+    // address did screen as sanctioned).
     await tx.refund.updateMany({
-      where: { id: r.id, ...tenantOf(ctx), status: 'pending', proposalId: null },
+      where: {
+        id: r.id,
+        ...tenantOf(ctx),
+        status: 'pending',
+        proposalId: null,
+        ...NOT_CLOSED_MERCHANT,
+      },
       data: { status: 'failed', reviewReason: REVIEW.sanctions, needsAddress: false },
     });
     await lockPayment(tx, ctx, r.paymentId);
@@ -998,12 +1047,22 @@ async function fillAddress(
     }
     const requested = BigInt(r.amount.toFixed(0)) - BigInt(r.returnFee?.toFixed(0) ?? '0');
     const { fee } = grossUpForReturnFee(D(0), perUnit, D(gasEstimateUsd(oneclick)));
+    // The same advisory balance check as the request (an unlisted asset holds nothing).
+    const balance = await accountBalance(ctx, r.assetId);
+    if (balance !== null && requested + fee > balance) {
+      throw new AppError(
+        'AMOUNT_EXCEEDS_REFUNDABLE',
+        'The store cannot send this refund right now; please try again later',
+        409,
+      );
+    }
     regross = { amount: (requested + fee).toString(), returnFee: fee.toString() };
   }
   const { count } = await prisma.refund.updateMany({
     where: {
       id: r.id,
       ...tenantOf(ctx),
+      ...NOT_CLOSED_MERCHANT,
       needsAddress: true,
       status: 'pending',
       ...(tokenHash ? { addressTokenHash: tokenHash } : {}),

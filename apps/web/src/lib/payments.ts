@@ -106,6 +106,21 @@ export function isClosedMerchantRefund(
   );
 }
 
+/**
+ * Whether the dashboard offers "Cancel refund" (W14): a store refund that is not sent, not closed
+ * and has no proposal yet (one with a proposal is rejected by the signers instead).
+ */
+export function canCancelStoreRefund(
+  r: Pick<Refund, 'reason' | 'status' | 'review_reason' | 'proposal_id'>,
+): boolean {
+  return (
+    r.reason === 'merchant' &&
+    r.status !== 'confirmed' &&
+    !r.proposal_id &&
+    !isClosedMerchantRefund(r)
+  );
+}
+
 export interface TxRef {
   chain: string | null;
   hash: string;

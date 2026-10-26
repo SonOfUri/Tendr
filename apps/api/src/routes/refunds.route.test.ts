@@ -4,13 +4,16 @@
 import type { Merchant } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { balancesCacheKey } from '../accounts/accounts.js';
 import { buildApp } from '../app.js';
+import { getRedis } from '../lib/redis.js';
 import { MemoryMailer, setMailer } from '../auth/mailer.js';
 import { LEGAL_ACK_PHRASE } from '@tendr/contracts';
 import { acknowledgeLegal, refundFromReview, reviewQueue } from '../checkout/review.js';
 import type { DashboardUserPrincipal } from '../gateway/principal.js';
 import {
   draftReturn,
+  holdMerchantRefund,
   onRefundProposalCancelled,
   onRefundProposalExecuted,
   onRefundProposalFailed,
@@ -568,6 +571,123 @@ describe('POST /v1/refunds', () => {
     const prop = await prisma.accountProposal.findFirstOrThrow();
     expect(prop.action).toMatchObject({
       refund: { amount: (usdc('10.00') + FEE_UNITS).toString(), destination: OTHER },
+    });
+  });
+
+  describe('a closed store refund is never brought back (fix round 2)', () => {
+    const OTHER = '0x2222222222222222222222222222222222222222';
+    const owner = () =>
+      ({
+        kind: 'dashboard_user',
+        merchantId: merchant.id,
+        livemode: false,
+        userId: 'usr_owner',
+        membershipId: 'mu_owner',
+        role: 'owner',
+        isSigner: true,
+        permissions: [],
+        sessionId: 'dss_1',
+        passkeyVerifiedAt: null,
+      }) as unknown as DashboardUserPrincipal;
+
+    it('a cancel that commits while refundFromReview screens wins: nothing is ever drafted', async () => {
+      const { p } = await settled();
+      setRefundDeps({ screen: async () => ({ decision: 'block' }) });
+      const id = (await refund({ payment: p.id, amount: '10.00', external_ref: 'rr' })).json().id;
+      await acknowledgeLegal(owner(), p.id, { phrase: LEGAL_ACK_PHRASE });
+      // The store cancels exactly while the review action screens the new destination.
+      let cancelled = 0;
+      setRefundDeps({
+        screen: async (_c, i) => {
+          if (i.address === OTHER) {
+            const res = await app.inject({
+              method: 'POST',
+              url: `/v1/refunds/${id}/cancel`,
+              headers: { authorization: `Bearer ${key}` },
+            });
+            expect(res.statusCode, res.body).toBe(200);
+            cancelled++;
+          }
+          return { decision: 'allow' };
+        },
+      });
+      await expect(
+        refundFromReview(owner(), p.id, { refund_id: id, destination: OTHER, chain: 'eth' }),
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
+      expect(cancelled).toBe(1);
+      expect(await prisma.refund.findUniqueOrThrow({ where: { id } })).toMatchObject({
+        status: 'failed',
+        reviewReason: 'store_cancelled',
+        destination: p.senderAddress, // as blocked; never the review action's new destination
+        proposalId: null,
+      });
+      await sweepReturns();
+      expect(await prisma.accountProposal.count()).toBe(0);
+      expect(await eventsOf('refund.review_redrafted')).toEqual([]);
+    });
+
+    it('a store refund closed by detaching its ended proposal is not redrafted', async () => {
+      const { p } = await settled();
+      const id = (await refund({ payment: p.id, amount: '10.00', external_ref: 'dc' })).json().id;
+      const r = await prisma.refund.findUniqueOrThrow({ where: { id } });
+      // Its proposal was rejected on the dashboard; the contract no longer has it.
+      await prisma.accountProposal.update({
+        where: { id: r.proposalId! },
+        data: { status: 'cancelled' },
+      });
+      const account = await prisma.merchantAccount.findFirstOrThrow({
+        where: { merchantId: merchant.id },
+      });
+      fake.scriptView(account.nearAccountId!, 'get_proposal', () => null);
+      // The review action itself detaches it (closing the store refund) — and must stop there.
+      await expect(
+        refundFromReview(owner(), p.id, { refund_id: id, destination: OTHER, chain: 'eth' }),
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
+      expect(await prisma.refund.findUniqueOrThrow({ where: { id } })).toMatchObject({
+        reviewReason: 'proposal_cancelled',
+        proposalId: null,
+        destination: p.senderAddress,
+      });
+      expect(await prisma.accountProposal.count()).toBe(1);
+      expect(await eventsOf('refund.cancelled')).toHaveLength(1);
+      await sweepReturns();
+      expect(await prisma.accountProposal.count()).toBe(1);
+    });
+
+    it('a later sanctions hold never undoes an acknowledged review action', async () => {
+      const { p } = await settled();
+      setRefundDeps({ screen: async () => ({ decision: 'unavailable' }) });
+      const id = (await refund({ payment: p.id, amount: '5.00', external_ref: 'ak' })).json().id;
+      setRefundDeps(null);
+      const at = new Date();
+      await prisma.refund.update({ where: { id }, data: { acknowledgedLegalAt: at } });
+      await prisma.payment.update({ where: { id: p.id }, data: { heldReason: 'sanctions' } });
+      await holdMerchantRefund(ctx(), id);
+      expect(await prisma.refund.findUniqueOrThrow({ where: { id } })).toMatchObject({
+        reviewReason: null,
+        destination: p.senderAddress,
+        acknowledgedLegalAt: at,
+      });
+    });
+
+    it("the shopper's address is refused when the account cannot cover the re-grossed return", async () => {
+      const BINANCE = '0x28C6c06298d514Db089934071355E5743bf21d60';
+      const { s, p } = await settled({}, BINANCE);
+      const id = (await refund({ payment: p.id, amount: '10.00', external_ref: 'eb' })).json().id;
+      balance = '100'; // the account was spent meanwhile
+      await getRedis().del(balancesCacheKey(merchant.id, false));
+      const given = await app.inject({
+        method: 'POST',
+        url: '/v1/checkout/client/refund-address',
+        headers: { authorization: `Bearer ${s.client_secret}` },
+        payload: { address: 'bob.near', chain: 'near' },
+      });
+      expect(given.statusCode).toBe(409);
+      expect(given.json().error.code).toBe('AMOUNT_EXCEEDS_REFUNDABLE');
+      expect(await prisma.refund.findUniqueOrThrow({ where: { id } })).toMatchObject({
+        needsAddress: true,
+        destination: null,
+      });
     });
   });
 

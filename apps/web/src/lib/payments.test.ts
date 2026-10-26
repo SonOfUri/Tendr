@@ -5,6 +5,7 @@ import {
   feeLines,
   formatUsd,
   heldReturnForms,
+  canCancelStoreRefund,
   isClosedMerchantRefund,
   refundStateWords,
   type FeeLine,
@@ -199,5 +200,18 @@ describe('held review card: one destination form per open return (C41)', () => {
         refund({ reason: 'merchant', review_reason: 'proposal_cancelled', status: 'confirmed' }),
       ),
     ).toBe('Sent');
+  });
+
+  it('"Cancel refund" is offered for open store refunds without a proposal only', () => {
+    expect(canCancelStoreRefund(refund({ reason: 'merchant', review_reason: 'sanctions' }))).toBe(
+      true,
+    );
+    expect(canCancelStoreRefund(refund({ reason: 'merchant' }))).toBe(true);
+    expect(canCancelStoreRefund(refund({ reason: 'merchant', proposal_id: 'prop_1' }))).toBe(false);
+    expect(canCancelStoreRefund(refund({ reason: 'merchant', status: 'confirmed' }))).toBe(false);
+    expect(
+      canCancelStoreRefund(refund({ reason: 'merchant', review_reason: 'store_cancelled' })),
+    ).toBe(false);
+    expect(canCancelStoreRefund(refund({ reason: 'sanctions' }))).toBe(false);
   });
 });
