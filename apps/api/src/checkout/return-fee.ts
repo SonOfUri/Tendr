@@ -42,6 +42,23 @@ export function netOfReturnFee(
 }
 
 /**
+ * The other way round, for a return whose network cost the merchant pays (a merchant-initiated
+ * refund, WooCommerce spec §7): `requestedUsd` worth of the asset (rounded up, so the shopper is
+ * never short) plus the same estimated return fee `netOfReturnFee` deducts (rounded up). The
+ * shopper nets `requested` within the estimate's accuracy; `gross` is what leaves the account.
+ */
+export function grossUpForReturnFee(
+  requestedUsd: Dec,
+  perUnit: Dec,
+  feeUsd: Dec,
+): { requested: bigint; fee: bigint; gross: bigint } {
+  if (!perUnit.gt(0)) throw new Error('grossUpForReturnFee: no positive price');
+  const requested = BigInt(requestedUsd.div(perUnit).ceil().toFixed(0));
+  const fee = BigInt(feeUsd.div(perUnit).ceil().toFixed(0));
+  return { requested, fee, gross: requested + fee };
+}
+
+/**
  * Whether returning `amount` of `assetId` to a sender on `senderChain` is worth less than
  * SMALL_OVERPAY_USD once the estimated return fee is deducted (the merchant keeps it). Null when it
  * cannot be told (no price): the return path then sends it to review, never keeps it.

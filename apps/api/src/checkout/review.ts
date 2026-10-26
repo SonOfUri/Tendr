@@ -31,6 +31,7 @@ import {
   draftReturn,
   ENDED_REVIEW,
   heldAmount,
+  isClosedMerchantRefund,
   isOpenReturn,
   keepSmall,
   legalAckRequired,
@@ -47,6 +48,7 @@ import {
   usdPerUnit,
   verifiedEndedOnChain,
 } from './refunds.js';
+import { grossUpForReturnFee } from './return-fee.js';
 import type { ReturnReason } from './watcher.js';
 
 const D = (v: Prisma.Decimal.Value) => new Prisma.Decimal(v);
@@ -82,6 +84,9 @@ export function refundView(r: Refund) {
     proposal_id: r.proposalId,
     refund_tx_hash: r.refundTxHash,
     acknowledged_legal_at: iso(r.acknowledgedLegalAt),
+    /** A store refund's own reference and requested USD amount (null for automatic returns). */
+    refund_external_ref: r.externalRef,
+    requested_amount_usd: r.requestedAmountUsd ? r.requestedAmountUsd.toFixed(2) : null,
     created_at: r.createdAt.toISOString(),
   };
 }
@@ -296,7 +301,8 @@ function pickRefund(refunds: Refund[], refundId?: string): Refund {
     return r;
   }
   const open = refunds.filter(
-    (r) => r.status !== 'confirmed' && r.reviewReason !== REVIEW.keptSmall,
+    (r) =>
+      r.status !== 'confirmed' && r.reviewReason !== REVIEW.keptSmall && !isClosedMerchantRefund(r),
   );
   if (open.length === 0) throw notFound('This payment has no return to draft');
   if (open.length > 1) throw invalid('Say which refund (refund_id)');
@@ -355,6 +361,12 @@ export async function refundFromReview(
   }
   let r = queuedNow && !input.refund_id ? queuedNow : pickRefund(refunds, input.refund_id);
   if (r.status === 'confirmed') throw conflict('This return was already sent');
+  // A store refund whose proposal ended was undone by the store (refund.cancelled / .failed):
+  // never drafted again from here — the store starts a new refund.
+  if (isClosedMerchantRefund(r)) {
+    throw conflict('This store refund was cancelled; start a new refund from the store');
+  }
+  const merchant = r.reason === 'merchant';
   const sanctioned = held || r.reason === 'sanctions' || r.reviewReason === REVIEW.sanctions;
   if (sanctioned && !p.legalAckAt) throw legalAckRequired();
   if (sanctioned && !input.destination) {
@@ -456,17 +468,26 @@ export async function refundFromReview(
         503,
       );
     }
-    const net = netOfReturnFee(gross, perUnit, D(gasEstimateUsd(oneclickChainOf(dest.chain))));
-    if (net.net <= 0n || net.netUsd.lt(SMALL_OVERPAY_USD)) {
-      await keepSmall(ctx, p.id, r.reason as ReturnReason);
-      await prisma.refund.updateMany({
-        where: { id: r.id, ...tenantOf(ctx), proposalId: null },
-        data: { status: 'failed', reviewReason: REVIEW.keptSmall },
-      });
-      return { refund: null, kept_small_overpayment: true };
+    const feeUsd = D(gasEstimateUsd(oneclickChainOf(dest.chain)));
+    if (merchant) {
+      // A store refund: the store pays the network cost (never kept small). The requested part
+      // stays; the return fee is the estimate for this destination's chain, added on top.
+      const requested = BigInt(r.amount.toFixed(0)) - (returnFee ?? 0n);
+      returnFee = grossUpForReturnFee(D(0), perUnit, feeUsd).fee;
+      amount = requested + returnFee;
+    } else {
+      const net = netOfReturnFee(gross, perUnit, feeUsd);
+      if (net.net <= 0n || net.netUsd.lt(SMALL_OVERPAY_USD)) {
+        await keepSmall(ctx, p.id, r.reason as ReturnReason);
+        await prisma.refund.updateMany({
+          where: { id: r.id, ...tenantOf(ctx), proposalId: null },
+          data: { status: 'failed', reviewReason: REVIEW.keptSmall },
+        });
+        return { refund: null, kept_small_overpayment: true };
+      }
+      amount = net.net;
+      returnFee = net.fee;
     }
-    amount = net.net;
-    returnFee = net.fee;
   }
 
   // Conditional on the refund still having no proposal (a concurrent draft or an on-chain revival

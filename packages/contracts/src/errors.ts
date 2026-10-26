@@ -60,6 +60,13 @@ export const ErrorCodes = [
    * 10 minutes old. Never served from a stale rate; retry shortly or offer another payment method.
    */
   'FX_RATE_UNAVAILABLE',
+  /** `POST /v1/refunds`: the payment is not SETTLED or PARTIALLY_REFUNDED (nothing to refund). */
+  'PAYMENT_NOT_REFUNDABLE',
+  /**
+   * `POST /v1/refunds`: the amount is more than what is left to refund on the payment, or its
+   * return (with the network cost the merchant pays) is more than the merchant account holds.
+   */
+  'AMOUNT_EXCEEDS_REFUNDABLE',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

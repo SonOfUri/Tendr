@@ -253,7 +253,7 @@ type QuoteRow = Quote;
 type Loaded = { quote: QuoteRow; session: Session; ctx: ScopeContext };
 
 /** Final for the watcher: nothing more will happen on this address. */
-const DONE_PAYMENT = new Set(['SETTLED', 'REFUNDED', 'HELD']);
+const DONE_PAYMENT = new Set(['SETTLED', 'PARTIALLY_REFUNDED', 'REFUNDED', 'HELD']);
 
 /**
  * A HELD payment is watched until its amounts are known (C40): until 1Click refunded it, or

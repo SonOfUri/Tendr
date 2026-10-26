@@ -1,0 +1,448 @@
+// Merchant-initiated refunds (WooCommerce plugin spec §7, Task 5): `POST /v1/refunds`.
+//
+// A store refund returns money to the wallet that paid. It is a `refunds` row with reason
+// `merchant`, drafted through the checkout-core return path (refunds.ts) as a system `refund`
+// proposal that the store's signers approve. Nothing here moves funds.
+//
+// - Reuses the return path, never forks it: the sender's destination is sanctions-screened right
+//   before the draft (`draftReturn`; a block → no draft, the review queue, `payment.held`); a
+//   payment already held for sanctions goes to the review queue (legal acknowledgement plus a
+//   merchant-given destination); an exchange sender waits for an address (`refund.needs_address`);
+//   an asset that cannot reach the sender's chain directly goes to review (`needs_swap_route`);
+//   the proposal outcomes (`refund.sent` / `refund.cancelled` / `refund.failed`) and every
+//   on-chain safety net are the existing ones.
+// - The merchant pays the network cost: the return is grossed up by the same return-fee estimate
+//   the automatic path deducts (`grossUpForReturnFee`), so the shopper nets the requested amount
+//   within the estimate's accuracy. Kept-small never applies.
+// - Several per payment (partial refunds), one per `external_ref` (the WooCommerce refund id).
+//   The same `external_ref` again with the same amount returns the existing refund; with another
+//   amount it is CONFLICT.
+// - Serialised per payment by the payment row lock, so concurrent requests can never together
+//   exceed what is left (`refundableRemaining`).
+import { Prisma, type Payment, type Refund, type Session } from '@prisma/client';
+import { z } from 'zod';
+import { getBalances } from '../accounts/accounts.js';
+import type { ScopeContext } from '../db/scoped.js';
+import { tenantTransaction } from '../db/tenant-transaction.js';
+import { recordEvent } from '../events/record.js';
+import { AppError, conflict, notFound } from '../lib/errors.js';
+import { newId } from '../lib/ids.js';
+import { log } from '../lib/logger.js';
+import { prisma } from '../lib/prisma.js';
+import { isExchangeAddress } from './exchanges.js';
+import { convertToUsd, minorUnits, unsupportedCurrency } from './fx.js';
+import { gasEstimateUsd } from './gas-estimates.js';
+import {
+  contractChainOf,
+  draftIfReady,
+  emailNeedsAddress,
+  isClosedMerchantRefund,
+  lockPayment,
+  refundPayload,
+  REVIEW,
+  settledUsdOf,
+} from './refunds.js';
+import { grossUpForReturnFee, usdPerUnit } from './return-fee.js';
+import { liveConnectionId } from './webhooks.js';
+
+type Tx = Prisma.TransactionClient;
+type Dec = Prisma.Decimal;
+const D = (v: Prisma.Decimal.Value) => new Prisma.Decimal(v);
+const tenantOf = (ctx: ScopeContext) => ({ merchantId: ctx.merchantId, livemode: ctx.livemode });
+
+/** The caller: a store secret key, and the connection that issued it (null: a hand-made key). */
+export type MerchantRefundCtx = ScopeContext & { connectionId: string | null };
+
+const DECIMAL = /^\d{1,30}(\.\d{1,18})?$/;
+
+export const MerchantRefundInputSchema = z
+  .object({
+    payment: z.string().min(1).max(64).optional(),
+    session: z.string().min(1).max(64).optional(),
+    /** USD (2 decimals), or `currency` when given. */
+    amount: z.string().regex(DECIMAL, 'amount must be a decimal string like "10.00"'),
+    /** Default USD; otherwise the session's original currency (converted at its stored rate). */
+    currency: z.string().trim().min(1).max(16).optional(),
+    reason: z.string().trim().max(500).optional(),
+    /** The store's id for this refund (the WooCommerce refund id). */
+    external_ref: z.string().trim().min(1).max(200),
+  })
+  .strict()
+  .refine((v) => (v.payment === undefined) !== (v.session === undefined), {
+    message: 'give exactly one of payment or session',
+    path: ['payment'],
+  });
+export type MerchantRefundInput = z.infer<typeof MerchantRefundInputSchema>;
+
+const notRefundable = (status: string) =>
+  new AppError(
+    'PAYMENT_NOT_REFUNDABLE',
+    'Only a settled (or partially refunded) payment can be refunded',
+    409,
+    { payment_status: status },
+  );
+const exceeds = (message: string, details?: unknown) =>
+  new AppError('AMOUNT_EXCEEDS_REFUNDABLE', message, 409, details);
+const invalidAmount = (message: string) =>
+  new AppError('VALIDATION_ERROR', message, 400, { field: 'amount' });
+const paymentNotFound = () => notFound('Payment not found');
+
+/** Statuses a merchant refund may be requested in. */
+const REFUNDABLE: ReadonlySet<string> = new Set(['SETTLED', 'PARTIALLY_REFUNDED']);
+
+// ─── amounts ─────────────────────────────────────────────────────────────────
+
+/** "10.5" → 10.50 USD, exactly; at most 2 decimals, more than 0. */
+function usdOf(amount: string): Dec {
+  const [, frac = ''] = amount.split('.');
+  if (frac.length > 2) throw invalidAmount('amount in USD allows at most 2 decimal places');
+  const v = D(amount);
+  if (!v.gt(0)) throw invalidAmount('amount must be greater than 0');
+  return v;
+}
+
+/**
+ * The requested USD amount, and whether it came from the session's original currency (then a
+ * rounding overshoot is clamped to what is left, see `requestMerchantRefund`). USD by default;
+ * the session's original currency is converted with the rate stored on the session at creation
+ * (Task 4's `convertToUsd`: rounded up to the cent). Anything else is 400 UNSUPPORTED_CURRENCY.
+ */
+function requestedUsd(
+  input: Pick<MerchantRefundInput, 'amount' | 'currency'>,
+  s: Pick<Session, 'originalCurrency' | 'fxRate' | 'fxSource' | 'fxAsOf'>,
+): { usd: Dec; converted: boolean } {
+  const currency = (input.currency ?? 'USD').toUpperCase();
+  if (currency === 'USD') return { usd: usdOf(input.amount), converted: false };
+  if (
+    currency !== s.originalCurrency ||
+    !s.fxRate ||
+    !s.fxSource ||
+    !s.fxAsOf ||
+    minorUnits(currency) === undefined
+  ) {
+    throw unsupportedCurrency(currency);
+  }
+  const c = convertToUsd(input.amount, currency, {
+    currency,
+    rate: s.fxRate.toFixed(),
+    source: s.fxSource,
+    asOf: s.fxAsOf,
+  });
+  return { usd: D(c.usd), converted: true };
+}
+
+/**
+ * What is left to refund of payment `p` by the store, in USD:
+ *
+ *     settled order amount − Σ requested USD of its merchant refunds that are not closed
+ *
+ * - "Settled order amount" is `settledUsdOf`: the USD order total the payment settled.
+ * - A merchant refund counts from the moment it is requested until it ends without executing
+ *   (`isClosedMerchantRefund`: rejected, expired or failed — the store undid it). Pending,
+ *   awaiting signers, in review (sanctions, needs a swap route, waiting for an address) and sent
+ *   refunds all count: each may still send, or has sent, money.
+ * - No automatic return reduces it. Only `overpaid` (and its direct 1Click record) can exist on a
+ *   SETTLED payment, and it returns the excess the shopper sent on top of the order amount —
+ *   money that is not part of the settled order amount. `late`, `underpaid`, `failed` and
+ *   `expired` returns belong to payments that never settle, and a held payment's `sanctions`
+ *   return to a HELD one (never SETTLED).
+ *
+ * Read under the payment row lock (the caller holds it), so concurrent requests serialise on it.
+ */
+async function refundableRemaining(
+  tx: Tx,
+  ctx: ScopeContext,
+  paymentId: string,
+  settled: Dec,
+): Promise<{ remaining: Dec; counted: number }> {
+  const rows = await tx.refund.findMany({
+    where: { paymentId, ...tenantOf(ctx), reason: 'merchant' },
+    select: { reason: true, status: true, reviewReason: true, requestedAmountUsd: true },
+  });
+  const counted = rows.filter((r) => !isClosedMerchantRefund(r));
+  const committed = counted.reduce((sum, r) => sum.add(r.requestedAmountUsd ?? 0), D(0));
+  return { remaining: settled.sub(committed), counted: counted.length };
+}
+
+// ─── who may refund what ─────────────────────────────────────────────────────
+
+/**
+ * Ruling W8: a connection key refunds only payments whose session was created by its own
+ * connection, or by a connection it replaced on a site re-connect (the `replaced_by_id` chain,
+ * followed by `liveConnectionId`). A hand-made key (no connection) refunds any payment of its
+ * store. Anything else is NOT_FOUND, exactly like an unknown payment.
+ */
+async function mayRefund(ctx: MerchantRefundCtx, sessionConnectionId: string | null) {
+  if (ctx.connectionId === null) return true;
+  if (sessionConnectionId === null) return false;
+  if (sessionConnectionId === ctx.connectionId) return true;
+  return (await liveConnectionId(sessionConnectionId, ctx.merchantId)) === ctx.connectionId;
+}
+
+async function paymentFor(ctx: ScopeContext, input: MerchantRefundInput): Promise<Payment> {
+  if (input.payment) {
+    const p = await prisma.payment.findFirst({ where: { id: input.payment, ...tenantOf(ctx) } });
+    if (!p) throw paymentNotFound();
+    return p;
+  }
+  const s = await prisma.session.findFirst({
+    where: { id: input.session!, ...tenantOf(ctx) },
+    select: { id: true },
+  });
+  if (!s) throw notFound('Session not found');
+  // The session's own payment: the one that settled (late deposits never settle), else any.
+  const payments = await prisma.payment.findMany({
+    where: { sessionId: s.id, ...tenantOf(ctx), isLate: false },
+    orderBy: { createdAt: 'asc' },
+  });
+  const p =
+    payments.find((x) => REFUNDABLE.has(x.status) || x.settledAt !== null) ?? payments[0] ?? null;
+  if (!p) throw notRefundable('NONE');
+  return p;
+}
+
+// ─── the request ─────────────────────────────────────────────────────────────
+
+/** What the route returns for a merchant refund. */
+export function merchantRefundView(r: Refund) {
+  return {
+    id: r.id,
+    status: merchantRefundStatus(r),
+    amount_usd: (r.requestedAmountUsd ?? D(0)).toFixed(2),
+    refund_external_ref: r.externalRef,
+    payment_id: r.paymentId,
+    created: Math.floor(r.createdAt.getTime() / 1000),
+  };
+}
+
+/**
+ * `pending` while it is (or is about to be) a proposal awaiting the signers; `review` when it
+ * needs a person first (sanctions, swap route, no sender, waiting for the shopper's address);
+ * `sent` once executed; `cancelled` once its proposal ended without executing.
+ */
+export function merchantRefundStatus(r: Refund): 'pending' | 'review' | 'sent' | 'cancelled' {
+  if (r.status === 'confirmed') return 'sent';
+  if (isClosedMerchantRefund(r)) return 'cancelled';
+  if (r.reviewReason !== null || r.needsAddress || r.status === 'failed') return 'review';
+  return 'pending';
+}
+
+/**
+ * Requests a merchant refund of a settled payment (see the module comment). Returns the refund and
+ * whether this call created it (false: the same `external_ref` and amount were already asked).
+ *
+ * Errors: 404 (unknown payment or session, or a connection key's foreign payment), 400
+ * (UNSUPPORTED_CURRENCY, VALIDATION_ERROR), 409 PAYMENT_NOT_REFUNDABLE, 409
+ * AMOUNT_EXCEEDS_REFUNDABLE (more than is left, or the return with its network cost is more than
+ * the merchant account holds), 409 CONFLICT (`external_ref` reused with another amount), 503
+ * PROVIDER_UNAVAILABLE (no price for the settlement asset).
+ */
+export async function requestMerchantRefund(
+  ctx: MerchantRefundCtx,
+  input: MerchantRefundInput,
+): Promise<{ refund: Refund; created: boolean }> {
+  const p0 = await paymentFor(ctx, input);
+  const s = await prisma.session.findFirstOrThrow({
+    where: { id: p0.sessionId, ...tenantOf(ctx) },
+  });
+  if (!(await mayRefund(ctx, s.connectionId))) throw paymentNotFound();
+  const asked = requestedUsd(input, s);
+
+  // A repeat of a refund already asked for: answered before anything else (the payment may be
+  // fully refunded by now). Re-checked under the lock below for a concurrent first request.
+  const known = await prisma.refund.findFirst({
+    where: {
+      paymentId: p0.id,
+      ...tenantOf(ctx),
+      reason: 'merchant',
+      externalRef: input.external_ref,
+    },
+  });
+  if (known) {
+    const n = await prisma.refund.count({
+      where: { paymentId: p0.id, ...tenantOf(ctx), reason: 'merchant' },
+    });
+    return { refund: sameOrConflict(known, asked, n), created: false };
+  }
+  if (!REFUNDABLE.has(p0.status)) throw notRefundable(p0.status);
+
+  const q = await prisma.quote.findFirstOrThrow({ where: { id: p0.quoteId, ...tenantOf(ctx) } });
+  const settled = settledUsdOf(s, q);
+  if (!settled) throw notRefundable(p0.status);
+
+  // Prices and the account balance are read before the lock (provider and chain calls).
+  const perUnit = await usdPerUnit(ctx.livemode, s.destAsset, q);
+  if (!perUnit || !perUnit.gt(0)) {
+    throw new AppError('PROVIDER_UNAVAILABLE', 'No price for the settlement asset; retry', 503);
+  }
+  const feeUsd = D(p0.senderChain ? gasEstimateUsd(p0.senderChain) : '0');
+  const balance = await accountBalance(ctx, s.destAsset);
+
+  const result = await tenantTransaction(ctx, async (tx) => {
+    await lockPayment(tx, ctx, p0.id);
+    const p = await tx.payment.findFirstOrThrow({ where: { id: p0.id, ...tenantOf(ctx) } });
+    const { remaining, counted } = await refundableRemaining(tx, ctx, p.id, settled);
+    const existing = await tx.refund.findFirst({
+      where: {
+        paymentId: p.id,
+        ...tenantOf(ctx),
+        reason: 'merchant',
+        externalRef: input.external_ref,
+      },
+    });
+    if (existing) return { refund: sameOrConflict(existing, asked, counted), created: false };
+    if (!REFUNDABLE.has(p.status)) throw notRefundable(p.status);
+    // A refund in the original currency is converted rounding up, each one to the cent: the last
+    // one ("refund the rest") can overshoot what is left by a cent per conversion. That overshoot
+    // — and only that — is clamped, so a full refund in the original currency equals exactly what
+    // is left. Anything more is refused like any other excess.
+    let usd = asked.usd;
+    if (asked.converted && usd.gt(remaining) && remaining.gt(0)) {
+      if (usd.sub(remaining).lte(roundingTolerance(counted))) usd = remaining;
+    }
+    if (usd.gt(remaining)) {
+      throw exceeds('The amount is more than what is left to refund on this payment', {
+        remaining_usd: (remaining.gt(0) ? remaining : D(0)).toFixed(2),
+      });
+    }
+    const amounts = grossUpForReturnFee(usd, perUnit, feeUsd);
+    if (balance !== null && amounts.gross > balance) {
+      throw exceeds(
+        'The merchant account does not hold enough to return this amount plus the network cost',
+        { asset: s.destAsset, needed: amounts.gross.toString(), available: balance.toString() },
+      );
+    }
+    return {
+      refund: await insertMerchantRefund(tx, ctx, p, s, input, usd, amounts),
+      created: true,
+    };
+  });
+
+  const r = result.refund;
+  if (!result.created) return result;
+  log('info', 'merchant refund requested', { refundId: r.id, paymentId: r.paymentId });
+  if (r.needsAddress) {
+    if (s.customerEmail) await emailNeedsAddress(ctx, r.id);
+    return { refund: r, created: true };
+  }
+  if (r.destination && r.reviewReason === null) {
+    // Screened right before the draft; screening down or the account busy → drafted later by the
+    // sweeper (still `pending`).
+    return { refund: await draftIfReady(ctx, r.id), created: true };
+  }
+  return { refund: r, created: true };
+}
+
+/**
+ * The most a converted amount may overshoot what is left and still be clamped to it: a cent for
+ * each conversion that rounded up — the `others` refunds already counted, plus this one.
+ */
+const roundingTolerance = (others: number) => D(others + 1).div(100);
+
+/**
+ * The same `external_ref` again: the existing refund when the amount is the same (for an amount
+ * in the original currency, the same up to the clamp it may have had), else 409 CONFLICT.
+ */
+function sameOrConflict(
+  existing: Refund,
+  asked: { usd: Dec; converted: boolean },
+  others: number,
+): Refund {
+  const had = existing.requestedAmountUsd;
+  const same =
+    !!had &&
+    (had.equals(asked.usd) ||
+      (asked.converted && asked.usd.gt(had) && asked.usd.sub(had).lte(roundingTolerance(others))));
+  if (same) return existing;
+  throw conflict('This external_ref was already used for a refund of another amount', {
+    refund_id: existing.id,
+    amount_usd: existing.requestedAmountUsd?.toFixed(2) ?? null,
+  });
+}
+
+/**
+ * The merchant account's balance of `asset` (base units), or null when it cannot be read: the
+ * check is then left to the chain (an underfunded proposal fails when it executes, and the store
+ * is told with `refund.failed`). Advisory either way: other proposals may spend the balance before
+ * the signers approve this one.
+ */
+async function accountBalance(ctx: ScopeContext, asset: string): Promise<bigint | null> {
+  try {
+    const { balances } = await getBalances(ctx.merchantId, ctx.livemode);
+    const b = balances.find((x) => x.asset === asset);
+    return b ? BigInt(b.amount) : null;
+  } catch (err) {
+    log('warn', 'merchant refund: account balance unavailable; not checked', { err: String(err) });
+    return null;
+  }
+}
+
+/**
+ * Inserts the merchant refund row (payment row locked), routed as `queueReturn` routes an
+ * automatic return to the same sender — minus kept-small, plus the merchant-paid network cost.
+ */
+async function insertMerchantRefund(
+  tx: Tx,
+  ctx: ScopeContext,
+  p: Payment,
+  s: Session,
+  input: MerchantRefundInput,
+  usd: Dec,
+  amounts: { requested: bigint; fee: bigint; gross: bigint },
+): Promise<Refund> {
+  const sender = p.senderAddress;
+  const senderChain = p.senderChain;
+  const chain = senderChain ? contractChainOf(senderChain) : null;
+  const exchange = !!sender && !!senderChain && isExchangeAddress(senderChain, sender);
+  const base = {
+    id: newId('ref'),
+    ...tenantOf(ctx),
+    paymentId: p.id,
+    reason: 'merchant' as const,
+    externalRef: input.external_ref,
+    requestedAmountUsd: usd.toFixed(2),
+    note: input.reason || null,
+    assetId: s.destAsset,
+  };
+  let data: Prisma.RefundUncheckedCreateInput;
+  if (!sender || !senderChain) {
+    // No known sender: a person gives the destination in the review queue (the fee is added for
+    // that chain then).
+    data = { ...base, amount: amounts.requested.toString(), reviewReason: REVIEW.noSender };
+  } else if (p.heldReason === 'sanctions') {
+    // A payment held for sanctions (a return of it screened as sanctioned): its funds never go
+    // back by themselves, nor to the sanctioned sender (C40) — the review queue, with the legal
+    // acknowledgement and a merchant-given, screened destination.
+    data = {
+      ...base,
+      amount: amounts.gross.toString(),
+      returnFee: amounts.fee.toString(),
+      reviewReason: REVIEW.sanctions,
+    };
+  } else {
+    data = {
+      ...base,
+      amount: amounts.gross.toString(),
+      returnFee: amounts.fee.toString(),
+      destination: exchange ? null : sender,
+      destinationChain: exchange ? null : chain,
+      needsAddress: exchange,
+      reviewReason: exchange || chain ? null : REVIEW.unsupportedChain,
+    };
+  }
+  const row = await tx.refund.create({ data });
+  if (exchange && !row.reviewReason) {
+    await recordEvent(tx, ctx, {
+      aggregateType: 'refund',
+      aggregateId: row.id,
+      type: 'refund.needs_address',
+      payload: {
+        ...refundPayload(row, p.sessionId, s.externalRef),
+        sender_address: sender,
+        sender_chain: senderChain,
+        customer_email_on_file: s.customerEmail !== null,
+      },
+    });
+  }
+  return row;
+}

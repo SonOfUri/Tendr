@@ -192,6 +192,7 @@ function shopperState(p: {
     case 'SCREENING_PENDING':
       return 'converting';
     case 'SETTLED':
+    case 'PARTIALLY_REFUNDED': // the store refunded part of a paid order: still paid here
       return 'settled';
     case 'REFUNDING':
       return 'refunding';

@@ -152,6 +152,8 @@ enum PaymentStatus {
   REFUNDED
   HELD
   SCREENING_PENDING
+  /// Settled, then part of it returned by a merchant-initiated refund that executed.
+  PARTIALLY_REFUNDED
 
   @@map("payment_status")
 }
@@ -187,6 +189,8 @@ enum RefundReason {
   failed
   overpaid
   sanctions
+  /// A refund the store started (`POST /v1/refunds`): several per payment, keyed by `external_ref`.
+  merchant
 
   @@map("refund_reason")
 }
@@ -1114,6 +1118,13 @@ model Refund {
   /// sha256 (hex) of the single-use return-address token emailed to the shopper (Ruling C20).
   addressTokenHash      String?          @map("address_token_hash")
   addressTokenExpiresAt DateTime?        @map("address_token_expires_at")
+  /// `merchant` refunds only: the store's own id for the refund (the WooCommerce refund id).
+  externalRef           String?          @map("external_ref")
+  /// `merchant` refunds only: the USD amount the store asked to return. `amount` is that plus
+  /// `return_fee` (the merchant pays the network cost), in `asset_id` base units.
+  requestedAmountUsd    Decimal?         @map("requested_amount_usd") @db.Decimal(18, 2)
+  /// `merchant` refunds only: the store's free-text reason.
+  note                  String?          @map("note")
   createdAt             DateTime         @default(now()) @map("created_at")
   updatedAt             DateTime         @updatedAt @map("updated_at")
 
@@ -1121,8 +1132,11 @@ model Refund {
   payment  Payment          @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   proposal AccountProposal? @relation(fields: [proposalId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
 
-  /// One return per payment and reason (the watcher hook and the sweeper are idempotent on it).
-  @@unique([paymentId, reason])
+  // One automatic return per payment and reason (the watcher hook and the sweeper are idempotent
+  // on it): a partial unique index on (payment_id, reason) WHERE reason <> 'merchant', in
+  // migration merchant_refunds_indexes. `merchant` refunds are several per payment, one per
+  // `external_ref` (automatic rows have none, so the plain unique below never binds them).
+  @@unique([paymentId, externalRef])
   @@index([merchantId])
   @@index([paymentId])
   @@index([proposalId])

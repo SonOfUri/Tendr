@@ -34,6 +34,7 @@ import {
   type Payment,
   type Quote,
   type Refund,
+  type Session,
 } from '@prisma/client';
 import { SMALL_OVERPAY_USD } from '@tendr/contracts';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -169,7 +170,7 @@ export { netOfReturnFee, usdPerUnit } from './return-fee.js';
 
 const tenantOf = (ctx: ScopeContext) => ({ merchantId: ctx.merchantId, livemode: ctx.livemode });
 
-async function lockPayment(tx: Tx, ctx: ScopeContext, id: string): Promise<void> {
+export async function lockPayment(tx: Tx, ctx: ScopeContext, id: string): Promise<void> {
   await tx.$queryRaw`SELECT id FROM payments WHERE id = ${id} AND merchant_id = ${ctx.merchantId} AND livemode = ${ctx.livemode} FOR UPDATE`;
 }
 export async function lockRefund(tx: Tx, ctx: ScopeContext, id: string): Promise<void> {
@@ -369,15 +370,50 @@ export async function keepSmall(ctx: ScopeContext, paymentId: string, reason: Re
 /** Refund statuses of a return that still needs something (C41): not sent, or in review. */
 export const OPEN_RETURN_STATUSES = ['pending', 'submitted', 'failed'] as const;
 
+/** Review reasons `detachProposal` sets when a refund's proposal ended without executing. */
+export const PROPOSAL_ENDED_REVIEW: ReadonlySet<string> = new Set([
+  REVIEW.proposalCancelled,
+  REVIEW.proposalExpired,
+  REVIEW.transferFailed,
+]);
+
+/**
+ * A merchant-initiated refund whose proposal ended without executing (rejected, expired, its
+ * transfer failed): closed. The store was told (`refund.cancelled` / `refund.failed`) and undid
+ * its own refund, so the row never goes to the review queue, is never drafted again (a new
+ * request from the store is a new refund) and no longer counts against the refundable amount.
+ * Closing is only this marking (the row stays `pending` + the review reason, with no proposal), so
+ * every on-chain safety net still applies to it: a revived proposal re-links it
+ * (`relinkRevivedRefundTx`) and an executed detached one confirms it (`detachedRefundFor`) — it
+ * then counts again, as the money did leave.
+ */
+export function isClosedMerchantRefund(r: {
+  reason?: string;
+  status: string;
+  reviewReason: string | null;
+}): boolean {
+  return (
+    r.reason === 'merchant' &&
+    r.status !== 'confirmed' &&
+    r.reviewReason !== null &&
+    PROPOSAL_ENDED_REVIEW.has(r.reviewReason)
+  );
+}
+
 /**
  * Whether a return is still open: pending, submitted, or failed into the review queue (a blocked
- * destination, a cancelled proposal, …) — anything but sent or kept small. The review queue and
- * `keepSmall` share this rule (C41).
+ * destination, a cancelled proposal, …) — anything but sent, kept small, or a closed merchant
+ * refund. The review queue and `keepSmall` share this rule (C41).
  */
-export function isOpenReturn(r: { status: string; reviewReason: string | null }): boolean {
+export function isOpenReturn(r: {
+  reason?: string;
+  status: string;
+  reviewReason: string | null;
+}): boolean {
   return (
     (OPEN_RETURN_STATUSES as readonly string[]).includes(r.status) &&
-    r.reviewReason !== REVIEW.keptSmall
+    r.reviewReason !== REVIEW.keptSmall &&
+    !isClosedMerchantRefund(r)
   );
 }
 
@@ -430,12 +466,78 @@ async function closeSession(tx: Tx, ctx: ScopeContext, sessionId: string, paymen
     await transitionSession(tx, ctx, sessionId, 'REFUNDED', { payment_id: paymentId });
 }
 
+/**
+ * `refund_external_ref` (W7): a merchant refund's own reference (the WooCommerce refund id), on
+ * every `refund.*` event of it. `external_ref` stays the order's (the session's) reference. The
+ * key is present only on refunds that have one, so automatic returns' payloads are unchanged.
+ */
+export const refundRef = (r: Pick<Refund, 'externalRef'>) =>
+  r.externalRef === null ? {} : { refund_external_ref: r.externalRef };
+
+/**
+ * The USD order amount a SETTLED payment settled — what merchant-initiated refunds of it may
+ * return in total: the session's USD amount (after a Task 4 conversion, the converted amount),
+ * or, for a session priced in the settlement asset, 1Click's USD value of the quoted output.
+ * Fixed at settlement, so the refundable amount never drifts with prices. Null when unknown.
+ * (One payment per session settles; a later deposit into the session is late, never SETTLED.)
+ */
+export function settledUsdOf(
+  s: Pick<Session, 'amount' | 'amountCurrency'>,
+  q: Pick<Quote, 'amountOutUsd'>,
+): Prisma.Decimal | null {
+  if (s.amountCurrency === 'USD') return s.amount;
+  return q.amountOutUsd && q.amountOutUsd.gt(0) ? q.amountOutUsd.toDecimalPlaces(2, 1) : null;
+}
+
+/**
+ * A merchant refund of payment `p` executed (its row already `confirmed`, inside the caller's
+ * transaction, payment row locked): the payment becomes PARTIALLY_REFUNDED, or REFUNDED once the
+ * merchant refunds sent cover its whole settled order amount. Returns whether it is now fully
+ * refunded by this one (the caller then records `payment.refunded`, once). A payment in any other
+ * status (a merchant refund of a payment that was HELD meanwhile cannot exist: only SETTLED ones
+ * are refundable, and SETTLED never becomes HELD) is left as it is.
+ */
+async function merchantRefundSent(
+  tx: Tx,
+  ctx: ScopeContext,
+  p: Payment,
+  refundId: string,
+): Promise<boolean> {
+  if (p.status !== 'SETTLED' && p.status !== 'PARTIALLY_REFUNDED') return false;
+  const s = await tx.session.findFirstOrThrow({
+    where: { id: p.sessionId, ...tenantOf(ctx) },
+    select: { amount: true, amountCurrency: true },
+  });
+  const q = await tx.quote.findFirstOrThrow({
+    where: { id: p.quoteId, ...tenantOf(ctx) },
+    select: { amountOutUsd: true },
+  });
+  const settled = settledUsdOf(s, q);
+  const sent = await tx.refund.findMany({
+    where: { paymentId: p.id, ...tenantOf(ctx), reason: 'merchant', status: 'confirmed' },
+    select: { requestedAmountUsd: true },
+  });
+  const total = sent.reduce((sum, x) => sum.add(x.requestedAmountUsd ?? 0), D(0));
+  if (settled && total.gte(settled)) {
+    await transitionPayment(tx, ctx, p.id, 'REFUNDED', { reason: 'merchant', refund_id: refundId });
+    return true;
+  }
+  if (p.status === 'SETTLED') {
+    await transitionPayment(tx, ctx, p.id, 'PARTIALLY_REFUNDED', {
+      reason: 'merchant',
+      refund_id: refundId,
+    });
+  }
+  return false;
+}
+
 export function refundPayload(r: Refund, sessionId: string, externalRef: string | null) {
   return {
     refund_id: r.id,
     payment_id: r.paymentId,
     session_id: sessionId,
     external_ref: externalRef,
+    ...refundRef(r),
     reason: r.reason,
     asset: r.assetId,
     amount: r.amount,
@@ -457,7 +559,7 @@ export const legalAckRequired = () =>
   );
 
 /** `draftReturn`, swallowing the reasons a draft cannot be made yet (the sweeper retries). */
-async function draftIfReady(ctx: ScopeContext, refundId: string): Promise<Refund> {
+export async function draftIfReady(ctx: ScopeContext, refundId: string): Promise<Refund> {
   try {
     return await draftReturn(ctx, refundId);
   } catch (err) {
@@ -1070,16 +1172,24 @@ export async function onRefundProposalExecuted(e: Event): Promise<void> {
       const p = await tx.payment.findFirstOrThrow({
         where: { id: r.paymentId, ...tenantOf(ctx) },
       });
-      if (p.status === 'HELD') {
-        await transitionPayment(tx, ctx, p.id, 'REFUNDING', { reason: r.reason, refund_id: r.id });
-      }
-      if (p.status === 'HELD' || p.status === 'REFUNDING') {
-        await transitionPayment(tx, ctx, p.id, 'REFUNDED', { reason: r.reason, refund_id: r.id });
-        await closeSession(tx, ctx, p.sessionId, p.id);
+      let fullyRefunded = false;
+      if (r.reason === 'merchant') {
+        fullyRefunded = await merchantRefundSent(tx, ctx, p, r.id);
+      } else {
+        if (p.status === 'HELD') {
+          await transitionPayment(tx, ctx, p.id, 'REFUNDING', {
+            reason: r.reason,
+            refund_id: r.id,
+          });
+        }
+        if (p.status === 'HELD' || p.status === 'REFUNDING') {
+          await transitionPayment(tx, ctx, p.id, 'REFUNDED', { reason: r.reason, refund_id: r.id });
+          await closeSession(tx, ctx, p.sessionId, p.id);
+        }
       }
       const s = await tx.session.findFirstOrThrow({
         where: { id: p.sessionId, ...tenantOf(ctx) },
-        select: { externalRef: true },
+        select: { externalRef: true, destAsset: true },
       });
       const done = await tx.refund.findFirstOrThrow({ where: { id: r.id, ...tenantOf(ctx) } });
       await recordEvent(tx, ctx, {
@@ -1088,6 +1198,32 @@ export async function onRefundProposalExecuted(e: Event): Promise<void> {
         type: 'refund.sent',
         payload: { ...refundPayload(done, p.sessionId, s.externalRef), tx_hash: done.refundTxHash },
       });
+      if (fullyRefunded) {
+        // Once, when the last of the order amount went back (never for a partial refund).
+        const sent = await tx.refund.findMany({
+          where: { paymentId: p.id, ...tenantOf(ctx), reason: 'merchant', status: 'confirmed' },
+          select: { amount: true, returnFee: true },
+        });
+        const net = sent.reduce(
+          (sum, x) => sum + BigInt(x.amount.toFixed(0)) - BigInt(x.returnFee?.toFixed(0) ?? '0'),
+          0n,
+        );
+        await recordEvent(tx, ctx, {
+          aggregateType: 'payment',
+          aggregateId: p.id,
+          type: 'payment.refunded',
+          payload: {
+            payment_id: p.id,
+            session_id: p.sessionId,
+            external_ref: s.externalRef,
+            reason: 'merchant',
+            refunded_amount: net.toString(),
+            asset: s.destAsset,
+            refund_via: 'merchant',
+            refund_id: r.id,
+          },
+        });
+      }
     });
   }
 }
@@ -1199,6 +1335,7 @@ async function recordRefundOutcome(
       session_id: sessionId,
       // The order's reference, as on every other session event (`refund.sent` included).
       external_ref: s.externalRef,
+      ...refundRef(r),
       asset: r.assetId,
       amount: r.amount,
       reason: r.reason,
@@ -1239,18 +1376,22 @@ export async function detachProposal(
         where: { id: r.paymentId, ...tenantOf(ctx) },
         select: { sessionId: true },
       });
-      await recordEvent(tx, ctx, {
-        aggregateType: 'refund',
-        aggregateId: id,
-        type: REFUND_NEEDS_REVIEW,
-        payload: {
-          refund_id: id,
-          payment_id: r.paymentId,
-          session_id: p.sessionId,
-          proposal_id: proposalId,
-          review_reason: reviewReason,
-        },
-      });
+      // A merchant refund is closed by this (`isClosedMerchantRefund`): the store is told and
+      // undoes its refund; nothing goes to the review queue, so no review mail either.
+      if (r.reason !== 'merchant') {
+        await recordEvent(tx, ctx, {
+          aggregateType: 'refund',
+          aggregateId: id,
+          type: REFUND_NEEDS_REVIEW,
+          payload: {
+            refund_id: id,
+            payment_id: r.paymentId,
+            session_id: p.sessionId,
+            proposal_id: proposalId,
+            review_reason: reviewReason,
+          },
+        });
+      }
       await recordRefundOutcome(tx, ctx, r, p.sessionId, proposalId, reviewReason);
       return true;
     });
@@ -1408,7 +1549,8 @@ export async function sweepReturns(): Promise<number> {
   const refunded = await prisma.payment.findMany({
     where: {
       // One reason per such payment (1Click refunded the whole deposit): nothing queued or kept.
-      refunds: { none: {} },
+      // (A store's own refunds never count here: they are not 1Click's returns.)
+      refunds: { none: { reason: { not: 'merchant' } } },
       keptSmallReasons: { isEmpty: true },
       refundsRecorded: { isEmpty: false },
       refundedAmount: { gt: 0 },
@@ -1434,7 +1576,8 @@ export async function sweepReturns(): Promise<number> {
     where: {
       refunds: { none: { reason: 'overpaid' } },
       ...notKept('overpaid'),
-      status: 'SETTLED',
+      // Settled — and possibly refunded by the store since: the excess is still due.
+      status: { in: ['SETTLED', 'PARTIALLY_REFUNDED', 'REFUNDED'] },
       overpaidAmount: { gt: 0 },
       quote: viaStore,
     },
@@ -1501,10 +1644,10 @@ export async function sweepReturns(): Promise<number> {
   // 1Click refunded straight to the shopper's own address: recorded only.
   const direct = await prisma.payment.findMany({
     where: {
-      refunds: { none: {} },
+      refunds: { none: { reason: { not: 'merchant' } } },
       refundedAmount: { gt: 0 },
       quote: { refundType: 'ORIGIN_CHAIN' },
-      status: { in: ['REFUNDED', 'SETTLED'] },
+      status: { in: ['REFUNDED', 'SETTLED', 'PARTIALLY_REFUNDED'] },
     },
     include: { quote: true },
     orderBy: { createdAt: 'asc' },

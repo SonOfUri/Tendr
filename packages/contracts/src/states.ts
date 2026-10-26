@@ -46,6 +46,8 @@ export const PaymentStatusValues = [
   'REFUNDED',
   'HELD',
   'SCREENING_PENDING',
+  /** Settled, then part of it returned by a merchant-initiated refund that executed. */
+  'PARTIALLY_REFUNDED',
 ] as const;
 export type PaymentStatus = (typeof PaymentStatusValues)[number];
 export const PaymentStatusSchema = z.enum(PaymentStatusValues);
@@ -54,7 +56,9 @@ export const PaymentStatusSchema = z.enum(PaymentStatusValues);
  * Payment moves. A `HELD` payment (sanctioned sender) is never settled; it leaves only through a
  * signer-approved refund proposal, or when 1Click refunds the deposit straight to the shopper's own
  * address. `SCREENING_PENDING` settles on `allow`, holds on `block`, or is refunded (REFUNDING)
- * when 1Click refunds it directly.
+ * when 1Click refunds it directly. A `SETTLED` payment moves only when a merchant-initiated refund
+ * (WooCommerce spec §7) executes: to `PARTIALLY_REFUNDED` while some of the order amount is left,
+ * to `REFUNDED` once all of it went back.
  */
 export const PAYMENT_TRANSITIONS: Record<PaymentStatus, readonly PaymentStatus[]> = {
   DETECTED: ['PROCESSING', 'REFUNDING', 'HELD', 'SCREENING_PENDING'],
@@ -62,7 +66,8 @@ export const PAYMENT_TRANSITIONS: Record<PaymentStatus, readonly PaymentStatus[]
   SCREENING_PENDING: ['SETTLED', 'HELD', 'REFUNDING'],
   HELD: ['REFUNDING'],
   REFUNDING: ['REFUNDED'],
-  SETTLED: [],
+  SETTLED: ['PARTIALLY_REFUNDED', 'REFUNDED'],
+  PARTIALLY_REFUNDED: ['REFUNDED'],
   REFUNDED: [],
 };
 

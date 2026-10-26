@@ -74,6 +74,10 @@ describe('payment transitions', () => {
     ['SCREENING_PENDING', 'HELD'],
     ['HELD', 'REFUNDING'],
     ['SCREENING_PENDING', 'REFUNDING'],
+    // A merchant-initiated refund (WooCommerce spec §7) that executed: part or all of it.
+    ['SETTLED', 'PARTIALLY_REFUNDED'],
+    ['SETTLED', 'REFUNDED'],
+    ['PARTIALLY_REFUNDED', 'REFUNDED'],
   ] as [PaymentStatus, PaymentStatus][])('payment allows %s → %s', (f, t) =>
     expect(canTransitionPayment(f, t)).toBe(true),
   );
@@ -84,13 +88,24 @@ describe('payment transitions', () => {
     ['SCREENING_PENDING', 'REFUNDED'],
     ['SCREENING_PENDING', 'PROCESSING'],
     ['REFUNDING', 'HELD'],
+    ['SETTLED', 'REFUNDING'],
+    ['SETTLED', 'HELD'],
+    ['PARTIALLY_REFUNDED', 'SETTLED'],
+    ['PARTIALLY_REFUNDED', 'REFUNDING'],
+    ['HELD', 'PARTIALLY_REFUNDED'],
+    ['REFUNDING', 'PARTIALLY_REFUNDED'],
   ] as [PaymentStatus, PaymentStatus][])('payment rejects %s → %s', (f, t) =>
     expect(canTransitionPayment(f, t)).toBe(false),
   );
 
-  it('payment SETTLED and REFUNDED are terminal', () => {
+  it('a settled payment only moves to (partially) refunded; REFUNDED is terminal', () => {
     for (const to of PaymentStatusValues) {
-      expect(canTransitionPayment('SETTLED', to), `SETTLED → ${to}`).toBe(false);
+      expect(canTransitionPayment('SETTLED', to), `SETTLED → ${to}`).toBe(
+        to === 'PARTIALLY_REFUNDED' || to === 'REFUNDED',
+      );
+      expect(canTransitionPayment('PARTIALLY_REFUNDED', to), `PARTIALLY_REFUNDED → ${to}`).toBe(
+        to === 'REFUNDED',
+      );
       expect(canTransitionPayment('REFUNDED', to), `REFUNDED → ${to}`).toBe(false);
     }
   });

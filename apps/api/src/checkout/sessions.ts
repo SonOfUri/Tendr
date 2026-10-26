@@ -387,7 +387,12 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
   let settledOut = 0n;
   let refundCount = 0;
   for (const p of s.payments) {
-    if (p.status === 'SETTLED' && p.amountOut) settledOut += BigInt(p.amountOut.toFixed());
+    // Settled payments, including ones the store has since refunded (part or all of).
+    const settledOnce =
+      p.status === 'SETTLED' ||
+      p.status === 'PARTIALLY_REFUNDED' ||
+      (p.status === 'REFUNDED' && p.settledAt !== null);
+    if (settledOnce && p.amountOut) settledOut += BigInt(p.amountOut.toFixed());
     refundCount += p.refunds.length;
   }
 
@@ -453,7 +458,7 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
       })),
     })),
     totals: {
-      /** Settlement-asset base units delivered by SETTLED payments. */
+      /** Settlement-asset base units delivered by payments that settled (since refunded too). */
       settled_amount_out: settledOut.toString(),
       payment_count: s.payments.length,
       refund_count: refundCount,

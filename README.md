@@ -341,6 +341,41 @@ The web app serves `/v1/tendr.js`, built from `apps/web/src/embed/tendr.ts` (und
 - If a wallet cannot open inside the frame, the checkout opens that wallet step in a popup window
   on its own origin, and the frame picks up the result.
 
+### Refunding a payment
+
+`POST /v1/refunds` returns money to the wallet that paid. It needs a secret key with
+`refunds:write`. It never moves funds by itself: it drafts a `refund` proposal that the store's
+signers approve in the dashboard.
+
+```json
+{ "payment": "pay_…", "amount": "10.00", "external_ref": "wc-refund-123", "reason": "damaged" }
+```
+
+- Give `payment` or `session` (one of them). The payment must be `SETTLED` or
+  `PARTIALLY_REFUNDED` (else 409 `PAYMENT_NOT_REFUNDABLE`).
+- `amount` is in USD. Or set `currency` to the order's original currency (the session's
+  `original_currency`): it is converted at the rate stored on the session, rounded up to the cent.
+  A refund of everything that is left in the original currency equals exactly what is left. Any
+  other currency is 400 `UNSUPPORTED_CURRENCY`.
+- Several partial refunds are allowed. Together they can never pass the order amount: 409
+  `AMOUNT_EXCEEDS_REFUNDABLE`. A refund whose proposal was rejected, expired or failed no longer
+  counts.
+- `external_ref` is your id for the refund. The same `external_ref` again with the same amount
+  returns the existing refund (200). With another amount it is 409 `CONFLICT`. `Idempotency-Key`
+  is honoured too.
+- You pay the network cost: the shopper gets the full amount, and the estimated network fee is
+  added on top from your account. If your account does not hold that much, the request is 409
+  `AMOUNT_EXCEEDS_REFUNDABLE`.
+- The response is `{ id, status, amount_usd, refund_external_ref, payment_id, created }`. `status`
+  is `pending` (awaiting your signers), or `review` when a person must act first: the paying
+  wallet is now sanctioned (legal acknowledgement and another destination, as for a held payment),
+  the asset cannot reach the shopper's chain directly, or the shopper sent from an exchange and
+  must say where to send it. A repeat of an earlier refund can also say `sent` or `cancelled`.
+- A key issued to a connected site refunds only payments made with that site's keys, or with the
+  keys of the connection it replaced when the site re-connected. Anything else is 404.
+- Then follow `refund.pending`, `refund.sent`, `refund.cancelled` and `refund.failed` (see
+  Webhooks).
+
 ### Registering checkout domains
 
 Only the store's registered domains may frame the checkout (CSP `frame-ancestors`). Other sites
@@ -373,9 +408,19 @@ secret (`whsec_...`) is shown once, at creation and on rotation.
   proposal. `data` has `refund_id`, `payment_id`, `session_id`, `external_ref`, `asset`, `amount`
   (base units of `asset`, as in `refund.sent`), `reason`, and `status` (`cancelled`, `expired` or
   `failed`). Each is sent at most once per proposal, and only once the proposal can no longer
-  execute on chain. The return goes back to the review queue, where it can be drafted again.
+  execute on chain. An automatic return goes back to the review queue, where it can be drafted
+  again. A refund you started (`POST /v1/refunds`) is closed instead: undo it on your side and
+  start a new refund if you still want one.
+- Every `refund.*` event of a refund you started also carries `refund_external_ref`, the
+  `external_ref` you gave `POST /v1/refunds` (your refund id). `external_ref` stays your order id.
+  The key is absent on automatic returns.
+- `payment.refunded` for a refund you started fires once, when the refunds sent cover the whole
+  order amount (`reason: merchant`, `refund_via: merchant`). The payment is `PARTIALLY_REFUNDED`
+  until then.
 - `refund.sent` is final. It can follow an earlier `refund.cancelled` or `refund.failed` for the
-  same `refund_id`, when the return was drafted again and the new proposal executed.
+  same `refund_id`, when the return was drafted again and the new proposal executed. (For a
+  refund you started, only in the rare case where a proposal reported as ended still executed on
+  chain. The money did leave: record the refund again.)
 - An endpoint created by a connected site (Connect) receives only events for the sessions and
   payments created with that site's keys. Endpoints you add yourself receive every event. When a
   site re-connects, events for its earlier orders go to the new connection's endpoints. After a

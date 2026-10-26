@@ -60,6 +60,8 @@ export const RefundReasonValues = [
   'failed',
   'overpaid',
   'sanctions',
+  /** A refund the store started (`POST /v1/refunds`, WooCommerce spec §7); several per payment. */
+  'merchant',
 ] as const;
 export type RefundReason = (typeof RefundReasonValues)[number];
 export const RefundReasonSchema = z.enum(RefundReasonValues);

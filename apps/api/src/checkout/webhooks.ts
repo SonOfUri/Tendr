@@ -80,6 +80,8 @@ const DATA_KEYS = [
   'external_ref',
   'payment_id',
   'refund_id',
+  /** A merchant refund's own reference (the WooCommerce refund id), W7. */
+  'refund_external_ref',
   'quote_id',
   'endpoint_id',
   'reason',

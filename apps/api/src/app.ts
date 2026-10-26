@@ -25,6 +25,7 @@ import { paymentRoutes } from './routes/payments.js';
 import { pingRoutes } from './routes/ping.js';
 import { proposalRoutes } from './routes/proposals.js';
 import { recoveryRoutes } from './routes/recovery.js';
+import { refundRoutes } from './routes/refunds.js';
 import { reviewRoutes } from './routes/review.js';
 import { teamRoutes } from './routes/team.js';
 import { webhookRoutes } from './routes/webhooks.js';
@@ -237,6 +238,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(webhookRoutes);
   await app.register(paymentRoutes);
   await app.register(reviewRoutes);
+  await app.register(refundRoutes);
   await app.register(merchantSettingsRoutes);
   await app.register(connectRoutes, { tokenRateLimit: limiters.connectToken });
   opts.extraRoutes?.(app);

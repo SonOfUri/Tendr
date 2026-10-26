@@ -6,12 +6,20 @@
 import { formatAmount } from './assets';
 
 export type PaymentStatus =
-  'DETECTED' | 'PROCESSING' | 'SETTLED' | 'REFUNDING' | 'REFUNDED' | 'HELD' | 'SCREENING_PENDING';
+  | 'DETECTED'
+  | 'PROCESSING'
+  | 'SETTLED'
+  | 'PARTIALLY_REFUNDED'
+  | 'REFUNDING'
+  | 'REFUNDED'
+  | 'HELD'
+  | 'SCREENING_PENDING';
 
 export const PAYMENT_STATUSES: PaymentStatus[] = [
   'DETECTED',
   'PROCESSING',
   'SETTLED',
+  'PARTIALLY_REFUNDED',
   'REFUNDING',
   'REFUNDED',
   'HELD',
