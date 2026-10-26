@@ -277,7 +277,11 @@ curl -X POST http://localhost:4000/v1/checkout/sessions \
     refetched rather than served, and a rate that arrives stale is never cached. Show the shopper
     "Crypto payment is unavailable right now" and offer the store's other payment methods.
   - Live sanity band: the last good live rate per currency is kept for 7 days. A new rate more
-    than 50% away from it in either direction is refused (`503 FX_RATE_UNAVAILABLE`, logged). The
+    than 50% away from it in either direction is refused (`503 FX_RATE_UNAVAILABLE`, logged) and
+    recorded as a candidate. If later fetches stay within ±5% of the candidate, it is accepted as
+    the new reference once it has been seen for at least 10 minutes across at least 3 fetches, so
+    a real devaluation is refused for about 10 minutes, not locked out. A fetch back inside the old
+    band clears the candidate, and a rate that keeps jumping more than 5% never qualifies. The
     first rate ever seen for a currency is accepted.
   - An `Idempotency-Key` replay returns the stored session; it never fetches a new rate.
   - Test mode always uses built-in **test rates**: approximate round rates for every currency in

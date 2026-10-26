@@ -12,7 +12,10 @@ import {
   TEST_FX_RATES,
   TEST_FX_SOURCE,
   fixedFxProvider,
+  FX_CANDIDATE_MIN_AGE_MS,
+  FX_CANDIDATE_MIN_FETCHES,
   fxCacheKey,
+  fxCandidateKey,
   fxLastGoodKey,
   fxLockKey,
   fxProviderFor,
@@ -333,6 +336,82 @@ describe('getUsdRate', () => {
         expect((await getUsdRate('NGN', now, { livemode: true, provider, redis })).rate).toBe(ok);
         expect(await redis.get(fxLastGoodKey('stub', 'NGN'))).toBe(ok);
       }
+    });
+
+    /** One live fetch at `at` (minutes after `now`) returning `rate`, with a fresh timestamp. */
+    async function fetchAt(at: number, rate: string) {
+      const t = new Date(now.getTime() + at * MIN);
+      await dropCache();
+      const provider: FxProvider = {
+        id: 'stub',
+        rate: vi.fn(async () => ({ rate, source: 'stub', asOf: t })),
+      };
+      try {
+        return {
+          ok: true as const,
+          rate: (await getUsdRate('NGN', t, { livemode: true, provider, redis })).rate,
+        };
+      } catch (err) {
+        expect(err).toBeInstanceOf(AppError);
+        expect((err as AppError).code).toBe('FX_RATE_UNAVAILABLE');
+        return { ok: false as const };
+      }
+    }
+    const candidate = async () => {
+      const text = await redis.get(fxCandidateKey('stub', 'NGN'));
+      return text
+        ? (JSON.parse(text) as { rate: string; firstSeen: string; fetches: number })
+        : null;
+    };
+
+    it('a one-off spike is refused, then cleared when the rate returns to the old band', async () => {
+      expect((await fetchAt(0, '1600')).ok).toBe(true);
+      expect((await fetchAt(1, '3200')).ok).toBe(false);
+      expect(await candidate()).toMatchObject({ rate: '3200', fetches: 1 });
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining('fx rate outside the sanity band'),
+      );
+      // Back in the old band: accepted, and the candidate is cleared.
+      expect(await fetchAt(2, '1610')).toEqual({ ok: true, rate: '1610' });
+      expect(await candidate()).toBeNull();
+      expect(await redis.get(fxLastGoodKey('stub', 'NGN'))).toBe('1610');
+      // A later lone spike starts from scratch: refused, not accepted on the old clock.
+      expect((await fetchAt(20, '3200')).ok).toBe(false);
+      expect(await candidate()).toMatchObject({ fetches: 1 });
+    });
+
+    it('a sustained devaluation is refused for under 10 minutes, then accepted', async () => {
+      expect(FX_CANDIDATE_MIN_AGE_MS).toBe(10 * MIN);
+      expect(FX_CANDIDATE_MIN_FETCHES).toBe(3);
+      expect((await fetchAt(0, '1600')).ok).toBe(true);
+      // NGN moves to ~3000 and stays there (each within ±5% of the first candidate, 3000).
+      expect((await fetchAt(1, '3000')).ok).toBe(false);
+      expect((await fetchAt(4, '3080')).ok).toBe(false); // 2 fetches, 3 min
+      expect((await fetchAt(10.5, '2900')).ok).toBe(false); // 9.5 min, 3 fetches: too soon
+      expect(await candidate()).toMatchObject({ rate: '3000', fetches: 3 });
+      expect(await fetchAt(11, '3020')).toEqual({ ok: true, rate: '3020' }); // 10 min, 4 fetches
+      expect(await candidate()).toBeNull();
+      expect(await redis.get(fxLastGoodKey('stub', 'NGN'))).toBe('3020');
+      // The new rate is now the reference: the next nearby fetch is ordinary.
+      expect(await fetchAt(12, '3050')).toEqual({ ok: true, rate: '3050' });
+    });
+
+    it('needs 3 fetches as well as 10 minutes', async () => {
+      expect((await fetchAt(0, '1600')).ok).toBe(true);
+      expect((await fetchAt(1, '3000')).ok).toBe(false);
+      expect((await fetchAt(15, '3000')).ok).toBe(false); // 14 min but only 2 fetches
+      expect(await fetchAt(16, '3000')).toEqual({ ok: true, rate: '3000' });
+    });
+
+    it('a candidate that flips around is never accepted', async () => {
+      expect((await fetchAt(0, '1600')).ok).toBe(true);
+      // Every fetch is outside the old band and more than 5% from the previous candidate.
+      const flips = ['3200', '600', '3500', '700', '3200', '650', '3600', '620', '3300', '700'];
+      for (const [i, r] of flips.entries()) {
+        expect((await fetchAt(1 + i * 3, r)).ok, `${r} at ${1 + i * 3} min`).toBe(false);
+        expect(await candidate()).toMatchObject({ rate: r, fetches: 1 });
+      }
+      expect(await redis.get(fxLastGoodKey('stub', 'NGN'))).toBe('1600');
     });
 
     it('does not apply in test mode', async () => {
