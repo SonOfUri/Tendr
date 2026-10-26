@@ -62,6 +62,7 @@ final class Tendr_Plugin {
 		Tendr_Connect::register();
 		Tendr_Settings::register();
 		Tendr_Order_Status::register();
+		Tendr_Webhooks::register();
 		if ( class_exists( 'Tendr_Gateway' ) ) {
 			Tendr_Gateway::register();
 		}

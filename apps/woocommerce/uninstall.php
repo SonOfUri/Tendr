@@ -15,6 +15,10 @@ foreach ( array( 'tendr_credentials', 'tendr_connection', 'tendr_mode', 'woocomm
 	delete_option( $tendr_option );
 }
 
+// The processed-events table, its version option and the daily prune.
+require_once __DIR__ . '/includes/class-tendr-webhooks.php';
+Tendr_Webhooks::uninstall();
+
 // Connect state (keyed by a hash of the state) and per-user notices: `tendr_connect_*`, `tendr_notice_*`.
 // With a persistent object cache these live in the cache instead and expire on their own (≤ 60 min).
 global $wpdb;

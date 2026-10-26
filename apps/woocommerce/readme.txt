@@ -41,7 +41,7 @@ In the WordPress options table, encrypted (libsodium secretbox) with a key deriv
 
 = What happens when I uninstall the plugin? =
 
-Uninstalling deletes the plugin's settings and stored keys from WordPress. It does not contact tendr, so click **Disconnect** first to revoke this site's keys, or remove the site later under Settings → Connected sites on your tendr dashboard.
+Uninstalling deletes the plugin's settings, stored keys and its table of processed payment updates from WordPress. It does not contact tendr, so click **Disconnect** first to revoke this site's keys, or remove the site later under Settings → Connected sites on your tendr dashboard.
 
 == Changelog ==
 
