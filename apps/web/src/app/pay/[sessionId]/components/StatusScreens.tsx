@@ -1,0 +1,269 @@
+'use client';
+
+import type { CheckoutClient, SessionPayment, SessionView, Token } from '@/lib/checkout/api';
+import { explorerTxUrl, formatUnits, networkName, safeHttpUrl } from '@/lib/checkout/format';
+import type { ScreenState } from '@/lib/checkout/status';
+import { Countdown } from './Countdown';
+import { SendDetails } from './SendDetails';
+import { TestModePanel } from './TestModePanel';
+
+interface Props {
+  view: SessionView;
+  screen: ScreenState;
+  /** Looks up a token by asset id (null when unknown or the list is unavailable). */
+  tokenOf: (assetId: string) => Token | null;
+  client: CheckoutClient;
+  now: number;
+  onRefresh: () => void;
+}
+
+/** A link back to the store; inside a frame it navigates the store's page, not the frame. */
+export function StoreLink({ href, children }: { href: string | null; children: string }) {
+  const url = safeHttpUrl(href);
+  if (!url) return null;
+  return (
+    <a className="pay-button" href={url} target="_top" rel="noopener">
+      {children}
+    </a>
+  );
+}
+
+function paidAmount(view: SessionView, payment: SessionPayment | null, token: Token | null) {
+  if (!token) return null;
+  const received = payment?.amount_received
+    ? formatUnits(payment.amount_received, token.decimals)
+    : null;
+  const quoted = view.quote ? formatUnits(view.quote.amount_in, token.decimals) : null;
+  const amount = received && received !== '0' ? received : quoted;
+  return amount ? `${amount} ${token.symbol}` : null;
+}
+
+function returnsOf(view: SessionView, payment: SessionPayment | null) {
+  const refunds = Array.isArray(view.refunds) ? view.refunds : [];
+  return payment ? refunds.filter((r) => r.payment_id === payment.id) : refunds;
+}
+
+function TxLink({
+  view,
+  payment,
+  token,
+}: {
+  view: SessionView;
+  payment: SessionPayment | null;
+  token: Token | null;
+}) {
+  const hash = payment?.origin_tx_hash;
+  if (!hash) return null;
+  const href = view.livemode && token ? explorerTxUrl(token.blockchain, hash) : null;
+  const short = hash.length > 14 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
+  return (
+    <div>
+      <dt>Transaction</dt>
+      <dd>
+        {href ? (
+          <a href={href} target="_blank" rel="noopener noreferrer" className="address">
+            {short} ↗<span className="sr-only"> (opens a block explorer)</span>
+          </a>
+        ) : (
+          <span className="address">{short}</span>
+        )}
+      </dd>
+    </div>
+  );
+}
+
+export function ProgressScreen({ kind }: { kind: 'detected' | 'converting' }) {
+  const steps = [
+    { label: 'Payment detected', state: 'done' },
+    { label: 'Converting', state: kind === 'converting' ? 'current' : 'todo' },
+    { label: 'Settled', state: 'todo' },
+  ] as const;
+  return (
+    <section className="pay-section" aria-labelledby="pay-progress-title">
+      <h2 id="pay-progress-title">We&apos;ve got your payment</h2>
+      <ol className="pay-steps">
+        {steps.map((s) => (
+          <li
+            key={s.label}
+            data-state={s.state}
+            aria-current={s.state === 'current' ? 'step' : undefined}
+          >
+            <span aria-hidden>{s.state === 'done' ? '✓' : s.state === 'current' ? '◌' : '○'}</span>{' '}
+            {s.label}
+            {s.state === 'current' ? '…' : ''}
+            <span className="sr-only">
+              {s.state === 'done' ? ' (done)' : s.state === 'todo' ? ' (next)' : ' (in progress)'}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <p className="muted small">
+        This usually takes a minute or two. You can close this page; the store will confirm your
+        order.
+      </p>
+    </section>
+  );
+}
+
+export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: Props) {
+  const payment = screen.payment;
+  const token = view.quote ? tokenOf(view.quote.origin_asset) : null;
+  const returns = returnsOf(view, payment);
+  const sent = returns.some((r) => r.state === 'sent');
+
+  switch (screen.kind) {
+    case 'detected':
+    case 'converting':
+      return <ProgressScreen kind={screen.kind} />;
+
+    case 'complete': {
+      const paid = paidAmount(view, payment, token);
+      const overpaid = payment?.overpaid_amount && /[1-9]/.test(payment.overpaid_amount);
+      return (
+        <section className="pay-section" aria-labelledby="pay-done-title">
+          <h2 id="pay-done-title" className="pay-success">
+            ✓ Payment complete
+          </h2>
+          <dl className="pay-kv">
+            {paid ? (
+              <div>
+                <dt>Paid</dt>
+                <dd>{paid}</dd>
+              </div>
+            ) : null}
+            <TxLink view={view} payment={payment} token={token} />
+          </dl>
+          {payment?.kept_small_overpayment ? (
+            <p className="muted small">
+              You sent a little extra. Leftovers under $1 aren&apos;t returned, so it stays with the
+              store.
+            </p>
+          ) : overpaid ? (
+            <p className="muted small">
+              You sent a little extra. It&apos;s being sent back to you.
+            </p>
+          ) : null}
+          <StoreLink href={view.success_url}>Return to store</StoreLink>
+        </section>
+      );
+    }
+
+    case 'topup': {
+      const offer = view.topup;
+      const t = offer ? tokenOf(offer.origin_asset) : null;
+      const remaining = offer && t ? formatUnits(offer.remaining_amount, t.decimals) : null;
+      return (
+        <section className="pay-section" aria-labelledby="pay-topup-title">
+          <h2 id="pay-topup-title">You sent less than the full amount</h2>
+          {offer ? (
+            <>
+              <div className="pay-row">
+                <p>{offer.message}</p>
+                <Countdown deadline={offer.deadline} now={now} label="to send the rest" />
+              </div>
+              {t && remaining ? (
+                <SendDetails
+                  address={offer.deposit_address}
+                  amount={remaining}
+                  symbol={t.symbol}
+                  network={networkName(t.blockchain)}
+                />
+              ) : (
+                <p className="address">{offer.deposit_address}</p>
+              )}
+              <p className="muted small">
+                If the rest doesn&apos;t arrive in time, what you sent is returned to you.
+              </p>
+              {!view.livemode ? (
+                <TestModePanel client={client} kind="topup" onDone={onRefresh} />
+              ) : null}
+            </>
+          ) : null}
+        </section>
+      );
+    }
+
+    case 'underpaid':
+      return (
+        <section className="pay-section" aria-labelledby="pay-under-title">
+          <h2 id="pay-under-title">Payment incomplete</h2>
+          <p>You sent less than the full amount, so it&apos;s being returned to you.</p>
+          <p className="muted small">
+            The cost of sending it back is taken from the amount returned.
+          </p>
+          <StoreLink href={view.cancel_url}>Return to store</StoreLink>
+        </section>
+      );
+
+    case 'late':
+      return (
+        <section className="pay-section" aria-labelledby="pay-late-title">
+          <h2 id="pay-late-title">Your payment arrived too late</h2>
+          <p>
+            It arrived after this checkout expired, so the order wasn&apos;t paid.{' '}
+            {sent ? 'Your money was sent back to you.' : "It's being returned to you."}
+          </p>
+          <p className="muted small">
+            The cost of sending it back is taken from the amount returned.
+          </p>
+          <StoreLink href={view.cancel_url}>Return to store</StoreLink>
+        </section>
+      );
+
+    case 'refunded': {
+      // No return rows on a refunded session: it went straight back to the shopper's address.
+      const done = sent || (view.status === 'REFUNDED' && returns.length === 0);
+      return (
+        <section className="pay-section" aria-labelledby="pay-refund-title">
+          <h2 id="pay-refund-title">
+            {done ? 'Your money was returned' : 'Your refund is being processed'}
+          </h2>
+          <p>
+            This order wasn&apos;t paid.{' '}
+            {done
+              ? 'The money you sent was sent back to you.'
+              : "We're sending the money you paid back to you."}
+          </p>
+          <p className="muted small">
+            The cost of sending it back is taken from the amount returned.
+          </p>
+          <StoreLink href={view.cancel_url}>Return to store</StoreLink>
+        </section>
+      );
+    }
+
+    case 'held':
+      return (
+        <section className="pay-section" aria-labelledby="pay-held-title">
+          <h2 id="pay-held-title">We couldn&apos;t complete this payment</h2>
+          <p>Please contact the store for help with this order.</p>
+          <StoreLink href={view.cancel_url}>Return to store</StoreLink>
+        </section>
+      );
+
+    case 'expired':
+      return (
+        <section className="pay-section" aria-labelledby="pay-expired-title">
+          <h2 id="pay-expired-title">This checkout has expired</h2>
+          <p>
+            Return to the store to start again. Don&apos;t send money to an address from this page.
+          </p>
+          <StoreLink href={view.cancel_url}>Return to store</StoreLink>
+        </section>
+      );
+
+    case 'pay':
+    case 'checking':
+    default:
+      return <CheckingScreen />;
+  }
+}
+
+export function CheckingScreen() {
+  return (
+    <section className="pay-section pay-center">
+      <span className="pay-spinner" aria-hidden />
+      <p role="status">Checking your payment…</p>
+    </section>
+  );
+}

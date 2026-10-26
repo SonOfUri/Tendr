@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { HideOnCheckout } from '@/components/HideOnCheckout';
 import { SiteFooter } from '@/components/SiteFooter';
 import { SiteHeader } from '@/components/SiteHeader';
 import { ServiceWorkerRegister } from '@/components/ServiceWorkerRegister';
@@ -27,11 +28,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <main>
-          <SiteHeader />
+          <HideOnCheckout>
+            <SiteHeader />
+          </HideOnCheckout>
           {children}
-          <SiteFooter />
+          <HideOnCheckout>
+            <SiteFooter />
+          </HideOnCheckout>
         </main>
-        <ServiceWorkerRegister />
+        <HideOnCheckout>
+          <ServiceWorkerRegister />
+        </HideOnCheckout>
       </body>
     </html>
   );

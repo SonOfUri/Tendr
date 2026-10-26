@@ -46,6 +46,15 @@ const nextConfig: NextConfig = {
         { key: 'Referrer-Policy', value: 'no-referrer' },
       ],
     })),
+    // The shopper checkout. Framing is governed by CSP frame-ancestors (the merchant's checkout
+    // domains, set in src/middleware.ts), so no X-Frame-Options here: it would refuse every frame.
+    {
+      source: '/pay/:path*',
+      headers: [
+        { key: 'X-Content-Type-Options', value: 'nosniff' },
+        { key: 'Referrer-Policy', value: 'no-referrer' },
+      ],
+    },
     {
       source: '/sw.js',
       headers: [

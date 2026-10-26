@@ -600,3 +600,344 @@ code {
   font: inherit;
   width: 100%;
 }
+
+/* ─── Shopper checkout (/pay/*) ─────────────────────────────────────────── */
+
+.pay {
+  display: grid;
+  place-items: start center;
+  padding: 1.5rem 0 2.5rem;
+}
+
+.pay-card {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 1.1rem;
+  padding: 1.25rem;
+  border: 1px solid var(--tendr-border);
+  border-radius: calc(var(--tendr-radius) + 4px);
+  background: rgba(15, 22, 41, 0.92);
+}
+
+.pay a {
+  color: var(--tendr-cyan);
+}
+
+.pay-header {
+  display: grid;
+  gap: 0.45rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--tendr-border);
+}
+
+.pay-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.pay-store {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.pay-store-name {
+  font-family: var(--tendr-font-display);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.pay-logo {
+  border-radius: 6px;
+  object-fit: contain;
+  background: #fff;
+}
+
+.pay-total {
+  font-size: 1.1rem;
+}
+
+.pay-close {
+  background: none;
+  border: 1px solid var(--tendr-border);
+  border-radius: 999px;
+  width: 2rem;
+  height: 2rem;
+  color: var(--tendr-white);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pay-test-banner {
+  margin: 0;
+  color: var(--tendr-warning);
+}
+
+.pay-section {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.pay-section h2,
+.pay-title {
+  font-family: var(--tendr-font-display);
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.pay-section p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.pay-center {
+  justify-items: center;
+  text-align: center;
+  padding: 1.5rem 0;
+}
+
+.pay-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--tendr-border);
+  border-top-color: var(--tendr-cyan);
+  animation: tendr-spin 0.8s linear infinite;
+}
+
+.pay-tokens {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.5rem;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+.pay-token {
+  width: 100%;
+  display: grid;
+  gap: 0.1rem;
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--tendr-radius);
+  border: 1px solid var(--tendr-border);
+  background: var(--tendr-surface);
+  color: var(--tendr-white);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pay-token[aria-pressed='true'],
+.pay-token:hover {
+  border-color: var(--tendr-cyan);
+}
+
+.pay-token-symbol {
+  font-weight: 600;
+}
+
+.pay-quote {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.9rem 1rem;
+  border-radius: var(--tendr-radius);
+  background: var(--tendr-surface);
+}
+
+.pay-amount {
+  font-family: var(--tendr-font-display);
+  font-size: 1.6rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.pay-countdown {
+  font-variant-numeric: tabular-nums;
+  color: var(--tendr-lavender);
+}
+
+.pay-fees,
+.pay-kv {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.pay-fees > div,
+.pay-kv > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.pay-fees > div {
+  grid-template-columns: 1fr auto;
+}
+
+.pay-fees dt,
+.pay-kv dt {
+  color: var(--tendr-muted);
+  font-size: 0.85rem;
+}
+
+.pay-fees dd,
+.pay-kv dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.pay-strong {
+  font-weight: 600;
+}
+
+.pay-send {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.pay-qr {
+  display: flex;
+  justify-content: center;
+}
+
+.pay-copy {
+  flex: none;
+  background: none;
+  border: 1px solid var(--tendr-border);
+  border-radius: 999px;
+  padding: 0.25rem 0.7rem;
+  color: var(--tendr-cyan);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.pay-warning {
+  border-left: 3px solid var(--tendr-warning);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  background: rgba(245, 185, 66, 0.08);
+  border-radius: 0 var(--tendr-radius) var(--tendr-radius) 0;
+}
+
+.pay-alert {
+  border-left: 3px solid var(--tendr-cyan);
+  padding: 0.6rem 0.85rem;
+  background: var(--tendr-surface);
+  border-radius: 0 var(--tendr-radius) var(--tendr-radius) 0;
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+}
+
+.pay-error {
+  color: var(--tendr-danger);
+}
+
+.pay-success {
+  color: var(--tendr-success);
+}
+
+.pay-or {
+  text-align: center;
+}
+
+.pay-wallet {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.pay-wallet p {
+  text-align: center;
+}
+
+.pay-button {
+  display: inline-block;
+  text-align: center;
+  padding: 0.75rem 1.25rem;
+  border-radius: var(--tendr-radius);
+  border: 1px solid transparent;
+  background: var(--tendr-indigo);
+  color: var(--tendr-white) !important;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pay-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pay-button-secondary {
+  background: transparent;
+  border-color: var(--tendr-border);
+}
+
+.pay-button-small {
+  padding: 0.45rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.pay-refund {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.pay-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.pay-steps li[data-state='todo'] {
+  color: var(--tendr-muted);
+}
+
+.pay-steps li[data-state='done'] {
+  color: var(--tendr-success);
+}
+
+.pay-action {
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--tendr-border);
+}
+
+.pay-test {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px dashed var(--tendr-warning);
+  border-radius: var(--tendr-radius);
+}
+
+.pay-test p {
+  margin: 0;
+}
+
+.pay-reconnecting {
+  margin: 0;
+  color: var(--tendr-warning);
+}
+
+.pay-foot {
+  margin: 0;
+  text-align: center;
+}
+
+.pay :focus-visible {
+  outline: 2px solid var(--tendr-cyan);
+  outline-offset: 2px;
+}

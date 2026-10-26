@@ -10,7 +10,6 @@
 // Signing recovery payloads (`signRecovery`) is for the recovery screens.
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha2';
-import QRCode from 'qrcode';
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const SECRET_BYTES = 32;
@@ -138,11 +137,7 @@ export function signRecovery(kitSecret: string | Uint8Array, payloadBytes: Uint8
   return toBase64(ed25519.sign(payloadBytes, secret));
 }
 
-/** An SVG data URL of a QR code for `text` (rendered locally; no network). */
-export async function qrDataUrl(text: string): Promise<string> {
-  const svg = await QRCode.toString(text, { type: 'svg', errorCorrectionLevel: 'M', margin: 2 });
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-}
+export { qrDataUrl } from './qr';
 
 /**
  * Prints the kit. The page renders the kit sheet (`.print-kit`, text plus the QR from

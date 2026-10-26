@@ -42,3 +42,57 @@ export function contentSecurityPolicy(opts: {
   ];
   return directives.join('; ');
 }
+
+/**
+ * A plain origin (scheme, host, optional port), as the API stores checkout domains. Anything else
+ * (paths, wildcards, quotes, spaces, `;`, line breaks) is dropped before it reaches a CSP header.
+ */
+const PLAIN_ORIGIN = /^(https|http):\/\/(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(:\d{1,5})?$/;
+const WALLET_SOURCE = /^(https|wss):\/\/(\*\.)?[a-z0-9.-]+(:\d{1,5})?$/;
+
+/** Keeps only plain origins (used for frame-ancestors). */
+export function plainOrigins(list: readonly unknown[]): string[] {
+  return list.filter((o): o is string => typeof o === 'string' && PLAIN_ORIGIN.test(o));
+}
+
+/**
+ * The policy for the shopper checkout (`/pay/*`). Like the signing-page policy (nonce scripts, no
+ * plugins), except:
+ *
+ * - frame-ancestors is `'self'` plus the merchant's checkout domains (the store pages allowed to
+ *   frame the checkout). `null` means the lookup failed: `'self'` only, failing closed.
+ * - connect-src adds the wallet providers' hosts (lib/checkout/wallet-hosts.ts, the one list).
+ * - img-src allows https: for the store's logo.
+ */
+export function checkoutContentSecurityPolicy(opts: {
+  nonce: string;
+  apiBaseUrl: string;
+  dev: boolean;
+  /** The merchant's checkout domains, or null when they could not be looked up. */
+  frameAncestors: readonly string[] | null;
+  walletHosts: readonly string[];
+}): string {
+  const ancestors = ["'self'", ...plainOrigins(opts.frameAncestors ?? [])];
+  const wallets = opts.walletHosts.filter((h) => WALLET_SOURCE.test(h));
+  const directives = [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${opts.nonce}'${opts.dev ? " 'unsafe-eval'" : ''}`,
+    "object-src 'none'",
+    `frame-ancestors ${ancestors.join(' ')}`,
+    [
+      'connect-src',
+      "'self'",
+      apiOrigin(opts.apiBaseUrl),
+      ...wallets,
+      ...(opts.dev ? ['ws:'] : []),
+    ].join(' '),
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob: https:",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "worker-src 'self'",
+    "manifest-src 'self'",
+  ];
+  return directives.join('; ');
+}

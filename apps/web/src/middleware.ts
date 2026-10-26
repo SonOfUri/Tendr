@@ -1,17 +1,49 @@
 // Strict CSP (with a per-request script nonce) on every dashboard page and the sign-in pages,
-// where passkeys are created and used. See lib/csp.ts. X-Frame-Options is in next.config.ts.
+// where passkeys are created and used, and the checkout policy on the shopper pages (`/pay/*`).
+// See lib/csp.ts. X-Frame-Options for the dashboard is in next.config.ts (never set for /pay).
+//
+// The checkout may be framed only by the merchant's checkout domains: for a request that could be
+// framed, the middleware asks the API's public frame-origins route (1.5 s cap, cached ≤ 60 s) and
+// puts those origins in `frame-ancestors`. If the lookup fails, only 'self' may frame it.
 import { NextResponse, type NextRequest } from 'next/server';
-import { contentSecurityPolicy } from './lib/csp';
+import {
+  checkoutSessionIdOf,
+  createFrameOriginsLookup,
+  needsFrameLookup,
+} from './lib/checkout/frame-origins';
+import { WALLET_CONNECT_HOSTS } from './lib/checkout/wallet-hosts';
+import { checkoutContentSecurityPolicy, contentSecurityPolicy } from './lib/csp';
 
-export function middleware(request: NextRequest) {
+const publicApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
+
+const frameOrigins = createFrameOriginsLookup({
+  // The middleware runs on the server: prefer the internal API address when one is set.
+  apiBaseUrl: process.env.API_BASE_URL || publicApiBaseUrl,
+  ttlMs: 60_000,
+  timeoutMs: 1500,
+});
+
+async function checkoutPolicy(request: NextRequest, nonce: string, dev: boolean) {
+  const sessionId = checkoutSessionIdOf(request.nextUrl.pathname);
+  const frameable = sessionId !== null && needsFrameLookup(request.headers.get('sec-fetch-dest'));
+  return checkoutContentSecurityPolicy({
+    nonce,
+    apiBaseUrl: publicApiBaseUrl,
+    dev,
+    frameAncestors: frameable ? await frameOrigins(sessionId) : [],
+    walletHosts: WALLET_CONNECT_HOSTS,
+  });
+}
+
+export async function middleware(request: NextRequest) {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   const nonce = btoa(String.fromCharCode(...bytes));
-  const csp = contentSecurityPolicy({
-    nonce,
-    apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000',
-    dev: process.env.NODE_ENV === 'development',
-  });
+  const dev = process.env.NODE_ENV === 'development';
+  const checkout = request.nextUrl.pathname.startsWith('/pay/');
+  const csp = checkout
+    ? await checkoutPolicy(request, nonce, dev)
+    : contentSecurityPolicy({ nonce, apiBaseUrl: publicApiBaseUrl, dev });
 
   // Next reads the nonce from the request's CSP header and applies it to its own scripts.
   const requestHeaders = new Headers(request.headers);
@@ -19,6 +51,10 @@ export function middleware(request: NextRequest) {
   requestHeaders.set('Content-Security-Policy', csp);
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set('Content-Security-Policy', csp);
+  if (checkout) {
+    // The policy depends on the session and on whether the request can be framed: never cache it.
+    response.headers.set('Cache-Control', 'no-store');
+  }
   return response;
 }
 
@@ -32,5 +68,6 @@ export const config = {
     '/invite/:path*',
     '/recover',
     '/recover/:path*',
+    '/pay/:path*',
   ],
 };

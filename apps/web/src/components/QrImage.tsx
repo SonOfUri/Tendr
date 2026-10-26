@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { qrDataUrl } from '@/lib/recovery-kit';
+import { qrDataUrl } from '@/lib/qr';
 
 /** A QR code drawn in the browser (no network request). */
 export function QrImage({
