@@ -340,8 +340,11 @@ export async function shopperSessionView(ctx: ShopperCtx) {
       overpaid_amount: toJsonDecimal(p.overpaidAmount),
       refunded_amount: toJsonDecimal(p.refundedAmount),
       kept_small_overpayment: p.keptSmallOverpayment,
-      /** Which returns were worth under $1 and stay with the store (reasons only, C41). */
-      kept_small_reasons: p.keptSmallReasons,
+      /**
+       * The extra paid was worth under $1 and stays with the store. Neutral by design (C42): the
+       * shopper never learns a return's reason (a held payment's would reveal the screening).
+       */
+      kept_extra: p.keptSmallReasons.includes('overpaid'),
       origin_tx_hash: p.originTxHash,
       created_at: p.createdAt.toISOString(),
     })),

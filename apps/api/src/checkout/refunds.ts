@@ -945,8 +945,10 @@ async function draftIfReadyScreened(
 
 /** The shopper-facing returns of a session (the checkout's "Tell us where to send it"). */
 export async function shopperRefunds(ctx: ShopperCtx) {
+  // Neutral rows only (C42): a sanctions return is never shown, and no row carries its reason —
+  // the shopper copy for a held payment stays "We couldn't complete this payment".
   const rows = await ctx.db.refund.findMany({
-    where: { payment: { sessionId: ctx.sessionId } },
+    where: { payment: { sessionId: ctx.sessionId }, reason: { not: 'sanctions' } },
     orderBy: { createdAt: 'asc' },
   });
   return rows.map((r) => ({
@@ -956,14 +958,12 @@ export async function shopperRefunds(ctx: ShopperCtx) {
     amount: r.amount.toFixed(0),
     needs_address: r.needsAddress,
     chains: r.needsAddress ? returnChainsOf(r.assetId).map(oneclickChainOf) : undefined,
-    /** What it is for (never an address). */
-    reason: r.reason,
     state:
       r.status === 'confirmed'
         ? 'sent'
         : r.reviewReason === REVIEW.keptSmall
           ? 'kept'
-          : r.status === 'failed'
+          : r.status === 'failed' || r.reviewReason !== null
             ? 'review'
             : 'processing',
   }));

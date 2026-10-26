@@ -592,11 +592,36 @@ describe('return to sender', () => {
     expect(res.statusCode).toBe(200);
     const v = res.json();
     const pay = v.payments.find((x: { id: string }) => x.id === p.id);
-    expect(pay.kept_small_reasons).toEqual(['late']);
-    expect(v.refunds).toEqual([
-      expect.objectContaining({ payment_id: p.id, reason: 'overpaid', state: 'processing' }),
-    ]);
+    // Neutral data only (C42): whether the extra was kept, never the reasons.
+    expect(pay.kept_extra).toBe(false);
+    expect(pay.kept_small_overpayment).toBe(true);
+    expect(pay).not.toHaveProperty('kept_small_reasons');
+    expect(v.refunds).toEqual([expect.objectContaining({ payment_id: p.id, state: 'processing' })]);
+    expect(v.refunds[0]).not.toHaveProperty('reason');
     expect(res.body).not.toContain(p.senderAddress!);
+  });
+
+  it("C42: a held payment's shopper view never says sanctions, anywhere", async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'overpay', { senderAddress: SANCTIONED });
+    await poll(q.deposit_address);
+    const p = await paymentOf(q.id);
+    expect(p.status).toBe('HELD');
+    // Its order-amount (sanctions) return and its excess (in review) both exist, one kept small.
+    await queueHeldReturn(ctx(), p.id);
+    await prisma.payment.update({
+      where: { id: p.id },
+      data: { keptSmallReasons: ['sanctions'], keptSmallOverpayment: true },
+    });
+    expect((await refundsOf(p.id)).map((r) => r.reason).sort()).toEqual(['overpaid', 'sanctions']);
+    const res = await call('GET', 'session', s.client_secret);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.toLowerCase()).not.toContain('sanction');
+    const v = res.json();
+    // The sanctions-reason return is not sent at all; the excess is neutral.
+    expect(v.refunds).toEqual([expect.objectContaining({ payment_id: p.id, state: 'review' })]);
+    expect(v.payments[0]).toMatchObject({ state: 'held', kept_extra: false });
   });
 
   it('C40: the sweeper still queues the excess after the late return was kept small', async () => {
