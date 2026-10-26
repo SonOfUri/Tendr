@@ -270,17 +270,20 @@ async function assertEarlierProposalsEnded(ctx: ScopeContext, r: Refund): Promis
       OR: [{ refundId: r.id }, ...(r.proposalId ? [{ id: r.proposalId }] : [])],
     },
   });
+  const endedAs = new Map<string, string>();
   for (const prop of proposals) {
-    const verdict = await verifiedEndedOnChain(ctx, prop);
-    if (verdict === 'unknown') throw chainUnreadable();
-    if (verdict === 'live') throw proposalStillLive();
+    const chain = await verifiedEndedOnChain(ctx, prop);
+    if (chain.verdict === 'unknown') throw chainUnreadable();
+    if (chain.verdict === 'live') throw proposalStillLive();
+    endedAs.set(prop.id, chain.status);
   }
   if (r.proposalId) {
-    const linked = proposals.find((p) => p.id === r.proposalId)!;
+    // How it ended ON CHAIN (the mirror may still say a local `cancelled`), so the review reason
+    // and the public refund.cancelled / refund.failed match what the contract did.
     await detachProposal(
       ctx,
       r.proposalId,
-      ENDED_REVIEW[linked.status] ?? REVIEW.proposalCancelled,
+      ENDED_REVIEW[endedAs.get(r.proposalId)!] ?? REVIEW.proposalCancelled,
     );
   }
 }

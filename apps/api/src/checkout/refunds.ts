@@ -1199,8 +1199,8 @@ async function recordRefundOutcome(
       session_id: sessionId,
       // The order's reference, as on every other session event (`refund.sent` included).
       external_ref: s.externalRef,
+      asset: r.assetId,
       amount: r.amount,
-      currency: r.assetId,
       reason: r.reason,
       status: outcome.status,
       proposal_id: proposalId,
@@ -1283,36 +1283,42 @@ export async function onRefundProposalCancelled(e: Event): Promise<void> {
 }
 
 /**
- * Whether a proposal the mirror shows as ended really cannot execute any more. A draft cancelled
+ * How a proposal the mirror shows as ended really ended (its status), or null while it may still
+ * execute. A draft cancelled
  * only in Postgres after a relay was attempted (`relay_claimed_at` still set — the cancel went
  * through a stale claim — or a relayed transaction on record) may be live on chain: the contract's
  * `get_proposal` view decides. Absent, cancelled, expired or failed there → ended. Pending,
  * timelocked, executing or executed → not ended: the mirror is brought up to date from the view
  * (which revives the local-only cancel and re-links the refund, proposals.ts). A view that
  * cannot be read → not ended (the next sweep asks again). Every other ended status is final.
+ * When the view decides, its status wins over the mirror's (a local cancel that expired or failed
+ * on chain is reported as such).
  */
-async function endedOnChain(ctx: ScopeContext, prop: AccountProposal): Promise<boolean> {
+async function endedOnChain(ctx: ScopeContext, prop: AccountProposal): Promise<string | null> {
   if (prop.status !== 'cancelled' || (prop.relayClaimedAt === null && prop.lastTxHash === null)) {
-    return true;
+    return prop.status;
   }
-  return (await chainSaysEnded(ctx, prop)) === 'ended';
+  const chain = await chainSaysEnded(ctx, prop);
+  return chain.verdict === 'ended' ? chain.status : null;
 }
+
+/** How the contract sees a proposal: ended (and how), live, or unreadable. */
+export type ChainEnd =
+  { verdict: 'ended'; status: string } | { verdict: 'live' } | { verdict: 'unknown' };
 
 /**
  * Asks the contract's `get_proposal` view whether `prop` can still execute: `ended` when it is
- * absent, cancelled, expired or failed there; `live` otherwise (the mirror is then brought up to
- * date from the view, which revives a local-only cancel and re-links its refund); `unknown` when
- * the view cannot be read.
+ * absent, cancelled, expired or failed there (with the chain's status; the mirror's when absent,
+ * since it never reached the chain); `live` otherwise (the mirror is then brought up to date from
+ * the view, which revives a local-only cancel and re-links its refund); `unknown` when the view
+ * cannot be read.
  */
-async function chainSaysEnded(
-  ctx: ScopeContext,
-  prop: AccountProposal,
-): Promise<'ended' | 'live' | 'unknown'> {
+async function chainSaysEnded(ctx: ScopeContext, prop: AccountProposal): Promise<ChainEnd> {
   const account = await prisma.merchantAccount.findFirst({
     where: { id: prop.accountId, ...tenantOf(ctx) },
     select: { nearAccountId: true },
   });
-  if (!account?.nearAccountId) return 'unknown';
+  if (!account?.nearAccountId) return { verdict: 'unknown' };
   let v: ContractProposalView | null;
   try {
     v = await nearClient(ctx.livemode).view<ContractProposalView | null>(
@@ -1325,36 +1331,39 @@ async function chainSaysEnded(
       proposalId: prop.id,
       err: String(err),
     });
-    return 'unknown';
+    return { verdict: 'unknown' };
   }
-  if (!v || ['cancelled', 'expired', 'failed'].includes(v.status)) return 'ended';
+  if (!v) return { verdict: 'ended', status: prop.status };
+  if (ENDED_STATUSES.has(v.status)) return { verdict: 'ended', status: v.status };
   await tenantTransaction(ctx, (tx) => applyProposalView(tx, ctx, prop.id, v));
   log('warn', 'refund: a refund proposal the mirror shows as ended is live on chain', {
     proposalId: prop.id,
     chainStatus: v.status,
   });
-  return 'live';
+  return { verdict: 'live' };
 }
 
 /** Statuses a refund proposal can end in without executing (mirror and contract alike). */
-const ENDED_STATUSES = new Set(['cancelled', 'expired', 'failed']);
+const ENDED_STATUSES: ReadonlySet<string> = new Set(['cancelled', 'expired', 'failed']);
 
 /**
  * The strict check before a return is drafted AGAIN (the review queue's refund action): `prop`
  * may never execute. The mirror must show it ended AND the contract's `get_proposal` view must
  * show it absent, cancelled, expired or failed — a status in Postgres alone is never enough, since
  * a relay or a local-only cancel may disagree with the chain. A relay claim inside its lease (a
- * `propose` possibly in flight) is not ended either. Returns `ended`, `live` or `unknown` (the
- * view cannot be read: the caller refuses and the person retries).
+ * `propose` possibly in flight) is not ended either. Returns `ended` with how it ended on chain
+ * (the caller maps that to the review reason and the public event, never the mirror's possibly
+ * stale status), `live`, or `unknown` (the view cannot be read: the caller refuses and the person
+ * retries).
  */
 export async function verifiedEndedOnChain(
   ctx: ScopeContext,
   prop: AccountProposal,
   now = Date.now(),
-): Promise<'ended' | 'live' | 'unknown'> {
-  if (!ENDED_STATUSES.has(prop.status)) return 'live';
+): Promise<ChainEnd> {
+  if (!ENDED_STATUSES.has(prop.status)) return { verdict: 'live' };
   if (prop.relayClaimedAt && prop.relayClaimedAt.getTime() > now - RELAY_CLAIM_LEASE_MS) {
-    return 'live';
+    return { verdict: 'live' };
   }
   return chainSaysEnded(ctx, prop);
 }
@@ -1523,8 +1532,9 @@ export async function sweepReturns(): Promise<number> {
   for (const r of ended) {
     await run('ended', r.id, async () => {
       const ctx = ctxOf(r);
-      if (!(await endedOnChain(ctx, r.proposal!))) return;
-      await detachProposal(ctx, r.proposalId!, ENDED_REVIEW[r.proposal!.status]!);
+      const ended = await endedOnChain(ctx, r.proposal!);
+      if (!ended) return;
+      await detachProposal(ctx, r.proposalId!, ENDED_REVIEW[ended] ?? REVIEW.proposalCancelled);
     });
   }
 

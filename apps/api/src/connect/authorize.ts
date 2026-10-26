@@ -255,7 +255,8 @@ export async function redeem(body: unknown): Promise<ConnectTokenResponse> {
  * site would (`'site'`: the domain stays). When one of them owned the domain (`added_domain`),
  * ownership passes to the new connection, so a later dashboard removal can still take it away.
  * Runs in the redeem transaction, holding the store lock, so an approval that is never redeemed
- * never breaks a working site.
+ * never breaks a working site. Each replaced connection records `replaced_by_id` → the new one
+ * (ruling W8), so webhooks for its earlier orders follow the site to its new endpoints.
  */
 async function replacePreviousConnections(
   tx: Tx,
@@ -277,6 +278,8 @@ async function replacePreviousConnections(
   for (const peer of peers) {
     if (siteKey(peer.siteUrl) !== site) continue; // another subdirectory site on that origin
     await revokeConnection(tx, peer.id, 'site');
+    // Ruling W8: the old connection's sessions now deliver to this connection's endpoints.
+    await tx.connection.update({ where: { id: peer.id }, data: { replacedById: connectionId } });
     await dropHeldCredentials(tx, peer.id); // an older approval never redeemed
     if (peer.addedDomain && !ownedDomain) {
       ownedDomain = peer.addedDomain;

@@ -969,7 +969,7 @@ describe('return to sender', () => {
       session_id: p.sessionId,
       external_ref: s.externalRef,
       amount: row.amount.toFixed(0),
-      currency: row.assetId,
+      asset: row.assetId,
       reason: 'overpaid',
       status,
     };

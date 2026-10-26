@@ -95,8 +95,6 @@ const DATA_KEYS = [
   'notice',
   'asset',
   'amount',
-  'currency',
-  'status',
   'return_fee',
   'destination',
   'destination_chain',
@@ -104,11 +102,21 @@ const DATA_KEYS = [
   'customer_email_on_file',
 ] as const;
 
-/** The webhook `data` for an event payload: only the allowlisted keys, `external_ref` always set. */
-export function webhookData(payload: unknown): Record<string, unknown> {
+/** Keys a merchant may see only on the named event types (on top of DATA_KEYS). */
+const TYPE_DATA_KEYS: Readonly<Partial<Record<string, readonly string[]>>> = {
+  'refund.cancelled': ['status'],
+  'refund.failed': ['status'],
+};
+
+/**
+ * The webhook `data` for an event payload: only the allowlisted keys (DATA_KEYS, plus the event
+ * type's own TYPE_DATA_KEYS), `external_ref` always set.
+ */
+export function webhookData(payload: unknown, type?: string): Record<string, unknown> {
   const src = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const k of DATA_KEYS) if (k in src) out[k] = src[k];
+  const keys = [...DATA_KEYS, ...((type && TYPE_DATA_KEYS[type]) || [])];
+  for (const k of keys) if (k in src) out[k] = src[k];
   if ('session_id' in out && !('external_ref' in out)) out.external_ref = null;
   return out;
 }
@@ -122,7 +130,7 @@ export function webhookBody(
     type: event.type,
     created: Math.floor(event.createdAt.getTime() / 1000),
     livemode: event.livemode === true,
-    data: webhookData(event.payload),
+    data: webhookData(event.payload, event.type),
   });
 }
 
@@ -406,13 +414,54 @@ export const deliveryKey = (endpointId: string, eventId: string) => `whd_${endpo
 
 const SESSION_CONNECTION = { connectionId: true } as const;
 
+/** How many re-connects `liveConnectionId` follows before giving up (ruling W8). */
+export const MAX_REPLACEMENT_HOPS = 10;
+
 /**
- * The connection whose key created the event's session, resolved from the event's subject (its
+ * The live connection that now speaks for `connectionId` (ruling W8): itself while not revoked;
+ * after a site re-connect, the connection that replaced it (`replaced_by_id`), followed to the
+ * live end of the chain. Null when the chain ends in a connection revoked with no successor (a
+ * disconnect, a dashboard removal, a sweep), runs past MAX_REPLACEMENT_HOPS, or loops.
+ */
+export async function liveConnectionId(
+  connectionId: string,
+  merchantId: string,
+): Promise<string | null> {
+  const seen = new Set<string>();
+  let id: string | null = connectionId;
+  for (let hop = 0; id !== null && hop <= MAX_REPLACEMENT_HOPS; hop++) {
+    if (seen.has(id)) return null;
+    seen.add(id);
+    const c: { revokedAt: Date | null; replacedById: string | null } | null =
+      await prisma.connection.findFirst({
+        where: { id, merchantId },
+        select: { revokedAt: true, replacedById: true },
+      });
+    if (!c) return null;
+    if (c.revokedAt === null) return id;
+    id = c.replacedById;
+  }
+  return null;
+}
+
+/**
+ * The live connection for the event's session, resolved from the event's subject (its
  * aggregate), never from its payload: a session; a payment → its session; a refund → its payment
- * → its session. Null when the session was made with a dashboard key, or the subject is none of
- * these — such an event goes only to endpoints bound to no connection.
+ * → its session. The session's connection is then followed through re-connects
+ * (`liveConnectionId`). Null when the session was made with a dashboard key, its connection was
+ * disconnected or removed, or the subject is none of these — such an event goes only to endpoints
+ * bound to no connection.
  */
 export async function eventConnectionId(
+  event: Pick<Event, 'aggregateType' | 'aggregateId'>,
+  ctx: ScopeContext,
+): Promise<string | null> {
+  const created = await sessionConnectionId(event, ctx);
+  return created === null ? null : liveConnectionId(created, ctx.merchantId);
+}
+
+/** The connection whose key created the event's session (as recorded; possibly revoked). */
+async function sessionConnectionId(
   event: Pick<Event, 'aggregateType' | 'aggregateId'>,
   ctx: ScopeContext,
 ): Promise<string | null> {

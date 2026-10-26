@@ -508,6 +508,46 @@ describe('review queue', () => {
     expect(await prisma.accountProposal.count()).toBe(2);
   });
 
+  it('a re-draft maps how the old proposal ended ON CHAIN, not the stale mirror status', async () => {
+    const outcomes = () =>
+      prisma.event.findMany({
+        where: { type: { in: ['refund.cancelled', 'refund.failed'] } },
+        orderBy: { createdAt: 'asc' },
+      });
+    for (const [chainStatus, type, status, reviewReason] of [
+      ['expired', 'refund.cancelled', 'expired', 'proposal_expired'],
+      ['failed', 'refund.failed', 'failed', 'transfer_failed'],
+    ] as const) {
+      const { p } = await paid('overpay');
+      const [r] = await prisma.refund.findMany({ where: { paymentId: p.id } });
+      const old = r!.proposalId!;
+      // Cancelled in Postgres through a stale claim (still linked); the chain says how it ended.
+      await prisma.accountProposal.update({
+        where: { id: old },
+        data: { status: 'cancelled', relayClaimedAt: new Date(Date.now() - 10 * 60_000) },
+      });
+      fake.scriptView(accountNear, 'get_proposal', () => ({
+        id: 'x',
+        status: chainStatus,
+        approvals: [],
+        valid_approvals: 0,
+        ready_at: null,
+      }));
+      const res = await refund(p.id);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().refund.proposal_id).not.toBe(old);
+      const ended = (await outcomes()).filter(
+        (e) => (e.payload as { refund_id: string }).refund_id === r!.id,
+      );
+      expect(ended).toHaveLength(1);
+      expect(ended[0]).toMatchObject({ type, payload: { status, proposal_id: old } });
+      const flagged = await prisma.event.findFirstOrThrow({
+        where: { type: 'refund.needs_review', aggregateId: r!.id },
+      });
+      expect(flagged.payload).toMatchObject({ review_reason: reviewReason });
+    }
+  });
+
   it('an amount_unknown held return is re-sized from the verified delivered amount', async () => {
     const { q, p } = await held();
     // Held before the swap's transfer was verified (no claim; M-3 claims one when it can).

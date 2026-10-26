@@ -337,12 +337,16 @@ secret (`whsec_...`) is shown once, at creation and on rotation.
   - `refund.pending`, `refund.sent`, `refund.needs_address`, `refund.cancelled`, `refund.failed`.
 - `refund.cancelled` means the refund's proposal was rejected by the signers or expired;
   `refund.failed` means it failed when it executed on chain. Either way no money moved for that
-  proposal. `data` has `refund_id`, `payment_id`, `session_id`, `external_ref`, `amount` and
-  `currency` (base units of that asset), `reason`, and `status` (`cancelled`, `expired` or
+  proposal. `data` has `refund_id`, `payment_id`, `session_id`, `external_ref`, `asset`, `amount`
+  (base units of `asset`, as in `refund.sent`), `reason`, and `status` (`cancelled`, `expired` or
   `failed`). Each is sent at most once per proposal, and only once the proposal can no longer
   execute on chain. The return goes back to the review queue, where it can be drafted again.
+- `refund.sent` is final. It can follow an earlier `refund.cancelled` or `refund.failed` for the
+  same `refund_id`, when the return was drafted again and the new proposal executed.
 - An endpoint created by a connected site (Connect) receives only events for the sessions and
-  payments created with that site's keys. Endpoints you add yourself receive every event.
+  payments created with that site's keys. Endpoints you add yourself receive every event. When a
+  site re-connects, events for its earlier orders go to the new connection's endpoints. After a
+  disconnect or a removal they go to no site endpoint.
 - A payment can have more than one return, each with its own `refund.*` events. For example, a
   late overpayment has a `late` return and an `overpaid` return for the excess. `payment.refunded`
   and a session's `REFUNDED` status can arrive before every return has been sent. Track each

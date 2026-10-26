@@ -1389,10 +1389,16 @@ model Connection {
   redeemedAt        DateTime?          @map("redeemed_at")
   lastUsedAt        DateTime?          @map("last_used_at")
   revokedAt         DateTime?          @map("revoked_at")
+  /// Set only by a site re-connect (ruling W8): the connection that replaced this one. Events of
+  /// sessions made with this connection's keys follow the chain to the live successor's endpoints.
+  /// Null on a disconnect, a dashboard removal or a sweep: such events reach no bound endpoint.
+  replacedById      String?            @map("replaced_by_id")
   createdAt         DateTime           @default(now()) @map("created_at")
   updatedAt         DateTime           @updatedAt @map("updated_at")
 
   merchant         Merchant          @relation(fields: [merchantId], references: [id])
+  replacedBy       Connection?       @relation("ConnectionReplacement", fields: [replacedById, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
+  replaces         Connection[]      @relation("ConnectionReplacement")
   connectedBy      User              @relation(fields: [connectedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   apiKeys          ApiKey[]
   webhookEndpoints WebhookEndpoint[]

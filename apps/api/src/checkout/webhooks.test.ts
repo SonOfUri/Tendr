@@ -18,6 +18,8 @@ import {
   FANOUT_HANDLER,
   fanOutEvent,
   isPrivateAddress,
+  liveConnectionId,
+  MAX_REPLACEMENT_HOPS,
   registerWebhookHandlers,
   resendDelivery,
   retryDelayMs,
@@ -31,6 +33,7 @@ import {
   signPayload,
   sweepDueDeliveries,
   validateEndpointUrl,
+  webhookData,
   type WebhookRequest,
 } from './webhooks.js';
 
@@ -803,6 +806,91 @@ describe('connection-scoped delivery', () => {
     const s = await sites();
     expect((await sendTestEvent(ctx(), s.epA)).status).toBe('delivered');
     expect(sent).toHaveLength(1);
+  });
+
+  it('W8: a replaced connection follows replaced_by_id to the live successor; a loop or an over-long chain resolves to nothing', async () => {
+    const live = await createRow('Connection', merchant.id, false);
+    const mid = await createRow('Connection', merchant.id, false, {
+      revokedAt: new Date(),
+      replacedById: live.id,
+    });
+    const old = await createRow('Connection', merchant.id, false, {
+      revokedAt: new Date(),
+      replacedById: mid.id,
+    });
+    expect(await liveConnectionId(old.id as string, merchant.id)).toBe(live.id);
+    expect(await liveConnectionId(live.id as string, merchant.id)).toBe(live.id);
+    // Revoked with no successor (disconnect, dashboard removal, sweep).
+    const gone = await createRow('Connection', merchant.id, false, { revokedAt: new Date() });
+    expect(await liveConnectionId(gone.id as string, merchant.id)).toBeNull();
+    // Another store's connection is never followed into.
+    const otherStore = await createMerchant();
+    const foreign = await createRow('Connection', otherStore.id, false, {
+      revokedAt: new Date(),
+    });
+    expect(await liveConnectionId(foreign.id as string, merchant.id)).toBeNull();
+
+    // A loop (never written by the re-connect, but guarded): x → y → x.
+    const x = await createRow('Connection', merchant.id, false, { revokedAt: new Date() });
+    const y = await createRow('Connection', merchant.id, false, {
+      revokedAt: new Date(),
+      replacedById: x.id,
+    });
+    await prisma.connection.update({ where: { id: x.id as string }, data: { replacedById: y.id } });
+    expect(await liveConnectionId(x.id as string, merchant.id)).toBeNull();
+
+    // A chain of MAX_REPLACEMENT_HOPS re-connects resolves; one more does not.
+    let next = (await createRow('Connection', merchant.id, false)).id as string;
+    const chain: string[] = [];
+    for (let i = 0; i <= MAX_REPLACEMENT_HOPS; i++) {
+      next = (
+        await createRow('Connection', merchant.id, false, {
+          revokedAt: new Date(),
+          replacedById: next,
+        })
+      ).id as string;
+      chain.push(next);
+    }
+    expect(await liveConnectionId(chain[MAX_REPLACEMENT_HOPS - 1]!, merchant.id)).not.toBeNull();
+    expect(await liveConnectionId(chain[MAX_REPLACEMENT_HOPS]!, merchant.id)).toBeNull();
+  });
+
+  it("W8: a replaced site's session delivers to the successor, other sites stay isolated", async () => {
+    const s = await sites();
+    const { paymentId } = await paymentOn(s.a);
+    // Site A re-connects as A2; site B is untouched.
+    const a2 = await createRow('Connection', merchant.id, false, {
+      siteUrl: 'https://a.example',
+      siteOrigin: 'https://a.example',
+    });
+    await prisma.$transaction((tx) => revokeConnection(tx, s.a, 'site'));
+    await prisma.connection.update({ where: { id: s.a }, data: { replacedById: a2.id } });
+    const { endpoint: epA2 } = await createEndpoint(ctx(), { url: 'https://a.example/hooks2' });
+    await prisma.webhookEndpoint.update({
+      where: { id: epA2.id },
+      data: { connectionId: a2.id as string },
+    });
+    const ev = await event('payment.succeeded', 'payment', paymentId, { payment_id: paymentId });
+    await fanOutEvent(ev);
+    expect(await recipients(ev.id)).toEqual([epA2.id, s.unbound].sort());
+    for (const d of await prisma.webhookDelivery.findMany({ where: { eventId: ev.id } })) {
+      expect((await attemptDelivery(d.id))?.status).toBe('delivered');
+    }
+    expect(sent.some((r) => r.url.startsWith('https://b.'))).toBe(false);
+  });
+});
+
+describe('per-type payload keys', () => {
+  it('`status` is delivered only on refund.cancelled and refund.failed', () => {
+    const payload = { refund_id: 'ref_1', status: 'expired', currency: 'x' };
+    expect(webhookData(payload, 'refund.cancelled')).toEqual({
+      refund_id: 'ref_1',
+      status: 'expired',
+    });
+    expect(webhookData(payload, 'refund.failed')).toHaveProperty('status');
+    expect(webhookData(payload, 'refund.sent')).toEqual({ refund_id: 'ref_1' });
+    expect(webhookData(payload, 'payment.succeeded')).not.toHaveProperty('status');
+    expect(webhookData(payload)).not.toHaveProperty('status');
   });
 });
 

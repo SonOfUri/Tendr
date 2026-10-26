@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { Merchant } from '@prisma/client';
+import type { Event, Merchant } from '@prisma/client';
 import { ConnectTokenResponseSchema, type MerchantUserRole } from '@tendr/contracts';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
-import { setWebhookResolver } from '../checkout/webhooks.js';
+import { fanOutEvent, setWebhookResolver } from '../checkout/webhooks.js';
 import { sweepConnections } from '../connect/authorize.js';
 import { flushLastUsed } from '../gateway/auth.js';
 import { prisma } from '../lib/prisma.js';
@@ -658,6 +658,95 @@ describe('connect routes', () => {
     expect(
       (await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } })).checkoutDomains,
     ).toContain(SITE);
+  });
+
+  /** A test-mode payment whose session was created with `connectionId`'s keys. */
+  async function paymentOn(connectionId: string) {
+    const p = await createRow('Payment', merchant.id, false);
+    await prisma.session.update({ where: { id: p.sessionId as string }, data: { connectionId } });
+    return p.id as string;
+  }
+
+  async function succeededFor(paymentId: string) {
+    return (await createRow('Event', merchant.id, false, {
+      type: 'payment.succeeded',
+      aggregateType: 'payment',
+      aggregateId: paymentId,
+      payload: { payment_id: paymentId },
+    })) as unknown as Event;
+  }
+
+  const recipients = async (eventId: string) =>
+    (await prisma.webhookDelivery.findMany({ where: { eventId } })).map((d) => d.endpointId);
+
+  it('W8: a session created before a re-connect delivers payment.succeeded to the NEW endpoint, not the old one', async () => {
+    const first = await connect();
+    const paymentId = await paymentOn(first.connection_id);
+    const second = await connect();
+    expect(
+      (await prisma.connection.findUniqueOrThrow({ where: { id: first.connection_id } }))
+        .replacedById,
+    ).toBe(second.connection_id);
+    const ev = await succeededFor(paymentId);
+    expect(await fanOutEvent(ev)).toBe(1);
+    const [newTest] = await prisma.webhookEndpoint.findMany({
+      where: { connectionId: second.connection_id, livemode: false },
+    });
+    expect(await recipients(ev.id)).toEqual([newTest!.id]);
+  });
+
+  it('W8: two re-connects in a row (A→B→C) deliver to C', async () => {
+    const a = await connect();
+    const paymentId = await paymentOn(a.connection_id);
+    const b = await connect();
+    const c = await connect();
+    expect(
+      (await prisma.connection.findUniqueOrThrow({ where: { id: b.connection_id } })).replacedById,
+    ).toBe(c.connection_id);
+    const ev = await succeededFor(paymentId);
+    await fanOutEvent(ev);
+    const [cTest] = await prisma.webhookEndpoint.findMany({
+      where: { connectionId: c.connection_id, livemode: false },
+    });
+    expect(await recipients(ev.id)).toEqual([cTest!.id]);
+  });
+
+  it('W8: after a disconnect (no successor), no bound endpoint receives the event; other sites stay isolated', async () => {
+    const shop = await connect();
+    const paymentId = await paymentOn(shop.connection_id);
+    // Another site of the same store, connected separately: never gets the shop's events.
+    const { challenge, verifier } = pkce();
+    const sub = await authorize(
+      admin,
+      authorizeBody(challenge, { site_url: `${SITE}/blog`, return_url: `${SITE}/blog/return` }),
+    );
+    const subCode = new URL(sub.json().redirect as string).searchParams.get('code')!;
+    const blog = ConnectTokenResponseSchema.parse(
+      (await token({ code: subCode, code_verifier: verifier, site_url: `${SITE}/blog` })).json(),
+    );
+    const before = await succeededFor(paymentId);
+    await fanOutEvent(before);
+    const [shopTest] = await prisma.webhookEndpoint.findMany({
+      where: { connectionId: shop.connection_id, livemode: false },
+    });
+    expect(await recipients(before.id)).toEqual([shopTest!.id]);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/connect/disconnect',
+      headers: { authorization: `Bearer ${shop.test.secret_key}` },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(
+      (await prisma.connection.findUniqueOrThrow({ where: { id: shop.connection_id } }))
+        .replacedById,
+    ).toBeNull();
+    const after = await succeededFor(paymentId);
+    expect(await fanOutEvent(after)).toBe(0);
+    const blogEndpoints = await prisma.webhookEndpoint.findMany({
+      where: { connectionId: blog.connection_id },
+    });
+    expect(blogEndpoints.every((e) => e.active)).toBe(true);
   });
 
   it('re-connect: an abandoned second approval leaves the working connection alone', async () => {
