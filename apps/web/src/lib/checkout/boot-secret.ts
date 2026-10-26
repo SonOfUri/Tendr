@@ -1,5 +1,7 @@
-// The checkout's boot script: an inline, nonce'd <script> that pay/layout.tsx renders ahead of
-// the page content, so it runs while the document is parsed, before Next hydrates. Next builds
+// The checkout's boot script: served as /checkout-boot.js (app/checkout-boot.js/route.ts) and
+// loaded by a parser-blocking <script src> in the root layout's <head> on checkout pages
+// (components/CheckoutBootScript.tsx), so it runs while the document is parsed, before the first
+// RSC chunk and before Next hydrates. Next builds
 // its router's canonicalUrl (and the tree it writes into history.state) from `location` at
 // hydration; if `#cs=…` were still there it would live on in history.state and come back on any
 // router update. So the script moves the secret out of the URL first:
@@ -13,6 +15,9 @@
 // - everything is in try/catch: a failure leaves the page to the fallback in secret.ts.
 //
 // It is a plain ES5 string so it runs as written (no bundler transforms).
+
+/** Where the boot script is served (same origin, so CSP `script-src 'self'` allows it). */
+export const CHECKOUT_BOOT_SCRIPT_PATH = '/checkout-boot.js';
 
 /** The non-enumerable window property the boot script hands the secret over on. */
 export const SECRET_HANDOFF = '__tendrCheckoutSecret';

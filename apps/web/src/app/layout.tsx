@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { CheckoutBootScript } from '@/components/CheckoutBootScript';
 import { HideOnCheckout } from '@/components/HideOnCheckout';
 import { SiteFooter } from '@/components/SiteFooter';
 import { SiteHeader } from '@/components/SiteHeader';
@@ -23,9 +24,14 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
+// Keep this layout synchronous, with no I/O-bound awaits: the checkout boot script in <head> must
+// be in the initial HTML shell, ahead of the first RSC chunk (e2e/checkout.spec.ts checks it).
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
+      <head>
+        <CheckoutBootScript />
+      </head>
       <body>
         <main>
           <HideOnCheckout>
