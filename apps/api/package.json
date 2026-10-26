@@ -21,7 +21,8 @@
     "jobs:failed": "tsx scripts/jobs-failed.ts",
     "e2e:serve": "tsx scripts/e2e-server.ts",
     "onchain:publish:testnet": "tsx scripts/onchain-publish-testnet.ts",
-    "onchain:verify:mainnet": "tsx scripts/verify-merchant-account-mainnet.ts"
+    "onchain:verify:mainnet": "tsx scripts/verify-merchant-account-mainnet.ts",
+    "checkout:verify:mainnet": "tsx scripts/verify-checkout-mainnet.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.1",

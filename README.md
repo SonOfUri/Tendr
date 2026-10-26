@@ -6,11 +6,10 @@ Tendr is a universal checkout and payment-orchestration layer for digital commer
 
 NEAR Intents is an optional execution integration behind the scenes—not the Tendr brand.
 
-> **Status:** foundation. The platform underneath checkout is in place: database schema, API
-> gateway (API keys, scopes, request signing, rate limits, idempotency), append-only event log,
-> BullMQ worker with outbox dispatch, and a key vault (local file in dev, Cloud KMS in
-> production). Checkout endpoints (sessions, quotes, payments, webhooks) come in the checkout
-> project; nothing here moves funds yet.
+> **Status:** checkout core. On top of the foundation (gateway, event log, worker, key vault) and
+> the NEAR merchant accounts, stores can create checkout sessions, embed the checkout, take
+> payments through 1Click into their merchant account, and receive signed webhooks. Test mode is
+> fully simulated. Live mode waits for the mainnet checks and the contract audit described below.
 
 ## Monorepo layout
 
@@ -36,12 +35,15 @@ Tendr/
 - Append-only `events` table with an outbox drained by the worker
 - `KeyVault`: envelope encryption and Ed25519 / secp256k1 signing (local file or Cloud KMS)
 - Health checks for the api (`GET /v1/health`) and worker (`GET /health` on `WORKER_HEALTH_PORT`)
+- NEAR merchant accounts with a passkey threshold contract (see below)
+- Checkout: sessions, the hosted / modal / widget checkout, 1Click quotes, the payment watcher
+  with per-transfer settlement checks, sanctions screening, returns, signed webhooks (see
+  [Checkout](#checkout))
 
 ## What is not implemented yet
 
-- Checkout sessions, quotes, payments, refunds, webhook delivery (checkout project)
-- Live settlement through NEAR Intents
-- Merchant dashboard sign-in / KYC
+- Live checkout is not switched on: it waits for the mainnet checks and the contract audit below
+- Merchant KYC
 
 ## Quick start
 
@@ -231,17 +233,338 @@ It creates keys in a separate `tendr-verify` key ring and deploys nothing.
 Never embed secret keys (`tdr_test_` / `tdr_live_`) in client bundles; only publishable keys
 belong in the browser.
 
+## Checkout
+
+Design: `docs/superpowers/specs/2026-10-25-checkout-core-design.md`. A shopper pays with any token
+1Click supports. 1Click swaps it into the store's settlement asset and delivers it straight to the
+store's merchant account (or, in `wallet` payout mode, to its saved payout address). Tendr never
+holds the money. An order counts as paid only when 1Click reports `SUCCESS` and the watcher finds,
+in the receipts of 1Click's settlement transaction, a transfer of at least the quoted amount to the
+store. Balance changes are never used, and browser messages never mark anything paid.
+
+### Creating a session
+
+Call this from your server with a secret key (`sessions:write`). `POST` accepts `Idempotency-Key`.
+
+```bash
+curl -X POST http://localhost:4000/v1/checkout/sessions \
+  -H "Authorization: Bearer tdr_test_..." -H "Idempotency-Key: order-1042" \
+  -H "Content-Type: application/json" \
+  -d '{"amount":"25.00","amount_currency":"USD","external_ref":"order-1042",
+       "success_url":"https://shop.example/thanks","cancel_url":"https://shop.example/cart"}'
+# {"id":"ses_...","client_secret":"ses_..._secret_...",
+#  "url":"http://localhost:3000/pay/ses_...#cs=ses_..._secret_...",
+#  "expires_at":"...","status":"PENDING_DEPOSIT"}
+```
+
+- `amount_currency` is `USD` (at most 2 decimals) or exactly the store's settlement asset id.
+  Anything else gets `400 UNSUPPORTED_CURRENCY`. The settlement asset and destination come from
+  the store's settings, and the request cannot set them.
+- Optional fields:
+  - `customer_email`, used only for refund contact and receipts;
+  - `metadata`, up to 50 string keys;
+  - `fee_payer` and `gas_payer` (`merchant` | `shopper`);
+  - `payment_link_id`;
+  - `expires_in`, 60 to 1800 seconds. The default is 30 minutes.
+- `external_ref` is your order id. Only one session that is open, being paid or paid may hold it,
+  or you get `409 CONFLICT`. An expired, late or held order can get a new session.
+- Without an active merchant account and settlement settings in that mode, you get
+  `409 ACCOUNT_NOT_READY`.
+- `GET /v1/checkout/sessions/:id` (`sessions:read`) returns the session with its payments,
+  refunds and totals.
+- `POST /v1/checkout/sessions/:id/expire` cancels an open session. It becomes `EXPIRED` with
+  reason `canceled`.
+- `url` is the hosted checkout. The client secret travels in its `#cs=` fragment, so it never
+  reaches a server in a request line. Redirect the shopper to it, or embed it as below.
+
+### Embedding (tendr.js)
+
+The web app serves `/v1/tendr.js`, built from `apps/web/src/embed/tendr.ts` (under 10 KB):
+
+```html
+<script src="https://usetendr.tech/v1/tendr.js"></script>
+<script>
+  // sessionUrl is the session's `url`, passed through unchanged.
+  Tendr.open({ sessionUrl, onEvent: (e) => console.log(e) }); // modal; Esc or × closes it
+  Tendr.mount(document.getElementById('pay'), { sessionUrl, onEvent }); // inline widget
+</script>
+```
+
+- Events are `{ type: 'ready' | 'status' | 'complete', sessionId, status }` and
+  `{ type: 'close' }`. They are informational only: mark orders paid from the webhook.
+- tendr.js frames and listens to one origin, set at build time:
+  - `TENDR_CHECKOUT_BASE_URL` when set;
+  - else `CHECKOUT_BASE_URL`;
+  - else `https://usetendr.tech`.
+
+  The API builds session URLs from `CHECKOUT_BASE_URL`, so the two must name the same origin.
+  tendr.js refuses a `sessionUrl` on any other origin.
+
+- If a wallet cannot open inside the frame, the checkout opens that wallet step in a popup window
+  on its own origin, and the frame picks up the result.
+
+### Registering checkout domains
+
+Only the store's registered domains may frame the checkout (CSP `frame-ancestors`). Other sites
+get a refused frame. Register domains in the dashboard under Settings → Checkout. The API route is
+`PATCH /v1/settings/checkout`; it needs a dashboard session with `settings:manage` and a fresh
+passkey:
+
+```json
+{ "checkout_domains": ["https://shop.example", "https://www.shop.example"] }
+```
+
+- Each entry is an origin: a scheme, a host and an optional port. Paths and wildcards are refused.
+- Production accepts `https://` only. Outside production, `http://localhost` also works.
+- Test and live mode share the same domains.
+- The checkout sends its `postMessage` events only to the registered origin that framed it.
+
+### Webhooks
+
+Add endpoints in the dashboard (Webhooks) or with `POST /v1/webhooks/endpoints`, for example
+`{ "url": "https://...", "events": [...] }`. Omit `events` to receive all of them. The signing
+secret (`whsec_...`) is shown once, at creation and on rotation.
+
+- Events:
+  - `checkout.session.expired`;
+  - `payment.detected`, `payment.processing`, `payment.succeeded`, `payment.refunded`,
+    `payment.late`, `payment.held`;
+  - `refund.pending`, `refund.sent`, `refund.needs_address`.
+- The body is `{ id, type, created, livemode, data }`. `data.external_ref` is your order id.
+- Failed deliveries are retried with exponential backoff for 3 days. You can resend any delivery
+  from the dashboard.
+- A retry or a resend keeps the event `id`, also sent as the `Tendr-Event-Id` header. Deduplicate
+  on it.
+
+Every delivery carries `Tendr-Signature: t=<unix>,v1=<hex>`. The hex is
+HMAC-SHA256(secret, `<t>.<raw body>`), and `t` is the time of that attempt. For 24 hours after you
+rotate a secret, the header carries a second `v1=` signed with the old secret, so check every `v1`
+value. Verify the raw bytes, before any JSON parsing:
+
+```js
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+const TOLERANCE_SECONDS = 300;
+
+/**
+ * rawBody: the request body as a Buffer. secrets: the secret(s) you hold (both while you switch to
+ * a rotated one). True when any v1 matches any secret and t is recent.
+ */
+export function verifyTendrSignature(rawBody, header, secrets, now = Date.now() / 1000) {
+  let t = NaN;
+  const signatures = [];
+  for (const part of String(header ?? '').split(',')) {
+    const [key, value] = part.trim().split('=');
+    if (key === 't') t = Number(value);
+    else if (key === 'v1' && value) signatures.push(Buffer.from(value, 'hex'));
+  }
+  if (!Number.isInteger(t) || signatures.length === 0) return false;
+  if (Math.abs(now - t) > TOLERANCE_SECONDS) return false;
+  let ok = false;
+  for (const secret of secrets) {
+    const expected = createHmac('sha256', secret).update(`${t}.`).update(rawBody).digest();
+    for (const sig of signatures) {
+      // Every pair is checked (no early exit), each in constant time.
+      if (sig.length === expected.length && timingSafeEqual(sig, expected)) ok = true;
+    }
+  }
+  return ok;
+}
+```
+
+### Test mode
+
+Test keys (`tdr_test_`) use a simulated 1Click and the mock intents verifier. Nothing touches a
+network, and settlement credits the store's test account.
+
+A test session's checkout page shows a test panel. The shopper API offers the same: once a quote
+exists, call `POST /v1/checkout/client/simulate` with `Authorization: Bearer <client_secret>` and
+`{ "scenario": "..." }`.
+
+| Scenario   | What happens                                                          |
+| ---------- | --------------------------------------------------------------------- |
+| `exact`    | The quoted amount arrives and settles                                 |
+| `overpay`  | It settles, and the extra is returned (or kept if under $1, below)    |
+| `underpay` | Part arrives, and 1Click reports an incomplete deposit                |
+| `topup`    | After `underpay`, the rest arrives before the deadline and it settles |
+| `late`     | A deposit arrives after the quote expired                             |
+| `failed`   | 1Click reports that the swap failed                                   |
+
+- Add `"sender_address"` to simulate a deposit from that address.
+- An address in `SCREENING_TEST_BLOCKLIST` (default `0x000000000000000000000000000000000000dead`)
+  counts as a sanctioned sender, and the payment is held.
+- The route answers `404` for a live session.
+
+### Who pays fees and gas
+
+- **Fees.**
+  - `fee_payer: merchant` is the default. The shopper pays exactly the order total. Tendr's fee,
+    1Click's fee and the swap spread come out of what the store receives.
+  - `fee_payer: shopper`: the store receives the order total, and the shopper's amount grows by
+    the fees, shown on the quote screen.
+- **Gas.**
+  - `gas_payer: shopper` is the default: no reduction.
+  - `gas_payer: merchant`: the shopper's amount is reduced by the estimated network fee of their
+    send, and that comes out of what the store receives. The reduction is capped by the session's
+    `gas_max_usd`, else `CHECKOUT_GAS_MAX_USD` (default 2 USD).
+- **Resolution.** Each setting is resolved once, when the session is created. The order is:
+  1. the session's own `fee_payer` / `gas_payer`;
+  2. the payment link's setting (links carry only a gas setting for now);
+  3. the store default.
+
+  Set store defaults under Settings → Checkout, or with `default_fee_payer` / `default_gas_payer`
+  in `PATCH /v1/settings/checkout`.
+
+- **Tendr's fee** is the store's fee plan, in basis points. It is 50 bps without a plan, and a
+  plan may set 0. It is a 1Click `appFees` entry paid to Tendr's fee account, never taken from the
+  store's account.
+
+### Returns: the return fee and the under-$1 rule
+
+- **Direct returns.** A connected wallet, or a refund address the shopper typed on the quote
+  screen, becomes 1Click's refund address. Underpayments, overpaid extra and late deposits go back
+  to it directly.
+- **Returns through the store.** Without such an address, 1Click returns the money to the store's
+  merchant account. Tendr drafts a refund proposal, and a signer approves it (project 2).
+  - The cross-chain fee of sending it back is deducted from the amount returned.
+  - If what is left is worth under $1, it is not returned. The store keeps it as a small
+    overpayment, no signer is needed, and the payment and webhook show
+    `kept_small_overpayment: true`.
+  - The checkout tells the shopper about the under-$1 rule before they pay.
+- **Exchange senders.** A sender that is a known exchange address is not refunded blindly. The
+  refund waits for an address (`refund.needs_address`), and the shopper is asked for one by email
+  or on the checkout.
+
+### Sanctions holds
+
+In live mode, Chainalysis screens every sender, connected wallet and typed refund address. The API
+key is the secret with purpose `chainalysis`. A hit holds the payment:
+
+- the order stays unpaid;
+- `payment.held` is sent instead of `payment.succeeded`;
+- every signer gets this notice:
+
+> These funds came from a sanctioned address. Tendr cannot freeze them; you are responsible for not using them; get legal advice.
+
+Tendr is non-custodial, so a hold is a notice, not a freeze. Money already swapped into the store's
+account is in the store's control.
+
+- A held payment is never settled or refunded automatically.
+- There is no "release to merchant" action.
+- The only way out is a refund through a signer-approved proposal. Before it, an owner must type
+  the legal-clearance acknowledgement, `I have legal clearance to refund this payment`.
+- If screening is unavailable, the payment waits in `SCREENING_PENDING` and screening is retried
+  for up to 6 hours. After that it becomes a review item, not a hold.
+
+### Tendr's fee account
+
+`FEE_ACCOUNT_LIVE` and `FEE_ACCOUNT_TEST` receive the `appFees`. They default to
+`fees.tendr.near` and `fees.tendr.testnet`. Each is a project 2 merchant account (the passkey
+threshold contract) whose signers are Tendr's operators, so Tendr's revenue has the same
+protection as stores' money. Test mode credits simulated fees to the testnet account through the
+mock verifier.
+
+To provision it with the project 2 tooling:
+
+1. Sign up an internal store named "Fees", so its slug is `fees`. This provisions
+   `fees.tendr.testnet`.
+2. Add the operators as signers, and raise the threshold.
+3. Go live from that store (`POST /v1/account/go-live`) to provision `fees.tendr.near`.
+
+Do this before public signup opens. `fees` is not a reserved slug, so the first store named "Fees"
+would otherwise get it.
+
+### Mainnet checks for checkout
+
+This is a manual script. It spends real funds, capped at 5 USD, and CI never runs it. It checks
+the spec's "Assumptions to verify early" with a funded mainnet account of your own. That account
+plays the merchant: every payment is delivered and refunded to its own intents balance.
+
+```bash
+export VERIFY_FUNDER_ACCOUNT_ID=you.near VERIFY_FUNDER_PRIVATE_KEY=ed25519:...
+export ONECLICK_API_KEY=<1Click JWT> VERIFY_CHAINALYSIS_API_KEY=<key>
+npm run checkout:verify:mainnet --workspace=@tendr/api -- \
+  --yes-i-understand-this-spends-mainnet-funds
+npm run checkout:verify:mainnet --workspace=@tendr/api -- \
+  --yes-i-understand-this-spends-mainnet-funds --phase cleanup
+```
+
+The account needs about 0.2 NEAR and 4 USDT on NEAR. By default each payment sends USDT on NEAR,
+delivers 1 USDC on NEAR, and pays 50 bps to `fees.tendr.near`. The flags that change this are
+listed at the top of `apps/api/scripts/verify-checkout-mainnet.ts`.
+
+Before it pays anything, it:
+
+- checks the Chainalysis key: a known sanctioned address is identified, and a clean one is not;
+- prints a raw dry quote, parsed by the API's own 1Click client;
+- prints the plan with every cost, and refuses a plan over 5 USD;
+- asks you to type `spend`.
+
+Then it pays three times:
+
+1. **Overpay.** An `EXACT_OUTPUT` payment, overpaid by 25%.
+   - The recipient must be credited exactly `amount_out`, found the way the watcher finds it: in
+     the settlement transaction's receipts.
+   - The excess must reach `refundTo`.
+   - It prints the settlement receipts and events, and which account routes `tx_status` to them.
+   - The `appFees` share must reach the fee account.
+   - It prints the raw 1Click status, the origin transaction and the sender.
+2. **Underpay and top up.** It sends half a payment, then the rest to the same address before the
+   deadline.
+   - A PASS means 1Click accumulates top-ups, so `CHECKOUT_TOPUP_ENABLED=true` is safe in live.
+     Top-ups stay off in live until then.
+   - It prints `depositedAmount` against the origin transaction hashes 1Click lists.
+3. **Late deposit.** It sends a deposit after the quote's deadline, and prints whether 1Click
+   refunded or swapped it.
+
+It stops at the first FAIL. A first FAIL may be a wrong guess about the 1Click wire format, so read
+the printed response. `--phase cleanup` withdraws your intents balances of both assets back to
+your account. What is spent for good: gas, storage deposits, the fee share, 1Click's fee and the
+spread.
+
+**Manual checklist (not scripted):**
+
+- Set a real `NEXT_PUBLIC_REOWN_PROJECT_ID`, with the checkout origin allowed in Reown.
+- On a registered store page, in both the modal and the widget, pay with a real wallet of each
+  family: EVM, Solana and Bitcoin (Reown AppKit), Tron (TronLink) and NEAR (Wallet Selector).
+- Where a wallet is blocked inside the frame, check the popup fallback round trip: the wallet step
+  opens in a popup, the payment goes through, and the frame shows the result.
+- Pay in wNEAR from a NEAR wallet that holds only NEAR. The checkout wraps the shortfall first.
+- Pay Tron USDT through TronLink.
+
+### Known limitations
+
+- **Wallet coverage.** Wallets can pay:
+  - native assets of the listed EVM chains, Solana, Bitcoin and Tron;
+  - EVM tokens on those chains;
+  - Solana USDC and USDT, and Tron USDT;
+  - NEAR tokens.
+
+  Every other token and chain 1Click supports is paid by manual send (deposit address and QR).
+  Without `NEXT_PUBLIC_REOWN_PROJECT_ID`, EVM, Solana and Bitcoin are manual-send only too.
+
+- **`@coinbase/cdp-sdk` is pinned to 1.52.0** (root `overrides`). Version 1.53 and later
+  statically import optional `@x402` packages, which breaks the Next build through Reown AppKit's
+  optional Coinbase dependency. Check that before lifting the pin.
+- Pricing currency is USD or the settlement asset only, because there is no FX source yet.
+- Payment links carry no fee-payer setting yet.
+- The 1Click wire format comes from its public docs until the mainnet checks run.
+  `apps/api/src/checkout/oneclick/http.ts` is the only place that maps it.
+- Underpay top-ups are off in live mode until the mainnet check confirms that 1Click accumulates
+  them.
+
 ## Scripts
 
-| Script                                          | Description                                |
-| ----------------------------------------------- | ------------------------------------------ |
-| `npm run dev`                                   | Web + API + worker (Turbo)                 |
-| `npm run dev:docs`                              | Mintlify docs                              |
-| `npm run build` / `lint` / `typecheck` / `test` | CI gates (tests need Postgres + Redis)     |
-| `npm run test:e2e`                              | Playwright smoke                           |
-| `npm run db:migrate`                            | Apply migrations (`prisma migrate deploy`) |
-| `npm run db:seed`                               | Seed the Demo Merchant                     |
-| `npm run jobs:failed --workspace=@tendr/api`    | List failed (dead-letter) jobs             |
+| Script                                                   | Description                                         |
+| -------------------------------------------------------- | --------------------------------------------------- |
+| `npm run dev`                                            | Web + API + worker (Turbo)                          |
+| `npm run dev:docs`                                       | Mintlify docs                                       |
+| `npm run build` / `lint` / `typecheck` / `test`          | CI gates (tests need Postgres + Redis)              |
+| `npm run test:e2e`                                       | Playwright smoke                                    |
+| `npm run db:migrate`                                     | Apply migrations (`prisma migrate deploy`)          |
+| `npm run db:seed`                                        | Seed the Demo Merchant                              |
+| `npm run jobs:failed --workspace=@tendr/api`             | List failed (dead-letter) jobs                      |
+| `npm run checkout:verify:mainnet --workspace=@tendr/api` | Manual mainnet checkout checks (spends up to 5 USD) |
 
 ## Deployment
 
