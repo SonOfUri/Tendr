@@ -63,36 +63,36 @@ describe('signup', () => {
     ]) {
       expect(isReservedLabel(reserved), reserved).toBe(true);
       const s = slugBase(reserved);
-      expect(s, reserved).toBe(`${reserved}-store`);
+      expect(s, reserved).toBe(`store-${reserved}`);
       expect(s).toMatch(NEAR_LABEL);
     }
-    expect(slugBase('Intents Mock')).toBe('intents-mock-store');
-    expect(slugBase('TENDR')).toBe('tendr-store');
+    expect(slugBase('Intents Mock')).toBe('store-intents-mock');
+    expect(slugBase('TENDR')).toBe('store-tendr');
     // `tendr*` is a reserved prefix: nothing under Tendr's parents may read as Tendr.
-    expect(slugBase('Tendr Coffee')).toBe('tendr-coffee-store');
+    expect(slugBase('Tendr Coffee')).toBe('store-tendr-coffee');
 
     const user = await createUser();
     await createCredential(user.id);
     const { merchant } = await createStore(user.id, 'Funding NEAR');
-    expect(merchant.slug).toBe('funding-near-store');
+    expect(merchant.slug).toBe('store-funding-near');
     const account = await prisma.merchantAccount.findFirstOrThrow({
       where: { merchantId: merchant.id },
     });
-    expect(account.nearAccountId).toBe('funding-near-store.tendr.testnet');
+    expect(account.nearAccountId).toBe('store-funding-near.tendr.testnet');
   });
 
   it('C-1: a store named "Fees" never takes Tendr\'s fee account, in either mode', async () => {
     for (const name of ['Fees', 'fees', 'FEE', 'Treasury', 'Support', 'Root', 'System', 'Mail']) {
-      expect(slugBase(name), name).toMatch(/-store$/);
+      expect(slugBase(name), name).toMatch(/^store-/);
     }
     const user = await createUser();
     await createCredential(user.id);
     const { merchant } = await createStore(user.id, 'Fees');
-    expect(merchant.slug).toBe('fees-store');
+    expect(merchant.slug).toBe('store-fees');
     const account = await prisma.merchantAccount.findFirstOrThrow({
       where: { merchantId: merchant.id },
     });
-    expect(account.nearAccountId).toBe('fees-store.tendr.testnet');
+    expect(account.nearAccountId).toBe('store-fees.tendr.testnet');
     expect(account.nearAccountId).not.toBe(loadEnv().FEE_ACCOUNT_TEST);
   });
 
@@ -158,7 +158,7 @@ describe('signup', () => {
     ]) {
       expect(isReservedLabel(label), label).toBe(true);
     }
-    for (const label of ['acme', 'coffee', 'feesh', 'gasket', 'fees-store', 'tendr-store-2']) {
+    for (const label of ['acme', 'coffee', 'feesh', 'gasket', 'store-fees', 'store-tendr-2']) {
       expect(isReservedLabel(label), label).toBe(false);
     }
     // A renamed fee account is reserved from env, whatever its label.
@@ -173,10 +173,30 @@ describe('signup', () => {
       expect(isReservedLabel('collect', e)).toBe(true);
       expect(isReservedLabel('take', e)).toBe(true);
       expect(isReservedLabel('verifier-x', e)).toBe(true);
-      expect(slugBase('Collect')).toBe('collect-store');
+      expect(slugBase('Collect')).toBe('store-collect');
     } finally {
       loadEnv();
     }
+  });
+
+  it('C40: a `-store` suffix never admits a reserved base; reserved names map to `store-…`', () => {
+    for (const label of [
+      'tendr-store',
+      'fees-store',
+      'intents-store',
+      'fees-store-2',
+      'admin-store',
+    ]) {
+      expect(isReservedLabel(label), label).toBe(true);
+    }
+    expect(slugBase('Fees Store')).toBe('store-fees-store');
+    expect(slugBase('Admin')).toBe('store-admin');
+    // The mapped form is never itself reserved, and a long name stays within the base length.
+    expect(isReservedLabel('store-fees')).toBe(false);
+    const long = slugBase(`tendr ${'x'.repeat(40)}`);
+    expect(long.startsWith('store-tendr-')).toBe(true);
+    expect(long.length).toBeLessThanOrEqual(28);
+    expect(isReservedLabel(long)).toBe(false);
   });
 
   it('C-1: no existing store slug is reserved (one-off check over the merchants table)', async () => {

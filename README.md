@@ -335,6 +335,10 @@ secret (`whsec_...`) is shown once, at creation and on rotation.
   - `payment.detected`, `payment.processing`, `payment.succeeded`, `payment.refunded`,
     `payment.late`, `payment.held`;
   - `refund.pending`, `refund.sent`, `refund.needs_address`.
+- A payment can have more than one return, each with its own `refund.*` events. For example, a
+  late overpayment has a `late` return and an `overpaid` return for the excess. `payment.refunded`
+  and a session's `REFUNDED` status can arrive before every return has been sent. Track each
+  return by its own `refund.sent`, keyed on `refund_id`.
 - The body is `{ id, type, created, livemode, data }`. `data.external_ref` is your order id.
 - Failed deliveries are retried with exponential backoff for 3 days. You can resend any delivery
   from the dashboard.
@@ -475,7 +479,7 @@ mock verifier.
 
 `fees` (and every label under Tendr's parents that env names, plus a static list and the
 `gas-*`, `fee-*`, `fees-*`, `intents*` and `tendr*` prefixes) is a reserved store label
-(`apps/api/src/merchants/reserved-labels.ts`): a store named "Fees" gets `fees-store`, and no
+(`apps/api/src/merchants/reserved-labels.ts`). A store named "Fees" gets `store-fees`, and no
 store's account may ever be `fees.tendr.*`. Provisioning won't adopt an existing account unless one
 of its on-chain signers is a signer of that store. Signup therefore can't provision the fee
 account; it needs an operator-only path (not built yet).

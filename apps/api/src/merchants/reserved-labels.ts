@@ -85,9 +85,6 @@ const STATIC: ReadonlySet<string> = new Set([
 /** Prefixes Tendr keeps for families of system accounts (`gas-tron`, `fee-usdc`, `intents-…`). */
 const PREFIXES = ['gas-', 'fee-', 'fees-', 'intents', 'tendr'] as const;
 
-/** A label ending in `-store` (optionally `-store-N`) is what a reserved name is mapped to. */
-const STORE_SUFFIX = /-store(-\d+)?$/;
-
 /**
  * The direct sub-account labels of Tendr's parents named by the env's account ids: the fee
  * accounts, the intents contracts, and anything else under `.<parent>`.
@@ -115,8 +112,12 @@ export function envReservedLabels(e: Env = env()): Set<string> {
 
 /** Whether a store may not take `label` as its NEAR sub-account label. */
 export function isReservedLabel(label: string, e: Env = env()): boolean {
-  if (STORE_SUFFIX.test(label)) return false;
+  // No suffix exemption (C40): `fees-store` or `tendr-store` still read as Tendr's. A reserved
+  // name is mapped to `store-<name>` instead (signup.ts `slugBase`), which no rule reserves.
   if (STATIC.has(label)) return true;
   if (PREFIXES.some((p) => label.startsWith(p))) return true;
-  return envReservedLabels(e).has(label);
+  if (envReservedLabels(e).has(label)) return true;
+  // `<reserved>-store` (and `-store-N`), the old mapped form, is reserved too.
+  const base = /^(.+)-store(?:-\d+)?$/.exec(label)?.[1];
+  return base !== undefined && isReservedLabel(base, e);
 }

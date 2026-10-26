@@ -29,8 +29,11 @@ export function slugBase(name: string): string {
   s = s.slice(0, MAX_BASE).replace(/-+$/, '');
   if (s.length === 0) return 'store';
   const base = s.length < 3 ? `${s}-store` : s;
-  // A reserved label (Tendr's accounts, system names; see reserved-labels.ts) gets `-store`.
-  return isReservedLabel(base) ? `${base}-store` : base;
+  // A reserved label (Tendr's accounts, system names; see reserved-labels.ts) becomes
+  // `store-<label>`: a prefix, so the label never starts with a reserved name (C40).
+  if (!isReservedLabel(base)) return base;
+  const mapped = `store-${base}`.slice(0, MAX_BASE).replace(/-+$/, '');
+  return isReservedLabel(mapped) ? 'store' : mapped;
 }
 
 /** The next free slug for `base`: `base`, then `base-2`, `base-3`, … */
