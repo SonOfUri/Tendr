@@ -9,6 +9,7 @@ import {
   PROVISION_REQUESTED,
   provisionMerchantAccount,
 } from '../accounts/accounts.js';
+import { registerWatcherHooks } from '../checkout/watcher.js';
 import { registerAccountHandlers } from './account-notices.js';
 import { registerEventHandler } from './handlers.js';
 
@@ -29,3 +30,6 @@ registerEventHandler(
 // Merchant-account notices to signers (built from the on-chain action) and the live → test
 // signer mirror.
 registerAccountHandlers();
+
+// Payment watcher: a SCREENING_PENDING payment that screens `allow` re-runs settlement.
+registerWatcherHooks();

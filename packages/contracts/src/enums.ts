@@ -98,7 +98,13 @@ export const ScreeningDecisionValues = ['allow', 'block'] as const;
 export type ScreeningDecision = (typeof ScreeningDecisionValues)[number];
 export const ScreeningDecisionSchema = z.enum(ScreeningDecisionValues);
 
-export const RevenueSourceValues = ['app_fee', 'spread'] as const;
+export const RevenueSourceValues = [
+  'app_fee',
+  'spread',
+  'oneclick_fee',
+  'network_fee',
+  'gas_reimbursement',
+] as const;
 export type RevenueSource = (typeof RevenueSourceValues)[number];
 export const RevenueSourceSchema = z.enum(RevenueSourceValues);
 

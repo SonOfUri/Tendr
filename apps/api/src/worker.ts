@@ -15,6 +15,7 @@ import {
   setAccountJobs,
 } from './jobs/account-notices.js';
 import { retryPendingScreenings } from './checkout/screening.js';
+import { expireSessions, pollDeposit, scanDueDeposits } from './checkout/watcher.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
 // Registers every event handler; must load before the dispatcher runs (see dispatchOnce).
@@ -38,6 +39,47 @@ import { closeClient, createRedis, whenReady } from './lib/redis.js';
 const HEALTH_CHECK_TIMEOUT_MS = 1000;
 /** Re-screens SCREENING_PENDING payments (backoff is per payment); runs every minute. */
 export const RETRY_SCREENINGS_JOB = 'retry-pending-screenings';
+/** The payment watcher's queue: the 5 s scan, one poll job per due address, the expiry sweep. */
+export const CHECKOUT_QUEUE = 'tendr-checkout';
+export const SCAN_DEPOSITS_JOB = 'scan-deposits';
+export const POLL_DEPOSIT_JOB = 'poll-deposit';
+export const EXPIRE_SESSIONS_JOB = 'expire-sessions';
+export const SCAN_DEPOSITS_EVERY_MS = 5_000;
+export const EXPIRE_SESSIONS_EVERY_MS = 60_000;
+
+interface PollJobData {
+  depositAddress: string;
+  livemode: boolean;
+}
+
+/** Runs one checkout-queue job; `queue` receives the poll jobs a scan fans out. */
+export async function processCheckoutJob(
+  job: Pick<Job, 'name' | 'data'>,
+  queue: Pick<Queue, 'add'>,
+): Promise<void> {
+  if (job.name === SCAN_DEPOSITS_JOB) {
+    await scanDueDeposits((data: PollJobData) =>
+      queue.add(POLL_DEPOSIT_JOB, data, {
+        // One queued poll per address; removed when done so the next scan can add it again.
+        jobId: `poll__${data.livemode ? 'live' : 'test'}__${data.depositAddress}`,
+        removeOnComplete: true,
+        removeOnFail: true,
+      }),
+    );
+    return;
+  }
+  if (job.name === POLL_DEPOSIT_JOB) {
+    const data = job.data as PollJobData;
+    await pollDeposit(data.depositAddress, { livemode: data.livemode });
+    return;
+  }
+  if (job.name === EXPIRE_SESSIONS_JOB) {
+    const n = await expireSessions();
+    if (n > 0) log('info', 'expired checkout sessions', { count: n });
+    return;
+  }
+  throw new Error(`unknown checkout job ${job.name}`);
+}
 
 /** Loads the event and runs the handler named by the job. Throwing makes BullMQ retry. */
 async function processEventJob(job: Job<EventJobData>): Promise<void> {
@@ -134,9 +176,10 @@ export interface WorkerOptions {
 }
 
 /**
- * Starts the worker process: event-job, maintenance and merchant-account workers, the hourly
- * `purge-idempotency` schedule, the per-minute account jobs (reconciliation, ready timelocks,
- * ready recoveries), the outbox dispatcher and the health server.
+ * Starts the worker process: event-job, maintenance, merchant-account and checkout workers, the
+ * hourly `purge-idempotency` schedule, the per-minute account jobs (reconciliation, ready
+ * timelocks, ready recoveries), the payment watcher (5 s deposit scan, per-minute session
+ * expiry), the outbox dispatcher and the health server.
  */
 export async function startWorker(
   opts: WorkerOptions = {},
@@ -163,7 +206,24 @@ export async function startWorker(
   const runAccountJob = (job: Job) => processAccountJob(job.name, job.data);
   const accountsWorker = new Worker(ACCOUNTS_QUEUE, runAccountJob, { ...setup, concurrency: 5 });
   const executorsWorker = new Worker(EXECUTORS_QUEUE, runAccountJob, { ...setup, concurrency: 1 });
-  for (const w of [eventsWorker, maintenanceWorker, accountsWorker, executorsWorker] as Worker[]) {
+  // Payment watcher: polls are independent per address (claimed with a lease), so many at once.
+  const checkoutQueue = new Queue(CHECKOUT_QUEUE, {
+    ...setup,
+    defaultJobOptions: { removeOnComplete: { age: 600 }, removeOnFail: { age: 86400 } },
+  });
+  const checkoutWorker = new Worker(
+    CHECKOUT_QUEUE,
+    (job: Job) => processCheckoutJob(job, checkoutQueue),
+    { ...setup, concurrency: 10 },
+  );
+  const workers = [
+    eventsWorker,
+    maintenanceWorker,
+    accountsWorker,
+    executorsWorker,
+    checkoutWorker,
+  ] as Worker[];
+  for (const w of workers) {
     w.on('failed', (job, err) =>
       log('warn', 'job failed', {
         queue: w.name,
@@ -197,6 +257,17 @@ export async function startWorker(
     await executorsQueue.upsertJobScheduler(name, { every: ACCOUNT_JOB_EVERY_MS }, { name });
   }
 
+  await checkoutQueue.upsertJobScheduler(
+    SCAN_DEPOSITS_JOB,
+    { every: SCAN_DEPOSITS_EVERY_MS },
+    { name: SCAN_DEPOSITS_JOB },
+  );
+  await checkoutQueue.upsertJobScheduler(
+    EXPIRE_SESSIONS_JOB,
+    { every: EXPIRE_SESSIONS_EVERY_MS },
+    { name: EXPIRE_SESSIONS_JOB },
+  );
+
   const stopDispatcher =
     opts.dispatcher === false
       ? async () => {}
@@ -212,11 +283,11 @@ export async function startWorker(
     healthPort: health.port,
     stop: async () => {
       await stopDispatcher();
+      await Promise.all(workers.map((w) => w.close()));
       await Promise.all(
-        [eventsWorker, maintenanceWorker, accountsWorker, executorsWorker].map((w) => w.close()),
-      );
-      await Promise.all(
-        [eventsQueue, maintenanceQueue, accountsQueue, executorsQueue].map((q) => q.close()),
+        [eventsQueue, maintenanceQueue, accountsQueue, executorsQueue, checkoutQueue].map((q) =>
+          q.close(),
+        ),
       );
       setAccountJobs(null);
       await closeConnection(connection);

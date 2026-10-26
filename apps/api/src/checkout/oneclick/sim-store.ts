@@ -37,6 +37,9 @@ export interface SimStore {
    * already held elsewhere fails fast with OneClickError 409 `BUSY`.
    */
   withLock<T>(depositAddress: string, fn: () => Promise<T>): Promise<T>;
+  /** Indexes a simulated settlement's destination tx hash → its deposit address. */
+  putDestination(txHash: string, depositAddress: string): Promise<void>;
+  getDestination(txHash: string): Promise<string | null>;
 }
 
 export const SIM_KEY_PREFIX = 'sim1click:';
@@ -88,6 +91,15 @@ export function decodeSimDeposit(text: string): SimDeposit {
 export class MemorySimStore implements SimStore {
   private readonly items = new Map<string, string>();
   private readonly locks = new Set<string>();
+  private readonly destinations = new Map<string, string>();
+
+  async putDestination(txHash: string, depositAddress: string): Promise<void> {
+    this.destinations.set(txHash, depositAddress);
+  }
+
+  async getDestination(txHash: string): Promise<string | null> {
+    return this.destinations.get(txHash) ?? null;
+  }
 
   async get(depositAddress: string): Promise<SimDeposit | null> {
     const text = this.items.get(depositAddress);
@@ -140,6 +152,18 @@ export class RedisSimStore implements SimStore {
 
   private lockKey(depositAddress: string): string {
     return `${this.key(depositAddress)}:lock`;
+  }
+
+  private destKey(txHash: string): string {
+    return `${this.keyPrefix}dest:${txHash}`;
+  }
+
+  async putDestination(txHash: string, depositAddress: string): Promise<void> {
+    await (await this.client()).set(this.destKey(txHash), depositAddress, 'PX', SIM_TTL_MS);
+  }
+
+  async getDestination(txHash: string): Promise<string | null> {
+    return (await this.client()).get(this.destKey(txHash));
   }
 
   private async client(): Promise<Redis> {

@@ -222,6 +222,9 @@ enum ScreeningDecision {
 enum RevenueSource {
   app_fee
   spread
+  oneclick_fee
+  network_fee
+  gas_reimbursement
 
   @@map("revenue_source")
 }
@@ -931,6 +934,12 @@ model Quote {
   /// The shopper reported a deposit transaction for this quote (`POST …/client/deposit`).
   depositTxHash        String?          @map("deposit_tx_hash")
   depositTxSubmittedAt DateTime?        @map("deposit_tx_submitted_at")
+  /// The payment watcher: when the next 1Click status poll is due (also a running poll's claim
+  /// lease). A partial index (migration payment_watcher) covers rows still being watched.
+  watchNextAt          DateTime?        @map("watch_next_at")
+  /// Polling stopped for good (terminal payment, 24 h after creation, or a superseded quote past
+  /// its deadline + 30 min with no deposit).
+  watchStoppedAt       DateTime?        @map("watch_stopped_at")
   createdAt            DateTime         @default(now()) @map("created_at")
 
   merchant Merchant  @relation(fields: [merchantId], references: [id])
@@ -950,7 +959,8 @@ model Payment {
   merchantId            String        @map("merchant_id")
   livemode              Boolean
   sessionId             String        @map("session_id")
-  quoteId               String        @map("quote_id")
+  /// One payment per deposit address (quote).
+  quoteId               String        @unique(map: "payments_quote_id_key") @map("quote_id")
   originTxHash          String?       @map("origin_tx_hash")
   amountReceived        Decimal       @map("amount_received") @db.Decimal(78, 0)
   settleTx              String?       @map("settle_tx")
@@ -972,6 +982,9 @@ model Payment {
   amountOut             Decimal?      @map("amount_out") @db.Decimal(78, 0)
   amountInUsd           Decimal?      @map("amount_in_usd") @db.Decimal(18, 6)
   settledAt             DateTime?     @map("settled_at")
+  /// How the settlement transfer (`settle_tx`, unique per mode via a partial index) was verified:
+  /// `receipt` (its transfer event) or `oneclick` (wallet payout to a chain without a verifier).
+  verifiedBy            String?       @map("verified_by")
   /// Sanctions-screening retries done while SCREENING_PENDING.
   screeningAttempts     Int           @default(0) @map("screening_attempts")
   /// When the next screening retry is due; null = first retry (1 min after creation).
@@ -1170,12 +1183,15 @@ model RevenueEntry {
   source     RevenueSource
   assetId    String        @map("asset_id")
   amount     Decimal       @db.Decimal(78, 0)
+  /// USD value at quote prices.
+  amountUsd  Decimal?      @map("amount_usd") @db.Decimal(18, 6)
   txHash     String?       @map("tx_hash")
   createdAt  DateTime      @default(now()) @map("created_at")
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
   payment  Payment  @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
 
+  @@unique([paymentId, source])
   @@index([merchantId])
   @@index([paymentId])
   @@map("revenue_entries")

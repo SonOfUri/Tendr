@@ -163,6 +163,7 @@ export class CappedNearClient implements NearClient {
   view: NearClient['view'] = (...args) => this.inner.view(...args);
   viewAccount: NearClient['viewAccount'] = (...args) => this.inner.viewAccount(...args);
   accessKeys: NearClient['accessKeys'] = (...args) => this.inner.accessKeys(...args);
+  txStatus: NearClient['txStatus'] = (...args) => this.inner.txStatus(...args);
 
   async callAsTestnetAdmin(
     ...args: Parameters<NearClient['callAsTestnetAdmin']>

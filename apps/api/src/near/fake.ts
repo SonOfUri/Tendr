@@ -11,6 +11,7 @@ import type {
   ProvisionParams,
   TopUpParams,
   TxResult,
+  TxStatusResult,
 } from './client.js';
 import { FakeMerchantContracts, SimulatedPanic } from './fake-contract.js';
 import {
@@ -34,7 +35,8 @@ export type FakeCall =
     }
   | { kind: 'view'; contractId: string; method: string; args: object }
   | { kind: 'provision'; accountId: string; init: InitConfigJson; initialBalanceYocto: bigint }
-  | { kind: 'topup'; accountId: string; amountYocto: bigint };
+  | { kind: 'topup'; accountId: string; amountYocto: bigint }
+  | { kind: 'txStatus'; hash: string; accountId?: string };
 
 type Kind = FakeCall['kind'];
 type Scripted<T> = T | ((args: object) => T);
@@ -43,6 +45,18 @@ const fakeHash = (): string => bs58.encode(randomBytes(32));
 /** Storage a freshly provisioned fake account reports (bytes), about what a real one uses. */
 export const FAKE_ACCOUNT_STORAGE_BYTES = 2_000n;
 const key = (contractId: string, method: string): string => `${contractId}#${method}`;
+
+/**
+ * Where an unscripted `txStatus` looks next: the simulated 1Click provider registers one so the
+ * destination transactions of its simulated settlements (`simulatedDestinationTxHash`) carry the
+ * transfer events that settlement implies. Shared by every fake client in the process.
+ */
+export type SimulatedTxSource = (hash: string) => Promise<TxStatusResult | null>;
+let simulatedTxSource: SimulatedTxSource | null = null;
+/** Installs (or with null removes) the process-wide simulated transaction source. */
+export function setSimulatedTxSource(source: SimulatedTxSource | null): void {
+  simulatedTxSource = source;
+}
 
 export class FakeNearClient implements NearClient {
   readonly calls: FakeCall[] = [];
@@ -61,11 +75,13 @@ export class FakeNearClient implements NearClient {
     { failure: string; failedLogs: string[] }[]
   >();
   private readonly provisionFailures: string[] = [];
+  private readonly txs = new Map<string, TxStatusResult | null>();
   private readonly throws: Record<Kind, unknown[]> = {
     call: [],
     view: [],
     provision: [],
     topup: [],
+    txStatus: [],
   };
   /** Storage use (bytes) per account, as `viewAccount` reports it. */
   private readonly storage = new Map<string, bigint>();
@@ -93,6 +109,14 @@ export class FakeNearClient implements NearClient {
   /** `view(contractId, method)` returns `answer(args)`. */
   scriptView(contractId: string, method: string, answer: (args: object) => unknown): void {
     this.views.set(key(contractId, method), answer);
+  }
+
+  /**
+   * `txStatus(hash)` returns `result` (null: the node does not know the transaction). Scripted
+   * transactions take precedence over the simulated source.
+   */
+  scriptTxStatus(hash: string, result: TxStatusResult | null): void {
+    this.txs.set(hash, result === null ? null : structuredClone(result));
   }
 
   /** `accessKeys(accountId)` returns `keys` (whether or not the account was provisioned here). */
@@ -345,6 +369,16 @@ export class FakeNearClient implements NearClient {
       status: 'success',
       topLevelStatus: 'success',
     };
+  }
+
+  async txStatus(hash: string, accountId?: string): Promise<TxStatusResult | null> {
+    this.calls.push({ kind: 'txStatus', hash, ...(accountId ? { accountId } : {}) });
+    this.maybeThrow('txStatus');
+    if (this.txs.has(hash)) {
+      const r = this.txs.get(hash)!;
+      return r === null ? null : structuredClone(r);
+    }
+    return simulatedTxSource ? simulatedTxSource(hash) : null;
   }
 
   async accessKeys(accountId: string): Promise<string[]> {

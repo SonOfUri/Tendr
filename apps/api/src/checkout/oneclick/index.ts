@@ -1,6 +1,7 @@
 // `providerFor(livemode)`: the real 1Click client in live mode, the simulated provider in test
 // mode. One instance per mode per process (the simulated provider keeps its deposits in memory).
 import { env } from '../../env.js';
+import { setSimulatedTxSource } from '../../near/fake.js';
 import { HttpOneClick } from './http.js';
 import { SimulatedOneClick } from './simulated.js';
 export {
@@ -41,8 +42,17 @@ function liveOneClick(): HttpOneClick {
 
 /** The process-wide test-mode provider (for `simulate()`). */
 export function simulatedOneClick(): SimulatedOneClick {
-  test ??= new SimulatedOneClick();
-  return test;
+  if (!test) installSimulated(new SimulatedOneClick());
+  return test!;
+}
+
+/**
+ * Makes `sim` the test-mode provider and lets the fake NEAR client answer `txStatus` for its
+ * simulated settlements' destination transactions.
+ */
+function installSimulated(sim: SimulatedOneClick | null): void {
+  test = sim;
+  setSimulatedTxSource(sim ? (hash) => sim.destinationTx(hash) : null);
 }
 
 /** Tendr's fee account for a mode (the `appFees` recipient). */
@@ -57,5 +67,5 @@ export function feeAccountFor(livemode: boolean): string {
  */
 export function resetOneClickProviders(opts: { simulated?: SimulatedOneClick } = {}): void {
   live = null;
-  test = opts.simulated ?? null;
+  installSimulated(opts.simulated ?? null);
 }

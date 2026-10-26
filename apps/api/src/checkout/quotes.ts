@@ -31,6 +31,7 @@ import { assertWithinMinimum, assertWithinTarget, buildQuoteRequests } from './p
 import { screenAddress } from './screening.js';
 import type { CheckoutCtx } from './sessions.js';
 import { tokenInfo, tokenList } from './tokens.js';
+import { markSessionViewed, topupEnabled, watcherNow } from './watcher.js';
 
 /** The tenant plus the one session the client secret opened. */
 export type ShopperCtx = CheckoutCtx & { sessionId: string };
@@ -172,8 +173,13 @@ function quoteView(q: QuoteRow, feePayer: FeePayer, now = new Date()) {
 }
 
 /** The shopper-facing state of a payment (no screening or settlement internals). */
-function shopperState(p: { status: string; isLate: boolean }): string {
+function shopperState(p: {
+  status: string;
+  isLate: boolean;
+  oneclickStatus: string | null;
+}): string {
   if (p.isLate) return 'late';
+  if (p.status === 'PROCESSING' && p.oneclickStatus === 'INCOMPLETE_DEPOSIT') return 'underpaid';
   switch (p.status) {
     case 'DETECTED':
       return 'detected';
@@ -206,6 +212,47 @@ async function merchantDisplay(ctx: ShopperCtx, s: SessionRow) {
   return { name: theme?.displayName ?? merchant.name, logo_url: theme?.logoUrl ?? null };
 }
 
+/** Base units → a decimal string ("0.005"). */
+function formatUnits(units: bigint, decimals: number): string {
+  const s = units.toString().padStart(decimals + 1, '0');
+  const whole = s.slice(0, s.length - decimals);
+  const frac = s.slice(s.length - decimals).replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : whole;
+}
+
+type PaymentRow = Awaited<ReturnType<ShopperCtx['db']['payment']['findMany']>>[number];
+
+/**
+ * The underpay top-up offer (spec "Changes" #8): while the underpaid payment's quote is live and
+ * top-ups are enabled, "Send the remaining X to the same address". Null otherwise.
+ */
+async function topupOffer(ctx: ShopperCtx, payments: PaymentRow[], now: Date) {
+  if (!topupEnabled(ctx.livemode)) return null;
+  const p = payments.find(
+    (x) => x.status === 'PROCESSING' && x.oneclickStatus === 'INCOMPLETE_DEPOSIT' && !x.isLate,
+  );
+  if (!p) return null;
+  const q = await ctx.db.quote.findFirst({ where: { id: p.quoteId } });
+  if (!q || q.deadline.getTime() <= now.getTime()) return null;
+  const remaining = BigInt(q.amountIn.toFixed(0)) - BigInt(p.amountReceived.toFixed(0));
+  if (remaining <= 0n) return null;
+  let label = `${remaining.toString()} base units`;
+  try {
+    const t = await tokenInfo(ctx.livemode, q.originAssetId);
+    label = `${formatUnits(remaining, t.decimals)} ${t.symbol}`;
+  } catch {
+    // The token list is unavailable: show base units.
+  }
+  return {
+    payment_id: p.id,
+    origin_asset: q.originAssetId,
+    deposit_address: q.depositAddress,
+    remaining_amount: remaining.toString(),
+    deadline: q.deadline.toISOString(),
+    message: `Send the remaining ${label} to the same address`,
+  };
+}
+
 /** Whether a refund is waiting on the shopper and the store gave no email. */
 async function needsEmail(ctx: ShopperCtx, s: SessionRow): Promise<boolean> {
   if (s.customerEmail) return false;
@@ -222,6 +269,8 @@ async function needsEmail(ctx: ShopperCtx, s: SessionRow): Promise<boolean> {
  */
 export async function shopperSessionView(ctx: ShopperCtx) {
   const s = await loadSession(ctx);
+  // The page is open: the watcher polls this session's addresses every 5 s for a minute.
+  await markSessionViewed(s.id);
   const feePayer = feePayerFromDb(s.feePayer);
   const [merchant, quote, payments, emailNeeded] = await Promise.all([
     merchantDisplay(ctx, s),
@@ -254,6 +303,7 @@ export async function shopperSessionView(ctx: ShopperCtx) {
       created_at: p.createdAt.toISOString(),
     })),
     needs_email: emailNeeded,
+    topup: await topupOffer(ctx, payments, watcherNow()),
   };
 }
 

@@ -11,7 +11,8 @@
 import { createHash } from 'node:crypto';
 import bs58 from 'bs58';
 import { env } from '../../env.js';
-import { nearClient, type NearClient } from '../../near/client.js';
+import { nearClient, type NearClient, type TxStatusResult } from '../../near/client.js';
+import { eventLog } from '../../near/events.js';
 import { RedisSimStore, type SimDeposit, type SimStore } from './sim-store.js';
 import {
   OneClickError,
@@ -365,6 +366,7 @@ export class SimulatedOneClick implements OneClickProvider {
       // Credits are saved on the stored (pre-deposit) state as they happen, so a retry after a
       // partial failure skips recipients already credited.
       await this.settle(depositAddress, d);
+      await this.store.putDestination(simulatedDestinationTxHash(depositAddress), depositAddress);
       next.credited = d.credited;
       next.status = 'SUCCESS';
       next.settled = true;
@@ -401,6 +403,75 @@ export class SimulatedOneClick implements OneClickProvider {
       d.credited = [...d.credited, c.id];
       await this.store.put(depositAddress, d);
     }
+  }
+
+  /**
+   * The simulated destination (NEAR) transaction of a settled deposit, as `EXPERIMENTAL_tx_status`
+   * would report it; null for any other hash. `INTENTS` recipients: one intents-contract receipt
+   * with a NEP-245 `mt_mint` per credit (merchant, then each app fee), as the mock verifier's
+   * `deposit` emits. `DESTINATION_CHAIN` with a `nep141:` asset: a NEP-141 `ft_transfer` from the
+   * token contract to the payout address.
+   */
+  async destinationTx(txHash: string): Promise<TxStatusResult | null> {
+    const depositAddress = await this.store.getDestination(txHash);
+    if (!depositAddress) return null;
+    const d = await this.store.get(depositAddress);
+    if (!d || !d.settled) return null;
+    const relayer = 'sim-1click-relayer.testnet';
+    if (d.req.recipientType === 'INTENTS') {
+      const intents = this.intentsContract();
+      const credits = [
+        { account: d.req.recipient, amount: d.amountOut },
+        ...(d.req.appFees ?? []).map((f) => ({
+          account: f.recipient,
+          amount: (d.amountOut * BigInt(f.fee)) / 10_000n,
+        })),
+      ].filter((c) => c.amount > 0n);
+      return {
+        hash: txHash,
+        signerId: relayer,
+        receiverId: intents,
+        receipts: [
+          {
+            receiptId: `${txHash}-0`,
+            executorId: intents,
+            ok: true,
+            logs: credits.map((c) =>
+              eventLog('nep245', '1.0.0', 'mt_mint', [
+                {
+                  owner_id: c.account,
+                  token_ids: [d.req.destinationAsset],
+                  amounts: [c.amount.toString()],
+                },
+              ]),
+            ),
+          },
+        ],
+      };
+    }
+    if (!d.req.destinationAsset.startsWith('nep141:')) return null;
+    const token = d.req.destinationAsset.slice('nep141:'.length);
+    return {
+      hash: txHash,
+      signerId: relayer,
+      receiverId: token,
+      receipts: [
+        {
+          receiptId: `${txHash}-0`,
+          executorId: token,
+          ok: true,
+          logs: [
+            eventLog('nep141', '1.0.0', 'ft_transfer', [
+              {
+                old_owner_id: relayer,
+                new_owner_id: d.req.recipient,
+                amount: d.amountOut.toString(),
+              },
+            ]),
+          ],
+        },
+      ],
+    };
   }
 
   /** An incomplete deposit still short when the deadline passes is refunded. */

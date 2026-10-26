@@ -2,7 +2,7 @@
 // production transport is @near-js/providers' JsonRpcProvider.
 import { JsonRpcProvider } from '@near-js/providers';
 import bs58 from 'bs58';
-import type { TxResult } from './client.js';
+import type { TxResult, TxStatusResult } from './client.js';
 
 export interface RpcTransport {
   request<T>(method: string, params: object): Promise<T>;
@@ -43,16 +43,19 @@ type ExecutionStatus = { SuccessValue?: string; SuccessReceiptId?: string; Failu
 
 interface FinalExecutionOutcome {
   status: ExecutionStatus | string;
-  transaction?: { hash?: string };
+  transaction?: { hash?: string; signer_id?: string; receiver_id?: string };
   transaction_outcome?: {
     id?: string;
-    outcome: { logs: string[]; status: ExecutionStatus | string };
+    outcome: { logs: string[]; status: ExecutionStatus | string; executor_id?: string };
   };
   receipts_outcome?: {
     id?: string;
-    outcome: { logs: string[]; status: ExecutionStatus | string };
+    outcome: { logs: string[]; status: ExecutionStatus | string; executor_id?: string };
   }[];
 }
+
+/** The node does not know the transaction (not yet, or wrong shard routing). */
+const UNKNOWN_TX = /\b(UNKNOWN_TRANSACTION|UnknownTransaction)\b/;
 
 /** A NEAR query answered with an error (e.g. unknown account, missing method, contract panic). */
 export class NearRpcError extends Error {
@@ -226,6 +229,36 @@ export class NearRpc {
       account_id: accountId,
     });
     return r.keys.map((k) => k.public_key);
+  }
+
+  /**
+   * `EXPERIMENTAL_tx_status` of a final transaction: its signer, receiver and every receipt with
+   * executor, logs and success. Null when the node does not know the transaction.
+   * `accountId` (the sender, or else the receiver) routes the lookup to the right shard.
+   */
+  async txStatus(hash: string, accountId: string): Promise<TxStatusResult | null> {
+    let o: FinalExecutionOutcome;
+    try {
+      o = await this.transport.request<FinalExecutionOutcome>('EXPERIMENTAL_tx_status', {
+        tx_hash: hash,
+        sender_account_id: accountId,
+        wait_until: 'FINAL',
+      });
+    } catch (err) {
+      if (UNKNOWN_TX.test(errorText(err))) return null;
+      throw err;
+    }
+    return {
+      hash: o.transaction?.hash ?? hash,
+      signerId: o.transaction?.signer_id ?? '',
+      receiverId: o.transaction?.receiver_id ?? '',
+      receipts: (o.receipts_outcome ?? []).map((r) => ({
+        receiptId: r.id ?? '',
+        executorId: r.outcome.executor_id ?? '',
+        logs: [...r.outcome.logs],
+        ok: !failureOf(r.outcome.status),
+      })),
+    };
   }
 
   /** Broadcasts a signed transaction and waits until it is final. */

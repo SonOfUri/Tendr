@@ -117,6 +117,18 @@ const EnvSchema = z
         .default(String(DEFAULT_GAS_MAX_USD)),
     ),
     /**
+     * Underpay top-up ("send the remaining X to the same address" while the quote is live).
+     * Unset: on in test mode (the simulator accumulates deposits), off in live mode until the
+     * mainnet check confirms 1Click accumulates a top-up. Set: applies to both modes.
+     */
+    CHECKOUT_TOPUP_ENABLED: z.preprocess(
+      blankAsUnset,
+      z
+        .enum(['true', 'false', '1', '0'])
+        .optional()
+        .transform((v) => (v === undefined ? undefined : v === 'true' || v === '1')),
+    ),
+    /**
      * Base URL of the hosted checkout page; a session's `url` is
      * `${CHECKOUT_BASE_URL}/pay/{id}#cs={client_secret}`. No trailing slash needed.
      */

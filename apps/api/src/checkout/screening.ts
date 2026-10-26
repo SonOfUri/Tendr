@@ -12,12 +12,12 @@ import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
-import { transitionPayment, transitionSession } from '../events/transitions.js';
 import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { getRedis } from '../lib/redis.js';
 import { getSecret } from '../secrets/secrets.js';
+import { holdPaymentInTx } from './hold.js';
 
 export type ScreeningOutcome = 'allow' | 'block' | 'unavailable';
 
@@ -159,21 +159,8 @@ export function onScreeningAllowed(hook: ScreeningAllowedHook | null): void {
   allowedHook = hook;
 }
 
-async function holdPayment(ctx: ScopeContext, paymentId: string, sessionId: string) {
-  await tenantTransaction(ctx, async (tx) => {
-    await transitionPayment(tx, ctx, paymentId, 'HELD', { reason: 'sanctions' });
-    await tx.payment.updateMany({
-      where: { id: paymentId, merchantId: ctx.merchantId, livemode: ctx.livemode },
-      data: { heldReason: 'sanctions' },
-    });
-    await transitionSession(tx, ctx, sessionId, 'HELD', { reason: 'sanctions' });
-    await recordEvent(tx, ctx, {
-      aggregateType: 'payment',
-      aggregateId: paymentId,
-      type: 'payment.held',
-      payload: { payment_id: paymentId, session_id: sessionId, held_reason: 'sanctions' },
-    });
-  });
+async function holdPayment(ctx: ScopeContext, paymentId: string) {
+  await tenantTransaction(ctx, (tx) => holdPaymentInTx(tx, ctx, paymentId));
 }
 
 /** Flagged payments keep being re-screened hourly until this long after creation. */
@@ -234,7 +221,7 @@ export async function retryPendingScreenings(now = new Date()): Promise<number> 
         log('warn', 'screening retry: payment has no sender address', { paymentId: p.id });
       }
       if (decision === 'block') {
-        await holdPayment(ctx, p.id, p.sessionId);
+        await holdPayment(ctx, p.id);
       } else if (decision === 'allow') {
         let settled = false;
         if (allowedHook) {

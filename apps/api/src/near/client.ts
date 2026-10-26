@@ -39,6 +39,7 @@ import {
   type SignedTx,
 } from './tx.js';
 import type { Action } from '@near-js/transactions';
+import type { TxReceipt } from './events.js';
 
 /** contract `SignerKey` JSON (serde `rename_all = "snake_case"`), standard padded base64. */
 export type SignerKeyJson = { p256: string } | { ed25519: string };
@@ -104,6 +105,15 @@ export interface TopUpParams {
 
 export type { AccountState };
 
+/** A transaction's final outcome (`EXPERIMENTAL_tx_status`): who sent it and every receipt. */
+export interface TxStatusResult {
+  hash: string;
+  signerId: string;
+  receiverId: string;
+  /** Every receipt (not the transaction outcome itself), with its executor and logs. */
+  receipts: TxReceipt[];
+}
+
 export interface CallOptions {
   gas?: bigint;
   deposit?: bigint;
@@ -128,6 +138,13 @@ export interface NearClient {
   viewAccount(accountId: string): Promise<AccountState>;
   /** Public keys (`ed25519:…`) of the account's access keys. */
   accessKeys(accountId: string): Promise<string[]>;
+  /**
+   * The final outcome of transaction `hash` with its receipts and their logs
+   * (`EXPERIMENTAL_tx_status`); null when the node does not know the transaction (yet).
+   * `senderOrReceiverAccountId` routes the lookup to a shard: the sender when known, else the
+   * receiver (the intents contract, for a 1Click settlement).
+   */
+  txStatus(hash: string, senderOrReceiverAccountId?: string): Promise<TxStatusResult | null>;
   /**
    * TESTNET ONLY. Calls `method` on a test merchant account as its `testnet_admin` — the test
    * parent account, signed by its `funding-near` key — e.g. `admin_sync_signers` to mirror the
@@ -204,6 +221,10 @@ export class RpcNearClient implements NearClient {
 
   viewAccount(accountId: string): Promise<AccountState> {
     return this.rpc.viewAccount(accountId);
+  }
+
+  txStatus(hash: string, senderOrReceiverAccountId?: string): Promise<TxStatusResult | null> {
+    return this.rpc.txStatus(hash, senderOrReceiverAccountId ?? this.config.intentsContractId);
   }
 
   async topUpAccount(p: TopUpParams): Promise<TxResult> {
