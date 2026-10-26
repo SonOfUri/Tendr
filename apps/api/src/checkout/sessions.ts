@@ -27,6 +27,7 @@ import { sha256 } from '../lib/crypto.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { toJsonDecimal } from '../lib/serialize.js';
+import { depositInFlight } from './in-flight.js';
 import { resolvePayers } from './pricing.js';
 import { tokenInfo } from './tokens.js';
 
@@ -223,7 +224,8 @@ export async function createSession(
   try {
     await tenantTransaction(ctx, async (tx, t) => {
       // A PENDING_DEPOSIT session past its expiry that the sweeper has not reached yet still holds
-      // the ref; expire it (timeout) first so the store's retry is not refused.
+      // the ref; expire it (timeout) first so the store's retry is not refused — unless a deposit
+      // is in flight (the sweeper's own test, in-flight.ts): then the ref stays held, 409.
       const stale = await tx.session.findMany({
         where: {
           merchantId: t.merchantId,
@@ -232,9 +234,11 @@ export async function createSession(
           status: 'PENDING_DEPOSIT',
           expiresAt: { lte: now },
         },
-        select: { id: true },
+        select: { id: true, merchantId: true, livemode: true, expiresAt: true },
       });
       for (const s of stale) {
+        await lockSession(tx, s.id);
+        if (await depositInFlight(tx, s, now)) throw depositInProgress(s.id, 'CONFLICT');
         await expireInTx(tx, t, s.id, input.external_ref, 'timeout');
       }
       await tx.session.create({
@@ -373,17 +377,46 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
 export type SessionView = Awaited<ReturnType<typeof sessionView>>;
 
 /**
+ * 409 while a session's deposit is in flight (I-1): CONFLICT when a new session for the ref is
+ * refused (the ref is still held), DEPOSIT_IN_PROGRESS when the store's cancel is refused.
+ */
+function depositInProgress(sessionId: string, code: 'CONFLICT' | 'DEPOSIT_IN_PROGRESS'): AppError {
+  return new AppError(
+    code,
+    'A deposit for this session is still in progress; retry once it is processed',
+    409,
+    { reason: 'deposit_in_progress', session_id: sessionId },
+  );
+}
+
+/** Row-locks a session (`FOR UPDATE`) so the in-flight check and the expiry see one state. */
+async function lockSession(tx: Prisma.TransactionClient, id: string): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM sessions WHERE id = ${id} FOR UPDATE`;
+}
+
+/**
  * The store cancels a session: `PENDING_DEPOSIT → EXPIRED` with `expired_reason = canceled`, and
- * `checkout.session.expired`. Any other status is INVALID_STATE_TRANSITION (409).
+ * `checkout.session.expired`. Any other status is INVALID_STATE_TRANSITION (409); a deposit in
+ * flight is CONFLICT (409, `details.reason: deposit_in_progress`).
  */
 export async function expireSession(ctx: CheckoutCtx, id: string): Promise<SessionView> {
   await tenantTransaction(ctx, async (tx, t) => {
     const tenant = { merchantId: t.merchantId, livemode: t.livemode };
     const s = await tx.session.findFirst({
       where: { id, ...tenant },
-      select: { externalRef: true },
+      select: { id: true, merchantId: true, livemode: true, expiresAt: true, externalRef: true },
     });
     if (!s) throw notFound('Session not found');
+    await lockSession(tx, id);
+    const cur = await tx.session.findFirstOrThrow({
+      where: { id, ...tenant },
+      select: { status: true },
+    });
+    // A deposit in flight (in-flight.ts, the sweeper's own test) is never canceled under the
+    // shopper: it would turn an on-time payment late. Other statuses fail the transition below.
+    if (cur.status === 'PENDING_DEPOSIT' && (await depositInFlight(tx, s, new Date()))) {
+      throw depositInProgress(id, 'DEPOSIT_IN_PROGRESS');
+    }
     await expireInTx(tx, t, id, s.externalRef, 'canceled');
   });
   return sessionView(ctx, id);

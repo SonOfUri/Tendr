@@ -28,12 +28,14 @@ import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { getRedis } from '../lib/redis.js';
-import { nearClient, type NearClient } from '../near/client.js';
+import { nearClient, type NearClient, type TxStatusResult } from '../near/client.js';
 import { matchingCredits } from '../near/events.js';
 import { holdPaymentInTx } from './hold.js';
+import { depositInFlight, SUPERSEDED_GRACE_MS } from './in-flight.js';
 import {
   OneClickError,
   providerFor,
+  simulatedOneClick,
   type OneClickProvider,
   type StatusResponse,
 } from './oneclick/index.js';
@@ -53,8 +55,8 @@ export const SLOW_POLL_MS = 30_000;
 export const VIEWED_TTL_S = 60;
 /** No polling more than this long after the quote was created. */
 export const WATCH_MAX_MS = 24 * 3_600_000;
-/** A superseded quote with no deposit is polled until its deadline plus this. */
-export const SUPERSEDED_GRACE_MS = 30 * 60_000;
+/** A superseded quote with no deposit is polled until its deadline plus this (in-flight.ts). */
+export { SUPERSEDED_GRACE_MS };
 /** A claimed address is not picked up again for this long (a crashed poll is retried after it). */
 export const POLL_LEASE_MS = 60_000;
 
@@ -137,6 +139,11 @@ export interface WatcherDeps {
   /** CHECKOUT_TOPUP_ENABLED; unset: on in test mode, off in live mode. */
   topupEnabled(livemode: boolean): boolean;
   /**
+   * TEST MODE ONLY: the simulated provider's destination tx for one of its settlement hashes
+   * (null for any other hash). Never consulted for a live payment.
+   */
+  simulatedTx(hash: string): Promise<TxStatusResult | null>;
+  /**
    * Every origin-chain sender of a deposit (senders/); [] when it cannot be told (the payment
    * then waits in SCREENING_PENDING). Never called in test mode, which uses the simulated sender.
    */
@@ -183,6 +190,7 @@ const DEFAULT_DEPS: WatcherDeps = {
   screen: screenAddress,
   topupEnabled: (livemode) => env().CHECKOUT_TOPUP_ENABLED ?? !livemode,
   resolveSenders: defaultResolveSenders,
+  simulatedTx: (hash) => simulatedOneClick().destinationTx(hash),
 };
 let deps: WatcherDeps = DEFAULT_DEPS;
 
@@ -1036,6 +1044,32 @@ async function claimInTx(
 }
 
 /**
+ * A destination tx as the chain reports it. Test mode falls back to the simulated provider, which
+ * answers only for its own settlement hashes (it credits the merchant through the mock verifier,
+ * then reports a synthetic hash no chain knows): with the deployed rpc driver testnet answers
+ * UNKNOWN_TRANSACTION (null) for that hash, so without the fallback test mode could never settle
+ * (I-2). Live mode reads only the chain: the simulator can never verify a live payment.
+ */
+async function destinationTxStatus(
+  livemode: boolean,
+  hash: string,
+  route: string,
+): Promise<TxStatusResult | null> {
+  if (livemode) return deps.near(true).txStatus(hash, route);
+  let chainErr: unknown = null;
+  try {
+    const tx = await deps.near(false).txStatus(hash, route);
+    if (tx) return tx;
+  } catch (err) {
+    chainErr = err;
+  }
+  const simulated = await deps.simulatedTx(hash);
+  if (simulated) return simulated;
+  if (chainErr) throw chainErr;
+  return null;
+}
+
+/**
  * Per-transfer verification of a `SUCCESS` (never balance deltas): an event in one of 1Click's
  * destination transactions crediting at least the quote's `amount_out` of the settlement asset to
  * the session's recipient, not claimed by another payment. Among several the smallest sufficient
@@ -1052,9 +1086,9 @@ export async function verify(
   const blocked: string[] = [];
   const viaReceipts = async (opts: { intentsContract?: string; route: string }) => {
     for (const hash of hashes) {
-      let tx;
+      let tx: TxStatusResult | null;
       try {
-        tx = await deps.near(ctx.livemode).txStatus(hash, opts.route);
+        tx = await destinationTxStatus(ctx.livemode, hash, opts.route);
       } catch (err) {
         log('warn', 'watcher: destination tx lookup failed', { hash, err: String(err) });
         continue;
@@ -1369,20 +1403,10 @@ export async function expireSessions(now: Date = deps.now()): Promise<number> {
         await pollQuote(q);
       }
       if (waiting) continue;
-      const inFlight = await prisma.payment.count({
-        where: { sessionId: s.id, status: { in: ['DETECTED', 'PROCESSING', 'SCREENING_PENDING'] } },
-      });
-      // A reported deposit 1Click has not shown yet stays in flight until its quote deadline plus
-      // the grace (once 1Click sees it, its payment is counted above).
-      const reported = await prisma.quote.count({
-        where: {
-          sessionId: s.id,
-          depositTxSubmittedAt: { not: null },
-          deadline: { gt: new Date(now.getTime() - SUPERSEDED_GRACE_MS) },
-          payments: { none: {} },
-        },
-      });
-      if (inFlight > 0 || reported > 0) continue;
+      // The shared in-flight test (in-flight.ts), also used by createSession and the store's
+      // /expire: a payment in flight, a reported deposit inside its deadline plus the grace, or
+      // a watched address still not polled after the expiry (e.g. its poll just failed).
+      if (await depositInFlight(prisma, s, now)) continue;
       const ctx = { merchantId: s.merchantId, livemode: s.livemode };
       const did = await tenantTransaction(ctx, async (tx) => {
         await lockRow(tx, 'sessions', s.id);

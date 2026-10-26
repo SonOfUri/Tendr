@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { prisma } from '../lib/prisma.js';
-import { fakeNearClient, resetNearClients } from '../near/client.js';
+import { fakeNearClient, resetNearClients, type NearClient } from '../near/client.js';
 import { eventLog } from '../near/events.js';
 import type { FakeNearClient } from '../near/fake.js';
 import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
@@ -26,6 +26,7 @@ import {
   scanDueDeposits,
   setWatcherDeps,
   SLOW_POLL_MS,
+  verify,
   FAST_POLL_MS,
   WATCH_MAX_MS,
 } from './watcher.js';
@@ -240,7 +241,64 @@ describe('payment watcher', () => {
     expect((await eventsOf('payment.succeeded')).length).toBe(1);
   });
 
+  describe('I-2: test mode settles with the rpc driver (NODE_ENV=production)', () => {
+    /** The deployed driver: testnet answers UNKNOWN_TRANSACTION (null) for a simulator hash. */
+    function rpcLike(livemode: boolean): NearClient {
+      const real = fakeNearClient(livemode);
+      const c = Object.create(real) as FakeNearClient;
+      c.txStatus = async () => null;
+      return c;
+    }
+
+    it('a simulated settlement is verified through the simulator, not testnet', async () => {
+      setWatcherDeps({ now: clock, near: rpcLike });
+      const s = await newSession();
+      const q = await quote(s.client_secret);
+      await sim.simulate(q.deposit_address, 'exact');
+      const [r] = await poll(q.deposit_address);
+      expect(r).toMatchObject({ outcome: 'settled', stopped: true });
+      const p = await paymentOf(q.id);
+      expect(p.status).toBe('SETTLED');
+      expect(p.verifiedBy).toBe('receipt');
+      expect(p.settleTx).toBe(simulatedDestinationTxHash(q.deposit_address));
+      expect(await eventTypes()).toContain('payment.succeeded');
+    });
+
+    it('the simulator never verifies a LIVE payment', async () => {
+      setWatcherDeps({ now: clock, near: rpcLike });
+      const s = await newSession();
+      const q = await quote(s.client_secret);
+      await sim.simulate(q.deposit_address, 'exact');
+      const status = await sim.status(q.deposit_address);
+      const quoteRow = await prisma.quote.findUniqueOrThrow({ where: { id: q.id } });
+      const session = await sessionOf(s.id);
+      const created = await createRow('Payment', merchant.id, false, {
+        sessionId: s.id,
+        quoteId: q.id,
+        status: 'PROCESSING',
+      });
+      const payment = await prisma.payment.findUniqueOrThrow({
+        where: { id: created.id as string },
+      });
+      const test = { merchantId: merchant.id, livemode: false };
+      const live = { merchantId: merchant.id, livemode: true };
+      // The same SUCCESS, the same simulator hash: test mode verifies, live mode does not.
+      expect(await verify({ quote: quoteRow, session, ctx: test }, payment, status)).toMatchObject({
+        ok: { verifiedBy: 'receipt' },
+      });
+      expect(
+        await verify(
+          { quote: quoteRow, session: { ...session, livemode: true }, ctx: live },
+          payment,
+          status,
+        ),
+      ).toBeNull();
+    });
+  });
+
   it('SUCCESS without a matching transfer event stays PROCESSING', async () => {
+    // The chain's answer alone decides here: no simulator fallback (I-2) for an unknown hash.
+    setWatcherDeps({ now: clock, simulatedTx: async () => null });
     const s = await newSession();
     const q = await quote(s.client_secret);
     await sim.simulate(q.deposit_address, 'exact');
@@ -958,6 +1016,7 @@ describe('payment watcher', () => {
   });
 
   it('the 24 h stop raises payment.verification_timeout for an unverified SUCCESS', async () => {
+    setWatcherDeps({ now: clock, simulatedTx: async () => null });
     const s = await newSession();
     const q = await quote(s.client_secret);
     await sim.simulate(q.deposit_address, 'exact');

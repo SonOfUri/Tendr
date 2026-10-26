@@ -404,7 +404,7 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
     tokenInfo(ctx.livemode, s.destAsset),
   ]);
 
-  const refundAddress = input.refund_address;
+  let refundAddress = input.refund_address;
   if (
     input.refund_chain !== undefined &&
     input.refund_chain.toLowerCase() !== origin.blockchain.toLowerCase()
@@ -434,10 +434,14 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
       throw new AppError('WALLET_NOT_ALLOWED', 'This wallet cannot be used for this payment', 403);
     }
     if (decision === 'unavailable') {
-      // Allowed: every sender is screened again when its deposit is detected.
-      log('warn', 'quote: refund address screening unavailable; quoting anyway', {
+      // Never hand 1Click an unscreened address as its direct `refundTo` (I-3): it would return
+      // underpay, overpay excess and late deposits straight there, past every Tendr gate. Quote
+      // as for a manual send instead (refundType INTENTS): returns go through the store path,
+      // which screens every destination right before drafting.
+      log('warn', 'quote: refund address screening unavailable; refunds go through the store', {
         sessionId: s.id,
       });
+      refundAddress = undefined;
     }
   }
 

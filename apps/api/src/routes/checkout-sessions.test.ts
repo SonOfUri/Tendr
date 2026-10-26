@@ -317,6 +317,60 @@ describe('checkout session routes', () => {
       expect((await create(body())).statusCode).toBe(409);
     });
 
+    describe('I-1: a deposit in flight holds the ref', () => {
+      async function expiredWith(o: { polledAfter?: boolean; reported?: boolean }) {
+        const first = (await create(body())).json().id as string;
+        const expiresAt = new Date(Date.now() - 1000);
+        await prisma.session.update({ where: { id: first }, data: { expiresAt } });
+        const quote = await createRow('Quote', merchant.id, false, {
+          sessionId: first,
+          deadline: new Date(Date.now() + 60_000),
+          watchPolledAt: o.polledAfter ? new Date() : new Date(expiresAt.getTime() - 60_000),
+          depositTxSubmittedAt: o.reported ? new Date(expiresAt.getTime() - 30_000) : null,
+        });
+        return { first, quote };
+      }
+
+      it('refuses (409 deposit_in_progress) while a reported deposit is inside its deadline', async () => {
+        const { first } = await expiredWith({ polledAfter: true, reported: true });
+        const res = await create(body());
+        expect(res.statusCode, res.body).toBe(409);
+        expect(res.json().error).toMatchObject({
+          code: 'CONFLICT',
+          details: { reason: 'deposit_in_progress', session_id: first },
+        });
+        const old = await prisma.session.findUniqueOrThrow({ where: { id: first } });
+        expect(old.status).toBe('PENDING_DEPOSIT');
+      });
+
+      it('refuses while a payment is in flight', async () => {
+        const { first, quote } = await expiredWith({ polledAfter: true });
+        await createRow('Payment', merchant.id, false, {
+          sessionId: first,
+          quoteId: quote.id,
+          status: 'PROCESSING',
+        });
+        const res = await create(body());
+        expect(res.statusCode, res.body).toBe(409);
+        expect(res.json().error.details).toMatchObject({ reason: 'deposit_in_progress' });
+      });
+
+      it('refuses while a watched address was not polled after the expiry', async () => {
+        await expiredWith({ polledAfter: false });
+        const res = await create(body());
+        expect(res.statusCode, res.body).toBe(409);
+        expect(res.json().error.details).toMatchObject({ reason: 'deposit_in_progress' });
+      });
+
+      it('expires and creates once nothing is in flight', async () => {
+        const { first } = await expiredWith({ polledAfter: true });
+        const res = await create(body());
+        expect(res.statusCode, res.body).toBe(201);
+        const old = await prisma.session.findUniqueOrThrow({ where: { id: first } });
+        expect(old.status).toBe('EXPIRED');
+      });
+    });
+
     it('is scoped per mode', async () => {
       await createRow('MerchantAccount', merchant.id, true, { status: 'active' });
       await createRow('SettlementConfig', merchant.id, true, {
@@ -495,6 +549,36 @@ describe('checkout session routes', () => {
         reason: 'canceled',
       });
       expect(events.some((e) => e.type === 'session.status_changed')).toBe(true);
+    });
+
+    it('I-1: refuses (409 deposit_in_progress) while a reported deposit is inside its deadline', async () => {
+      const id = (await create(body())).json().id as string;
+      await createRow('Quote', merchant.id, false, {
+        sessionId: id,
+        deadline: new Date(Date.now() + 60_000),
+        depositTxSubmittedAt: new Date(),
+      });
+      const res = await expire(id);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toMatchObject({
+        code: 'DEPOSIT_IN_PROGRESS',
+        details: { reason: 'deposit_in_progress', session_id: id },
+      });
+      const row = await prisma.session.findUniqueOrThrow({ where: { id } });
+      expect(row.status).toBe('PENDING_DEPOSIT');
+    });
+
+    it('I-1: refuses while a payment is in flight', async () => {
+      const id = (await create(body())).json().id as string;
+      const quote = await createRow('Quote', merchant.id, false, { sessionId: id });
+      await createRow('Payment', merchant.id, false, {
+        sessionId: id,
+        quoteId: quote.id,
+        status: 'DETECTED',
+      });
+      const res = await expire(id);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error.details).toMatchObject({ reason: 'deposit_in_progress' });
     });
 
     it('refuses from any other status', async () => {

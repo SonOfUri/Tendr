@@ -267,13 +267,18 @@ curl -X POST http://localhost:4000/v1/checkout/sessions \
   - `payment_link_id`;
   - `expires_in`, 60 to 1800 seconds. The default is 30 minutes.
 - `external_ref` is your order id. Only one session that is open, being paid or paid may hold it,
-  or you get `409 CONFLICT`. An expired, late or held order can get a new session.
+  or you get `409 CONFLICT`. An expired, late or held order can get a new session. A session past
+  its expiry that still has a deposit in flight (a payment being processed, a deposit the shopper
+  reported inside its deadline, or an address not checked since the expiry) keeps holding it:
+  you get `409 CONFLICT` with `details.reason: deposit_in_progress`. Retry shortly; never ask the
+  shopper to pay again.
 - Without an active merchant account and settlement settings in that mode, you get
   `409 ACCOUNT_NOT_READY`.
 - `GET /v1/checkout/sessions/:id` (`sessions:read`) returns the session with its payments,
   refunds and totals.
 - `POST /v1/checkout/sessions/:id/expire` cancels an open session. It becomes `EXPIRED` with
-  reason `canceled`.
+  reason `canceled`. While a deposit is in flight it is refused with `409 DEPOSIT_IN_PROGRESS`
+  (`details.reason: deposit_in_progress`), so an on-time payment is never turned late.
 - `url` is the hosted checkout. The client secret travels in its `#cs=` fragment, so it never
   reaches a server in a request line. Redirect the shopper to it, or embed it as below.
 
@@ -374,8 +379,11 @@ export function verifyTendrSignature(rawBody, header, secrets, now = Date.now() 
 
 ### Test mode
 
-Test keys (`tdr_test_`) use a simulated 1Click and the mock intents verifier. Nothing touches a
-network, and settlement credits the store's test account.
+Test keys (`tdr_test_`) use a simulated 1Click and the mock intents verifier. No real swap runs.
+Settlement credits the store's test account through the mock verifier: in memory with the fake NEAR
+driver, on testnet with the rpc driver (any deployed environment). The simulator's settlement
+transaction is synthetic, so test mode verifies it through the simulator; live mode only ever
+accepts a transfer the chain reports.
 
 A test session's checkout page shows a test panel. The shopper API offers the same: once a quote
 exists, call `POST /v1/checkout/client/simulate` with `Authorization: Bearer <client_secret>` and
@@ -464,15 +472,12 @@ threshold contract) whose signers are Tendr's operators, so Tendr's revenue has 
 protection as stores' money. Test mode credits simulated fees to the testnet account through the
 mock verifier.
 
-To provision it with the project 2 tooling:
-
-1. Sign up an internal store named "Fees", so its slug is `fees`. This provisions
-   `fees.tendr.testnet`.
-2. Add the operators as signers, and raise the threshold.
-3. Go live from that store (`POST /v1/account/go-live`) to provision `fees.tendr.near`.
-
-Do this before public signup opens. `fees` is not a reserved slug, so the first store named "Fees"
-would otherwise get it.
+`fees` (and every label under Tendr's parents that env names, plus a static list and the
+`gas-*`, `fee-*`, `fees-*`, `intents*` and `tendr*` prefixes) is a reserved store label
+(`apps/api/src/merchants/reserved-labels.ts`): a store named "Fees" gets `fees-store`, and no
+store's account may ever be `fees.tendr.*`. Provisioning won't adopt an existing account unless one
+of its on-chain signers is a signer of that store. Signup therefore can't provision the fee
+account; it needs an operator-only path (not built yet).
 
 ### Mainnet checks for checkout
 
