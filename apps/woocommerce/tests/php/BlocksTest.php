@@ -27,7 +27,7 @@ class BlocksTest extends Tendr_Test_Case {
 
 		$data = $method->get_payment_method_data();
 		$this->assertSame( 'Pay with crypto', $data['title'] );
-		$this->assertSame( array( 'products' ), $data['supports'] );
+		$this->assertSame( array( 'products', 'refunds' ), $data['supports'] );
 	}
 
 	public function test_blocks_method_is_active_only_when_connected_and_enabled(): void {

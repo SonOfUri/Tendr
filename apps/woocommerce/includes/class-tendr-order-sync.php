@@ -18,7 +18,7 @@
  * | payment.held, order not paid                  | Pending/Failed → On hold, note with review link  |
  * | payment.held, order already paid or cancelled | note only                                        |
  * | payment.succeeded on a tendr-held order       | note only: it stays On hold                      |
- * | payment.refunded (merchant), refund.*         | apply_refund_event() (Task 11)                   |
+ * | payment.refunded (merchant), refund.*         | Tendr_Refunds::apply_event()                     |
  *
  * An event for an older session of the order (a retry, a test/live switch) is still real money
  * for the order and is applied; only an expiry must be for the order's current session.
@@ -173,8 +173,7 @@ final class Tendr_Order_Sync {
 
 		if ( in_array( $event['type'], self::REFUND_EVENTS, true )
 			|| ( 'payment.refunded' === $event['type'] && 'merchant' === ( $data['reason'] ?? null ) ) ) {
-			self::apply_refund_event( $order, $event, $view );
-			return 'applied';
+			return self::apply_refund_event( $order, $event, $view );
 		}
 
 		$payment = self::payment_of( $view, $data );
@@ -196,14 +195,16 @@ final class Tendr_Order_Sync {
 	}
 
 	/**
-	 * Store refunds and refund outcomes (`refund.*`, `payment.refunded` with reason `merchant`).
-	 * Task 11 implements this; until then it only announces the event.
+	 * Store refunds and refund outcomes (`refund.*`, `payment.refunded` with reason `merchant`):
+	 * see Tendr_Refunds::apply_event().
 	 *
 	 * @param WC_Order $order Order.
 	 * @param array    $event Verified event.
 	 * @param array    $view  The session as re-read from the API.
+	 * @return string|WP_Error 'applied' | 'noop', or an error: the receiver answers 503 and does
+	 *                         not record the event, so tendr retries.
 	 */
-	public static function apply_refund_event( WC_Order $order, array $event, array $view ): void {
+	public static function apply_refund_event( WC_Order $order, array $event, array $view ) {
 		/**
 		 * A verified refund event for a tendr order, after the session re-read.
 		 *
@@ -212,6 +213,11 @@ final class Tendr_Order_Sync {
 		 * @param array    $view  Session view.
 		 */
 		do_action( 'tendr_refund_event', $order, $event, $view );
+		$result = Tendr_Refunds::apply_event( $order, $event, $view );
+		if ( 'noop' === $result ) {
+			self::log( $event, 'refund_unchanged' );
+		}
+		return $result;
 	}
 
 	// ------------------------------------------------------------------ events.
@@ -771,6 +777,27 @@ final class Tendr_Order_Sync {
 	private static function status_of( WP_Error $error ): int {
 		$data = $error->get_error_data();
 		return is_array( $data ) && isset( $data['status'] ) ? (int) $data['status'] : 0;
+	}
+
+	/**
+	 * Take the per-order lock that serialises every tendr change to one order (webhook deliveries
+	 * and refund requests).
+	 *
+	 * @param int $order_id Order id.
+	 */
+	public static function lock_order( int $order_id ): bool {
+		global $wpdb;
+		return self::lock( 'tendr_order_' . $wpdb->prefix . $order_id );
+	}
+
+	/**
+	 * Release lock_order().
+	 *
+	 * @param int $order_id Order id.
+	 */
+	public static function unlock_order( int $order_id ): void {
+		global $wpdb;
+		self::unlock( 'tendr_order_' . $wpdb->prefix . $order_id );
 	}
 
 	/**

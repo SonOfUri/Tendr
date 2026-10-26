@@ -24,6 +24,12 @@ abstract class Tendr_Test_Case extends WP_UnitTestCase {
 		parent::set_up();
 		$this->requests = array();
 		$this->set_permalink_structure( '/%postname%/' );
+		// No test ever reaches the network: a request no mock answered fails like a transport error.
+		add_filter(
+			'pre_http_request',
+			static fn( $pre ) => false === $pre ? new WP_Error( 'http_request_failed', 'Unmocked HTTP request in a test.' ) : $pre,
+			PHP_INT_MAX
+		);
 	}
 
 	/**

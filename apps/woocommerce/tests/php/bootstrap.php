@@ -39,3 +39,7 @@ tests_add_filter(
 
 require $tendr_tests_dir . '/includes/bootstrap.php';
 require __DIR__ . '/class-tendr-test-case.php';
+
+// Build WooCommerce's mailer before the first test backs up the hooks: its email hooks are added
+// once, when the mailer is first built, and would otherwise vanish after the test that built it.
+WC()->mailer();

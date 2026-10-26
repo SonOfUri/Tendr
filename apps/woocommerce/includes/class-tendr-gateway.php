@@ -69,7 +69,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		$this->description        = __( 'Pay with crypto from any wallet or exchange.', 'tendr' );
 		$this->order_button_text  = __( 'Pay with crypto', 'tendr' );
 		$this->has_fields         = false;
-		$this->supports           = array( 'products' );
+		$this->supports           = array( 'products', 'refunds' );
 
 		$this->init_form_fields();
 		$this->init_settings();
@@ -129,6 +129,31 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 			return false;
 		}
 		return true;
+	}
+
+	// ------------------------------------------------------------------ refunds.
+
+	/**
+	 * Refundable through tendr only when a tendr payment paid the order (its transaction id).
+	 *
+	 * @param WC_Order $order Order.
+	 */
+	public function can_refund_order( $order ) {
+		return $order instanceof WC_Order && $this->supports( 'refunds' ) && '' !== Tendr_Refunds::payment_id( $order );
+	}
+
+	/**
+	 * Ask tendr to refund (spec §7). Nothing is refunded yet: the request waits for the store's
+	 * signers in tendr, and the WooCommerce refund is recorded once tendr sends it
+	 * (see Tendr_Refunds).
+	 *
+	 * @param int        $order_id Order id.
+	 * @param float|null $amount   Amount.
+	 * @param string     $reason   Reason.
+	 * @return bool|WP_Error
+	 */
+	public function process_refund( $order_id, $amount = null, $reason = '' ) {
+		return Tendr_Refunds::request( $order_id, $amount, (string) $reason );
 	}
 
 	// ------------------------------------------------------------------ sessions.
