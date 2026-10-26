@@ -125,14 +125,20 @@ final class Tendr_Api_Client {
 
 		self::log( $method, $path, $headers, $status, $code, $message, $request_id );
 
-		return new WP_Error(
-			$code,
-			$message,
-			array(
-				'status'     => $status,
-				'request_id' => $request_id,
-			)
+		$error_data = array(
+			'status'     => $status,
+			'request_id' => $request_id,
 		);
+		// Two short machine-readable details the plugin acts on (e.g. `field: amount`,
+		// `reason: deposit_in_progress`); nothing else from `details` is kept.
+		$details = ( isset( $error['details'] ) && is_array( $error['details'] ) ) ? $error['details'] : array();
+		foreach ( array( 'field', 'reason' ) as $key ) {
+			if ( isset( $details[ $key ] ) && is_string( $details[ $key ] ) && preg_match( '/^[a-z][a-z0-9_]{0,63}$/', $details[ $key ] ) ) {
+				$error_data[ $key ] = $details[ $key ];
+			}
+		}
+
+		return new WP_Error( $code, $message, $error_data );
 	}
 
 	/**

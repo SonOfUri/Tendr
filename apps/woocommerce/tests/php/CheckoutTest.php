@@ -135,14 +135,16 @@ class CheckoutTest extends Tendr_Test_Case {
 	 * @param string $code    Code.
 	 * @param string $message Message.
 	 */
-	private static function error( string $code, string $message ): array {
-		return array(
-			'error' => array(
-				'code'      => $code,
-				'message'   => $message,
-				'requestId' => 'req_1',
-			),
+	private static function error( string $code, string $message, ?array $details = null ): array {
+		$error = array(
+			'code'      => $code,
+			'message'   => $message,
+			'requestId' => 'req_1',
 		);
+		if ( null !== $details ) {
+			$error['details'] = $details;
+		}
+		return array( 'error' => $error );
 	}
 
 	/**
@@ -579,6 +581,217 @@ class CheckoutTest extends Tendr_Test_Case {
 		$this->expire_reply = array( 502, null );
 
 		$this->assertFalse( apply_filters( 'woocommerce_cancel_unpaid_order', true, wc_get_order( $order->get_id() ) ) );
+	}
+
+	/**
+	 * The order's notes, newest first.
+	 *
+	 * @param int $order_id Order id.
+	 * @return string[]
+	 */
+	private static function notes( int $order_id ): array {
+		return array_map( static fn( $n ) => (string) $n->content, wc_get_order_notes( array( 'order_id' => $order_id ) ) );
+	}
+
+	/**
+	 * Notes containing a phrase.
+	 *
+	 * @param int    $order_id Order id.
+	 * @param string $phrase   Phrase.
+	 */
+	private static function notes_with( int $order_id, string $phrase ): int {
+		return count( array_filter( self::notes( $order_id ), static fn( $n ) => str_contains( $n, $phrase ) ) );
+	}
+
+	/**
+	 * Run the cancel filter as wc_cancel_unpaid_orders() does.
+	 *
+	 * @param int $order_id Order id.
+	 */
+	private static function cancel_run( int $order_id ): bool {
+		return (bool) apply_filters( 'woocommerce_cancel_unpaid_order', true, wc_get_order( $order_id ) );
+	}
+
+	public function test_auto_cancel_proceeds_when_the_site_is_no_longer_connected(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+		Tendr_Connect::disconnect();
+		$this->requests = array();
+
+		$this->assertTrue( self::cancel_run( $order->get_id() ) );
+		$this->assertCount( 0, $this->requests, 'no API call without credentials' );
+	}
+
+	public function test_auto_cancel_proceeds_on_permanent_api_errors(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+		$cases = array(
+			401 => self::error( 'UNAUTHORIZED', 'Invalid API key' ),
+			403 => self::error( 'FORBIDDEN', 'Key lacks scope' ),
+			400 => self::error( 'VALIDATION_ERROR', 'Request validation failed' ),
+		);
+		foreach ( $cases as $status => $body ) {
+			$this->expire_reply = array( $status, $body );
+			$this->assertTrue( self::cancel_run( $order->get_id() ), "HTTP $status cancels" );
+		}
+	}
+
+	public function test_auto_cancel_keeps_the_order_on_temporary_failures(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+
+		$this->expire_reply = array( 429, self::error( 'RATE_LIMITED', 'Too many requests' ) );
+		$this->assertFalse( self::cancel_run( $order->get_id() ), '429' );
+		$this->expire_reply = array( 503, self::error( 'INTERNAL', 'down' ) );
+		$this->assertFalse( self::cancel_run( $order->get_id() ), '503' );
+		$this->expire_reply = array( 404, null );
+		$this->assertFalse( self::cancel_run( $order->get_id() ), 'a 404 that is not the API (proxy, wrong base)' );
+
+		remove_all_filters( 'pre_http_request' );
+		add_filter( 'pre_http_request', static fn() => new WP_Error( 'http_request_failed', 'cURL error 28' ) );
+		$this->assertFalse( self::cancel_run( $order->get_id() ), 'transport failure' );
+	}
+
+	public function test_auto_cancel_writes_each_hold_note_once(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+
+		$this->expire_reply = array( 502, null );
+		self::cancel_run( $order->get_id() );
+		self::cancel_run( $order->get_id() );
+		$this->assertSame( 1, self::notes_with( $order->get_id(), 'could not be reached' ) );
+
+		$this->expire_reply = array( 409, self::error( 'DEPOSIT_IN_PROGRESS', 'in progress' ) );
+		self::cancel_run( $order->get_id() );
+		self::cancel_run( $order->get_id() );
+		$this->assertSame( 1, self::notes_with( $order->get_id(), 'deposit is in progress' ) );
+		$this->assertSame( 1, self::notes_with( $order->get_id(), 'could not be reached' ) );
+	}
+
+	public function test_auto_cancel_proceeds_when_the_session_is_gone_or_already_expired(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+
+		$this->expire_reply = array( 404, self::error( 'NOT_FOUND', 'Session not found' ) );
+		$this->assertTrue( self::cancel_run( $order->get_id() ), 'unknown to the API' );
+
+		$this->expire_reply                 = array( 409, self::error( 'INVALID_STATE_TRANSITION', 'EXPIRED → EXPIRED' ) );
+		$this->sessions[ self::SESSION_ID ] = self::view( self::SESSION_ID, 'EXPIRED', '-1 minute' );
+		$this->assertTrue( self::cancel_run( $order->get_id() ), 'already expired' );
+
+		$this->sessions[ self::SESSION_ID ] = self::view( self::SESSION_ID, 'SETTLED', '-1 minute', array( 'SETTLED' ) );
+		$this->assertFalse( self::cancel_run( $order->get_id() ), 'paid: the webhook moves the order' );
+	}
+
+	public function test_a_404_that_is_not_the_api_never_replaces_the_session(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+		remove_all_filters( 'pre_http_request' );
+		$this->mock_http(
+			function ( $url, $args ) {
+				if ( 'GET' === $args['method'] ) {
+					$r         = self::response( 404 );
+					$r['body'] = '<html>Not Found</html>';
+					return $r;
+				}
+				return $this->api( $url, $args );
+			}
+		);
+
+		$result = self::gateway()->process_payment( $order->get_id() );
+
+		$this->assertSame( 'failure', $result['result'] );
+		$this->assertCount( 1, $this->creates() );
+		$this->assertSame( self::SESSION_ID, wc_get_order( $order->get_id() )->get_meta( '_tendr_session_id' ) );
+	}
+
+	public function test_an_unknown_session_status_shows_the_stored_session_again(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+		$this->sessions[ self::SESSION_ID ] = self::view( self::SESSION_ID, 'SOMETHING_NEW', '-5 minutes' );
+
+		$result = self::gateway()->process_payment( $order->get_id() );
+
+		$this->assertSame( 'success', $result['result'] );
+		$this->assertCount( 1, $this->creates() );
+		$this->assertSame( 'in_flight', Tendr_Gateway::disposition( self::view( 'ses_X', 'SOMETHING_NEW', '+5 minutes' ) ) );
+		$this->assertSame( 'in_flight', Tendr_Gateway::disposition( array( 'status' => 'PENDING_DEPOSIT' ) ), 'no expiry: do not guess' );
+		$this->assertSame( 'dead', Tendr_Gateway::disposition( self::view( 'ses_X', 'REFUNDED', '-5 minutes' ) ) );
+	}
+
+	public function test_too_many_decimals_for_the_currency_gets_a_specific_notice(): void {
+		self::connect_locally();
+		$order              = self::order( 'JPY', '1000.50' );
+		$this->create_reply = array(
+			400,
+			self::error( 'VALIDATION_ERROR', 'amount in JPY allows at most 0 decimal places', array( 'field' => 'amount' ) ),
+		);
+
+		$result = self::gateway()->process_payment( $order->get_id() );
+
+		$this->assertSame( 'failure', $result['result'] );
+		$notice = wc_get_notices( 'error' )[0]['notice'];
+		$this->assertStringContainsString( 'decimals', $notice );
+		$this->assertStringContainsString( 'JPY', $notice );
+		$this->assertStringNotContainsString( 'Please try again', $notice );
+		$this->assertSame( 'pending', wc_get_order( $order->get_id() )->get_status() );
+	}
+
+	public function test_the_thank_you_page_has_a_message_for_when_polling_stops(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+
+		ob_start();
+		do_action( 'woocommerce_thankyou_tendr', $order->get_id() );
+		ob_end_clean();
+
+		$data = wp_scripts()->get_data( 'tendr-checkout', 'before' );
+		$data = is_array( $data ) ? implode( "\n", $data ) : (string) $data;
+		$this->assertStringContainsString( '"stopAfter":3600000', $data );
+		$this->assertStringContainsString( 'taking longer than usual', $data );
+		$this->assertStringContainsString( 'email', $data );
+	}
+
+	public function test_the_session_url_is_cleared_once_the_order_leaves_pending(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+		$this->assertNotSame( '', wc_get_order( $order->get_id() )->get_meta( '_tendr_session_url' ) );
+
+		wc_get_order( $order->get_id() )->update_status( 'processing' );
+
+		$order = wc_get_order( $order->get_id() );
+		$this->assertSame( '', $order->get_meta( '_tendr_session_url' ) );
+		$this->assertSame( self::SESSION_ID, $order->get_meta( '_tendr_session_id' ), 'the id stays for webhooks and refunds' );
+
+		$other = self::order();
+		$other->set_payment_method( 'bacs' );
+		$other->update_meta_data( '_tendr_session_url', 'keep' );
+		$other->save();
+		$other->update_status( 'processing' );
+		$this->assertSame( 'keep', wc_get_order( $other->get_id() )->get_meta( '_tendr_session_url' ) );
+	}
+
+	public function test_a_failed_order_paid_again_gets_a_new_session(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+		$this->sessions[ self::SESSION_ID ] = self::view( self::SESSION_ID, 'REFUNDED', '-5 minutes', array( 'REFUNDED' ) );
+		wc_get_order( $order->get_id() )->update_status( 'failed' );
+
+		$result = self::gateway()->process_payment( $order->get_id() );
+
+		$this->assertSame( 'success', $result['result'] );
+		$this->assertSame( self::SESSION_ID_2, wc_get_order( $order->get_id() )->get_meta( '_tendr_session_id' ) );
+		$this->assertNotSame( '', wc_get_order( $order->get_id() )->get_meta( '_tendr_session_url' ) );
 	}
 
 	public function test_auto_cancel_leaves_other_orders_alone(): void {

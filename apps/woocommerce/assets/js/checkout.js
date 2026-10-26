@@ -60,10 +60,20 @@
 
   function wait() {
     var interval = typeof data.interval === 'number' && data.interval > 0 ? data.interval : 3000;
-    var stopAt = Date.now() + 60 * 60 * 1000;
+    var stopAfter =
+      typeof data.stopAfter === 'number' && data.stopAfter > 0 ? data.stopAfter : 60 * 60 * 1000;
+    var stopAt = Date.now() + stopAfter;
+
+    function stop() {
+      var el = document.querySelector('[data-tendr-waiting]');
+      if (el && typeof data.slowText === 'string') el.textContent = data.slowText;
+    }
 
     function poll() {
-      if (Date.now() > stopAt) return;
+      if (Date.now() > stopAt) {
+        stop();
+        return;
+      }
       if (!window.fetch) return;
       window
         .fetch(data.statusUrl, {

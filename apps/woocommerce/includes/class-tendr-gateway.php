@@ -40,6 +40,15 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	/** Session statuses where money arrived or is arriving: never replace the session. */
 	const IN_FLIGHT_SESSION_STATUSES = array( 'PROCESSING', 'SCREENING_PENDING', 'SETTLED', 'HELD', 'LATE_DEPOSIT' );
 
+	/** Finished session statuses a new session may replace (when no payment is in flight). */
+	const DEAD_SESSION_STATUSES = array( 'EXPIRED', 'REFUNDED' );
+
+	/** Order meta: the last reason the auto-cancel kept the order (one note per reason). */
+	const META_CANCEL_HOLD = '_tendr_cancel_hold';
+
+	/** How long the thank-you page polls before it stops (ms). */
+	const POLL_STOP_AFTER_MS = 3600000;
+
 	/** Payment statuses that mean the money is still on its way (the API's in-flight test). */
 	const IN_FLIGHT_PAYMENT_STATUSES = array( 'DETECTED', 'PROCESSING', 'SCREENING_PENDING' );
 
@@ -75,6 +84,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		add_action( 'woocommerce_receipt_' . self::ID, array( self::class, 'receipt_page' ) );
 		add_action( 'woocommerce_thankyou_' . self::ID, array( self::class, 'thankyou_page' ) );
 		add_filter( 'woocommerce_cancel_unpaid_order', array( self::class, 'filter_cancel_unpaid_order' ), 10, 2 );
+		add_action( 'woocommerce_order_status_changed', array( self::class, 'clear_session_url' ), 10, 4 );
 	}
 
 	/**
@@ -226,11 +236,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 
 		$session = $this->ensure_session( $order );
 		if ( is_wp_error( $session ) ) {
-			self::notice(
-				in_array( $session->get_error_code(), self::UNAVAILABLE_CODES, true )
-					? __( 'Crypto payment is unavailable right now. Please choose another payment method or try again later.', 'tendr' )
-					: __( 'Crypto payment could not be started. Please try again.', 'tendr' )
-			);
+			self::notice( self::error_notice( $session, $order ) );
 			return array( 'result' => 'failure' );
 		}
 
@@ -238,6 +244,39 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 			'result'   => 'success',
 			'redirect' => $order->get_checkout_payment_url( true ),
 		);
+	}
+
+	/**
+	 * The checkout notice for a failed session. The API's own message is never shown.
+	 *
+	 * @param WP_Error $error Error.
+	 * @param WC_Order $order Order.
+	 */
+	private static function error_notice( WP_Error $error, WC_Order $order ): string {
+		if ( in_array( $error->get_error_code(), self::UNAVAILABLE_CODES, true ) ) {
+			return __( 'Crypto payment is unavailable right now. Please choose another payment method or try again later.', 'tendr' );
+		}
+		if ( self::is_precision_error( $error ) ) {
+			return sprintf(
+				/* translators: %s: currency code, e.g. JPY. */
+				__( 'Crypto payment is unavailable for this order: its total has more decimals than %s allows. The store\'s price decimals do not match its currency; please choose another payment method.', 'tendr' ),
+				$order->get_currency()
+			);
+		}
+		return __( 'Crypto payment could not be started. Please try again.', 'tendr' );
+	}
+
+	/**
+	 * Whether the API refused the amount for having more decimals than the currency allows
+	 * (`VALIDATION_ERROR`, `details.field = amount`, "… allows at most N decimal places").
+	 *
+	 * @param WP_Error $error Error.
+	 */
+	private static function is_precision_error( WP_Error $error ): bool {
+		$data = $error->get_error_data();
+		return 'VALIDATION_ERROR' === $error->get_error_code()
+			&& is_array( $data ) && 'amount' === ( $data['field'] ?? null )
+			&& str_contains( $error->get_error_message(), 'decimal places' );
 	}
 
 	/**
@@ -252,60 +291,73 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	public function ensure_session( WC_Order $order ) {
 		$mode       = Tendr_Connect::mode();
 		$session_id = (string) $order->get_meta( self::META_SESSION_ID );
-		$stored_url = (string) $order->get_meta( self::META_SESSION_URL );
-		$have_old   = '' !== $session_id && '' !== $stored_url;
+		$have_url   = self::is_session_url( (string) $order->get_meta( self::META_SESSION_URL ) );
+		// The stored session, when shown again, needs its browser URL (cleared once the order
+		// left pending; see clear_session_url()).
+		$show_old = $have_url
+			? $session_id
+			: new WP_Error( 'tendr_session_unavailable', __( 'Crypto payment could not be started. Please try again.', 'tendr' ) );
 
-		if ( $have_old ) {
+		if ( '' !== $session_id ) {
 			$stored_mode = 'live' === $order->get_meta( self::META_MODE ) ? 'live' : 'test';
 			$view        = Tendr_Api_Client::request( 'GET', '/v1/checkout/sessions/' . rawurlencode( $session_id ), array(), $stored_mode );
 			if ( is_wp_error( $view ) ) {
-				if ( 404 !== self::status_of( $view ) ) {
+				if ( ! self::is_not_found( $view ) ) {
 					return $view;
 				}
 			} else {
-				switch ( self::disposition( $view ) ) {
-					case 'in_flight':
-						return $session_id;
-					case 'open':
-						if ( $stored_mode === $mode ) {
-							return $session_id;
-						}
-						break;
+				$disposition = self::disposition( $view );
+				if ( 'in_flight' === $disposition || ( 'open' === $disposition && $stored_mode === $mode ) ) {
+					return $show_old;
 				}
 			}
 		}
 
 		$created = $this->create_session( $order, $mode );
-		if ( is_wp_error( $created ) && $have_old && 'CONFLICT' === $created->get_error_code() ) {
+		if ( is_wp_error( $created ) && '' !== $session_id && 'CONFLICT' === $created->get_error_code() ) {
 			// The API still holds the ref for the stored session (a deposit it can see is in flight).
-			return $session_id;
+			return $show_old;
 		}
 		return $created;
 	}
 
 	/**
-	 * What to do with a session, from its GET view: 'in_flight' (show it again, never replace),
-	 * 'open' (reuse), or 'dead' (replace).
+	 * Whether an API error is the tendr API saying the session does not exist (HTTP 404 with
+	 * code NOT_FOUND), not a 404 from something else (a proxy, a wrong API base).
+	 *
+	 * @param WP_Error $error Error.
+	 */
+	private static function is_not_found( WP_Error $error ): bool {
+		return 404 === self::status_of( $error ) && 'NOT_FOUND' === $error->get_error_code();
+	}
+
+	/**
+	 * What to do with a session, from its GET view:
+	 * - 'dead' (replace) only for the known finished states: EXPIRED, REFUNDED, or PENDING_DEPOSIT
+	 *   past its expiry, each with no payment in flight;
+	 * - 'open' (reuse): PENDING_DEPOSIT before its expiry;
+	 * - 'in_flight' (show it again, never replace): money in flight or arrived, and anything not
+	 *   recognised (a future status, a missing expiry), the safe default.
 	 *
 	 * @param array $view `GET /v1/checkout/sessions/:id`.
 	 */
 	public static function disposition( array $view ): string {
 		$status = isset( $view['status'] ) && is_string( $view['status'] ) ? $view['status'] : '';
-		if ( in_array( $status, self::IN_FLIGHT_SESSION_STATUSES, true ) ) {
-			return 'in_flight';
-		}
 		foreach ( ( isset( $view['payments'] ) && is_array( $view['payments'] ) ) ? $view['payments'] : array() as $payment ) {
 			if ( is_array( $payment ) && isset( $payment['status'] ) && in_array( $payment['status'], self::IN_FLIGHT_PAYMENT_STATUSES, true ) ) {
 				return 'in_flight';
 			}
 		}
+		if ( in_array( $status, self::DEAD_SESSION_STATUSES, true ) ) {
+			return 'dead';
+		}
 		if ( 'PENDING_DEPOSIT' === $status ) {
 			$expires = isset( $view['expires_at'] ) && is_string( $view['expires_at'] ) ? strtotime( $view['expires_at'] ) : false;
-			if ( false !== $expires && $expires > time() ) {
-				return 'open';
+			if ( false !== $expires ) {
+				return $expires > time() ? 'open' : 'dead';
 			}
 		}
-		return 'dead';
+		return 'in_flight';
 	}
 
 	/**
@@ -472,6 +524,8 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 				'action'    => 'wait',
 				'statusUrl' => rest_url( Tendr_Order_Status::NAMESPACE . '/order-status/' . $order->get_order_key() ),
 				'interval'  => self::POLL_INTERVAL_MS,
+				'stopAfter' => self::POLL_STOP_AFTER_MS,
+				'slowText'  => __( 'Confirmation is taking longer than usual. You will get an email when your payment is confirmed, and you can check your order later.', 'tendr' ),
 			)
 		);
 
@@ -498,9 +552,12 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 
 	/**
 	 * `woocommerce_cancel_unpaid_order`: before WooCommerce cancels an unpaid tendr order, cancel
-	 * its session. If tendr refuses because a deposit is in flight, keep the order (and its stock)
-	 * pending with a note; the payment webhook settles it. If tendr cannot be asked, keep the
-	 * order too, and let the next run try again.
+	 * its session. The order is kept pending (return false) only when it must or might still be
+	 * paid: tendr refuses because a deposit is in flight (or a payment exists), or tendr cannot be
+	 * asked right now (transport failure, 5xx, 429, or a non-API response). The next run retries.
+	 * Everything else lets WooCommerce cancel: the session is expired or unknown, or the failure
+	 * is permanent (the site is disconnected, the key is revoked, any other 4xx), since no webhook
+	 * could ever settle the order then. Each "not cancelled" note is written once per reason.
 	 *
 	 * @param bool     $cancel Whether WooCommerce will cancel the order.
 	 * @param WC_Order $order  The unpaid order.
@@ -513,32 +570,107 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		if ( '' === $session_id ) {
 			return $cancel;
 		}
+		$hold = self::cancel_hold_reason( $order, $session_id );
+		if ( null === $hold ) {
+			if ( '' !== (string) $order->get_meta( self::META_CANCEL_HOLD ) ) {
+				$order->delete_meta_data( self::META_CANCEL_HOLD );
+				$order->save();
+			}
+			return $cancel;
+		}
+		if ( (string) $order->get_meta( self::META_CANCEL_HOLD ) !== $hold ) {
+			$order->update_meta_data( self::META_CANCEL_HOLD, $hold );
+			$order->save();
+			$order->add_order_note( self::cancel_hold_note( $hold ) );
+		}
+		return false;
+	}
+
+	/**
+	 * Why the order must stay pending ('deposit' | 'payment' | 'unreachable'), or null to cancel.
+	 *
+	 * @param WC_Order $order      Order.
+	 * @param string   $session_id Its session.
+	 */
+	private static function cancel_hold_reason( WC_Order $order, string $session_id ): ?string {
 		$mode   = 'live' === $order->get_meta( self::META_MODE ) ? 'live' : 'test';
 		$result = Tendr_Api_Client::request( 'POST', '/v1/checkout/sessions/' . rawurlencode( $session_id ) . '/expire', array(), $mode );
 		if ( ! is_wp_error( $result ) ) {
-			return $cancel;
+			return null;
 		}
-
-		$code = $result->get_error_code();
-		if ( 'DEPOSIT_IN_PROGRESS' === $code ) {
-			$order->add_order_note( __( 'Not cancelled: a crypto deposit is in progress for this order. The order stays pending and its stock stays held until tendr confirms the payment.', 'tendr' ) );
-			return false;
+		if ( 'DEPOSIT_IN_PROGRESS' === $result->get_error_code() ) {
+			return 'deposit';
 		}
-		if ( 404 === self::status_of( $result ) ) {
-			return $cancel;
-		}
-		if ( 'INVALID_STATE_TRANSITION' === $code ) {
-			// The session is no longer open: cancel only if it simply expired.
+		if ( 'INVALID_STATE_TRANSITION' === $result->get_error_code() ) {
+			// The session is no longer open: cancel only if it simply finished unpaid.
 			$view = Tendr_Api_Client::request( 'GET', '/v1/checkout/sessions/' . rawurlencode( $session_id ), array(), $mode );
-			if ( ! is_wp_error( $view ) && 'dead' === self::disposition( $view ) ) {
-				return $cancel;
-			}
 			if ( ! is_wp_error( $view ) ) {
-				$order->add_order_note( __( 'Not cancelled: tendr has a crypto payment for this order. The order stays pending until tendr confirms it.', 'tendr' ) );
-				return false;
+				return 'dead' === self::disposition( $view ) ? null : 'payment';
 			}
+			$result = $view;
 		}
-		$order->add_order_note( __( 'Not cancelled yet: tendr could not be reached to close the crypto checkout. WooCommerce will try again on its next run.', 'tendr' ) );
-		return false;
+		if ( self::is_not_found( $result ) ) {
+			return null;
+		}
+		return self::is_temporary( $result ) ? 'unreachable' : null;
+	}
+
+	/**
+	 * Whether an API failure may go away on its own: a transport failure, an unreadable answer,
+	 * 429, 5xx, or a response that did not come from the tendr API (no API error code: a proxy
+	 * page, a wrong API base). Not connected, 401/403 and other API 4xx are permanent.
+	 *
+	 * @param WP_Error $error Error.
+	 */
+	private static function is_temporary( WP_Error $error ): bool {
+		$code   = (string) $error->get_error_code();
+		$status = self::status_of( $error );
+		if ( 'tendr_unreachable' === $code || 'tendr_bad_response' === $code ) {
+			return true;
+		}
+		if ( 429 === $status || $status >= 500 ) {
+			return true;
+		}
+		return $status >= 400 && str_starts_with( $code, 'tendr_http_' );
+	}
+
+	/**
+	 * The order note for a kept order.
+	 *
+	 * @param string $reason From cancel_hold_reason().
+	 */
+	private static function cancel_hold_note( string $reason ): string {
+		switch ( $reason ) {
+			case 'deposit':
+				return __( 'Not cancelled: a crypto deposit is in progress for this order. The order stays pending and its stock stays held until tendr confirms the payment.', 'tendr' );
+			case 'payment':
+				return __( 'Not cancelled: tendr has a crypto payment for this order. The order stays pending until tendr confirms it.', 'tendr' );
+			default:
+				return __( 'Not cancelled yet: tendr could not be reached to close the crypto checkout. WooCommerce will try again on its next run.', 'tendr' );
+		}
+	}
+
+	// ------------------------------------------------------------------ retention.
+
+	/**
+	 * `woocommerce_order_status_changed`: once a tendr order leaves pending, forget the session's
+	 * browser URL (it carries the session client secret). The session id stays for webhooks and
+	 * refunds; paying a failed order again creates a new session.
+	 *
+	 * @param int           $order_id Order id.
+	 * @param string        $from     Old status.
+	 * @param string        $to       New status.
+	 * @param WC_Order|null $order    Order.
+	 */
+	public static function clear_session_url( $order_id, $from, $to, $order = null ): void {
+		if ( 'pending' === $to ) {
+			return;
+		}
+		$order = $order instanceof WC_Order ? $order : wc_get_order( $order_id );
+		if ( ! $order instanceof WC_Order || self::ID !== $order->get_payment_method() || '' === (string) $order->get_meta( self::META_SESSION_URL ) ) {
+			return;
+		}
+		$order->delete_meta_data( self::META_SESSION_URL );
+		$order->save_meta_data();
 	}
 }
