@@ -123,10 +123,37 @@ export function webhookBody(
   });
 }
 
-/** The `Tendr-Signature` value: `t=<t>,v1=<hex HMAC-SHA256(secret, t + "." + rawBody)>`. */
-export function signPayload(secret: string, t: number, rawBody: string | Buffer): string {
+/**
+ * The `Tendr-Signature` value: `t=<t>,v1=<hex HMAC-SHA256(secret, t + "." + rawBody)>`. During a
+ * rotation overlap `previousSecrets` (the old secret) add further `v1=` values, Stripe-style, so a
+ * receiver still verifying with the old secret keeps accepting until it switches.
+ */
+export function signPayload(
+  secret: string,
+  t: number,
+  rawBody: string | Buffer,
+  previousSecrets: readonly string[] = [],
+): string {
   const body = typeof rawBody === 'string' ? Buffer.from(rawBody, 'utf8') : rawBody;
-  return `t=${t},v1=${computeSignature(secret, t, body)}`;
+  return [secret, ...previousSecrets].reduce(
+    (h, s) => `${h},v1=${computeSignature(s, t, body)}`,
+    `t=${t}`,
+  );
+}
+
+/** After a rotation the old secret also signs (a second `v1=`) for this long. */
+export const ROTATION_OVERLAP_MS = 24 * 3600_000;
+
+/** The current secret first, then the previous one while its rotation overlap lasts. */
+async function signingSecrets(
+  e: Pick<WebhookEndpoint, 'secretRef' | 'previousSecretRef' | 'previousSecretExpiresAt'>,
+  now: Date,
+): Promise<string[]> {
+  const out = [await getSecret(e.secretRef)];
+  if (e.previousSecretRef && e.previousSecretExpiresAt && e.previousSecretExpiresAt > now) {
+    out.push(await getSecret(e.previousSecretRef));
+  }
+  return out;
 }
 
 /** Delay after the `attempt`-th failed send (1-based): 1 min, 2 min, 4 min, … */
@@ -212,11 +239,21 @@ export function setWebhookResolver(fn: Resolver | null): void {
 
 const LOCAL_TEST_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
+/**
+ * Whether endpoints of this mode get the full SSRF policy (https only, public addresses only).
+ * Always in live mode; in test mode too when running in production — test mode is relaxed (http
+ * and private hosts allowed for local development) only when NODE_ENV is development or test.
+ */
+export function strictHostPolicy(livemode: boolean): boolean {
+  return livemode || process.env.NODE_ENV === 'production';
+}
+
 const invalidUrl = (message: string) => new AppError('VALIDATION_ERROR', message, 400);
 
 /**
- * Checks an endpoint URL for `livemode` and returns its normalised form. Live: `https://` only,
- * and the host (literal or every DNS answer) must be a public address. Test: `https://` anywhere,
+ * Checks an endpoint URL for `livemode` and returns its normalised form. Strict (live, or any
+ * mode in production — `strictHostPolicy`): `https://` only, and the host (literal or every DNS
+ * answer) must be a public address. Relaxed (test mode outside production): `https://` anywhere,
  * or `http://localhost` (also 127.0.0.1 / [::1]) for local development.
  */
 export async function validateEndpointUrl(raw: string, livemode: boolean): Promise<string> {
@@ -229,20 +266,21 @@ export async function validateEndpointUrl(raw: string, livemode: boolean): Promi
   }
   if (url.username || url.password) throw invalidUrl('The URL must not contain credentials');
   url.hash = '';
+  const strict = strictHostPolicy(livemode);
   if (url.protocol === 'http:') {
-    if (livemode) throw invalidUrl('Live webhook endpoints must use https://');
+    if (strict) throw invalidUrl('Webhook endpoints must use https://');
     if (!LOCAL_TEST_HOSTS.has(url.hostname)) {
       throw invalidUrl('http:// is allowed only for localhost in test mode; use https://');
     }
   } else if (url.protocol !== 'https:') {
     throw invalidUrl('The URL must use https://');
   }
-  if (livemode) await assertPublicHost(url.hostname);
+  if (strict) await assertPublicHost(url.hostname);
   return url.toString();
 }
 
 const ssrfError = () =>
-  invalidUrl('Live webhook endpoints must resolve to public addresses (not private or loopback)');
+  invalidUrl('Webhook endpoints must resolve to public addresses (not private or loopback)');
 
 /** Throws unless `hostname` is a public IP literal or resolves only to public addresses. */
 export async function assertPublicHost(hostname: string): Promise<void> {
@@ -291,6 +329,8 @@ export interface WebhookRequest {
   headers: Record<string, string>;
   body: string;
   livemode: boolean;
+  /** Apply the SSRF guard to the connection (`strictHostPolicy`). */
+  strict: boolean;
 }
 /** Resolves with the HTTP status; rejects on a network error or timeout. */
 export type WebhookTransport = (req: WebhookRequest) => Promise<{ status: number }>;
@@ -298,8 +338,8 @@ export type WebhookTransport = (req: WebhookRequest) => Promise<{ status: number
 /** POSTs with a 10 s overall timeout, never following redirects (a 3xx is just a non-2xx). */
 const httpTransport: WebhookTransport = async (req) => {
   const url = new URL(req.url);
-  if (req.livemode) {
-    if (url.protocol !== 'https:') throw new Error('live webhooks must use https');
+  if (req.strict) {
+    if (url.protocol !== 'https:') throw new Error('webhooks must use https');
     const host = url.hostname.replace(/^\[|\]$/g, '');
     if (isIP(host) && isPrivateAddress(host)) throw new Error('webhook host is a private address');
   }
@@ -307,7 +347,7 @@ const httpTransport: WebhookTransport = async (req) => {
   const opts: RequestOptions = {
     method: 'POST',
     headers: { ...req.headers, 'content-length': String(Buffer.byteLength(req.body)) },
-    ...(req.livemode ? { lookup: guardedLookup } : {}),
+    ...(req.strict ? { lookup: guardedLookup } : {}),
   };
   return new Promise((resolve, reject) => {
     const r = send(url, opts, (res) => {
@@ -543,12 +583,15 @@ async function send(d: WebhookDelivery, now: Date): Promise<SendOutcome> {
   if (event.livemode !== endpoint.livemode || endpoint.livemode !== d.livemode) {
     return fail('mode mismatch', true);
   }
-  let secret: string;
+  const strict = strictHostPolicy(endpoint.livemode);
+  let secrets: string[];
   try {
-    if (endpoint.livemode) {
-      await assertPublicHost(new URL(endpoint.url).hostname);
+    if (strict) {
+      const url = new URL(endpoint.url);
+      if (url.protocol !== 'https:') return fail('webhook endpoints must use https://', true);
+      await assertPublicHost(url.hostname);
     }
-    secret = await getSecret(endpoint.secretRef);
+    secrets = await signingSecrets(endpoint, now);
   } catch (err) {
     return fail(err instanceof Error ? err.message : String(err));
   }
@@ -558,12 +601,13 @@ async function send(d: WebhookDelivery, now: Date): Promise<SendOutcome> {
     const res = await transport({
       url: endpoint.url,
       livemode: endpoint.livemode,
+      strict,
       body,
       headers: {
         'content-type': 'application/json',
         'user-agent': 'Tendr-Webhooks/1.0',
         'tendr-event-id': event.id,
-        [SIGNATURE_HEADER.toLowerCase()]: signPayload(secret, t, body),
+        [SIGNATURE_HEADER.toLowerCase()]: signPayload(secrets[0]!, t, body, secrets.slice(1)),
       },
     });
     if (res.status >= 200 && res.status < 300) return { ok: true, statusCode: res.status };
@@ -649,17 +693,32 @@ export async function deleteEndpoint(ctx: ScopeContext, id: string): Promise<{ i
   return { id };
 }
 
-/** Replaces the signing secret (the old one stops working at once); returns the new one. */
+/**
+ * Replaces the signing secret; returns the new one. For `ROTATION_OVERLAP_MS` (24 h) after, every
+ * send also carries a second `v1=` signed with the old secret, so the merchant can switch without
+ * dropping events. Rotating again ends the earlier overlap (only the latest old secret overlaps).
+ */
 export async function rotateEndpointSecret(
   ctx: ScopeContext,
   id: string,
-): Promise<{ endpoint: EndpointView; secret: string }> {
+  now = new Date(),
+): Promise<{ endpoint: EndpointView; secret: string; previous_secret_expires_at: string }> {
   const e = await activeEndpoint(ctx, id);
   const secret = newSecret();
   const secretRef = await putSecret(secret, SECRET_PURPOSE);
-  await scopedDb(ctx).webhookEndpoint.updateMany({ where: { id }, data: { secretRef } });
-  await prisma.secret.deleteMany({ where: { id: e.secretRef } });
-  return { endpoint: view({ ...e, secretRef }), secret };
+  const previousSecretExpiresAt = new Date(now.getTime() + ROTATION_OVERLAP_MS);
+  await scopedDb(ctx).webhookEndpoint.updateMany({
+    where: { id },
+    data: { secretRef, previousSecretRef: e.secretRef, previousSecretExpiresAt },
+  });
+  if (e.previousSecretRef) {
+    await prisma.secret.deleteMany({ where: { id: e.previousSecretRef } });
+  }
+  return {
+    endpoint: view({ ...e, secretRef }),
+    secret,
+    previous_secret_expires_at: previousSecretExpiresAt.toISOString(),
+  };
 }
 
 export interface DeliveryView {

@@ -792,6 +792,9 @@ model WebhookEndpoint {
   livemode   Boolean
   url        String
   secretRef  String   @map("secret_ref")
+  /// The secret replaced by the last rotation; it still signs (a second v1=) until the expiry.
+  previousSecretRef       String?   @map("previous_secret_ref")
+  previousSecretExpiresAt DateTime? @map("previous_secret_expires_at")
   events     String[]
   active     Boolean  @default(true)
   createdAt  DateTime @default(now()) @map("created_at")

@@ -102,7 +102,12 @@ describe('webhook endpoint routes', () => {
     expect(next).not.toBe(secret);
     const after = await prisma.webhookEndpoint.findUniqueOrThrow({ where: { id: endpoint.id } });
     expect(await getSecret(after.secretRef)).toBe(next);
-    expect(await prisma.secret.findUnique({ where: { id: row.secretRef } })).toBeNull();
+    // The old secret overlaps for 24 h (second v1=), so its row is kept until the next rotation.
+    expect(after.previousSecretRef).toBe(row.secretRef);
+    expect(rotated.json().previous_secret_expires_at).toEqual(
+      after.previousSecretExpiresAt!.toISOString(),
+    );
+    expect(rotated.body).not.toContain(secret);
 
     const deliveries = await call('GET', `/v1/webhooks/endpoints/${endpoint.id}/deliveries`, admin);
     expect(deliveries.body).not.toContain(next);

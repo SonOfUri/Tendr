@@ -18,6 +18,9 @@ import {
   registerWebhookHandlers,
   resendDelivery,
   retryDelayMs,
+  ROTATION_OVERLAP_MS,
+  rotateEndpointSecret,
+  strictHostPolicy,
   setWebhookQueue,
   setWebhookResolver,
   setWebhookTransport,
@@ -44,13 +47,58 @@ describe('signPayload', () => {
     );
   });
 
+  it('signs with every overlap secret as extra v1= values', () => {
+    const body = '{"id":"evt_2"}';
+    const header = signPayload('whsec_new', 1_700_000_000, body, ['whsec_old']);
+    expect(header).toMatch(/^t=1700000000,v1=[0-9a-f]{64},v1=[0-9a-f]{64}$/);
+    for (const s of ['whsec_new', 'whsec_old']) {
+      expect(verifyRequestSignature(header, Buffer.from(body), s, 1_700_000_000)).toBe('ok');
+    }
+    expect(header.split(',')[1]).toBe(signPayload('whsec_new', 1_700_000_000, body).split(',')[1]);
+  });
+
   it('retry delays grow 1 min × 2^n', () => {
     expect([1, 2, 3, 4, 5].map(retryDelayMs)).toEqual([1, 2, 4, 8, 16].map((m) => m * MIN));
   });
 });
 
 describe('endpoint URL policy (C24)', () => {
-  afterEach(() => setWebhookResolver(null));
+  afterEach(() => {
+    setWebhookResolver(null);
+    vi.unstubAllEnvs();
+  });
+
+  it('strict policy: live always; test mode only in production', () => {
+    expect(strictHostPolicy(true)).toBe(true);
+    expect(strictHostPolicy(false)).toBe(false); // NODE_ENV=test
+    vi.stubEnv('NODE_ENV', 'development');
+    expect(strictHostPolicy(false)).toBe(false);
+    vi.stubEnv('NODE_ENV', 'production');
+    expect(strictHostPolicy(false)).toBe(true);
+  });
+
+  it('production: test-mode endpoints get the private-address block and https-only', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    setWebhookResolver(async () => [{ address: '93.184.216.34', family: 4 }]);
+    await expect(validateEndpointUrl('https://shop.example/hooks', false)).resolves.toBe(
+      'https://shop.example/hooks',
+    );
+    for (const u of [
+      'http://localhost:3000/hooks',
+      'http://127.0.0.1:3000/hooks',
+      'http://[::1]/hooks',
+      'http://shop.example/hooks',
+    ]) {
+      await expect(validateEndpointUrl(u, false), u).rejects.toThrow(/https/);
+    }
+    for (const u of ['https://127.0.0.1/hooks', 'https://10.0.0.8/hooks', 'https://[fe80::1]/x']) {
+      await expect(validateEndpointUrl(u, false), u).rejects.toThrow(/public/);
+    }
+    setWebhookResolver(async () => [{ address: '192.168.1.20', family: 4 }]);
+    await expect(validateEndpointUrl('https://intranet.example/hooks', false)).rejects.toThrow(
+      /public/,
+    );
+  });
 
   it('classifies private, loopback and link-local addresses', () => {
     for (const ip of [
@@ -452,6 +500,75 @@ describe('webhook delivery', () => {
     expect(r?.status).toBe('pending');
     expect(r?.error).toMatch(/public/);
     expect(sent).toHaveLength(0);
+  });
+
+  it('production: re-checks test-mode endpoints at send time (http localhost, private DNS)', async () => {
+    const local = await createEndpoint(testCtx(), { url: 'http://localhost:4242/hooks' });
+    const intranet = await createEndpoint(testCtx(), { url: 'https://intranet.example/hooks' });
+    await fanOutEvent(await succeeded(false));
+    const rows = await prisma.webhookDelivery.findMany();
+    const of = (id: string) => rows.find((r) => r.endpointId === id)!.id;
+
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      const r1 = await attemptDelivery(of(local.endpoint.id));
+      expect(r1).toMatchObject({ status: 'failed' });
+      expect(r1?.error).toMatch(/https/);
+      setWebhookResolver(async () => [{ address: '10.2.3.4', family: 4 }]);
+      const r2 = await attemptDelivery(of(intranet.endpoint.id));
+      expect(r2?.status).toBe('pending');
+      expect(r2?.error).toMatch(/public/);
+      expect(sent).toHaveLength(0);
+      setWebhookResolver(async () => [{ address: '93.184.216.34', family: 4 }]);
+      const r3 = await attemptDelivery(of(intranet.endpoint.id), {
+        now: new Date(Date.now() + 2 * MIN),
+      });
+      expect(r3?.status).toBe('delivered');
+      expect(sent[0]!.strict).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('rotation: the old secret also signs (second v1=) for 24 h, then only the new one', async () => {
+    const ep = await createEndpoint(testCtx(), { url: 'https://a.example/hooks' });
+    const t0 = new Date(Date.now() - 3 * DAY);
+    const { secret: next } = await rotateEndpointSecret(testCtx(), ep.endpoint.id, t0);
+    const verify = (r: WebhookRequest, secret: string) => {
+      const header = r.headers['tendr-signature']!;
+      const t = Number(/t=(\d+)/.exec(header)![1]);
+      return verifyRequestSignature(header, Buffer.from(r.body), secret, t);
+    };
+
+    // Within the overlap: both secrets verify.
+    await fanOutEvent(await succeeded(), t0);
+    const [d1] = await prisma.webhookDelivery.findMany();
+    await attemptDelivery(d1!.id, { now: new Date(t0.getTime() + 3600_000) });
+    expect(sent[0]!.headers['tendr-signature']!.match(/v1=/g)).toHaveLength(2);
+    expect(verify(sent[0]!, next)).toBe('ok');
+    expect(verify(sent[0]!, ep.secret)).toBe('ok');
+
+    // After 24 h: the new secret only; the old one no longer verifies.
+    await fanOutEvent(await succeeded(), t0);
+    const d2 = (await prisma.webhookDelivery.findMany()).find((d) => d.id !== d1!.id)!;
+    await attemptDelivery(d2.id, { now: new Date(t0.getTime() + ROTATION_OVERLAP_MS + 1) });
+    expect(sent[1]!.headers['tendr-signature']!.match(/v1=/g)).toHaveLength(1);
+    expect(verify(sent[1]!, next)).toBe('ok');
+    expect(verify(sent[1]!, ep.secret)).toBe('invalid');
+
+    // Rotating again: only the latest old secret overlaps; the first one's row is deleted.
+    const firstRef = (await prisma.webhookEndpoint.findFirstOrThrow()).previousSecretRef!;
+    const t1 = new Date(t0.getTime() + 2 * DAY);
+    const { secret: third } = await rotateEndpointSecret(testCtx(), ep.endpoint.id, t1);
+    expect(await prisma.secret.findUnique({ where: { id: firstRef } })).toBeNull();
+    await fanOutEvent(await succeeded(), t1);
+    const d3 = (await prisma.webhookDelivery.findMany()).find(
+      (d) => d.id !== d1!.id && d.id !== d2.id,
+    )!;
+    await attemptDelivery(d3.id, { now: new Date(t1.getTime() + 60_000) });
+    expect(verify(sent[2]!, third)).toBe('ok');
+    expect(verify(sent[2]!, next)).toBe('ok');
+    expect(verify(sent[2]!, ep.secret)).toBe('invalid');
   });
 
   it('two concurrent sends of one delivery: only one goes out', async () => {
