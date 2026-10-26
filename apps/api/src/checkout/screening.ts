@@ -210,13 +210,24 @@ export async function retryPendingScreenings(now = new Date()): Promise<number> 
       });
     };
     try {
-      let decision: 'allow' | 'block' | 'unavailable' = 'unavailable';
-      if (p.senderAddress && p.senderChain) {
-        ({ decision } = await screenAddress(ctx, {
-          sessionId: p.sessionId,
-          address: p.senderAddress,
-          chain: p.senderChain,
-        }));
+      let decision: ScreeningOutcome = 'unavailable';
+      // Every sender (a multi-input Bitcoin deposit has several): any block holds, any
+      // unavailable keeps waiting, all allow settles.
+      const senders =
+        p.senderAddresses.length > 0 ? p.senderAddresses : p.senderAddress ? [p.senderAddress] : [];
+      if (senders.length > 0 && p.senderChain) {
+        const ds: ScreeningOutcome[] = [];
+        for (const address of senders) {
+          ds.push(
+            (await screenAddress(ctx, { sessionId: p.sessionId, address, chain: p.senderChain }))
+              .decision,
+          );
+        }
+        decision = ds.includes('block')
+          ? 'block'
+          : ds.includes('unavailable')
+            ? 'unavailable'
+            : 'allow';
       } else {
         log('warn', 'screening retry: payment has no sender address', { paymentId: p.id });
       }

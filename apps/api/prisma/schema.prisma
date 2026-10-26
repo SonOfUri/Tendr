@@ -971,6 +971,8 @@ model Payment {
   status                PaymentStatus @default(DETECTED)
   isLate                Boolean       @default(false) @map("is_late")
   senderAddress         String?       @map("sender_address")
+  /// Every sender found (several for a multi-input Bitcoin deposit); each is screened.
+  senderAddresses       String[]      @default([]) @map("sender_addresses")
   senderChain           String?       @map("sender_chain")
   overpaidAmount        Decimal?      @map("overpaid_amount") @db.Decimal(78, 0)
   refundedAmount        Decimal?      @map("refunded_amount") @db.Decimal(78, 0)

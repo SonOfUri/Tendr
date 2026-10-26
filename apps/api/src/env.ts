@@ -129,6 +129,38 @@ const EnvSchema = z
         .transform((v) => (v === undefined ? undefined : v === 'true' || v === '1')),
     ),
     /**
+     * Live-mode EVM RPC endpoints for reading a deposit's sender, as JSON
+     * `{"<1Click blockchain id>": "<url>"}` (`eth`, `base`, `arb`, `pol`, `bsc`, `op`, `avax`, …;
+     * `arbitrum`/`polygon`/`optimism`/`avalanche`/`ethereum` accepted). Merged over public defaults.
+     */
+    EVM_RPC_URLS: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .default('{}')
+        .transform((text, ctx) => {
+          let v: unknown;
+          try {
+            v = JSON.parse(text);
+          } catch {
+            v = null;
+          }
+          const ok =
+            v !== null &&
+            typeof v === 'object' &&
+            !Array.isArray(v) &&
+            Object.values(v).every((u) => typeof u === 'string' && /^https?:\/\//i.test(u));
+          if (!ok) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: 'must be a JSON object of chain to http(s) URL',
+            });
+            return z.NEVER;
+          }
+          return v as Record<string, string>;
+        }),
+    ),
+    /**
      * Base URL of the hosted checkout page; a session's `url` is
      * `${CHECKOUT_BASE_URL}/pay/{id}#cs={client_secret}`. No trailing slash needed.
      */

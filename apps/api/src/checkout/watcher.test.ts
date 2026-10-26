@@ -609,6 +609,140 @@ describe('payment watcher', () => {
     expect(await prisma.payment.count({ where: { quoteId: q.id } })).toBe(0);
   });
 
+  /** A provider over the simulator that hides its sender (like live 1Click) and can override. */
+  function liveLikeProvider(override?: (st: StatusResponse) => StatusResponse) {
+    return () =>
+      ({
+        status: async (addr: string) => {
+          const st = await sim.status(addr);
+          const { senderAddress: _hidden, ...swapDetails } = st.swapDetails;
+          const out = { ...st, swapDetails };
+          return override ? override(out) : out;
+        },
+      }) as unknown as SimulatedOneClick;
+  }
+
+  it('test mode never calls the sender resolvers (the simulated sender is used)', async () => {
+    const resolveSenders = vi.fn(async () => ['0xshouldnotbeused']);
+    setWatcherDeps({ now: clock, resolveSenders });
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'exact');
+    await poll(q.deposit_address);
+    expect(resolveSenders).not.toHaveBeenCalled();
+    expect((await paymentOf(q.id)).status).toBe('SETTLED');
+  });
+
+  it('resolved senders: every one is screened and any block holds (multi-input deposit)', async () => {
+    const resolveSenders = vi.fn(async () => [WALLET, SANCTIONED]);
+    setWatcherDeps({ now: clock, provider: liveLikeProvider(), resolveSenders });
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'exact');
+    await poll(q.deposit_address);
+    expect(resolveSenders).toHaveBeenCalledWith(
+      expect.objectContaining({ chain: 'eth', originAsset: ETH }),
+    );
+    const p = await paymentOf(q.id);
+    expect(p.senderAddress).toBe(WALLET);
+    expect(p.senderAddresses).toEqual([WALLET, SANCTIONED]);
+    expect(p.status).toBe('HELD');
+    const rows = await prisma.screeningResult.findMany({ where: { sessionId: s.id } });
+    expect(rows.map((r) => [r.address, r.decision]).sort()).toEqual([
+      [SANCTIONED, 'block'],
+      [WALLET, 'allow'],
+    ]);
+  });
+
+  it('resolved senders all allowed → settles; no sender found → SCREENING_PENDING', async () => {
+    setWatcherDeps({
+      now: clock,
+      provider: liveLikeProvider(),
+      resolveSenders: async () => [WALLET, '0x2222222222222222222222222222222222222222'],
+    });
+    const a = await newSession();
+    const qa = await quote(a.client_secret);
+    await sim.simulate(qa.deposit_address, 'exact');
+    await poll(qa.deposit_address);
+    expect((await paymentOf(qa.id)).status).toBe('SETTLED');
+
+    setWatcherDeps({ now: clock, provider: liveLikeProvider(), resolveSenders: async () => [] });
+    const b = await newSession();
+    const qb = await quote(b.client_secret);
+    await sim.simulate(qb.deposit_address, 'exact');
+    await poll(qb.deposit_address);
+    expect((await paymentOf(qb.id)).status).toBe('SCREENING_PENDING');
+    expect((await paymentOf(qb.id)).senderAddresses).toEqual([]);
+  });
+
+  it('HELD, then 1Click refunds straight to the shopper → REFUNDING → REFUNDED, session REFUNDED', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret, { origin_asset: ETH, refund_address: WALLET });
+    await sim.simulate(q.deposit_address, 'underpay', { senderAddress: SANCTIONED });
+    await poll(q.deposit_address);
+    expect((await paymentOf(q.id)).status).toBe('HELD');
+    expect((await sessionOf(s.id)).status).toBe('HELD');
+    // Still watched: 1Click refunds the short deposit at the deadline.
+    expect(
+      (await prisma.quote.findUniqueOrThrow({ where: { id: q.id } })).watchStoppedAt,
+    ).toBeNull();
+    offset = 13 * 60_000;
+    const [r] = await poll(q.deposit_address);
+    expect(r!.stopped).toBe(true);
+    const p = await paymentOf(q.id);
+    expect(p.status).toBe('REFUNDED');
+    expect(p.heldReason).toBe('sanctions');
+    expect((await sessionOf(s.id)).status).toBe('REFUNDED');
+    const [refunded] = await eventsOf('payment.refunded');
+    expect(refunded!.payload).toMatchObject({ reason: 'sanctions', refund_via: 'origin_chain' });
+    const moves = (await eventsOf('payment.status_changed')).map(
+      (e) => `${(e.payload as { from: string }).from}>${(e.payload as { to: string }).to}`,
+    );
+    expect(moves.slice(-2)).toEqual(['HELD>REFUNDING', 'REFUNDING>REFUNDED']);
+    expect(returns).not.toHaveBeenCalled();
+  });
+
+  it('HELD with a store-path refund stays HELD (signers decide) and polling stops', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'underpay', { senderAddress: SANCTIONED });
+    const [r] = await poll(q.deposit_address);
+    expect(r!.stopped).toBe(true);
+    offset = 13 * 60_000;
+    await poll(q.deposit_address);
+    expect((await paymentOf(q.id)).status).toBe('HELD');
+    expect((await sessionOf(s.id)).status).toBe('HELD');
+    expect(await eventsOf('payment.refunded')).toEqual([]);
+    expect(returns).not.toHaveBeenCalled();
+  });
+
+  it('SCREENING_PENDING, then 1Click refunds straight to the shopper → REFUNDED, session REFUNDED', async () => {
+    setWatcherDeps({ now: clock, screen: async () => ({ decision: 'unavailable' }) });
+    const s = await newSession();
+    const q = await quote(s.client_secret, { origin_asset: ETH, refund_address: WALLET });
+    await sim.simulate(q.deposit_address, 'exact');
+    await poll(q.deposit_address);
+    expect((await paymentOf(q.id)).status).toBe('SCREENING_PENDING');
+    expect((await sessionOf(s.id)).status).toBe('SCREENING_PENDING');
+    setWatcherDeps({
+      now: clock,
+      screen: async () => ({ decision: 'unavailable' }),
+      provider: liveLikeProvider((st) => ({
+        status: 'REFUNDED',
+        swapDetails: {
+          ...st.swapDetails,
+          destinationChainTxHashes: [],
+          refundedAmount: st.swapDetails.depositedAmount!,
+        },
+      })),
+    });
+    await poll(q.deposit_address);
+    expect((await paymentOf(q.id)).status).toBe('REFUNDED');
+    expect((await sessionOf(s.id)).status).toBe('REFUNDED');
+    expect((await eventsOf('payment.refunded')).length).toBe(1);
+    expect(await eventsOf('payment.succeeded')).toEqual([]);
+  });
+
   it('worker jobs: the scan fans out one poll job per address; the poll job settles', async () => {
     const { processCheckoutJob, POLL_DEPOSIT_JOB, SCAN_DEPOSITS_JOB } =
       await import('../worker.js');

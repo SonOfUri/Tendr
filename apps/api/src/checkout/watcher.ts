@@ -38,6 +38,7 @@ import {
   type StatusResponse,
 } from './oneclick/index.js';
 import { recordRevenue } from './revenue.js';
+import { liveSenderResolvers } from './senders/index.js';
 import { onScreeningAllowed, screenAddress, type ScreeningOutcome } from './screening.js';
 import { expireInTx } from './sessions.js';
 import { tokenInfo } from './tokens.js';
@@ -135,33 +136,42 @@ export interface WatcherDeps {
   ): Promise<{ decision: ScreeningOutcome }>;
   /** CHECKOUT_TOPUP_ENABLED; unset: on in test mode, off in live mode. */
   topupEnabled(livemode: boolean): boolean;
-  /** The origin-chain sender of a deposit, when this chain has a lookup; else null. */
-  resolveSender(input: {
+  /**
+   * Every origin-chain sender of a deposit (senders/); [] when it cannot be told (the payment
+   * then waits in SCREENING_PENDING). Never called in test mode, which uses the simulated sender.
+   */
+  resolveSenders(input: {
     livemode: boolean;
     chain: string;
     originAsset: string;
     originTxHashes: string[];
-  }): Promise<string | null>;
+  }): Promise<string[]>;
 }
 
-/** Sender lookups per origin chain. Only NEAR for now (the transaction's signer). */
-async function defaultResolveSender(input: {
+const liveResolvers = liveSenderResolvers(() => deps.near(true));
+
+/** Live mode: the per-family resolvers. Test mode: none (the simulator names the sender). */
+async function defaultResolveSenders(input: {
   livemode: boolean;
   chain: string;
   originAsset: string;
   originTxHashes: string[];
-}): Promise<string | null> {
-  if (input.chain.toLowerCase() !== 'near') return null;
-  const contract = input.originAsset.startsWith('nep141:') ? input.originAsset.slice(7) : undefined;
-  for (const hash of input.originTxHashes) {
-    try {
-      const tx = await deps.near(input.livemode).txStatus(hash, contract);
-      if (tx?.signerId) return tx.signerId;
-    } catch (err) {
-      log('warn', 'watcher: sender lookup failed', { hash, err: String(err) });
-    }
-  }
-  return null;
+}): Promise<string[]> {
+  if (!input.livemode) return [];
+  return liveResolvers.resolve(input);
+}
+
+/** Every known sender of a payment (`sender_addresses`, else the primary `sender_address`). */
+export function paymentSenders(p: Pick<Payment, 'senderAddress' | 'senderAddresses'>): string[] {
+  if (p.senderAddresses.length > 0) return p.senderAddresses;
+  return p.senderAddress ? [p.senderAddress] : [];
+}
+
+/** Any `block` blocks; otherwise any `unavailable` (or no sender at all) is unavailable. */
+export function combineDecisions(ds: ScreeningOutcome[]): ScreeningOutcome {
+  if (ds.includes('block')) return 'block';
+  if (ds.length === 0 || ds.includes('unavailable')) return 'unavailable';
+  return 'allow';
 }
 
 const DEFAULT_DEPS: WatcherDeps = {
@@ -170,7 +180,7 @@ const DEFAULT_DEPS: WatcherDeps = {
   near: nearClient,
   screen: screenAddress,
   topupEnabled: (livemode) => env().CHECKOUT_TOPUP_ENABLED ?? !livemode,
-  resolveSender: defaultResolveSender,
+  resolveSenders: defaultResolveSenders,
 };
 let deps: WatcherDeps = DEFAULT_DEPS;
 
@@ -189,7 +199,7 @@ export function setWatcherDeps(overrides: Partial<WatcherDeps> | null): void {
   deps = overrides ? { ...DEFAULT_DEPS, ...overrides } : DEFAULT_DEPS;
 }
 
-export type ReturnReason = 'overpaid' | 'underpaid' | 'late' | 'failed';
+export type ReturnReason = 'overpaid' | 'underpaid' | 'late' | 'failed' | 'sanctions';
 /**
  * Money that landed in the merchant account must go back to the sender (Task 8 queues the
  * signer-approved return). Called after the payment's state change committed.
@@ -231,6 +241,19 @@ type Loaded = { quote: QuoteRow; session: Session; ctx: ScopeContext };
 
 /** Final for the watcher: nothing more will happen on this address. */
 const DONE_PAYMENT = new Set(['SETTLED', 'REFUNDED', 'HELD']);
+
+/**
+ * A HELD payment is still watched while 1Click may yet refund it straight to the shopper's own
+ * address (`ORIGIN_CHAIN`): until 1Click swapped (SUCCESS) or refunded it.
+ */
+function watchHeld(q: Pick<Quote, 'refundType'>, p: Pick<Payment, 'status' | 'oneclickStatus'>) {
+  return (
+    p.status === 'HELD' &&
+    q.refundType === 'ORIGIN_CHAIN' &&
+    p.oneclickStatus !== 'SUCCESS' &&
+    p.oneclickStatus !== 'REFUNDED'
+  );
+}
 
 export interface PollResult {
   depositAddress: string;
@@ -274,7 +297,7 @@ async function pollQuote(q0: QuoteRow): Promise<PollResult> {
   });
   if (q0.watchStoppedAt) return result('none', true);
   const existing = await prisma.payment.findFirst({ where: { quoteId: q0.id } });
-  if (existing && DONE_PAYMENT.has(existing.status)) {
+  if (existing && DONE_PAYMENT.has(existing.status) && !watchHeld(q0, existing)) {
     await stopWatching(q0.id, now);
     return result('none', true);
   }
@@ -396,14 +419,15 @@ async function detect(q: QuoteRow, status: StatusResponse): Promise<Payment | nu
   const ctx = { merchantId: q.merchantId, livemode: q.livemode };
   const chain = await chainOf(q.livemode, q.originAssetId);
   const origin = status.swapDetails.originChainTxHashes.map((h) => h.hash);
-  const sender =
-    status.swapDetails.senderAddress ??
-    (await deps.resolveSender({
-      livemode: q.livemode,
-      chain,
-      originAsset: q.originAssetId,
-      originTxHashes: origin,
-    }));
+  const senders = status.swapDetails.senderAddress
+    ? [status.swapDetails.senderAddress]
+    : await deps.resolveSenders({
+        livemode: q.livemode,
+        chain,
+        originAsset: q.originAssetId,
+        originTxHashes: origin,
+      });
+  const sender = senders[0] ?? null;
   const now = deps.now();
   let created: Payment | null;
   try {
@@ -427,6 +451,7 @@ async function detect(q: QuoteRow, status: StatusResponse): Promise<Payment | nu
           amountReceived: big(status.swapDetails.depositedAmount).toString(),
           isLate: late,
           senderAddress: sender,
+          senderAddresses: senders,
           senderChain: chain,
           oneclickStatus: status.status,
           amountInUsd: q.amountInUsd,
@@ -477,14 +502,14 @@ async function detect(q: QuoteRow, status: StatusResponse): Promise<Payment | nu
   }
   if (!created) return prisma.payment.findFirst({ where: { quoteId: q.id } });
 
-  // Every detected sender is screened, connected wallets included.
-  if (sender) {
-    const { decision } = await deps.screen(ctx, {
-      sessionId: q.sessionId,
-      address: sender,
-      chain,
-    });
-    if (decision === 'block') {
+  // Every detected sender is screened, connected wallets included; any `block` holds.
+  if (senders.length > 0) {
+    let blocked = false;
+    for (const address of senders) {
+      const { decision } = await deps.screen(ctx, { sessionId: q.sessionId, address, chain });
+      if (decision === 'block') blocked = true;
+    }
+    if (blocked) {
       await tenantTransaction(ctx, (tx) => holdPaymentInTx(tx, ctx, created!.id));
     }
   } else {
@@ -541,6 +566,13 @@ async function advance(
     status,
     payment.createdAt,
   );
+  if (payment.status === 'HELD') {
+    // Held funds are never refunded by Tendr; 1Click may refund them to the shopper's address.
+    if (status.status === 'REFUNDED' && q.refundType === 'ORIGIN_CHAIN') {
+      await refund(l, payment, 'sanctions', status);
+    }
+    return { outcome, done: !watchHeld(q, payment) };
+  }
   if (DONE_PAYMENT.has(payment.status)) return { outcome, done: true };
   if (payment.status === 'REFUNDING') {
     // Waiting for 1Click's own refund after a FAILED swap; returns via the store are Task 8's.
@@ -628,6 +660,17 @@ async function releaseSession(
   });
   if (s.status === 'LATE_DEPOSIT') {
     await transitionSession(tx, ctx, s.id, 'REFUNDED', { payment_id: paymentId });
+  } else if (
+    (s.status === 'HELD' || s.status === 'SCREENING_PENDING') &&
+    (await tx.payment.count({
+      where: {
+        sessionId: s.id,
+        id: { not: paymentId },
+        status: { in: ['DETECTED', 'PROCESSING', 'SCREENING_PENDING', 'HELD'] },
+      },
+    })) === 0
+  ) {
+    await transitionSession(tx, ctx, s.id, 'REFUNDED', { payment_id: paymentId });
   } else if (s.status === 'PROCESSING' && !(await otherInFlight(tx, s.id, paymentId))) {
     const unexpired = s.expiresAt.getTime() > deps.now().getTime();
     await transitionSession(tx, ctx, s.id, unexpired ? 'PENDING_DEPOSIT' : 'REFUNDED', {
@@ -700,9 +743,14 @@ async function refund(
   const changed = await tenantTransaction(ctx, async (tx) => {
     await lockRow(tx, 'payments', payment.id);
     const p = await tx.payment.findUniqueOrThrow({ where: { id: payment.id } });
-    if (!['PROCESSING', 'DETECTED', 'REFUNDING'].includes(p.status)) {
+    // HELD / SCREENING_PENDING: only 1Click's own refund to the shopper's address moves them
+    // (Tendr never refunds held funds; a store-path refund waits for the signers).
+    const movable =
+      ['PROCESSING', 'DETECTED', 'REFUNDING'].includes(p.status) ||
+      (direct && (p.status === 'HELD' || p.status === 'SCREENING_PENDING'));
+    if (!movable) {
       if (p.status === 'SCREENING_PENDING') {
-        log('error', 'watcher: 1Click refunded a payment waiting on screening', {
+        log('error', 'watcher: 1Click refunded a payment waiting on screening into the store', {
           paymentId: p.id,
         });
       }
@@ -879,37 +927,48 @@ export async function verify(
 /** The sanctions decision for the payment's sender, screened at or after detection. */
 async function senderDecision(l: Loaded, payment: Payment): Promise<ScreeningOutcome> {
   const { quote: q, ctx } = l;
-  let sender = payment.senderAddress;
-  if (!sender) {
-    sender = await deps.resolveSender({
+  let senders = paymentSenders(payment);
+  if (senders.length === 0) {
+    senders = await deps.resolveSenders({
       livemode: ctx.livemode,
       chain: payment.senderChain ?? 'unknown',
       originAsset: q.originAssetId,
       originTxHashes: payment.originTxHash ? [payment.originTxHash] : [],
     });
-    if (!sender) return 'unavailable';
-    await prisma.payment.updateMany({ where: { id: payment.id }, data: { senderAddress: sender } });
+    if (senders.length === 0) return 'unavailable';
+    await prisma.payment.updateMany({
+      where: { id: payment.id },
+      data: { senderAddress: senders[0], senderAddresses: senders },
+    });
   }
-  const row = await prisma.screeningResult.findFirst({
-    where: {
-      sessionId: payment.sessionId,
-      merchantId: ctx.merchantId,
-      livemode: ctx.livemode,
-      address: sender,
-      createdAt: { gte: payment.createdAt },
-    },
-    orderBy: { createdAt: 'desc' },
-    select: { decision: true },
-  });
-  if (row) return row.decision;
-  // A SCREENING_PENDING payment is re-screened by screening.ts's retries, not every poll.
-  if (payment.status === 'SCREENING_PENDING') return 'unavailable';
-  const { decision } = await deps.screen(ctx, {
-    sessionId: payment.sessionId,
-    address: sender,
-    chain: payment.senderChain ?? 'unknown',
-  });
-  return decision;
+  const decisions: ScreeningOutcome[] = [];
+  for (const address of senders) {
+    const row = await prisma.screeningResult.findFirst({
+      where: {
+        sessionId: payment.sessionId,
+        merchantId: ctx.merchantId,
+        livemode: ctx.livemode,
+        address,
+        createdAt: { gte: payment.createdAt },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { decision: true },
+    });
+    if (row) {
+      decisions.push(row.decision);
+    } else if (payment.status === 'SCREENING_PENDING') {
+      // A SCREENING_PENDING payment is re-screened by screening.ts's retries, not every poll.
+      decisions.push('unavailable');
+    } else {
+      const { decision } = await deps.screen(ctx, {
+        sessionId: payment.sessionId,
+        address,
+        chain: payment.senderChain ?? 'unknown',
+      });
+      decisions.push(decision);
+    }
+  }
+  return combineDecisions(decisions);
 }
 
 /** SUCCESS: verify the transfer, gate on screening, settle. Returns true when done. */

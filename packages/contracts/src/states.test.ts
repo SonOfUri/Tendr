@@ -19,6 +19,7 @@ describe('session transitions', () => {
     ['PROCESSING', 'SCREENING_PENDING'],
     ['SCREENING_PENDING', 'SETTLED'],
     ['SCREENING_PENDING', 'HELD'],
+    ['SCREENING_PENDING', 'REFUNDED'],
     ['EXPIRED', 'LATE_DEPOSIT'],
     ['LATE_DEPOSIT', 'REFUNDED'],
     ['LATE_DEPOSIT', 'HELD'],
@@ -35,7 +36,6 @@ describe('session transitions', () => {
     ['PENDING_DEPOSIT', 'SETTLED'],
     ['HELD', 'SETTLED'],
     ['HELD', 'PENDING_DEPOSIT'],
-    ['SCREENING_PENDING', 'REFUNDED'],
     ['SCREENING_PENDING', 'PENDING_DEPOSIT'],
     ['PENDING_DEPOSIT', 'HELD'],
     ['EXPIRED', 'HELD'],
@@ -73,6 +73,7 @@ describe('payment transitions', () => {
     ['SCREENING_PENDING', 'SETTLED'],
     ['SCREENING_PENDING', 'HELD'],
     ['HELD', 'REFUNDING'],
+    ['SCREENING_PENDING', 'REFUNDING'],
   ] as [PaymentStatus, PaymentStatus][])('payment allows %s → %s', (f, t) =>
     expect(canTransitionPayment(f, t)).toBe(true),
   );
@@ -80,7 +81,7 @@ describe('payment transitions', () => {
   it.each([
     ['HELD', 'SETTLED'],
     ['HELD', 'REFUNDED'],
-    ['SCREENING_PENDING', 'REFUNDING'],
+    ['SCREENING_PENDING', 'REFUNDED'],
     ['SCREENING_PENDING', 'PROCESSING'],
     ['REFUNDING', 'HELD'],
   ] as [PaymentStatus, PaymentStatus][])('payment rejects %s → %s', (f, t) =>
