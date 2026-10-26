@@ -38,7 +38,8 @@ export type IdPrefix =
   | 'prop'
   | 'appr'
   | 'rec'
-  | 'alim'; // account_limits (mirror of the contract's per-asset limits)
+  | 'alim' // account_limits (mirror of the contract's per-asset limits)
+  | 'ntc'; // event_notices (signer notice emails sent per event)
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${ulid()}`;

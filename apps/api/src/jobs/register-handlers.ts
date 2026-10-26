@@ -13,6 +13,7 @@ import { registerRefundHooks } from '../checkout/refunds.js';
 import { registerWatcherHooks } from '../checkout/watcher.js';
 import { registerWebhookHandlers } from '../checkout/webhooks.js';
 import { registerAccountHandlers } from './account-notices.js';
+import { registerReviewNotices } from './review-notices.js';
 import { registerEventHandler } from './handlers.js';
 
 // Merchant-account provisioning (test account at store creation, live account at go-live).
@@ -43,3 +44,7 @@ registerRefundHooks();
 // Merchant webhooks: each merchant-facing checkout event fans out to the store's endpoints of its
 // mode (internal ops events are never delivered — ruling C23).
 registerWebhookHandlers();
+
+// Review-queue signer emails (Ruling C23): payment.held, payment.screening_unresolved and
+// refund.needs_review — internal ops events mailed to signers once per event, never webhooks.
+registerReviewNotices();

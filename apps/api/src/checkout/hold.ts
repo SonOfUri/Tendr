@@ -3,15 +3,15 @@
 // `payment.held` replaces the paid webhook, and every signer is told, in exactly these words, that
 // the funds are theirs to keep untouched.
 import type { Prisma } from '@prisma/client';
+import { HOLD_NOTICE } from '@tendr/contracts';
 import type { ScopeContext } from '../db/scoped.js';
 import { recordEvent } from '../events/record.js';
 import { transitionPayment, transitionSession } from '../events/transitions.js';
 import { notFound } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
 
-/** The non-custodial notice to all signers, verbatim (spec "Changes" #3). */
-export const HOLD_NOTICE =
-  'These funds came from a sanctioned address. Tendr cannot freeze them; you are responsible for not using them; get legal advice.';
+/** The non-custodial notice to all signers, verbatim (spec "Changes" #3; in @tendr/contracts). */
+export { HOLD_NOTICE };
 
 /** Payment statuses a hold applies to (from the state machine: → HELD). */
 const HOLDABLE_PAYMENT = new Set(['DETECTED', 'PROCESSING', 'SCREENING_PENDING']);

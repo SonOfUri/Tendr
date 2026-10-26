@@ -42,6 +42,10 @@ export const ErrorCodes = [
   'DEPOSIT_IN_PROGRESS',
   /** Returning a held (sanctions) payment's funds needs the typed legal-clearance acknowledgement. */
   'LEGAL_ACK_REQUIRED',
+  /** An earlier refund proposal for this return may still execute on chain; it must end there first. */
+  'PROPOSAL_STILL_LIVE',
+  /** The amount that reached the merchant account cannot be verified yet (a held return). */
+  'AMOUNT_UNKNOWN',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

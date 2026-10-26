@@ -18,10 +18,13 @@ import {
 } from './routes/checkout-client.js';
 import { checkoutSessionRoutes } from './routes/checkout-sessions.js';
 import { healthRoutes } from './routes/health.js';
+import { merchantSettingsRoutes } from './routes/merchant-settings.js';
 import { merchantRoutes } from './routes/merchants.js';
+import { paymentRoutes } from './routes/payments.js';
 import { pingRoutes } from './routes/ping.js';
 import { proposalRoutes } from './routes/proposals.js';
 import { recoveryRoutes } from './routes/recovery.js';
+import { reviewRoutes } from './routes/review.js';
 import { teamRoutes } from './routes/team.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { randomUUID } from 'node:crypto';
@@ -228,6 +231,9 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(checkoutSessionRoutes);
   await app.register(checkoutClientRoutes, { quoteRateLimit: limiters.sessionQuote });
   await app.register(webhookRoutes);
+  await app.register(paymentRoutes);
+  await app.register(reviewRoutes);
+  await app.register(merchantSettingsRoutes);
   opts.extraRoutes?.(app);
 
   return app;

@@ -787,18 +787,18 @@ model PayoutAllowlistEntry {
 }
 
 model WebhookEndpoint {
-  id         String   @id
-  merchantId String   @map("merchant_id")
-  livemode   Boolean
-  url        String
-  secretRef  String   @map("secret_ref")
+  id                      String    @id
+  merchantId              String    @map("merchant_id")
+  livemode                Boolean
+  url                     String
+  secretRef               String    @map("secret_ref")
   /// The secret replaced by the last rotation; it still signs (a second v1=) until the expiry.
   previousSecretRef       String?   @map("previous_secret_ref")
   previousSecretExpiresAt DateTime? @map("previous_secret_expires_at")
-  events     String[]
-  active     Boolean  @default(true)
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  events                  String[]
+  active                  Boolean   @default(true)
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
 
   merchant   Merchant          @relation(fields: [merchantId], references: [id])
   secret     Secret            @relation(fields: [secretRef], references: [id])
@@ -1006,6 +1006,10 @@ model Payment {
   screeningNextAt       DateTime?     @map("screening_next_at")
   /// Set when screening was still unavailable after 6 h: a merchant review item (not a hold).
   screeningUnresolvedAt DateTime?     @map("screening_unresolved_at")
+  /// The typed legal-clearance acknowledgement (owner, step-up) for a held payment: required
+  /// before its funds can be returned. `legal_ack_by_user_id` is the person (no FK: a record).
+  legalAckAt            DateTime?     @map("legal_ack_at")
+  legalAckByUserId      String?       @map("legal_ack_by_user_id")
   createdAt             DateTime      @default(now()) @map("created_at")
   updatedAt             DateTime      @updatedAt @map("updated_at")
 
@@ -1349,6 +1353,19 @@ model Secret {
   webhookEndpoints WebhookEndpoint[]
 
   @@map("secrets")
+}
+
+/// A signer notice email sent for an event, one per (event, recipient): claimed before the send so
+/// a replayed handler never mails the same person twice (payment.held, refund.needs_review, …).
+model EventNotice {
+  id        String   @id
+  eventId   String   @map("event_id")
+  recipient String
+  template  String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([eventId, recipient])
+  @@map("event_notices")
 }
 
 model EventOutbox {

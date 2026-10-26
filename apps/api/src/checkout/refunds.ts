@@ -38,6 +38,7 @@ import { z } from 'zod';
 import {
   applyProposalView,
   createSystemDraftInTx,
+  RELAY_CLAIM_LEASE_MS,
   SUPPORTED_CHAINS,
   type ContractProposalView,
 } from '../accounts/proposals.js';
@@ -88,6 +89,8 @@ export const REVIEW = {
   proposalCancelled: 'proposal_cancelled',
   proposalExpired: 'proposal_expired',
   amountUnknown: 'amount_unknown',
+  /** Re-netted for a new destination in the review queue, the return fell under SMALL_OVERPAY_USD. */
+  keptSmall: 'kept_small',
 } as const;
 
 // ─── dependencies ────────────────────────────────────────────────────────────
@@ -103,6 +106,14 @@ let deps: RefundDeps = DEFAULT_DEPS;
 /** Test hook: overrides some dependencies; null restores the defaults. */
 export function setRefundDeps(overrides: Partial<RefundDeps> | null): void {
   deps = overrides ? { ...DEFAULT_DEPS, ...overrides } : DEFAULT_DEPS;
+}
+
+/** Sanctions-screens a return destination (the same seam `draftReturn` uses). */
+export function screenDestination(
+  ctx: ScopeContext,
+  input: { sessionId: string; address: string; chain: string },
+): Promise<{ decision: ScreeningOutcome }> {
+  return deps.screen(ctx, input);
 }
 
 // ─── chains and routes ───────────────────────────────────────────────────────
@@ -150,7 +161,7 @@ export function returnChainsOf(asset: string): string[] {
 // ─── amounts ─────────────────────────────────────────────────────────────────
 
 /** USD per base unit of `assetId`: the token list's price, else the quote's own in/out ratio. */
-async function usdPerUnit(
+export async function usdPerUnit(
   livemode: boolean,
   assetId: string,
   quote: Pick<Quote, 'originAssetId' | 'amountIn' | 'amountInUsd'>,
@@ -188,7 +199,7 @@ const tenantOf = (ctx: ScopeContext) => ({ merchantId: ctx.merchantId, livemode:
 async function lockPayment(tx: Tx, ctx: ScopeContext, id: string): Promise<void> {
   await tx.$queryRaw`SELECT id FROM payments WHERE id = ${id} AND merchant_id = ${ctx.merchantId} AND livemode = ${ctx.livemode} FOR UPDATE`;
 }
-async function lockRefund(tx: Tx, ctx: ScopeContext, id: string): Promise<void> {
+export async function lockRefund(tx: Tx, ctx: ScopeContext, id: string): Promise<void> {
   await tx.$queryRaw`SELECT id FROM refunds WHERE id = ${id} AND merchant_id = ${ctx.merchantId} AND livemode = ${ctx.livemode} FOR UPDATE`;
 }
 
@@ -345,7 +356,7 @@ async function recordDirectRefund(
  * (`kept_small_overpayment`), no signer. A payment waiting in REFUNDING for this return is done
  * (REFUNDED), and a late-deposit session waiting on it closes.
  */
-async function keepSmall(ctx: ScopeContext, paymentId: string, reason: ReturnReason) {
+export async function keepSmall(ctx: ScopeContext, paymentId: string, reason: ReturnReason) {
   await tenantTransaction(ctx, async (tx) => {
     await lockPayment(tx, ctx, paymentId);
     const p = await tx.payment.findFirstOrThrow({ where: { id: paymentId, ...tenantOf(ctx) } });
@@ -383,7 +394,7 @@ async function closeSession(tx: Tx, ctx: ScopeContext, sessionId: string, paymen
     await transitionSession(tx, ctx, sessionId, 'REFUNDED', { payment_id: paymentId });
 }
 
-function refundPayload(r: Refund, sessionId: string, externalRef: string | null) {
+export function refundPayload(r: Refund, sessionId: string, externalRef: string | null) {
   return {
     refund_id: r.id,
     payment_id: r.paymentId,
@@ -573,7 +584,7 @@ async function blockReturn(ctx: ScopeContext, refundId: string): Promise<Refund>
  * payment, else 1Click's reported `amountOut` for a SUCCESS, else the amount 1Click refunded into
  * the account (a store-path refund). Never the quote's estimate.
  */
-async function heldAmount(
+export async function heldAmount(
   ctx: ScopeContext,
   p: Payment,
   q: Quote,
@@ -1030,7 +1041,7 @@ export const REFUND_NEEDS_REVIEW = 'refund.needs_review';
  * the merchant can draft it again (Task 10). Records the internal `refund.needs_review` event (not
  * a webhook). Only refunds still linked to `proposalId` and not yet sent are touched.
  */
-async function detachProposal(
+export async function detachProposal(
   ctx: ScopeContext,
   proposalId: string,
   reviewReason: string,
@@ -1110,11 +1121,24 @@ async function endedOnChain(ctx: ScopeContext, prop: AccountProposal): Promise<b
   if (prop.status !== 'cancelled' || (prop.relayClaimedAt === null && prop.lastTxHash === null)) {
     return true;
   }
+  return (await chainSaysEnded(ctx, prop)) === 'ended';
+}
+
+/**
+ * Asks the contract's `get_proposal` view whether `prop` can still execute: `ended` when it is
+ * absent, cancelled, expired or failed there; `live` otherwise (the mirror is then brought up to
+ * date from the view, which revives a local-only cancel and re-links its refund); `unknown` when
+ * the view cannot be read.
+ */
+async function chainSaysEnded(
+  ctx: ScopeContext,
+  prop: AccountProposal,
+): Promise<'ended' | 'live' | 'unknown'> {
   const account = await prisma.merchantAccount.findFirst({
     where: { id: prop.accountId, ...tenantOf(ctx) },
     select: { nearAccountId: true },
   });
-  if (!account?.nearAccountId) return false;
+  if (!account?.nearAccountId) return 'unknown';
   let v: ContractProposalView | null;
   try {
     v = await nearClient(ctx.livemode).view<ContractProposalView | null>(
@@ -1123,23 +1147,46 @@ async function endedOnChain(ctx: ScopeContext, prop: AccountProposal): Promise<b
       { id: prop.onchainId },
     );
   } catch (err) {
-    log('warn', 'refund sweep: get_proposal failed; not detaching', {
+    log('warn', 'refund: get_proposal failed; not treating the proposal as ended', {
       proposalId: prop.id,
       err: String(err),
     });
-    return false;
+    return 'unknown';
   }
-  if (!v || ['cancelled', 'expired', 'failed'].includes(v.status)) return true;
+  if (!v || ['cancelled', 'expired', 'failed'].includes(v.status)) return 'ended';
   await tenantTransaction(ctx, (tx) => applyProposalView(tx, ctx, prop.id, v));
-  log('warn', 'refund sweep: a locally cancelled refund draft is live on chain', {
+  log('warn', 'refund: a refund proposal the mirror shows as ended is live on chain', {
     proposalId: prop.id,
     chainStatus: v.status,
   });
-  return false;
+  return 'live';
+}
+
+/** Statuses a refund proposal can end in without executing (mirror and contract alike). */
+const ENDED_STATUSES = new Set(['cancelled', 'expired', 'failed']);
+
+/**
+ * The strict check before a return is drafted AGAIN (the review queue's refund action): `prop`
+ * may never execute. The mirror must show it ended AND the contract's `get_proposal` view must
+ * show it absent, cancelled, expired or failed — a status in Postgres alone is never enough, since
+ * a relay or a local-only cancel may disagree with the chain. A relay claim inside its lease (a
+ * `propose` possibly in flight) is not ended either. Returns `ended`, `live` or `unknown` (the
+ * view cannot be read: the caller refuses and the person retries).
+ */
+export async function verifiedEndedOnChain(
+  ctx: ScopeContext,
+  prop: AccountProposal,
+  now = Date.now(),
+): Promise<'ended' | 'live' | 'unknown'> {
+  if (!ENDED_STATUSES.has(prop.status)) return 'live';
+  if (prop.relayClaimedAt && prop.relayClaimedAt.getTime() > now - RELAY_CLAIM_LEASE_MS) {
+    return 'live';
+  }
+  return chainSaysEnded(ctx, prop);
 }
 
 /** Review reason for a proposal that ended without executing. */
-const ENDED_REVIEW: Readonly<Record<string, string>> = {
+export const ENDED_REVIEW: Readonly<Record<string, string>> = {
   cancelled: REVIEW.proposalCancelled,
   expired: REVIEW.proposalExpired,
   failed: REVIEW.transferFailed,
@@ -1283,8 +1330,13 @@ export async function sweepReturns(): Promise<number> {
       needsAddress: false,
       reviewReason: null,
       destination: { not: null },
-      OR: [{ acknowledgedLegalAt: { not: null } }, { reason: { not: 'sanctions' } }],
-      payment: { status: { not: 'HELD' } },
+      // A held payment's return is retried only once the review queue's refund action set it up:
+      // the owner's typed legal acknowledgement plus a merchant-given destination (never the
+      // sanctioned sender), which is what `acknowledged_legal_at` on the refund records.
+      AND: [
+        { OR: [{ acknowledgedLegalAt: { not: null } }, { reason: { not: 'sanctions' } }] },
+        { OR: [{ acknowledgedLegalAt: { not: null } }, { payment: { status: { not: 'HELD' } } }] },
+      ],
     },
     orderBy: { createdAt: 'asc' },
     take: SWEEP_BATCH,

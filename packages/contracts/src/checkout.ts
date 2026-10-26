@@ -64,3 +64,16 @@ export const DEFAULT_SLIPPAGE_BPS = 100;
 export const DEFAULT_GAS_MAX_USD = 2;
 /** Webhook retries back off exponentially and give up after this long. */
 export const WEBHOOK_RETRY_WINDOW_MS = 3 * 24 * 3600_000;
+
+/**
+ * The non-custodial hold notice, verbatim (spec "Changes after external plan review" #3): shown on
+ * every held payment in the dashboard, in the signer email and in the docs.
+ */
+export const HOLD_NOTICE =
+  'These funds came from a sanctioned address. Tendr cannot freeze them; you are responsible for not using them; get legal advice.';
+
+/** What an owner must type, exactly, before a held payment's funds can be returned. */
+export const LEGAL_ACK_PHRASE = 'I have legal clearance to refund this payment';
+
+/** Most checkout domains (origins allowed to frame the checkout) a merchant may register. */
+export const MAX_CHECKOUT_DOMAINS = 20;
