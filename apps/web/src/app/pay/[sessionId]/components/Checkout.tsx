@@ -171,6 +171,8 @@ export function Checkout({ sessionId }: { sessionId: string }) {
       if (!reporter) return;
       const reported = reporter.record(r).finally(refresh);
       refresh();
+      // A tx id saved before its broadcast is not a result yet: the window stays open.
+      if (r.persistOnly) return;
       if (
         walletWindow &&
         r.txHash !== null &&
@@ -183,6 +185,27 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     },
     [reporter, refresh, walletWindow, sessionId],
   );
+  // Right before a wallet send: the session is re-fetched, and a deposit reported meanwhile
+  // (another tab, another window) blocks this one (C33).
+  const checkBeforeSend = useCallback(async (): Promise<'ok' | 'blocked' | 'error'> => {
+    if (!client || !reporter) return 'error';
+    let v: SessionView;
+    try {
+      v = await client.session();
+    } catch {
+      return 'error';
+    }
+    setView(v);
+    const block = paymentBlock({
+      status: v.status,
+      pending: reporter.pending(),
+      depositSubmittedAt: v.deposit_submitted_at ?? null,
+      dismissedSubmittedAt: reporter.dismissed(),
+    });
+    if (v.status !== 'PENDING_DEPOSIT') return 'blocked';
+    return block === null ? 'ok' : 'blocked';
+  }, [client, reporter]);
+
   // The wallet window: its result is recorded with the WINDOW's quote id, never this page's.
   const openWallet = useCallback(() => {
     if (!secret) return null;
@@ -303,6 +326,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
               dismissedSubmittedAt: dismissedAt,
             })}
             onDidntGoThrough={onDidntGoThrough}
+            checkBeforeSend={checkBeforeSend}
             openWalletWindow={walletWindow ? undefined : openWallet}
           />
         ) : tokensFailed ? (

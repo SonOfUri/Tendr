@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { SessionView, Token } from '@/lib/checkout/api';
 import { CheckoutHeader } from './CheckoutHeader';
 import { CopyButton } from './CopyButton';
-import { leftoversNotice } from './PayFlow';
+import { PayFlow, leftoversNotice } from './PayFlow';
+import { CONFIRM_NOT_SENT_COPY } from './WalletConnect';
 import { WalletConnect } from './WalletConnect';
 import { canPay } from './WalletPanel';
 
@@ -144,5 +145,65 @@ describe('WalletConnect', () => {
     );
     expect(html).not.toContain('<button');
     expect(html).toContain('Send it yourself');
+  });
+});
+
+describe('PayFlow while a payment may be on its way (C33)', () => {
+  const token: Token = {
+    asset_id: 'nep141:usdt.tether-token.near',
+    symbol: 'USDT',
+    blockchain: 'near',
+    decimals: 6,
+    price_usd: '1',
+    popular: true,
+  };
+  const DEPOSIT = 'b'.repeat(64);
+  const view = {
+    ...VIEW,
+    quote: {
+      id: 'quo_01JAAAAAAAAAAAAAAAAAAAAAAA',
+      origin_asset: token.asset_id,
+      deposit_address: DEPOSIT,
+      amount_in: '84000000',
+      amount_in_usd: '84',
+      deadline: '2026-10-26T12:10:00Z',
+      expired: false,
+      refund: 'store',
+      refund_address: null,
+      fee_lines: [],
+      small_overpay_notice: false,
+      small_overpay_usd: 1,
+    },
+  } as SessionView;
+  const render = (now: string) =>
+    renderToStaticMarkup(
+      <PayFlow
+        view={view}
+        client={{} as never}
+        tokens={[token]}
+        now={Date.parse(now)}
+        onQuote={() => {}}
+        onRefresh={() => {}}
+        blocked="sent"
+        onDidntGoThrough={() => {}}
+      />,
+    );
+
+  it('before the deadline the manual send details stay', () => {
+    const html = render('2026-10-26T12:00:00Z');
+    expect(html).toContain(DEPOSIT);
+    expect(html).toContain('Your payment is on its way');
+  });
+
+  it('past the deadline only the notice and the confirm control remain', () => {
+    const html = render('2026-10-26T12:11:00Z');
+    expect(html).not.toContain(DEPOSIT);
+    expect(html).not.toContain('send it yourself');
+    expect(html).toContain('Your payment is on its way');
+    expect(html).toContain('My payment didn&#x27;t go through');
+  });
+
+  it('the confirm copy covers a failed and a never-sent payment', () => {
+    expect(CONFIRM_NOT_SENT_COPY).toContain('shows this payment failed or was never sent');
   });
 });

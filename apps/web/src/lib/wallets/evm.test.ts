@@ -148,4 +148,25 @@ describe('EVM deposits', () => {
     expect((err as WalletError).address).toBe(other);
     expect(calls.some((c) => c.method === 'eth_sendTransaction')).toBe(false);
   });
+
+  it('a throw from the send after the wallet may have broadcast is "possibly sent" (C33)', async () => {
+    const { provider } = fakeProvider({ chainId: 8453, acceptSwitch: true });
+    const adapter = createEvmAdapter(payTargetFor(USDC_BASE)!, session(provider));
+    await adapter.connect();
+    const real = provider.request;
+    provider.request = vi.fn(async (a: { method: string; params?: unknown[] | object }) => {
+      if (a.method === 'eth_sendTransaction') throw new Error('Request expired. Please try again.');
+      return real(a);
+    });
+    const err = await adapter.sendDeposit(usdc).catch((e: unknown) => e);
+    expect((err as WalletError).kind).toBe('uncertain');
+    // A refusal in the wallet is still a plain cancel.
+    provider.request = vi.fn(async (a: { method: string; params?: unknown[] | object }) => {
+      if (a.method === 'eth_sendTransaction')
+        throw Object.assign(new Error('User rejected the request.'), { code: 4001 });
+      return real(a);
+    });
+    const r = await adapter.sendDeposit(usdc).catch((e: unknown) => e);
+    expect((r as WalletError).kind).toBe('rejected');
+  });
 });

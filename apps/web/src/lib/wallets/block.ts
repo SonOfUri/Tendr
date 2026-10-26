@@ -18,11 +18,16 @@ export function paymentBlock(opts: {
   dismissedSubmittedAt: string | null;
 }): PaymentBlock {
   if (opts.status !== 'PENDING_DEPOSIT') return null;
-  if (opts.pending) return opts.pending.state;
-  if (opts.depositSubmittedAt && opts.depositSubmittedAt !== opts.dismissedSubmittedAt) {
-    return 'sent';
+  const serverCounts =
+    opts.depositSubmittedAt !== null && opts.depositSubmittedAt !== opts.dismissedSubmittedAt;
+  if (opts.pending) {
+    // A record the API acknowledged is tracked there: once the watcher has recorded that deposit
+    // the server stops counting it (C33), and this tab follows, so a reopened session isn't stuck.
+    // A record the API never acknowledged (refused, not reported yet, failed on chain) blocks.
+    if (opts.pending.acknowledged && !serverCounts) return null;
+    return opts.pending.state;
   }
-  return null;
+  return serverCounts ? 'sent' : null;
 }
 
 /** Whether the page should fetch a new price on its own (once per expired quote, never blocked). */
@@ -30,9 +35,11 @@ export function autoRequoteDue(opts: {
   quote: { id: string; deadline: string };
   now: number;
   blocked: boolean;
+  /** A wallet send is in flight: the quote it pays must not be replaced under it. */
+  sending?: boolean;
   lastAutoId: string | null;
 }): boolean {
-  if (opts.blocked) return false;
+  if (opts.blocked || opts.sending) return false;
   if (Date.parse(opts.quote.deadline) > opts.now) return false;
   return opts.lastAutoId !== opts.quote.id;
 }
@@ -44,4 +51,19 @@ export const SEND_DEADLINE_MARGIN_MS = 15_000;
 export function mustRequoteBeforeSend(deadline: string, now: number): boolean {
   const t = Date.parse(deadline);
   return !Number.isFinite(t) || t - now <= SEND_DEADLINE_MARGIN_MS;
+}
+
+/**
+ * Whether the manual send details (deposit address, amount) are shown. While blocked and past
+ * the quote's deadline the address is expired: only the notice and the confirm control remain.
+ */
+export function showManualSend(blocked: PaymentBlock, deadline: string, now: number): boolean {
+  if (blocked === null) return true;
+  const t = Date.parse(deadline);
+  return Number.isFinite(t) && t > now;
+}
+
+/** A block from a poll waits until a wallet send in flight has settled before replacing it. */
+export function showBlockNotice(blocked: PaymentBlock, sending: boolean): boolean {
+  return blocked !== null && !sending;
 }

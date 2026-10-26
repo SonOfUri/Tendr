@@ -72,6 +72,18 @@ export function toWalletError(err: unknown): WalletError {
   return new WalletError('failed', { cause: err });
 }
 
+/**
+ * A throw during or after the wallet's sign-and-send step (C33): a refusal in the wallet is a
+ * cancel; anything else may have happened after the transaction went out, so it is "possibly
+ * sent", never a plain failure the pay button could retry.
+ */
+export function afterSignError(err: unknown, txHash?: string): WalletError {
+  const e = toWalletError(err);
+  if (e.kind === 'rejected') return e;
+  if (e.kind === 'uncertain' || e.kind === 'onchain_failed') return e;
+  return new WalletError('uncertain', { cause: err, ...(txHash ? { txHash } : {}) });
+}
+
 export const CHECK_WALLET_COPY = 'Check your wallet before paying again.';
 export const PAYMENT_FAILED_COPY = "Your payment didn't go through in your wallet.";
 

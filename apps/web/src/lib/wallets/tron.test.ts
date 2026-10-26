@@ -136,4 +136,42 @@ describe('Tron deposits (TronLink)', () => {
     expect((err as WalletError).kind).toBe('onchain_failed');
     expect((err as WalletError).txHash).toBe(TXID);
   });
+
+  it('onSigned records the signed tx id BEFORE the broadcast', async () => {
+    const { win, tronWeb } = fakeTron();
+    const order: string[] = [];
+    tronWeb.trx.sendRawTransaction.mockImplementationOnce(async () => {
+      order.push('broadcast');
+      return { result: true, txid: TXID };
+    });
+    const adapter = createTronAdapter(payTargetFor(USDT)!, { win });
+    await adapter.connect();
+    await adapter.sendDeposit(usdt, {
+      onSigned: (id) => {
+        order.push('signed:' + id);
+      },
+    });
+    expect(order).toEqual(['signed:' + TXID, 'broadcast']);
+  });
+
+  it('a duplicate-transaction refusal is "possibly sent"; a sign error is too, a refusal is not', async () => {
+    const { win, tronWeb } = fakeTron();
+    const adapter = createTronAdapter(payTargetFor(TRX)!, { win });
+    await adapter.connect();
+    tronWeb.trx.sendRawTransaction.mockResolvedValueOnce({
+      result: false,
+      code: 'DUP_TRANSACTION_ERROR',
+    });
+    const dup = (await adapter.sendDeposit(trx).catch((e: unknown) => e)) as WalletError;
+    expect(dup.kind).toBe('uncertain');
+    expect(dup.txHash).toBe(TXID);
+    tronWeb.trx.sign.mockRejectedValueOnce(new Error('extension disconnected'));
+    expect(((await adapter.sendDeposit(trx).catch((e: unknown) => e)) as WalletError).kind).toBe(
+      'uncertain',
+    );
+    tronWeb.trx.sign.mockRejectedValueOnce(new Error('Confirmation declined by user'));
+    expect(((await adapter.sendDeposit(trx).catch((e: unknown) => e)) as WalletError).kind).toBe(
+      'rejected',
+    );
+  });
 });

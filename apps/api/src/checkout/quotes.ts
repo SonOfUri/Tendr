@@ -286,9 +286,11 @@ export async function shopperSessionView(ctx: ShopperCtx) {
     ctx.db.payment.findMany({ where: { sessionId: s.id }, orderBy: { createdAt: 'asc' } }),
     needsEmail(ctx, s),
     shopperRefunds(ctx),
-    // Any quote of this session with a reported deposit (C32: blocks wallet sends in every tab).
+    // Any quote of this session with a reported deposit the watcher has not recorded yet (C32,
+    // C33): blocks wallet sends in every tab. Once a payment row exists for that quote, whatever
+    // its outcome, it stops counting, so a session the watcher reopens is not stuck behind it.
     ctx.db.quote.findFirst({
-      where: { sessionId: s.id, depositTxSubmittedAt: { not: null } },
+      where: { sessionId: s.id, depositTxSubmittedAt: { not: null }, payments: { none: {} } },
       orderBy: { depositTxSubmittedAt: 'desc' },
       select: { depositTxSubmittedAt: true },
     }),

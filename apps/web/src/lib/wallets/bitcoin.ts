@@ -1,7 +1,7 @@
 // Bitcoin deposits through AppKit's Bitcoin adapter: the wallet's own send (`sendTransfer`, i.e.
 // sendBitcoin) of the exact satoshis to the deposit address. Wallets that only sign PSBTs refuse
 // it; the shopper is then told to send manually. Mainnet only.
-import { WalletError, toWalletError } from './errors';
+import { WalletError, afterSignError, toWalletError } from './errors';
 import type { PayTarget, WalletAdapter } from './index';
 import { assertDepositMatches } from './match';
 import type { AppKitSession } from './appkit';
@@ -45,7 +45,11 @@ export function createBitcoinAdapter(
           amount: amount.toString(),
         });
       } catch (err) {
-        throw toWalletError(err);
+        // AppKit's wallet-standard connector refuses sendTransfer before anything is signed.
+        if ((err as { name?: unknown } | null)?.name === 'MethodNotSupportedError') {
+          throw new WalletError('failed', { cause: err, detail: 'wallet cannot send' });
+        }
+        throw afterSignError(err);
       }
       if (typeof txid !== 'string' || !TXID.test(txid)) {
         throw new WalletError('uncertain', { detail: 'no transaction id' });

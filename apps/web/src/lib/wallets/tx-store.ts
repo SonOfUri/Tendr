@@ -25,6 +25,8 @@ export interface PendingTx {
   quoteId: string;
   /** Nothing more to POST: the API acknowledged or refused it, or there is nothing to report. */
   reported: boolean;
+  /** The API accepted this hash: from then on the server's deposit_submitted_at tracks it. */
+  acknowledged: boolean;
   state: PendingState;
 }
 
@@ -43,7 +45,13 @@ function parse(raw: string | null): PendingTx | null {
     const hashOk = o.txHash === null || (typeof o.txHash === 'string' && HASH.test(o.txHash));
     if (!hashOk || typeof o.quoteId !== 'string' || !o.quoteId) return null;
     const state = STATES.has(o.state) ? (o.state as PendingState) : 'sent';
-    return { txHash: o.txHash ?? null, quoteId: o.quoteId, reported: o.reported === true, state };
+    return {
+      txHash: o.txHash ?? null,
+      quoteId: o.quoteId,
+      reported: o.reported === true,
+      state,
+      acknowledged: o.acknowledged === true,
+    };
   } catch {
     return null;
   }
@@ -68,6 +76,8 @@ export interface DepositReporter {
     txHash: string | null;
     quoteId: string;
     state: PendingState;
+    /** Save only; reported later (the tx id before its broadcast). A reload still resumes it. */
+    persistOnly?: boolean;
   }): Promise<ReportOutcome>;
   /** After a reload: POSTs a saved hash that was not acknowledged yet (its own quote only). */
   resume(): Promise<ReportOutcome | null>;
@@ -125,7 +135,7 @@ export function createDepositReporter(opts: {
     for (let attempt = 0; ; attempt++) {
       try {
         await opts.deposit(p.txHash, p.quoteId);
-        if (same(p)) save({ ...current!, reported: true });
+        if (same(p)) save({ ...current!, reported: true, acknowledged: true });
         return 'reported';
       } catch (err) {
         if (!retryable(err)) {
@@ -150,7 +160,7 @@ export function createDepositReporter(opts: {
     return promise;
   };
 
-  const record: DepositReporter['record'] = ({ txHash, quoteId, state }) => {
+  const record: DepositReporter['record'] = ({ txHash, quoteId, state, persistOnly }) => {
     if (
       !current ||
       current.txHash !== txHash ||
@@ -159,13 +169,16 @@ export function createDepositReporter(opts: {
     ) {
       // A failed-on-chain transaction is kept, never reported as a deposit.
       const reported = txHash === null || state === 'failed';
+      const sameTx = current?.txHash === txHash && current?.quoteId === quoteId;
       save({
         txHash,
         quoteId,
         state,
-        reported: current?.txHash === txHash && current.reported ? true : reported,
+        reported: sameTx && current!.reported ? true : reported,
+        acknowledged: sameTx ? current!.acknowledged : false,
       });
     }
+    if (persistOnly) return Promise.resolve('gave_up');
     return run(current!);
   };
 

@@ -13,7 +13,7 @@ import {
   createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
 } from '@solana/spl-token';
-import { WalletError, toWalletError } from './errors';
+import { WalletError, afterSignError, toWalletError } from './errors';
 import type { DepositRequest, PayTarget, WalletAdapter } from './index';
 import { assertDepositMatches } from './match';
 import type { AppKitSession } from './appkit';
@@ -113,8 +113,7 @@ export function createSolanaAdapter(
         // a dropped connection) may come after the transaction went out. Possibly sent (C32).
         signature = await provider.sendTransaction(tx, connection as never);
       } catch (err) {
-        const e = toWalletError(err);
-        throw e.kind === 'rejected' ? e : new WalletError('uncertain', { cause: err });
+        throw afterSignError(err);
       }
       if (typeof signature !== 'string' || !SIGNATURE.test(signature)) {
         throw new WalletError('uncertain', { detail: 'no signature' });

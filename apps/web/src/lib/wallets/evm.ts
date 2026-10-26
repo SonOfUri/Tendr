@@ -4,7 +4,7 @@
 // ask it to switch, and if it does not, the send is blocked.
 import { networkName } from '@/lib/checkout/format';
 import { toHexQuantity } from './amount';
-import { WalletError, toWalletError } from './errors';
+import { WalletError, afterSignError, toWalletError } from './errors';
 import type { DepositRequest, PayTarget, WalletAdapter } from './index';
 import { assertDepositMatches } from './match';
 
@@ -128,7 +128,8 @@ export function createEvmAdapter(target: PayTarget, session: EvmSession): Wallet
       try {
         hash = await provider.request({ method: 'eth_sendTransaction', params: [tx] });
       } catch (err) {
-        throw toWalletError(err);
+        // Over WalletConnect a mobile wallet can broadcast and the request still time out here.
+        throw afterSignError(err);
       }
       // The wallet answered after signing: from here on it may have been sent (C32).
       if (typeof hash !== 'string' || !TX_HASH.test(hash)) {

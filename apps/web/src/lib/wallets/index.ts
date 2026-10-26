@@ -19,10 +19,18 @@ export interface DepositRequest {
   decimals: number;
 }
 
+export interface SendHooks {
+  onSigned?: (txId: string) => void;
+}
+
 export interface WalletAdapter {
   chainFamily: ChainFamily;
   connect(): Promise<{ address: string; chainId?: string }>;
-  sendDeposit(q: DepositRequest): Promise<{ txHash: string }>;
+  /**
+   * Sends exactly `q`. `hooks.onSigned` is called with the tx id when the adapter learns it
+   * before broadcasting (Tron), so the payment can be recorded before it may go out.
+   */
+  sendDeposit(q: DepositRequest, hooks?: SendHooks): Promise<{ txHash: string }>;
   disconnect(): Promise<void>;
 }
 

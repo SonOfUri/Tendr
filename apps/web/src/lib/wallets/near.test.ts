@@ -214,4 +214,32 @@ describe('NEAR deposits', () => {
     const err = await adapter.sendDeposit(usdt).catch((e: unknown) => e);
     expect((err as WalletError).kind).toBe('uncertain');
   });
+
+  it('a planning error (a view failed) is retryable; a throw from the wallet send is "possibly sent"', async () => {
+    const wallet = walletReturning({ transaction: { hash: HASH } });
+    const failingView: NearView = async () => {
+      throw new Error('RPC unavailable');
+    };
+    const planFails = createNearAdapter(payTargetFor(USDT)!, {
+      ...nearDeps(wallet),
+      view: failingView,
+    });
+    await planFails.connect();
+    const e1 = await planFails.sendDeposit(usdt).catch((e: unknown) => e);
+    expect((e1 as WalletError).kind).toBe('failed');
+    expect(wallet.signAndSendTransaction).not.toHaveBeenCalled();
+
+    const sendThrows = walletReturning(null);
+    sendThrows.signAndSendTransaction.mockRejectedValueOnce(new Error('Failed to fetch'));
+    const a2 = createNearAdapter(payTargetFor(USDT)!, nearDeps(sendThrows));
+    await a2.connect();
+    const e2 = await a2.sendDeposit(usdt).catch((e: unknown) => e);
+    expect((e2 as WalletError).kind).toBe('uncertain');
+
+    sendThrows.signAndSendTransaction.mockRejectedValueOnce(
+      new Error('User rejected the transaction'),
+    );
+    const e3 = await a2.sendDeposit(usdt).catch((e: unknown) => e);
+    expect((e3 as WalletError).kind).toBe('rejected');
+  });
 });

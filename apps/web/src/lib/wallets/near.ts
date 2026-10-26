@@ -8,7 +8,7 @@
 // 3. `ft_transfer` of the exact amount (1 yoctoNEAR attached, as NEP-141 requires).
 //
 // 1Click lists NEAR as wNEAR (`nep141:wrap.near`), so the asset sent is always the quote's token.
-import { WalletError, toWalletError } from './errors';
+import { WalletError, afterSignError, toWalletError } from './errors';
 import type { DepositRequest, PayTarget, WalletAdapter } from './index';
 import { assertDepositMatches } from './match';
 
@@ -174,12 +174,21 @@ export function createNearAdapter(target: PayTarget, deps: NearDeps): WalletAdap
       assertDepositMatches(target, q);
       if (accountId.endsWith('.testnet'))
         throw new WalletError('chain_mismatch', { network: 'NEAR' });
+      // Planning (contract views) happens before the wallet is asked to sign: its errors are
+      // plain failures. A throw from the wallet's sign-and-send is possibly sent (C33).
+      let plan: NearPlan;
+      try {
+        plan = await planNearDeposit(deps.view, accountId, target, q);
+      } catch (err) {
+        throw err instanceof WalletError
+          ? err
+          : new WalletError('failed', { cause: err, detail: 'planning failed' });
+      }
       let outcome: unknown;
       try {
-        const plan = await planNearDeposit(deps.view, accountId, target, q);
         outcome = await wallet.signAndSendTransaction({ signerId: accountId, ...plan });
       } catch (err) {
-        throw toWalletError(err);
+        throw afterSignError(err);
       }
       // The wallet returned an outcome: from here on, never a plain retry (C32).
       const hash = hashOf(outcome);

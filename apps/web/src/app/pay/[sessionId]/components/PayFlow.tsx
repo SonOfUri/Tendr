@@ -9,7 +9,7 @@ import { RefundAddressField } from './RefundAddressField';
 import { SendDetails } from './SendDetails';
 import { TestModePanel } from './TestModePanel';
 import { TokenPicker } from './TokenPicker';
-import { autoRequoteDue, type PaymentBlock } from '@/lib/wallets/block';
+import { autoRequoteDue, showManualSend, type PaymentBlock } from '@/lib/wallets/block';
 import { WalletConnect, type WalletQuoteResult, type WalletSendResult } from './WalletConnect';
 
 type Reason = 'choose' | 'auto' | 'refund' | 'retry' | 'wallet';
@@ -36,6 +36,7 @@ export function PayFlow({
   blocked = null,
   onDidntGoThrough,
   openWalletWindow,
+  checkBeforeSend,
 }: {
   view: SessionView;
   client: CheckoutClient;
@@ -53,6 +54,8 @@ export function PayFlow({
   onDidntGoThrough?: () => void;
   /** Inside a frame: opens the wallet step in a window. */
   openWalletWindow?: () => Window | null;
+  /** Re-fetches the session right before a wallet send (another tab may have paid). */
+  checkBeforeSend?: () => Promise<'ok' | 'blocked' | 'error'>;
 }) {
   const resumed = view.quote
     ? (tokens.find((t) => t.asset_id === view.quote!.origin_asset) ?? null)
@@ -63,6 +66,8 @@ export function PayFlow({
   const [failure, setFailure] = useState<QuoteFailure | null>(null);
   const [refundError, setRefundError] = useState<string | null>(null);
   const [priceChanged, setPriceChanged] = useState(false);
+  // A wallet send in flight: the quote it pays is never replaced under it (C33).
+  const [walletSending, setWalletSending] = useState(false);
   const autoRequoted = useRef<string | null>(null);
 
   const quote =
@@ -114,13 +119,17 @@ export function PayFlow({
   useEffect(() => {
     if (step !== 'pay' || !token || !quote || loading) return;
     // Never while a payment may be on its way: a new quote would move the deposit address.
-    if (
-      !autoRequoteDue({ quote, now, blocked: blocked !== null, lastAutoId: autoRequoted.current })
-    )
-      return;
+    const due = autoRequoteDue({
+      quote,
+      now,
+      blocked: blocked !== null,
+      sending: walletSending,
+      lastAutoId: autoRequoted.current,
+    });
+    if (!due) return;
     autoRequoted.current = quote.id;
     void requote(token, quote.refund_address, 'auto');
-  }, [step, token, quote, loading, now, requote, blocked]);
+  }, [step, token, quote, loading, now, requote, blocked, walletSending]);
 
   if (step === 'choose' || !token) {
     return (
@@ -136,6 +145,8 @@ export function PayFlow({
   const network = networkName(token.blockchain);
   const amount = quote ? formatUnits(quote.amount_in, token.decimals) : null;
   const usd = quote?.amount_in_usd ? formatUsd(quote.amount_in_usd) : null;
+  // Blocked and past the deadline: the deposit address is expired, so only the notice remains.
+  const manual = quote ? showManualSend(blocked, quote.deadline, now) : true;
 
   return (
     <section className="pay-section" aria-labelledby="pay-quote-title">
@@ -185,33 +196,35 @@ export function PayFlow({
         ) : null
       ) : (
         <>
-          <div className="pay-quote">
-            <div className="pay-row">
-              <span>You send</span>
-              <Countdown deadline={quote.deadline} now={now} label="on this price" />
+          {manual ? (
+            <div className="pay-quote">
+              <div className="pay-row">
+                <span>You send</span>
+                <Countdown deadline={quote.deadline} now={now} label="on this price" />
+              </div>
+              <p className="pay-amount">
+                {amount} {token.symbol}
+              </p>
+              {usd ? <p className="muted small">About {usd}</p> : null}
+              {quote.fee_lines.length > 0 ? (
+                <dl className="pay-fees">
+                  {quote.fee_lines.map((f) => (
+                    <div key={f.kind}>
+                      <dt>{f.label} (included)</dt>
+                      <dd>{formatUsd(f.amount_usd) ?? f.amount_usd}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
+              <p className="small" aria-live="polite">
+                {loading
+                  ? 'Updating your price…'
+                  : priceChanged
+                    ? 'The price changed. Please send the new amount.'
+                    : ''}
+              </p>
             </div>
-            <p className="pay-amount">
-              {amount} {token.symbol}
-            </p>
-            {usd ? <p className="muted small">About {usd}</p> : null}
-            {quote.fee_lines.length > 0 ? (
-              <dl className="pay-fees">
-                {quote.fee_lines.map((f) => (
-                  <div key={f.kind}>
-                    <dt>{f.label} (included)</dt>
-                    <dd>{formatUsd(f.amount_usd) ?? f.amount_usd}</dd>
-                  </div>
-                ))}
-              </dl>
-            ) : null}
-            <p className="small" aria-live="polite">
-              {loading
-                ? 'Updating your price…'
-                : priceChanged
-                  ? 'The price changed. Please send the new amount.'
-                  : ''}
-            </p>
-          </div>
+          ) : null}
 
           {failure?.kind === 'on_its_way' ? null : (
             <WalletConnect
@@ -222,29 +235,37 @@ export function PayFlow({
               blocked={blocked}
               onDidntGoThrough={onDidntGoThrough}
               openWalletWindow={openWalletWindow}
+              checkBeforeSend={checkBeforeSend}
+              onSendingChange={setWalletSending}
               onWalletAddress={(address) => requote(token, address, 'wallet')}
               onDepositSent={onDepositSent}
             />
           )}
 
-          <p className="pay-or muted small">or send it yourself</p>
-          <SendDetails
-            address={quote.deposit_address}
-            amount={amount}
-            symbol={token.symbol}
-            network={network}
-          />
-          <RefundAddressField
-            blockchain={token.blockchain}
-            saved={quote.refund_address}
-            busy={loading}
-            error={refundError}
-            onSave={(address) => void requote(token, address, 'refund')}
-          />
-          {quote.small_overpay_notice ? (
-            <p className="muted small">{leftoversNotice(quote.small_overpay_usd)}</p>
+          {manual ? (
+            <>
+              <p className="pay-or muted small">or send it yourself</p>
+              <SendDetails
+                address={quote.deposit_address}
+                amount={amount}
+                symbol={token.symbol}
+                network={network}
+              />
+              <RefundAddressField
+                blockchain={token.blockchain}
+                saved={quote.refund_address}
+                busy={loading}
+                error={refundError}
+                onSave={(address) => void requote(token, address, 'refund')}
+              />
+              {quote.small_overpay_notice ? (
+                <p className="muted small">{leftoversNotice(quote.small_overpay_usd)}</p>
+              ) : null}
+              {!view.livemode ? (
+                <TestModePanel client={client} kind="pay" onDone={onRefresh} />
+              ) : null}
+            </>
           ) : null}
-          {!view.livemode ? <TestModePanel client={client} kind="pay" onDone={onRefresh} /> : null}
         </>
       )}
     </section>

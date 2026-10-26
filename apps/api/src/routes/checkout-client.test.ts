@@ -474,6 +474,25 @@ describe('shopper checkout routes', () => {
     expect(later.deposit_submitted_at).toBe(row.depositTxSubmittedAt!.toISOString());
   });
 
+  it('a deposit the watcher recorded stops counting: a reopened session shows deposit_submitted_at null', async () => {
+    const s = await newSession();
+    const q = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();
+    await call('POST', 'deposit', s.client_secret, { tx_hash: '0xfeed', quote_id: q.id });
+    expect(
+      (await call('GET', 'session', s.client_secret)).json().deposit_submitted_at,
+    ).not.toBeNull();
+    // The watcher records the deposit (underpaid), then reopens the session for a retry.
+    await createRow('Payment', merchant.id, false, {
+      sessionId: s.id,
+      quoteId: q.id,
+      status: 'REFUNDING',
+    });
+    await prisma.session.update({ where: { id: s.id }, data: { status: 'PENDING_DEPOSIT' } });
+    const view = (await call('GET', 'session', s.client_secret)).json();
+    expect(view.status).toBe('PENDING_DEPOSIT');
+    expect(view.deposit_submitted_at).toBeNull();
+  });
+
   it('refuses a deposit report once the session is closed', async () => {
     const s = await newSession();
     const q = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();

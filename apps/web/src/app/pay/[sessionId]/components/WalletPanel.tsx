@@ -6,8 +6,8 @@ import { formatUnits, shortAddress } from '@/lib/checkout/format';
 import { publicEnv } from '@/lib/env';
 import { toWalletError, walletErrorCopy } from '@/lib/wallets/errors';
 import type { ChainFamily, WalletAdapter, WalletRoute } from '@/lib/wallets/index';
-import { mustRequoteBeforeSend } from '@/lib/wallets/block';
 import { sameAddress } from '@/lib/wallets/match';
+import { runWalletPay } from '@/lib/wallets/pay';
 import { isFramed } from '@/lib/wallets/popup';
 import type { WalletConnectProps, WalletQuoteResult } from './WalletConnect';
 
@@ -48,6 +48,8 @@ export function WalletPanel({
   blocked = null,
   sessionId,
   openWalletWindow,
+  checkBeforeSend,
+  onSendingChange,
 }: WalletConnectProps & { route: WalletRoute }) {
   const adapterRef = useRef<WalletAdapter | null>(null);
   const sendingRef = useRef(false);
@@ -154,46 +156,42 @@ export function WalletPanel({
     const adapter = adapterRef.current;
     if (!adapter || !address || sendingRef.current || blocked) return;
     sendingRef.current = true;
+    onSendingChange?.(true);
     setMessage(null);
     setOfferWindow(false);
-    // Bound before the wallet opens: a re-quote while it is open never changes what is recorded.
-    const quoteId = quote.id;
+    setPhase('sending');
     try {
-      // The price may have run out while the shopper read it: renew it, never open the wallet.
-      if (mustRequoteBeforeSend(quote.deadline, Date.now())) {
-        setMessage("Your price ran out, so we've updated it. Check the amount, then pay.");
-        await quoteForWallet(adapter, address);
-        return;
-      }
-      setPhase('sending');
-      try {
-        const { txHash } = await adapter.sendDeposit({
-          depositAddress: quote.deposit_address,
-          assetId: quote.origin_asset,
-          amount: quote.amount_in,
-          decimals: token.decimals,
-        });
-        onDepositSent?.({ txHash, quoteId, state: 'sent' });
-      } catch (err) {
-        const e = toWalletError(err);
-        if (e.kind === 'uncertain' || e.kind === 'onchain_failed') {
-          // The wallet signed: the page blocks every further wallet payment (C32).
-          onDepositSent?.({
-            txHash: e.txHash ?? null,
-            quoteId,
-            state: e.kind === 'uncertain' ? 'uncertain' : 'failed',
-          });
-        } else if (e.kind === 'account_changed' && e.address) {
-          setAddress(e.address);
+      const step = await runWalletPay({
+        quote,
+        decimals: token.decimals,
+        now: () => Date.now(),
+        adapter,
+        checkBeforeSend,
+        record: (r) => onDepositSent?.(r),
+      });
+      switch (step.kind) {
+        case 'requote':
+          // The price ran out while the shopper read it: renewed, the wallet never opened.
+          setMessage("Your price ran out, so we've updated it. Check the amount, then pay.");
+          await quoteForWallet(adapter, address);
+          break;
+        case 'check_failed':
+          setMessage("We couldn't check your payment status. Try again in a moment.");
+          break;
+        case 'account_changed':
+          setAddress(step.address);
           setMessage('Your wallet switched accounts, so we updated the price for this one.');
-          await quoteForWallet(adapter, e.address);
-        } else {
-          fail(err, 'send');
-        }
+          await quoteForWallet(adapter, step.address);
+          break;
+        case 'error':
+          fail(step.error, 'send');
+          break;
+        // 'sent', 'recorded', 'blocked': the page now shows the payment notice.
       }
     } finally {
       sendingRef.current = false;
       setPhase((p) => (p === 'idle' ? p : 'ready'));
+      onSendingChange?.(false);
     }
   }
 

@@ -1,7 +1,7 @@
 // Tron deposits through TronLink's injected TronWeb (no SDK is bundled). TRX is `sendTrx` in sun;
 // USDT (TRC-20, the verified contract in wallets/index.ts) is `transfer(address,uint256)` with the
 // amount passed as an exact decimal string. TronLink must be on Tron mainnet (api.trongrid.io).
-import { WalletError, toWalletError } from './errors';
+import { WalletError, afterSignError, toWalletError } from './errors';
 import type { PayTarget, WalletAdapter } from './index';
 import { assertDepositMatches } from './match';
 
@@ -65,7 +65,7 @@ export function createTronAdapter(target: PayTarget, deps: { win: TronWindow }):
       address = a;
       return { address };
     },
-    async sendDeposit(q) {
+    async sendDeposit(q, hooks) {
       const tw = tronWebOf(deps.win);
       if (!address || !tw) throw new WalletError('failed', { detail: 'not connected' });
       const amount = assertDepositMatches(target, q);
@@ -103,12 +103,13 @@ export function createTronAdapter(target: PayTarget, deps: { win: TronWindow }):
       try {
         signed = await tw.trx.sign(unsigned!);
       } catch (err) {
-        throw toWalletError(err);
+        throw afterSignError(err);
       }
-      // Signed: the tx id is captured BEFORE broadcasting, so whatever happens next the payment
-      // is never forgotten and the pay button never comes back for it (C32).
+      // Signed: the tx id is captured and handed to onSigned (recorded and persisted) BEFORE
+      // broadcasting, so a reload or a failure from here on never re-arms the pay button (C32/C33).
       const txId = typeof signed?.txID === 'string' && TXID.test(signed.txID) ? signed.txID : null;
       if (!txId) throw new WalletError('uncertain', { detail: 'signed without a tx id' });
+      hooks?.onSigned?.(txId);
       let sent: { result?: boolean; txid?: string; code?: unknown };
       try {
         sent = await tw.trx.sendRawTransaction(signed);
@@ -116,6 +117,10 @@ export function createTronAdapter(target: PayTarget, deps: { win: TronWindow }):
         throw new WalletError('uncertain', { txHash: txId, cause: err });
       }
       if (!sent || sent.result !== true) {
+        // DUP_TRANSACTION_ERROR: this exact transaction is already known to the network.
+        if (String(sent?.code ?? '') === 'DUP_TRANSACTION_ERROR') {
+          throw new WalletError('uncertain', { txHash: txId, detail: 'duplicate broadcast' });
+        }
         // The node refused the broadcast (e.g. not enough bandwidth or energy).
         throw new WalletError('onchain_failed', { txHash: txId, detail: 'broadcast refused' });
       }

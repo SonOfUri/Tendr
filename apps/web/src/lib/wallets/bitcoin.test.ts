@@ -60,4 +60,23 @@ describe('Bitcoin deposits', () => {
     await adapter.connect();
     await expect(adapter.sendDeposit(req)).rejects.toBeInstanceOf(WalletError);
   });
+
+  it('a throw from the wallet send is "possibly sent", except a wallet that cannot send at all', async () => {
+    const d = deps();
+    const adapter = createBitcoinAdapter(payTargetFor(BTC)!, { session: d.session });
+    await adapter.connect();
+    d.sendTransfer.mockRejectedValueOnce(new Error('timeout'));
+    expect(((await adapter.sendDeposit(req).catch((e: unknown) => e)) as WalletError).kind).toBe(
+      'uncertain',
+    );
+    // AppKit's wallet-standard connector refuses sendTransfer before anything is signed.
+    d.sendTransfer.mockRejectedValueOnce(
+      Object.assign(new Error('Method sendTransfer is not supported'), {
+        name: 'MethodNotSupportedError',
+      }),
+    );
+    expect(((await adapter.sendDeposit(req).catch((e: unknown) => e)) as WalletError).kind).toBe(
+      'failed',
+    );
+  });
 });

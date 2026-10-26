@@ -38,6 +38,7 @@ describe('deposit reporting survives failures and reloads', () => {
       quoteId: 'quo_1',
       reported: true,
       state: 'sent',
+      acknowledged: true,
     });
   });
 
@@ -81,6 +82,7 @@ describe('deposit reporting survives failures and reloads', () => {
       quoteId: 'quo_1',
       reported: false,
       state: 'sent',
+      acknowledged: false,
     });
 
     // Reloaded page: a new reporter finds the hash and posts it.
@@ -98,6 +100,7 @@ describe('deposit reporting survives failures and reloads', () => {
       quoteId: 'quo_1',
       reported: false,
       state: 'sent',
+      acknowledged: false,
     });
     expect(await second.resume()).toBe('reported');
     expect(deposit).toHaveBeenCalledWith(HASH, 'quo_1');
@@ -106,6 +109,7 @@ describe('deposit reporting survives failures and reloads', () => {
       quoteId: 'quo_1',
       reported: true,
       state: 'sent',
+      acknowledged: true,
     });
     // Already reported: a later resume does not post again.
     expect(await second.resume()).toBe('reported');
@@ -132,7 +136,13 @@ describe('deposit reporting survives failures and reloads', () => {
     const storage = memoryStorage();
     storage.setItem(
       pendingTxKey(SID),
-      JSON.stringify({ txHash: HASH, quoteId: 'quo_A', reported: false, state: 'sent' }),
+      JSON.stringify({
+        txHash: HASH,
+        quoteId: 'quo_A',
+        reported: false,
+        state: 'sent',
+        acknowledged: false,
+      }),
     );
     // The page now shows quote B; the API refuses to bind quote A's hash to it.
     const deposit = vi.fn(async (_h: string, _q: string) => {
@@ -193,6 +203,28 @@ describe('deposit reporting survives failures and reloads', () => {
       deposit: async () => ({ submitted: true }),
     });
     expect(again.dismissed()).toBe('2026-10-26T12:01:00.000Z');
+  });
+
+  it('marks a record acknowledged only when the API accepted it', async () => {
+    const storage = memoryStorage();
+    const ok = createDepositReporter({
+      sessionId: SID,
+      storage: () => storage,
+      deposit: async () => ({ submitted: true }),
+      sleep: async () => {},
+    });
+    await ok.report(HASH, 'quo_1');
+    expect(ok.pending()?.acknowledged).toBe(true);
+    const refused = createDepositReporter({
+      sessionId: 'ses_other',
+      storage: () => storage,
+      deposit: async () => {
+        throw new CheckoutApiError(409, 'QUOTE_MISMATCH', 'x');
+      },
+      sleep: async () => {},
+    });
+    await refused.report(HASH, 'quo_1');
+    expect(refused.pending()?.acknowledged).toBe(false);
   });
 
   it('works in memory when storage is blocked', async () => {
