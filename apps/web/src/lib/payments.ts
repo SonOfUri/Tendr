@@ -256,7 +256,6 @@ export function explorerTxUrl(
   return base ? `${base}${encodeURIComponent(hash)}` : null;
 }
 
-/** Words for a refund's state, as the merchant sees it. */
 /** What a held payment's return is for, in the review card. */
 export function returnLabel(reason: string): string {
   if (reason === 'sanctions') return 'Order amount';
@@ -289,6 +288,7 @@ export function heldReturnForms(
   return forms;
 }
 
+/** Words for a refund's state, as the merchant sees it. */
 export function refundStateWords(r: Refund): string {
   if (r.status === 'confirmed') return 'Sent';
   if (r.needs_address) return 'Waiting for the shopper’s address';

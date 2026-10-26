@@ -6,6 +6,7 @@ import { CopyButton } from './CopyButton';
 import { PayFlow, QuotePending, leftoversNotice, refundToCarry } from './PayFlow';
 import { CONFIRM_NOT_SENT_COPY } from './WalletConnect';
 import { WalletConnect } from './WalletConnect';
+import { StatusScreen } from './StatusScreens';
 import { canPay } from './WalletPanel';
 
 const VIEW = {
@@ -252,5 +253,67 @@ describe('PayFlow with no current quote (C35)', () => {
     expect(refundToCarry(last, 'near')).toBeNull();
     expect(refundToCarry(null, 'eth')).toBeNull();
     expect(refundToCarry({ address: null, blockchain: 'eth' }, 'eth')).toBeNull();
+  });
+});
+
+describe('StatusScreen: the extra paid (C42)', () => {
+  const settled = (refundState: string | null) => {
+    const payment = {
+      id: 'pay_1',
+      state: 'settled',
+      amount_received: '1100',
+      overpaid_amount: '100',
+      refunded_amount: '100',
+      kept_small_overpayment: false,
+      kept_extra: false,
+      origin_tx_hash: null,
+      created_at: '2026-10-26T12:00:00Z',
+    };
+    const view = {
+      ...VIEW,
+      status: 'SETTLED',
+      payments: [payment],
+      refunds: refundState
+        ? [
+            {
+              id: 'ref_1',
+              payment_id: 'pay_1',
+              asset: 'nep141:eth.test',
+              amount: '90',
+              needs_address: false,
+              state: refundState,
+            },
+          ]
+        : [],
+    } as SessionView;
+    return renderToStaticMarkup(
+      <StatusScreen
+        view={view}
+        screen={{
+          kind: 'complete',
+          terminal: true,
+          pollMs: 5000,
+          bridgeStatus: null,
+          action: null,
+          notice: null,
+          payment,
+          refundNeedingAddress: null,
+        }}
+        tokenOf={() => null}
+        client={{} as never}
+        now={Date.parse('2026-10-26T12:00:00Z')}
+        onRefresh={() => {}}
+      />,
+    );
+  };
+
+  it('a blocked return in review asks the shopper to contact the store, never "being sent back"', () => {
+    const html = settled('review');
+    expect(html).toContain('Contact the store about the extra you paid.');
+    expect(html).not.toContain('being sent back');
+  });
+
+  it('a return in progress is being sent back', () => {
+    expect(settled('processing')).toContain('being sent back to you');
   });
 });

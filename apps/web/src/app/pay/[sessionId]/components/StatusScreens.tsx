@@ -144,6 +144,8 @@ export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: 
             <p className="muted small">
               You sent a little extra. It&apos;s being sent back to you.
             </p>
+          ) : notice === 'contact' ? (
+            <p className="muted small">Contact the store about the extra you paid.</p>
           ) : notice === 'sent' ? (
             <p className="muted small">You sent a little extra. It was sent back to you.</p>
           ) : null}
