@@ -421,7 +421,8 @@ exists, call `POST /v1/checkout/client/simulate` with `Authorization: Bearer <cl
   3. the store default.
 
   Set store defaults under Settings → Checkout, or with `default_fee_payer` / `default_gas_payer`
-  in `PATCH /v1/settings/checkout`.
+  in `PATCH /v1/settings/checkout`. The defaults apply to test and live: there is one setting per
+  store, so a change made with a test key or in test mode changes live checkouts too.
 
 - **Tendr's fee** is the store's fee plan, in basis points. It is 50 bps without a plan, and a
   plan may set 0. It is a 1Click `appFees` entry paid to Tendr's fee account, never taken from the

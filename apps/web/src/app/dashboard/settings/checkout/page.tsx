@@ -6,7 +6,7 @@ import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import { api } from '@/lib/api';
-import type { CheckoutSettings } from '@/lib/payments';
+import { CHECKOUT_DEFAULTS_SCOPE_NOTE, type CheckoutSettings } from '@/lib/payments';
 import { withStepUp } from '@/lib/webauthn';
 
 type Payer = CheckoutSettings['default_fee_payer'];
@@ -114,7 +114,10 @@ export default function CheckoutSettingsPage() {
             </select>
           </label>
         </div>
-        <p className="muted small">A session or payment link can override these defaults.</p>
+        <p className="muted small">
+          <strong>{CHECKOUT_DEFAULTS_SCOPE_NOTE}</strong> A session or payment link can override
+          these defaults.
+        </p>
         {saved && <Alert tone="success">Saved.</Alert>}
         {error && <Alert tone="danger">{error}</Alert>}
         <Button type="submit" disabled={busy}>

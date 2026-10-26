@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { explorerTxUrl, feeLines, formatUsd, type FeeLine } from './payments';
+import {
+  CHECKOUT_DEFAULTS_SCOPE_NOTE,
+  explorerTxUrl,
+  feeLines,
+  formatUsd,
+  type FeeLine,
+} from './payments';
 
 const USDC_TEST = 'nep141:usdc.fakes.testnet';
 
@@ -84,5 +90,12 @@ describe('explorerTxUrl', () => {
     expect(explorerTxUrl('eth', '0x1', true)).toBe('https://etherscan.io/tx/0x1');
     expect(explorerTxUrl('mystery', '0x1', true)).toBeNull();
     expect(explorerTxUrl(null, '0x1', true)).toBeNull();
+  });
+});
+
+describe('checkout settings copy (M-6)', () => {
+  it('labels the fee and gas payer defaults as applying to test and live', () => {
+    expect(CHECKOUT_DEFAULTS_SCOPE_NOTE).toMatch(/fee and gas/i);
+    expect(CHECKOUT_DEFAULTS_SCOPE_NOTE).toMatch(/applies to test and live/i);
   });
 });

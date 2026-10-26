@@ -132,6 +132,13 @@ export interface ReviewQueue {
   needs_address: ReturnItem[];
 }
 
+/**
+ * The fee and gas payer defaults are one store-wide setting (M-6): a change made while viewing test
+ * mode changes live checkouts too.
+ */
+export const CHECKOUT_DEFAULTS_SCOPE_NOTE =
+  'Fee and gas defaults: applies to test and live. Changing them here changes both modes.';
+
 export interface CheckoutSettings {
   checkout_domains: string[];
   default_fee_payer: 'merchant' | 'shopper';

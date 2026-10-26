@@ -43,23 +43,46 @@ export function refundToCarry(last: KnownRefund, blockchain: string): string | n
 /**
  * The pay step with no quote for the chosen token: while blocked, the payment notice with its
  * "didn't go through" control (C35), so a blocked tab is never left blank; otherwise the loading
- * line while a price is fetched.
+ * line while a price is fetched. A fresh quote refused because of the return address it carried
+ * shows why, with a way to continue without it (T12): the step is never silent.
  */
 export function QuotePending({
   blocked,
   loading,
   onDidntGoThrough,
+  refundError = null,
+  onRetryWithoutRefund,
 }: {
   blocked: PaymentBlock;
   loading: boolean;
   onDidntGoThrough?: () => void;
+  /** Why the carried return address was refused. */
+  refundError?: string | null;
+  /** Fetch the price again without a return address. */
+  onRetryWithoutRefund?: () => void;
 }) {
   if (blocked) return <PaymentSentNotice blocked={blocked} onDidntGoThrough={onDidntGoThrough} />;
-  if (!loading) return null;
+  if (loading) {
+    return (
+      <p className="muted" role="status">
+        Getting your price…
+      </p>
+    );
+  }
+  if (!refundError) return null;
   return (
-    <p className="muted" role="status">
-      Getting your price…
-    </p>
+    <div className="pay-alert" role="alert">
+      <p>{refundError}</p>
+      {onRetryWithoutRefund ? (
+        <button
+          type="button"
+          className="pay-button pay-button-secondary"
+          onClick={onRetryWithoutRefund}
+        >
+          Continue without a refund address
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -265,7 +288,18 @@ export function PayFlow({
       ) : null}
 
       {!quote || !amount ? (
-        <QuotePending blocked={blocked} loading={loading} onDidntGoThrough={onDidntGoThrough} />
+        <QuotePending
+          blocked={blocked}
+          loading={loading}
+          onDidntGoThrough={onDidntGoThrough}
+          refundError={refundError}
+          onRetryWithoutRefund={() => {
+            // The refused address is dropped: the next quote (and later ones) carry none.
+            knownRefund.current = null;
+            setRefundError(null);
+            void requote(token, null, 'retry');
+          }}
+        />
       ) : (
         <>
           {manual ? (

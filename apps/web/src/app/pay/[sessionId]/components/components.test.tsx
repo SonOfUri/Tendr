@@ -225,6 +225,26 @@ describe('PayFlow with no current quote (C35)', () => {
     expect(renderToStaticMarkup(<QuotePending blocked={null} loading={false} />)).toBe('');
   });
 
+  it('T12: a refused carried return address says why and offers to continue without it', () => {
+    const html = renderToStaticMarkup(
+      <QuotePending
+        blocked={null}
+        loading={false}
+        refundError="This address can't be used for this payment."
+        onRetryWithoutRefund={() => {}}
+      />,
+    );
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('This address can&#x27;t be used for this payment.');
+    expect(html).toContain('Continue without a refund address');
+    // Never silent, but the loading line wins while the retry runs.
+    expect(
+      renderToStaticMarkup(
+        <QuotePending blocked={null} loading refundError="x" onRetryWithoutRefund={() => {}} />,
+      ),
+    ).toContain('Getting your price');
+  });
+
   it('a fresh quote carries the last return address the shopper had on that network', () => {
     const last = { address: '0xrefund', blockchain: 'eth' };
     expect(refundToCarry(last, 'eth')).toBe('0xrefund');
