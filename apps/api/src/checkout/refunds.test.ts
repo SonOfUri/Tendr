@@ -67,6 +67,19 @@ describe('route mirror (contract poa_target)', () => {
     expect(isExchangeAddress('sol', 'TV6MuMXfmLbBqPZvBHdwFsDnQeVfnmiuSi')).toBe(false);
   });
 
+  it('T8: bech32 (BTC) exchange addresses match case-insensitively; base58 stays exact', () => {
+    const BECH32 = 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh';
+    setExchangeAddresses({ btc: [BECH32.toUpperCase(), '34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo'] });
+    try {
+      expect(isExchangeAddress('btc', BECH32)).toBe(true);
+      expect(isExchangeAddress('btc', BECH32.toUpperCase())).toBe(true);
+      expect(isExchangeAddress('btc', '34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo')).toBe(true);
+      expect(isExchangeAddress('btc', '34XP4VROCGJYM3XR7YCVPFHOCNXV4TWSEO')).toBe(false);
+    } finally {
+      setExchangeAddresses(null);
+    }
+  });
+
   it('returnRoute: Poa through the asset contract, or null when a swap would be needed', () => {
     expect(returnRoute(ETH, 'eth', WALLET)).toEqual({ poa: { token_contract: 'eth.omft.near' } });
     expect(returnRoute(USDC, 'near', 'bob.near')).toEqual({ poa: { token_contract: 'usdc.test' } });

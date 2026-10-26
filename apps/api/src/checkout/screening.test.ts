@@ -107,6 +107,21 @@ describe('screenAddress (live)', () => {
     expect(await prisma.screeningResult.count()).toBe(2);
   });
 
+  it('T6: caches allow for at most 1 h and block for 24 h', async () => {
+    const { ctx, sessionId } = await liveSetup();
+    setScreeningFetch(async () => json({ identifications: [] }));
+    await screenAddress(ctx, { sessionId, address: ADDR, chain: 'eth' });
+    const allowTtl = await getRedis().ttl(`screening:eth:${ADDR.toLowerCase()}`);
+    expect(allowTtl).toBeGreaterThan(0);
+    expect(allowTtl).toBeLessThanOrEqual(3600);
+    const BAD = '0x2222222222222222222222222222222222222222';
+    setScreeningFetch(async () => json({ identifications: [{ category: 'sanctions' }] }));
+    await screenAddress(ctx, { sessionId, address: BAD, chain: 'eth' });
+    const blockTtl = await getRedis().ttl(`screening:eth:${BAD}`);
+    expect(blockTtl).toBeGreaterThan(23 * 3600);
+    expect(blockTtl).toBeLessThanOrEqual(24 * 3600);
+  });
+
   it('does not cache unavailable', async () => {
     const { ctx, sessionId } = await liveSetup();
     const fetchMock = vi.fn(async () => json({}, 500));

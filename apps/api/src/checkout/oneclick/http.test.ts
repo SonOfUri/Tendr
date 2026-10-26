@@ -186,6 +186,30 @@ describe('HttpOneClick', () => {
     expect(err).toMatchObject({ code: 'BAD_RESPONSE' });
   });
 
+  it('T3: an untrusted status value is truncated in the error message', async () => {
+    const { fetch } = fakeFetch(() => ({
+      status: 200,
+      body: { status: 'W'.repeat(10_000), swapDetails: {} },
+    }));
+    const err = (await new HttpOneClick({ baseUrl: 'https://1click.test', fetch })
+      .status('0x1')
+      .catch((e: unknown) => e)) as Error;
+    expect(err).toMatchObject({ code: 'BAD_RESPONSE' });
+    expect(err.message.length).toBeLessThan(300);
+  });
+
+  it('T3: an untrusted error message and code are truncated', async () => {
+    const { fetch } = fakeFetch(() => ({
+      status: 409,
+      body: { message: 'M'.repeat(10_000), code: 'C'.repeat(10_000) },
+    }));
+    const err = (await new HttpOneClick({ baseUrl: 'https://1click.test', fetch })
+      .status('0x1')
+      .catch((e: unknown) => e)) as OneClickError;
+    expect(err.message.length).toBeLessThanOrEqual(200);
+    expect(err.code.length).toBeLessThanOrEqual(200);
+  });
+
   it('submits a deposit tx hash', async () => {
     const { fetch, calls } = fakeFetch(() => ({ status: 200, body: { status: 'PROCESSING' } }));
     await new HttpOneClick({ baseUrl: 'https://1click.test', apiKey: 'k', fetch }).submitDeposit(

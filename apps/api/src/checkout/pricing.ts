@@ -11,6 +11,7 @@ import { env } from '../env.js';
 import { AppError } from '../lib/errors.js';
 import {
   OneClickError,
+  truncateUntrusted,
   type AppFee,
   type QuoteRequest,
   type QuoteResponse,
@@ -62,9 +63,10 @@ const RESPONSE_INT_RE = /^\+?(\d+)$/;
 const MAX_RESPONSE_EXPONENT = 100;
 
 function badResponse(field: string, value: unknown): OneClickError {
+  // The value is untrusted provider text: truncated before it reaches API errors and logs (T3).
   return new OneClickError(`1Click returned an unparseable ${field}`, null, 'BAD_RESPONSE', {
     field,
-    value,
+    value: truncateUntrusted(value),
   });
 }
 

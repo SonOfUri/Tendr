@@ -106,12 +106,63 @@ describe('EVM sender', () => {
       const hash = (body.params as string[])[0];
       if (hash === '0xbad') return json({}, 500);
       return body.method === 'eth_getTransactionByHash'
-        ? json({ result: { from: RELAYER } })
+        ? json({ result: { from: RELAYER, to: DEPOSIT } }) // a plain native send
         : json({ result: { logs: [] } });
     });
     const r = new EvmSenderResolver(() => evmRpcUrls({}), f);
     await expect(r.resolve(input('eth', ['0xgood'], DEPOSIT))).resolves.toEqual([RELAYER]);
     await expect(r.resolve(input('eth', ['0xgood', '0xbad'], DEPOSIT))).resolves.toEqual([]);
+  });
+
+  describe('T7: native deposits through contract wallets', () => {
+    const USEROP_TOPIC = '0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f';
+    const ENTRYPOINT_V07 = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
+    const ENTRYPOINT_V06 = '0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789';
+    const SMART = '0x' + 'e'.repeat(40);
+    const PAYMASTER = '0x' + 'f'.repeat(40);
+    const userOp = (sender: string) => ({
+      topics: [USEROP_TOPIC, '0x' + '9'.repeat(64), pad(sender), pad(PAYMASTER)],
+    });
+    const resolve = (tx: unknown, logs: unknown[]) =>
+      new EvmSenderResolver(() => evmRpcUrls({}), evmFetch({ tx, receipt: { logs } }).f).resolve(
+        input('eth', ['0x1'], DEPOSIT),
+      );
+
+    it('an ERC-4337 bundle: the bundler and every UserOperationEvent sender are screened', async () => {
+      for (const ep of [ENTRYPOINT_V07, ENTRYPOINT_V06, ENTRYPOINT_V07.toLowerCase()]) {
+        await expect(resolve({ from: RELAYER, to: ep }, [userOp(SMART)])).resolves.toEqual([
+          RELAYER,
+          SMART,
+        ]);
+      }
+    });
+
+    it('an EntryPoint call whose user-op sender cannot be read fails closed', async () => {
+      await expect(resolve({ from: RELAYER, to: ENTRYPOINT_V07 }, [])).resolves.toEqual([]);
+    });
+
+    it('a smart account called directly: the caller and the account (tx.to) are screened', async () => {
+      await expect(resolve({ from: OWNER, to: SMART }, [])).resolves.toEqual([OWNER, SMART]);
+    });
+
+    it('a native send whose source cannot be told (no tx.to) fails closed', async () => {
+      await expect(resolve({ from: OWNER, to: null }, [])).resolves.toEqual([]);
+    });
+
+    it('a plain native send to the deposit address is just tx.from', async () => {
+      await expect(
+        resolve({ from: OWNER, to: DEPOSIT.toUpperCase().replace('0X', '0x') }, []),
+      ).resolves.toEqual([OWNER]);
+    });
+
+    it('an ERC-20 deposit through a user op screens the user-op sender too', async () => {
+      await expect(
+        resolve({ from: RELAYER, to: ENTRYPOINT_V07 }, [
+          userOp(SMART),
+          { topics: [`0x${TRANSFER_TOPIC}`, pad(SMART), pad(DEPOSIT)] },
+        ]),
+      ).resolves.toEqual([RELAYER, SMART]);
+    });
   });
 
   it('EVM_RPC_URLS overrides and adds chains (long names accepted)', () => {
@@ -227,6 +278,7 @@ describe('Tron sender', () => {
             },
           })
         : json({
+            id: 'abcd',
             log: [
               { topics: [TRANSFER_TOPIC, '0'.repeat(24) + FROM_HEX, '0'.repeat(24) + DEP_HEX] },
               { topics: [TRANSFER_TOPIC, '0'.repeat(24) + 'e'.repeat(40), '0'.repeat(64)] },
@@ -247,6 +299,17 @@ describe('Tron sender', () => {
 
   it('is [] for an unknown tx ({})', async () => {
     const { f } = fakeFetch(() => json({}));
+    await expect(
+      new TronSenderResolver('https://t.example', f).resolve(input('tron', ['ab'], DEPOSIT)),
+    ).resolves.toEqual([]);
+  });
+
+  it('M-4: an unconfirmed tx (info {} before confirmation) is unknown, never signer-only', async () => {
+    const { f } = fakeFetch((url) =>
+      url.endsWith('gettransactionbyid')
+        ? json({ raw_data: { contract: [{ parameter: { value: { owner_address: OWNER } } }] } })
+        : json({}),
+    );
     await expect(
       new TronSenderResolver('https://t.example', f).resolve(input('tron', ['ab'], DEPOSIT)),
     ).resolves.toEqual([]);

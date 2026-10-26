@@ -4,8 +4,10 @@
 // that reached the deposit address (a relayer / fee payer can differ from the token owner):
 //
 //   EVM      eth_getTransactionByHash `from` + every ERC-20 Transfer log `from` whose `to` is the
-//            deposit address (eth_getTransactionReceipt). RPC per chain: EVM_RPC_URLS over
-//            public defaults.
+//            deposit address (eth_getTransactionReceipt) + every ERC-4337 UserOperationEvent
+//            sender; a native deposit not sent straight to the deposit address also screens
+//            tx.to (the smart account / contract that forwarded it). RPC per chain:
+//            EVM_RPC_URLS over public defaults.
 //   Solana   getTransaction (jsonParsed): the fee payer + the source / authority / owner of every
 //            SOL or SPL transfer into the deposit address (inner instructions included).
 //   Tron     TronGrid gettransactionbyid owner_address + every TRC-20 Transfer `from` whose `to`
@@ -144,6 +146,16 @@ const EVM_ADDR = /^0x[0-9a-fA-F]{40}$/;
 const topicAddress = (t: unknown): string | null =>
   typeof t === 'string' && /^0x[0-9a-fA-F]{64}$/.test(t) ? `0x${t.slice(26).toLowerCase()}` : null;
 
+/** keccak256("UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)"). */
+export const USER_OPERATION_EVENT_TOPIC =
+  '0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f';
+/** ERC-4337 EntryPoint deployments (v0.6, v0.7, v0.8), lower-case: the same on every EVM chain. */
+export const ENTRY_POINTS: ReadonlySet<string> = new Set([
+  '0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789',
+  '0x0000000071727de22e5e9d8baf0edac6f37da032',
+  '0x4337084d9e255ff0702461cf8895ce9e3b5ff108',
+]);
+
 export class EvmSenderResolver implements SenderResolver {
   constructor(
     private readonly urls: () => Record<string, string> = () => evmRpcUrls(),
@@ -172,14 +184,38 @@ export class EvmSenderResolver implements SenderResolver {
       const receipt = obj(await this.rpc(url, 'eth_getTransactionReceipt', [hash]));
       if (!receipt) throw new Error('no receipt yet');
       const sources: string[] = [];
+      const userOpSenders: string[] = [];
+      let tokenIn = false;
       for (const raw of arr(receipt.logs)) {
         const topics = arr(obj(raw)?.topics);
-        if (String(topics[0]).toLowerCase() !== `0x${TRANSFER_TOPIC}`) continue;
+        const topic0 = String(topics[0]).toLowerCase();
+        if (topic0 === USER_OPERATION_EVENT_TOPIC) {
+          // ERC-4337: tx.from is only the bundler; the smart account (indexed `sender`) is the
+          // real payer, and is screened too (T7).
+          const sender = topicAddress(topics[2]);
+          if (sender) userOpSenders.push(sender);
+          continue;
+        }
+        if (topic0 !== `0x${TRANSFER_TOPIC}`) continue;
         const src = topicAddress(topics[1]);
         const dst = topicAddress(topics[2]);
-        if (src && dst === deposit) sources.push(src);
+        if (src && dst === deposit) {
+          sources.push(src);
+          tokenIn = true;
+        }
       }
-      return unique([from.toLowerCase(), ...sources]);
+      const to = str(tx?.to)?.toLowerCase() ?? null;
+      const viaEntryPoint = to !== null && ENTRY_POINTS.has(to);
+      // An EntryPoint call whose user-op sender cannot be read: the real payer is unknown.
+      if (viaEntryPoint && userOpSenders.length === 0) return [];
+      if (!tokenIn && !viaEntryPoint && to !== deposit) {
+        // A native deposit that did not go straight to the deposit address reached it through an
+        // internal call of the contract the tx called (a smart account executed by its owner, a
+        // router): that contract is a source too. With no `to` at all it cannot be told: unknown.
+        if (to === null || !EVM_ADDR.test(to)) return [];
+        sources.push(to);
+      }
+      return unique([from.toLowerCase(), ...userOpSenders, ...sources]);
     });
   }
 }
@@ -289,7 +325,8 @@ export class TronSenderResolver implements SenderResolver {
       const info = obj(
         await postJson(this.fetchImpl, `${this.url}/wallet/gettransactioninfobyid`, { value }),
       );
-      if (!info) throw new Error('no transaction info yet');
+      // TronGrid answers `{}` until the tx is confirmed: unknown (retry), never signer-only (M-4).
+      if (!info || typeof info.id !== 'string') throw new Error('no transaction info yet');
       const sources: string[] = [];
       for (const raw of arr(info.log)) {
         const topics = arr(obj(raw)?.topics).map((t) => String(t).toLowerCase());

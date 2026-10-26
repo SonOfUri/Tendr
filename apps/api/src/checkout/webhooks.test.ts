@@ -125,6 +125,25 @@ describe('endpoint URL policy (C24)', () => {
     }
   });
 
+  it('T9: blocks IPv4-compatible ::/96 and Teredo 2001::/32', () => {
+    for (const ip of [
+      '::8.8.8.8',
+      '::808:808',
+      '::7f00:1',
+      '::0:a9fe:a9fe',
+      '0:0:0:0:0:0:808:808',
+      '2001::1',
+      '2001:0:4136:e378:8000:63bf:3fff:fdd2', // a Teredo address (embeds an arbitrary IPv4)
+      '[2001::5efe:c000:201]',
+    ]) {
+      expect(isPrivateAddress(ip), ip).toBe(true);
+    }
+    // Neighbours stay public: Google DNS (2001:4860::/32), IPv4-mapped public.
+    for (const ip of ['2001:4860:4860::8888', '2a00:1450:4001::64', '::ffff:8.8.8.8']) {
+      expect(isPrivateAddress(ip), ip).toBe(false);
+    }
+  });
+
   it('live: https only, and the host must resolve to public addresses', async () => {
     setWebhookResolver(async () => [{ address: '93.184.216.34', family: 4 }]);
     await expect(validateEndpointUrl('https://shop.example/hooks', true)).resolves.toBe(

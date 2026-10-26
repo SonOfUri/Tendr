@@ -116,6 +116,24 @@ export interface OneClickProvider {
  * - `code`: the API's error code when it gives one, else `HTTP_<status>`, `TIMEOUT`, `NETWORK`
  *   or `BAD_RESPONSE`.
  */
+/** Longest untrusted provider value carried into an error's message, details or logs (T3). */
+export const UNTRUSTED_VALUE_MAX = 200;
+
+/** An untrusted provider value, as text of at most UNTRUSTED_VALUE_MAX characters. */
+export function truncateUntrusted(value: unknown, max = UNTRUSTED_VALUE_MAX): string {
+  let text: string;
+  if (typeof value === 'string') {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value) ?? String(value);
+    } catch {
+      text = String(value);
+    }
+  }
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
 export class OneClickError extends Error {
   constructor(
     message: string,

@@ -184,11 +184,11 @@ for (const [net, prefix] of [
   blocked.addSubnet(net, prefix, 'ipv4');
 }
 for (const [net, prefix] of [
-  ['::', 128],
-  ['::1', 128],
+  ['::', 96], // unspecified, loopback and IPv4-compatible (deprecated; embeds any IPv4) — T9
   ['64:ff9b::', 96], // NAT64: may front any IPv4, including private ones
   ['64:ff9b:1::', 48],
   ['100::', 64],
+  ['2001::', 32], // Teredo: tunnels to an arbitrary IPv4 — T9
   ['2001:db8::', 32],
   ['2002::', 16], // 6to4: embeds an arbitrary IPv4
   ['fc00::', 7],
@@ -206,9 +206,9 @@ export function isPrivateAddress(address: string): boolean {
   if (family === 4) return blocked.check(ip, 'ipv4');
   if (family !== 6) return true; // not an IP: never treated as safe
   const lower = ip.toLowerCase();
-  // IPv4-mapped / -compatible IPv6 (::ffff:a.b.c.d, ::ffff:7f00:1): judge the embedded IPv4.
-  const mapped =
-    /^(?:0{0,4}:){0,5}(?:0{0,4}:)?ffff:(.+)$/.exec(lower) ?? /^::(.+\..+)$/.exec(lower);
+  // IPv4-mapped IPv6 (::ffff:a.b.c.d, ::ffff:7f00:1): judge the embedded IPv4. IPv4-compatible
+  // (::a.b.c.d) is in ::/96 and blocked outright.
+  const mapped = /^(?:0{0,4}:){0,5}(?:0{0,4}:)?ffff:(.+)$/.exec(lower);
   if (mapped) {
     const tail = mapped[1]!;
     if (isIP(tail) === 4) return blocked.check(tail, 'ipv4');

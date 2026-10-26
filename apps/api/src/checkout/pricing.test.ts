@@ -301,6 +301,20 @@ describe('buildQuoteRequests', () => {
     }
   });
 
+  it('T3: an untrusted provider value is truncated to 200 chars in BAD_RESPONSE details', () => {
+    const { real } = buildQuoteRequests(input({ feePayer: 'merchant' }));
+    const huge = 'x'.repeat(10_000);
+    let caught: unknown;
+    try {
+      real(quote('1000', huge));
+    } catch (err) {
+      caught = err;
+    }
+    const details = (caught as OneClickError).details as { value: string };
+    expect(details.value.length).toBeLessThanOrEqual(200);
+    expect(details.value.startsWith('xxx')).toBe(true);
+  });
+
   it('merchant pays fees and gas: targets order − reimbursement', () => {
     const { real } = buildQuoteRequests(
       input({ feePayer: 'merchant', gasPayer: 'merchant', gasEstimateUsd: '1.00' }),

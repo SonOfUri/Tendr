@@ -6,8 +6,9 @@
 // SCREENING_PENDING for `retryPendingScreenings`.
 //
 // Test mode (`ctx.livemode === false`) uses the SCREENING_TEST_BLOCKLIST fixture list and never
-// makes an HTTP call. Results are cached 24 h in Redis per (chain, address), without the
-// merchant, so one lookup serves every merchant. A dead Redis only costs the cache.
+// makes an HTTP call. Results are cached in Redis per (chain, address), without the merchant, so
+// one lookup serves every merchant: `block` for 24 h, `allow` for 1 h (a newly sanctioned address
+// is caught within the hour). A dead Redis only costs the cache.
 import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
@@ -24,7 +25,10 @@ export type ScreeningOutcome = 'allow' | 'block' | 'unavailable';
 export const CHAINALYSIS_PURPOSE = 'chainalysis';
 export const CHAINALYSIS_URL = 'https://public.chainalysis.com/api/v1/address/';
 export const SCREENING_TIMEOUT_MS = 3000;
+/** How long a `block` is cached: a sanctioned address stays blocked. */
 export const SCREENING_CACHE_TTL_S = 24 * 3600;
+/** How long an `allow` is cached (T6): a newly sanctioned address is caught within the hour. */
+export const SCREENING_ALLOW_CACHE_TTL_S = 3600;
 /** After this long unresolved, a pending payment becomes a review item (not a hold). */
 export const SCREENING_GIVE_UP_MS = 6 * 3_600_000;
 /** First retry 1 min after the payment appeared; then 5, 15, 30 min; then hourly. */
@@ -125,7 +129,8 @@ export async function screenAddress(
       decision = await lookupLive(address);
       if (decision !== 'unavailable') {
         try {
-          await getRedis().set(key, decision, 'EX', SCREENING_CACHE_TTL_S);
+          const ttl = decision === 'allow' ? SCREENING_ALLOW_CACHE_TTL_S : SCREENING_CACHE_TTL_S;
+          await getRedis().set(key, decision, 'EX', ttl);
         } catch {
           // The cache is best effort.
         }

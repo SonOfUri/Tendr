@@ -3,6 +3,7 @@
 import {
   ONECLICK_STATUSES,
   OneClickError,
+  truncateUntrusted,
   type OneClickProvider,
   type OneClickStatus,
   type QuoteRequest,
@@ -106,7 +107,13 @@ export class HttpOneClick implements OneClickProvider {
           : typeof errBody.error === 'string' && /^[A-Z][A-Z0-9_]*$/.test(errBody.error)
             ? errBody.error
             : `HTTP_${res.status}`;
-      throw new OneClickError(message, res.status, code, parsed ?? text);
+      // The provider's message and code are untrusted text bound for API errors and logs (T3).
+      throw new OneClickError(
+        truncateUntrusted(message),
+        res.status,
+        truncateUntrusted(code),
+        parsed ?? truncateUntrusted(text),
+      );
     }
     return parsed;
   }
@@ -131,7 +138,12 @@ function asObject(v: unknown, where: string): Json {
 }
 
 function badResponse(where: string, why: string): OneClickError {
-  return new OneClickError(`1Click ${where}: unexpected response (${why})`, null, 'BAD_RESPONSE');
+  // `why` can carry provider text (an unknown status): truncated (T3).
+  return new OneClickError(
+    `1Click ${where}: unexpected response (${truncateUntrusted(why)})`,
+    null,
+    'BAD_RESPONSE',
+  );
 }
 
 /** A string, or a number rendered as its decimal string (1Click mixes the two). */
