@@ -44,6 +44,8 @@ function ctxOf(req: FastifyRequest): ShopperCtx {
 export type CheckoutClientRouteOptions = {
   /** Per-session quote limiter (`createRateLimiters().sessionQuote`), run after auth. */
   quoteRateLimit: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  /** Per-session-id frame-origins limiter (`createRateLimiters().frameOrigins`, C26). */
+  frameOriginsRateLimit: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 };
 
 export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions> = async (
@@ -103,11 +105,15 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
   });
 
   // Ruling C3 (Task 11): the origins allowed to frame this session's checkout, for the web
-  // middleware's CSP `frame-ancestors`. Public and per-IP limited; only the origin list, and an
-  // empty list (not a 404) for unknown or expired sessions.
+  // middleware's CSP `frame-ancestors`. Public; only the origin list, and an empty list (not a
+  // 404) for unknown or expired sessions. Limited per session id, not per IP (C26): the web
+  // middleware calls it from one server IP.
   app.get<{ Params: { sessionId: string } }>(
     `${CHECKOUT_PUBLIC_PREFIX}:sessionId/frame-origins`,
-    { config: { auth: 'public' } },
+    {
+      config: { auth: 'public', publicLimit: 'route' },
+      preHandler: opts.frameOriginsRateLimit,
+    },
     async (req, reply) => {
       reply.header('cache-control', 'no-store');
       return publicFrameOrigins(req.params.sessionId);

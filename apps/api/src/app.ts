@@ -229,7 +229,10 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(accountRoutes);
   await app.register(recoveryRoutes);
   await app.register(checkoutSessionRoutes);
-  await app.register(checkoutClientRoutes, { quoteRateLimit: limiters.sessionQuote });
+  await app.register(checkoutClientRoutes, {
+    quoteRateLimit: limiters.sessionQuote,
+    frameOriginsRateLimit: limiters.frameOrigins,
+  });
   await app.register(webhookRoutes);
   await app.register(paymentRoutes);
   await app.register(reviewRoutes);

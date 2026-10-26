@@ -8,6 +8,9 @@
 //   user_session    120 / person    (signed in, no store selected)
 //   public           60 / IP          routes declared `auth: 'public'`
 //   session_quote     8 / session     the shopper quote route only (route-level `sessionQuote`)
+//   frame_origins    60 / session id  the public frame-origins route (C26), instead of `public`:
+//                                     the web middleware calls it from one server IP
+//   frame_origins_global 20000 / all  ceiling across every session id on that route
 //
 // Counters are keyed by ids (principalRef) and IPs, never by raw credentials. Fails open:
 // if Redis is unreachable the request is let through and a warning is logged.
@@ -30,7 +33,11 @@ export type RateLimitKind =
   | 'user_session'
   | 'public'
   /** Shopper quotes per session (each one calls 1Click and allocates a deposit address). */
-  | 'session_quote';
+  | 'session_quote'
+  /** The public frame-origins route, per session id (C26). */
+  | 'frame_origins'
+  /** The public frame-origins route, across all session ids. */
+  | 'frame_origins_global';
 
 export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   ip_global: 3000,
@@ -41,7 +48,22 @@ export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   user_session: 120,
   public: 60,
   session_quote: 8,
+  frame_origins: 60,
+  frame_origins_global: 20_000,
 };
+
+declare module 'fastify' {
+  interface FastifyContextConfig {
+    /**
+     * `'route'`: a public route that brings its own limiter (route-level hook) instead of the
+     * per-IP `public` limit. The `ip_global` limit still applies.
+     */
+    publicLimit?: 'per_ip' | 'route';
+  }
+}
+
+/** A session id as issued (`ses_` + ULID); anything else shares one bucket. */
+const SESSION_ID = /^ses_[0-9A-HJKMNP-TV-Z]{26}$/;
 
 export type RateLimitOptions = {
   redis: Redis;
@@ -68,7 +90,7 @@ type Hook = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 export async function createRateLimiters(
   app: FastifyInstance,
   opts: RateLimitOptions,
-): Promise<{ ip: Hook; principal: Hook; sessionQuote: Hook }> {
+): Promise<{ ip: Hook; principal: Hook; sessionQuote: Hook; frameOrigins: Hook }> {
   await app.register(rateLimit, {
     global: false,
     redis: opts.redis,
@@ -94,6 +116,8 @@ export async function createRateLimiters(
     user_session: make('user_session'),
     public: make('public'),
     session_quote: make('session_quote'),
+    frame_origins: make('frame_origins'),
+    frame_origins_global: make('frame_origins_global'),
   };
 
   async function enforce(
@@ -129,6 +153,15 @@ export async function createRateLimiters(
       if (p?.kind !== 'session_client') return;
       await enforce(req, reply, 'session_quote', `quote:${p.sessionId}`);
     },
+    /**
+     * Route-level hook for `GET /v1/checkout/public/:sessionId/frame-origins` (C26): a global
+     * ceiling, then `frame_origins` per session id. Malformed ids share one bucket.
+     */
+    frameOrigins: async (req, reply) => {
+      await enforce(req, reply, 'frame_origins_global', 'fo:all');
+      const id = (req.params as { sessionId?: string } | undefined)?.sessionId ?? '';
+      await enforce(req, reply, 'frame_origins', `fo:${SESSION_ID.test(id) ? id : 'invalid'}`);
+    },
     ip: async (req, reply) => {
       if (!isV1(req.routeOptions.url)) return;
       await enforce(req, reply, 'ip_global', `ip:${req.ip}`);
@@ -137,7 +170,10 @@ export async function createRateLimiters(
       if (!isV1(req.routeOptions.url)) return;
       const p = req.principal;
       if (!p) {
-        if (req.routeOptions.config.auth === 'public') {
+        if (
+          req.routeOptions.config.auth === 'public' &&
+          req.routeOptions.config.publicLimit !== 'route'
+        ) {
           await enforce(req, reply, 'public', `pub:${req.ip}`);
         }
         return;

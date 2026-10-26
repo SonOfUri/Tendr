@@ -533,16 +533,42 @@ describe('shopper checkout routes', () => {
       expect((await frameOrigins(s.id)).json()).toEqual({ origins: ['https://shop.example'] });
     });
 
-    it('is rate-limited per IP like the other public routes (429 RATE_LIMITED)', async () => {
+    it('is rate-limited per session id, not per IP (C26)', async () => {
       await app.close();
-      app = await buildApp({ rateLimitOverrides: { public: 2 } });
+      // The per-IP public limit is lower than the per-session one: it must not apply here.
+      app = await buildApp({ rateLimitOverrides: { public: 1, frame_origins: 2 } });
       await app.ready();
-      const s = await newSession();
-      expect((await frameOrigins(s.id)).statusCode).toBe(200);
-      expect((await frameOrigins(s.id)).statusCode).toBe(200);
-      const limited = await frameOrigins(s.id);
+      const a = await newSession();
+      const b = await newSession();
+      // All requests come from the same IP (the web server's middleware in production).
+      expect((await frameOrigins(a.id)).statusCode).toBe(200);
+      expect((await frameOrigins(a.id)).statusCode).toBe(200);
+      const limited = await frameOrigins(a.id);
       expect(limited.statusCode, limited.body).toBe(429);
       expect(limited.json().error.code).toBe('RATE_LIMITED');
+      // Another session from the same IP is not throttled by A's limit.
+      expect((await frameOrigins(b.id)).statusCode).toBe(200);
+      expect((await frameOrigins(b.id)).statusCode).toBe(200);
+      // The other public routes keep their per-IP limit.
+      const refund = () =>
+        app.inject({
+          method: 'POST',
+          url: '/v1/checkout/refund-address',
+          payload: { token: 'ref_x.y', address: 'alice.near', chain: 'near' },
+        });
+      expect((await refund()).statusCode).toBe(401);
+      expect((await refund()).statusCode).toBe(429);
+    });
+
+    it('has a global ceiling across all sessions', async () => {
+      await app.close();
+      app = await buildApp({
+        rateLimitOverrides: { frame_origins: 100, frame_origins_global: 3 },
+      });
+      await app.ready();
+      const ids = [await newSession(), await newSession(), await newSession(), await newSession()];
+      for (const s of ids.slice(0, 3)) expect((await frameOrigins(s.id)).statusCode).toBe(200);
+      expect((await frameOrigins(ids[3]!.id)).statusCode).toBe(429);
     });
   });
 

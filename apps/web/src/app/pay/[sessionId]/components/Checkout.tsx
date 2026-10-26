@@ -10,7 +10,7 @@ import {
 } from '@/lib/checkout/api';
 import { createEmbedBridge, type EmbedBridge } from '@/lib/checkout/embed-bridge';
 import { createPoller, type Poller } from '@/lib/checkout/poller';
-import { takeClientSecret } from '@/lib/checkout/secret';
+import { clearClientSecret, takeClientSecret } from '@/lib/checkout/secret';
 import { screenFor, type ScreenKind } from '@/lib/checkout/status';
 import { publicEnv } from '@/lib/env';
 import { EmailPanel, NeedsAddressPanel } from './ActionPanels';
@@ -73,9 +73,13 @@ export function Checkout({ sessionId }: { sessionId: string }) {
         try {
           const v = await client.session();
           setView(v);
-          return { terminal: screenFor(v, new Date()).terminal };
+          const { terminal } = screenFor(v, new Date());
+          // Nothing more to wait for: a reload no longer needs the secret (C27).
+          if (terminal) clearClientSecret(sessionId, window);
+          return { terminal };
         } catch (err) {
           if (err instanceof CheckoutApiError && [401, 403, 404].includes(err.status)) {
+            clearClientSecret(sessionId, window);
             setFatal('invalid');
             return { terminal: true };
           }
@@ -91,7 +95,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
       poller.stop();
       pollerRef.current = null;
     };
-  }, [client]);
+  }, [client, sessionId]);
 
   const loadTokens = useCallback(() => {
     if (!client) return;
