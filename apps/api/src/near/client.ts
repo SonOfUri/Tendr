@@ -110,6 +110,8 @@ export interface TxStatusResult {
   hash: string;
   signerId: string;
   receiverId: string;
+  /** `sender_id` of each NEP-366 delegate action (meta-transaction): the real sender. */
+  delegateSenderIds?: string[];
   /** Every receipt (not the transaction outcome itself), with its executor and logs. */
   receipts: TxReceipt[];
 }

@@ -23,6 +23,7 @@ export type IdPrefix =
   | 'obx'
   | 'fplan'
   | 'rev'
+  | 'scl' // settlement_claims
   | 'thm'
   | 'tasset'
   | 'sec'

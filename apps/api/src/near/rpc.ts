@@ -43,7 +43,12 @@ type ExecutionStatus = { SuccessValue?: string; SuccessReceiptId?: string; Failu
 
 interface FinalExecutionOutcome {
   status: ExecutionStatus | string;
-  transaction?: { hash?: string; signer_id?: string; receiver_id?: string };
+  transaction?: {
+    hash?: string;
+    signer_id?: string;
+    receiver_id?: string;
+    actions?: unknown[];
+  };
   transaction_outcome?: {
     id?: string;
     outcome: { logs: string[]; status: ExecutionStatus | string; executor_id?: string };
@@ -52,6 +57,20 @@ interface FinalExecutionOutcome {
     id?: string;
     outcome: { logs: string[]; status: ExecutionStatus | string; executor_id?: string };
   }[];
+  /** `EXPERIMENTAL_tx_status` only: the receipts themselves (predecessor of each). */
+  receipts?: { receipt_id?: string; predecessor_id?: string }[];
+}
+
+/** `sender_id` of every NEP-366 `Delegate` action (meta-transaction) in a transaction. */
+function delegateSenders(actions: unknown[] | undefined): string[] {
+  const out: string[] = [];
+  for (const a of actions ?? []) {
+    if (!a || typeof a !== 'object') continue;
+    const d = (a as { Delegate?: { delegate_action?: { sender_id?: unknown } } }).Delegate;
+    const sender = d?.delegate_action?.sender_id;
+    if (typeof sender === 'string') out.push(sender);
+  }
+  return out;
 }
 
 /** The node does not know the transaction (not yet, or wrong shard routing). */
@@ -130,11 +149,17 @@ function safeJson(v: unknown): string {
   }
 }
 
+/**
+ * Undefined only for an explicit success (`SuccessValue` / `SuccessReceiptId`); anything else —
+ * `Failure`, a missing status, `Unknown` / `Pending` or an unrecognised shape — is not a success
+ * and is reported as a failure, so an event in such a receipt is never trusted.
+ */
 function failureOf(status: ExecutionStatus | string | undefined): string | undefined {
-  if (!status || typeof status === 'string') {
-    return status === 'Failure' ? 'Failure' : undefined;
-  }
-  return status.Failure !== undefined ? JSON.stringify(status.Failure) : undefined;
+  if (!status) return 'MissingStatus';
+  if (typeof status === 'string') return status;
+  if (status.Failure !== undefined) return JSON.stringify(status.Failure);
+  if ('SuccessValue' in status || 'SuccessReceiptId' in status) return undefined;
+  return `UnrecognisedStatus ${JSON.stringify(status)}`;
 }
 
 /** Maps a final execution outcome to a TxResult: logs of every receipt, first failure wins. */
@@ -248,16 +273,24 @@ export class NearRpc {
       if (UNKNOWN_TX.test(errorText(err))) return null;
       throw err;
     }
+    const predecessors = new Map(
+      (o.receipts ?? []).map((r) => [r.receipt_id ?? '', r.predecessor_id ?? '']),
+    );
     return {
       hash: o.transaction?.hash ?? hash,
       signerId: o.transaction?.signer_id ?? '',
       receiverId: o.transaction?.receiver_id ?? '',
-      receipts: (o.receipts_outcome ?? []).map((r) => ({
-        receiptId: r.id ?? '',
-        executorId: r.outcome.executor_id ?? '',
-        logs: [...r.outcome.logs],
-        ok: !failureOf(r.outcome.status),
-      })),
+      delegateSenderIds: delegateSenders(o.transaction?.actions),
+      receipts: (o.receipts_outcome ?? []).map((r) => {
+        const predecessorId = predecessors.get(r.id ?? '');
+        return {
+          receiptId: r.id ?? '',
+          executorId: r.outcome.executor_id ?? '',
+          logs: [...r.outcome.logs],
+          ok: !failureOf(r.outcome.status),
+          ...(predecessorId ? { predecessorId } : {}),
+        };
+      }),
     };
   }
 

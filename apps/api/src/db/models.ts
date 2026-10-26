@@ -17,6 +17,7 @@ export const PER_MODE_MODELS = [
   'GasSponsorship',
   'ScreeningResult',
   'RevenueEntry',
+  'SettlementClaim',
   'AccountKey',
   'MerchantAccount',
   'AccountProposal',

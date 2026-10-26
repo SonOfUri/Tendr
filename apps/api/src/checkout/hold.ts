@@ -7,10 +7,14 @@ import type { ScopeContext } from '../db/scoped.js';
 import { recordEvent } from '../events/record.js';
 import { transitionPayment, transitionSession } from '../events/transitions.js';
 import { notFound } from '../lib/errors.js';
+import { log } from '../lib/logger.js';
 
 /** The non-custodial notice to all signers, verbatim (spec "Changes" #3). */
 export const HOLD_NOTICE =
   'These funds came from a sanctioned address. Tendr cannot freeze them; you are responsible for not using them; get legal advice.';
+
+/** Payment statuses a hold applies to (from the state machine: → HELD). */
+const HOLDABLE_PAYMENT = new Set(['DETECTED', 'PROCESSING', 'SCREENING_PENDING']);
 
 /** Session statuses a held payment also holds (the session is waiting on this payment). */
 const SESSION_HOLDABLE = new Set(['PROCESSING', 'SCREENING_PENDING', 'LATE_DEPOSIT']);
@@ -27,12 +31,19 @@ export async function holdPaymentInTx(
   paymentId: string,
 ): Promise<boolean> {
   const tenant = { merchantId: ctx.merchantId, livemode: ctx.livemode };
+  // Serialise with the watcher's other payment writes (settle, refund) on this row.
+  await tx.$queryRaw`SELECT id FROM payments WHERE id = ${paymentId} AND merchant_id = ${ctx.merchantId} AND livemode = ${ctx.livemode} FOR UPDATE`;
   const p = await tx.payment.findFirst({
     where: { id: paymentId, ...tenant },
     select: { id: true, status: true, sessionId: true, isLate: true, senderAddress: true },
   });
   if (!p) throw notFound('Payment not found');
   if (p.status === 'HELD') return false;
+  if (!HOLDABLE_PAYMENT.has(p.status)) {
+    // Already settled, refunding or refunded: a hold cannot apply; ops must look at it.
+    log('error', 'hold skipped: payment is no longer holdable', { paymentId, status: p.status });
+    return false;
+  }
   await transitionPayment(tx, ctx, p.id, 'HELD', { reason: 'sanctions' });
   await tx.payment.updateMany({
     where: { id: p.id, ...tenant },

@@ -100,6 +100,8 @@ export interface TxReceipt {
   logs: string[];
   /** False when the receipt failed: its logs describe rolled-back changes. */
   ok: boolean;
+  /** The account that created the receipt (when the RPC reports it). */
+  predecessorId?: string;
 }
 
 /**
@@ -134,6 +136,52 @@ export function creditedAmount(
     }
   }
   return total;
+}
+
+/** One matching credit, identified within its transaction (a settlement claim's key). */
+export interface MatchedCredit {
+  receiptId: string;
+  /** `<log index>.<data entry>.<token index>` within the receipt. */
+  eventKey: string;
+  amount: bigint;
+}
+
+/**
+ * Every credit to `receiver` in `assetId` in the successful receipts of a transaction, each
+ * identified by receipt and event position, so distinct events of one (batched) transaction can
+ * settle distinct payments while one event never settles two. Same emitter rules as
+ * `creditedAmount`.
+ */
+export function matchingCredits(
+  receipts: readonly TxReceipt[],
+  opts: { assetId: string; receiver: string; intentsContract?: string },
+): MatchedCredit[] {
+  const tokenContract = opts.assetId.startsWith('nep141:') ? opts.assetId.slice(7) : null;
+  const expectedEmitter = opts.intentsContract ?? tokenContract;
+  const out: MatchedCredit[] = [];
+  for (const r of receipts) {
+    if (!r.ok || !expectedEmitter || r.executorId !== expectedEmitter) continue;
+    r.logs.forEach((line, logIndex) => {
+      const e = parseEventLog(line);
+      if (!e || !Array.isArray(e.data)) return;
+      (e.data as unknown[]).forEach((entry, dataIndex) => {
+        const single = { ...e, data: [entry] };
+        creditsOf(single, r.executorId).forEach((c, tokenIndex) => {
+          if (c.receiver !== opts.receiver) return;
+          const ok = opts.intentsContract
+            ? c.standard === 'nep245' && c.tokenId === opts.assetId
+            : c.standard === 'nep141';
+          if (!ok) return;
+          out.push({
+            receiptId: r.receiptId,
+            eventKey: `${logIndex}.${dataIndex}.${tokenIndex}`,
+            amount: c.amount,
+          });
+        });
+      });
+    });
+  }
+  return out;
 }
 
 /** Builds an `EVENT_JSON:` log line (fakes and the simulated provider). */

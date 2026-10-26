@@ -1,19 +1,28 @@
-// Who sent a deposit, read from the origin-chain transaction (live mode only: test mode uses the
-// simulated provider's `senderAddress`). One resolver per chain family behind one interface:
+// Who sent a deposit, read from the origin-chain transactions (live mode only: test mode uses the
+// simulated provider's `senderAddress`). One resolver per chain family behind one interface.
+// Every resolver screens the union of the transaction's SIGNER and the actual SOURCE of the funds
+// that reached the deposit address (a relayer / fee payer can differ from the token owner):
 //
-//   EVM      eth_getTransactionByHash → `from` (RPC per chain: EVM_RPC_URLS over public defaults)
-//   Solana   getTransaction → the first account key (fee payer, first signer)
-//   Tron     TronGrid wallet/gettransactionbyid (visible) → owner_address (base58)
-//   Bitcoin  mempool.space /api/tx/:txid → every distinct input's prevout address
-//   NEAR     EXPERIMENTAL_tx_status → signer (NearClient.txStatus)
+//   EVM      eth_getTransactionByHash `from` + every ERC-20 Transfer log `from` whose `to` is the
+//            deposit address (eth_getTransactionReceipt). RPC per chain: EVM_RPC_URLS over
+//            public defaults.
+//   Solana   getTransaction (jsonParsed): the fee payer + the source / authority / owner of every
+//            SOL or SPL transfer into the deposit address (inner instructions included).
+//   Tron     TronGrid gettransactionbyid owner_address + every TRC-20 Transfer `from` whose `to`
+//            is the deposit address (gettransactioninfobyid), base58.
+//   Bitcoin  mempool.space: every distinct input's prevout address.
+//   NEAR     the signer + NEP-366 delegate senders + `old_owner_id` of every NEP-141 / NEP-245
+//            transfer event into the deposit address (and the predecessor of that receipt).
 //
-// A resolver returns every sender it found (Bitcoin may have several; each is screened and any
-// `block` holds the payment), or [] when it cannot tell — an unknown chain, an unknown tx, a
-// timeout or a malformed answer. [] is never "clean": the payment waits in SCREENING_PENDING.
+// Fail closed: if ANY transaction cannot be read, or yields no sender, the resolver returns [] —
+// never a partial list. [] means "unknown": the payment waits in SCREENING_PENDING.
 // Every HTTP call has a 5 s timeout and needs no API key.
+import { createHash } from 'node:crypto';
+import bs58 from 'bs58';
 import { env } from '../../env.js';
 import { log } from '../../lib/logger.js';
 import type { NearClient } from '../../near/client.js';
+import { creditsOf, parseEventLog } from '../../near/events.js';
 import { chainFamily } from '../address-format.js';
 
 export const SENDER_LOOKUP_TIMEOUT_MS = 5_000;
@@ -25,6 +34,8 @@ export interface SenderLookupInput {
   chain: string;
   /** 1Click origin asset id (NEAR uses its token contract to route the lookup). */
   originAsset: string;
+  /** The quote's deposit address (transfers INTO it identify the source of funds). */
+  depositAddress: string;
   originTxHashes: string[];
 }
 
@@ -53,6 +64,8 @@ const EVM_ALIASES: Readonly<Record<string, string>> = {
 export const SOLANA_RPC_URL = 'https://api.mainnet-beta.solana.com';
 export const TRONGRID_URL = 'https://api.trongrid.io';
 export const MEMPOOL_URL = 'https://mempool.space';
+/** keccak256("Transfer(address,address,uint256)"): ERC-20 and TRC-20 Transfer topic. */
+export const TRANSFER_TOPIC = 'ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 
 const realFetch: FetchLike = (url, init) => fetch(url, init);
 
@@ -91,25 +104,45 @@ const postJson = (fetchImpl: FetchLike, url: string, body: unknown) =>
 
 const obj = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
 
 const unique = (xs: string[]) => [...new Set(xs)];
 
-/** Runs `one` per tx hash, keeping going past failures; logs them. */
-async function eachHash(
+/**
+ * Runs `one` for every tx hash. All or nothing: a hash that throws or yields no sender makes the
+ * whole lookup [] (unknown), so a partial list can never pass as the complete set of senders.
+ */
+async function everyHash(
   family: string,
   hashes: string[],
   one: (hash: string) => Promise<string[]>,
 ): Promise<string[]> {
+  if (hashes.length === 0) return [];
   const found: string[] = [];
   for (const hash of hashes) {
+    let senders: string[];
     try {
-      found.push(...(await one(hash)));
+      senders = await one(hash);
     } catch (err) {
       log('warn', 'sender lookup failed', { family, hash, err: String(err) });
+      return [];
     }
+    if (senders.length === 0) {
+      log('warn', 'sender lookup found no sender', { family, hash });
+      return [];
+    }
+    found.push(...senders);
   }
   return unique(found);
 }
+
+// ─── EVM ─────────────────────────────────────────────────────────────────────
+
+const EVM_ADDR = /^0x[0-9a-fA-F]{40}$/;
+/** The address in a 32-byte topic (last 20 bytes), lower-case 0x form. */
+const topicAddress = (t: unknown): string | null =>
+  typeof t === 'string' && /^0x[0-9a-fA-F]{64}$/.test(t) ? `0x${t.slice(26).toLowerCase()}` : null;
 
 export class EvmSenderResolver implements SenderResolver {
   constructor(
@@ -117,28 +150,41 @@ export class EvmSenderResolver implements SenderResolver {
     private readonly fetchImpl: FetchLike = realFetch,
   ) {}
 
+  private async rpc(url: string, method: string, params: unknown[]): Promise<unknown> {
+    const body = obj(
+      await postJson(this.fetchImpl, url, { jsonrpc: '2.0', id: 1, method, params }),
+    );
+    if (body?.error) throw new Error(`${method}: ${JSON.stringify(body.error)}`);
+    return body?.result;
+  }
+
   async resolve(input: SenderLookupInput): Promise<string[]> {
     const url = this.urls()[input.chain.toLowerCase()];
     if (!url) {
       log('warn', 'sender lookup: no RPC for EVM chain', { chain: input.chain });
       return [];
     }
-    return eachHash('evm', input.originTxHashes, async (hash) => {
-      const body = obj(
-        await postJson(this.fetchImpl, url, {
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'eth_getTransactionByHash',
-          params: [hash],
-        }),
-      );
-      const from = obj(body?.result)?.from;
-      return typeof from === 'string' && /^0x[0-9a-fA-F]{40}$/.test(from)
-        ? [from.toLowerCase()]
-        : [];
+    const deposit = input.depositAddress.toLowerCase();
+    return everyHash('evm', input.originTxHashes, async (hash) => {
+      const tx = obj(await this.rpc(url, 'eth_getTransactionByHash', [hash]));
+      const from = str(tx?.from);
+      if (!from || !EVM_ADDR.test(from)) return [];
+      const receipt = obj(await this.rpc(url, 'eth_getTransactionReceipt', [hash]));
+      if (!receipt) throw new Error('no receipt yet');
+      const sources: string[] = [];
+      for (const raw of arr(receipt.logs)) {
+        const topics = arr(obj(raw)?.topics);
+        if (String(topics[0]).toLowerCase() !== `0x${TRANSFER_TOPIC}`) continue;
+        const src = topicAddress(topics[1]);
+        const dst = topicAddress(topics[2]);
+        if (src && dst === deposit) sources.push(src);
+      }
+      return unique([from.toLowerCase(), ...sources]);
     });
   }
 }
+
+// ─── Solana ──────────────────────────────────────────────────────────────────
 
 export class SolanaSenderResolver implements SenderResolver {
   constructor(
@@ -147,7 +193,8 @@ export class SolanaSenderResolver implements SenderResolver {
   ) {}
 
   async resolve(input: SenderLookupInput): Promise<string[]> {
-    return eachHash('solana', input.originTxHashes, async (sig) => {
+    const deposit = input.depositAddress;
+    return everyHash('solana', input.originTxHashes, async (sig) => {
       const body = obj(
         await postJson(this.fetchImpl, this.url, {
           jsonrpc: '2.0',
@@ -155,19 +202,70 @@ export class SolanaSenderResolver implements SenderResolver {
           method: 'getTransaction',
           params: [
             sig,
-            { encoding: 'json', maxSupportedTransactionVersion: 0, commitment: 'finalized' },
+            { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'finalized' },
           ],
         }),
       );
-      const message = obj(obj(obj(body?.result)?.transaction)?.message);
-      const keys = message?.accountKeys;
-      // accountKeys[0] is the fee payer, the first signer of the transaction.
-      const first = Array.isArray(keys) ? keys[0] : undefined;
-      return typeof first === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(first)
-        ? [first]
-        : [];
+      const result = obj(body?.result);
+      const message = obj(obj(result?.transaction)?.message);
+      const keys = arr(message?.accountKeys).map((k) => str(obj(k)?.pubkey) ?? str(k));
+      const feePayer = keys[0];
+      if (!feePayer) return [];
+      const meta = obj(result?.meta);
+      // Token account → owner, from the balances 1Click's deposit touched.
+      const owners = new Map<string, string>();
+      for (const b of [...arr(meta?.preTokenBalances), ...arr(meta?.postTokenBalances)]) {
+        const ob = obj(b);
+        const idx = typeof ob?.accountIndex === 'number' ? ob.accountIndex : -1;
+        const account = keys[idx];
+        const owner = str(ob?.owner);
+        if (account && owner) owners.set(account, owner);
+      }
+      const instructions = [
+        ...arr(message?.instructions),
+        ...arr(meta?.innerInstructions).flatMap((i) => arr(obj(i)?.instructions)),
+      ];
+      const sources: string[] = [];
+      for (const raw of instructions) {
+        const ins = obj(raw);
+        const parsed = obj(ins?.parsed);
+        const info = obj(parsed?.info);
+        const type = str(parsed?.type);
+        if (!info || !type) continue;
+        const program = str(ins?.program);
+        if (program === 'system' && type === 'transfer' && info.destination === deposit) {
+          const source = str(info.source);
+          if (source) sources.push(source);
+        }
+        if (
+          (program === 'spl-token' || program === 'spl-token-2022') &&
+          (type === 'transfer' || type === 'transferChecked')
+        ) {
+          const dest = str(info.destination);
+          if (!dest || (dest !== deposit && owners.get(dest) !== deposit)) continue;
+          for (const who of [info.authority, info.multisigAuthority]) {
+            const w = str(who);
+            if (w) sources.push(w);
+          }
+          const srcOwner = owners.get(str(info.source) ?? '');
+          if (srcOwner) sources.push(srcOwner);
+        }
+      }
+      return unique([feePayer, ...sources]);
     });
   }
+}
+
+// ─── Tron ────────────────────────────────────────────────────────────────────
+
+const TRON_B58 = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
+const sha256 = (b: Uint8Array) => createHash('sha256').update(b).digest();
+
+/** 21-byte Tron hex (`41…`) → base58check address (`T…`). */
+export function tronHexToBase58(hex: string): string {
+  const payload = Buffer.from(hex, 'hex');
+  const check = sha256(sha256(payload)).subarray(0, 4);
+  return bs58.encode(Buffer.concat([payload, check]));
 }
 
 export class TronSenderResolver implements SenderResolver {
@@ -177,20 +275,35 @@ export class TronSenderResolver implements SenderResolver {
   ) {}
 
   async resolve(input: SenderLookupInput): Promise<string[]> {
-    return eachHash('tron', input.originTxHashes, async (hash) => {
-      const body = obj(
+    return everyHash('tron', input.originTxHashes, async (hash) => {
+      const value = hash.replace(/^0x/i, '');
+      const tx = obj(
         await postJson(this.fetchImpl, `${this.url}/wallet/gettransactionbyid`, {
-          value: hash.replace(/^0x/i, ''),
+          value,
           visible: true,
         }),
       );
-      const contracts = obj(body?.raw_data)?.contract;
-      const first = Array.isArray(contracts) ? obj(contracts[0]) : null;
-      const owner = obj(obj(first?.parameter)?.value)?.owner_address;
-      return typeof owner === 'string' && /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(owner) ? [owner] : [];
+      const contract = obj(arr(obj(tx?.raw_data)?.contract)[0]);
+      const owner = str(obj(obj(contract?.parameter)?.value)?.owner_address);
+      if (!owner || !TRON_B58.test(owner)) return [];
+      const info = obj(
+        await postJson(this.fetchImpl, `${this.url}/wallet/gettransactioninfobyid`, { value }),
+      );
+      if (!info) throw new Error('no transaction info yet');
+      const sources: string[] = [];
+      for (const raw of arr(info.log)) {
+        const topics = arr(obj(raw)?.topics).map((t) => String(t).toLowerCase());
+        if (topics[0] !== TRANSFER_TOPIC || !topics[1] || !topics[2]) continue;
+        const from = tronHexToBase58(`41${topics[1].slice(24)}`);
+        const to = tronHexToBase58(`41${topics[2].slice(24)}`);
+        if (to === input.depositAddress) sources.push(from);
+      }
+      return unique([owner, ...sources]);
     });
   }
 }
+
+// ─── Bitcoin ─────────────────────────────────────────────────────────────────
 
 export class BitcoinSenderResolver implements SenderResolver {
   constructor(
@@ -199,20 +312,20 @@ export class BitcoinSenderResolver implements SenderResolver {
   ) {}
 
   async resolve(input: SenderLookupInput): Promise<string[]> {
-    return eachHash('bitcoin', input.originTxHashes, async (txid) => {
+    return everyHash('bitcoin', input.originTxHashes, async (txid) => {
       if (!/^[0-9a-fA-F]{64}$/.test(txid)) throw new Error('not a bitcoin txid');
       const body = obj(await getJson(this.fetchImpl, `${this.url}/api/tx/${txid}`));
-      const vin = body?.vin;
-      if (!Array.isArray(vin)) return [];
       // Every input's owner is a sender; each is screened.
       return unique(
-        vin
-          .map((i) => obj(obj(i)?.prevout)?.scriptpubkey_address)
-          .filter((a): a is string => typeof a === 'string' && a.length > 0),
+        arr(body?.vin)
+          .map((i) => str(obj(obj(i)?.prevout)?.scriptpubkey_address))
+          .filter((a): a is string => a !== null),
       );
     });
   }
 }
+
+// ─── NEAR ────────────────────────────────────────────────────────────────────
 
 export class NearSenderResolver implements SenderResolver {
   constructor(private readonly near: () => NearClient) {}
@@ -221,12 +334,32 @@ export class NearSenderResolver implements SenderResolver {
     const contract = input.originAsset.startsWith('nep141:')
       ? input.originAsset.slice(7)
       : undefined;
-    return eachHash('near', input.originTxHashes, async (hash) => {
+    return everyHash('near', input.originTxHashes, async (hash) => {
       const tx = await this.near().txStatus(hash, contract);
-      return tx?.signerId ? [tx.signerId] : [];
+      if (!tx?.signerId) return [];
+      const sources: string[] = [...(tx.delegateSenderIds ?? [])];
+      for (const r of tx.receipts) {
+        if (!r.ok) continue;
+        for (const line of r.logs) {
+          const e = parseEventLog(line);
+          if (!e || !Array.isArray(e.data)) continue;
+          const intoDeposit = creditsOf(e, r.executorId).some(
+            (c) => c.receiver === input.depositAddress,
+          );
+          if (!intoDeposit) continue;
+          for (const d of e.data as unknown[]) {
+            const old = str(obj(d)?.old_owner_id);
+            if (old) sources.push(old);
+          }
+          if (r.predecessorId && r.predecessorId !== r.executorId) sources.push(r.predecessorId);
+        }
+      }
+      return unique([tx.signerId, ...sources]);
     });
   }
 }
+
+// ─── dispatch ────────────────────────────────────────────────────────────────
 
 /** Picks the resolver for the origin chain's family; unknown families resolve to []. */
 export class SenderResolvers implements SenderResolver {

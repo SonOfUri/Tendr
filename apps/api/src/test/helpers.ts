@@ -388,6 +388,20 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         ...o,
       },
     }),
+  SettlementClaim: async (merchantId, livemode, o) =>
+    prisma.settlementClaim.create({
+      data: {
+        id: newId('scl'),
+        merchantId,
+        livemode,
+        paymentId: (await builders.Payment(merchantId, livemode, {})).id,
+        txHash: unique('tx'),
+        receiptId: 'r0',
+        eventKey: '0.0.0',
+        amount: '5000',
+        ...o,
+      },
+    }),
   CheckoutTheme: (merchantId, _l, o) =>
     prisma.checkoutTheme.create({
       data: {

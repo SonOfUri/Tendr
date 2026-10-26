@@ -482,6 +482,7 @@ model Merchant {
   events            Event[]
   feePlans          FeePlan[]
   revenueEntries    RevenueEntry[]
+  settlementClaims  SettlementClaim[]
   checkoutThemes    CheckoutTheme[]
   themeAssets       ThemeAsset[]
   idempotencyKeys   IdempotencyKey[]
@@ -940,6 +941,8 @@ model Quote {
   /// Polling stopped for good (terminal payment, 24 h after creation, or a superseded quote past
   /// its deadline + 30 min with no deposit).
   watchStoppedAt       DateTime?        @map("watch_stopped_at")
+  /// When the last poll of this address completed (the expiry sweep waits for one after expiry).
+  watchPolledAt        DateTime?        @map("watch_polled_at")
   createdAt            DateTime         @default(now()) @map("created_at")
 
   merchant Merchant  @relation(fields: [merchantId], references: [id])
@@ -973,6 +976,10 @@ model Payment {
   senderAddress         String?       @map("sender_address")
   /// Every sender found (several for a multi-input Bitcoin deposit); each is screened.
   senderAddresses       String[]      @default([]) @map("sender_addresses")
+  /// Origin transactions whose senders were resolved and screened; settlement needs all of them.
+  senderOriginHashes    String[]      @default([]) @map("sender_origin_hashes")
+  /// Refund reasons already recorded (`payment.refunded` and the return happen once per reason).
+  refundsRecorded       String[]      @default([]) @map("refunds_recorded")
   senderChain           String?       @map("sender_chain")
   overpaidAmount        Decimal?      @map("overpaid_amount") @db.Decimal(78, 0)
   refundedAmount        Decimal?      @map("refunded_amount") @db.Decimal(78, 0)
@@ -984,7 +991,7 @@ model Payment {
   amountOut             Decimal?      @map("amount_out") @db.Decimal(78, 0)
   amountInUsd           Decimal?      @map("amount_in_usd") @db.Decimal(18, 6)
   settledAt             DateTime?     @map("settled_at")
-  /// How the settlement transfer (`settle_tx`, unique per mode via a partial index) was verified:
+  /// How the settlement transfer (`settle_tx`; the claimed event is in `settlement_claims`) was verified:
   /// `receipt` (its transfer event) or `oneclick` (wallet payout to a chain without a verifier).
   verifiedBy            String?       @map("verified_by")
   /// Sanctions-screening retries done while SCREENING_PENDING.
@@ -996,17 +1003,41 @@ model Payment {
   createdAt             DateTime      @default(now()) @map("created_at")
   updatedAt             DateTime      @updatedAt @map("updated_at")
 
-  merchant                 Merchant         @relation(fields: [merchantId], references: [id])
-  session                  Session          @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
-  quote                    Quote            @relation(fields: [quoteId, sessionId, merchantId, livemode], references: [id, sessionId, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  merchant                 Merchant          @relation(fields: [merchantId], references: [id])
+  session                  Session           @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  quote                    Quote             @relation(fields: [quoteId, sessionId, merchantId, livemode], references: [id, sessionId, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   refunds                  Refund[]
   revenueEntries           RevenueEntry[]
   recoveredGasSponsorships GasSponsorship[]
+  settlementClaims         SettlementClaim[]
 
   @@unique([id, merchantId, livemode])
   @@index([merchantId])
   @@index([sessionId])
   @@map("payments")
+}
+
+/// The destination transfer event that settled (or, for a late deposit, was returned for) a
+/// payment. One event settles at most one payment (unique per tx, receipt and event); one
+/// transaction may carry several (batched settlements).
+model SettlementClaim {
+  id         String   @id
+  merchantId String   @map("merchant_id")
+  livemode   Boolean
+  paymentId  String   @unique @map("payment_id")
+  txHash     String   @map("tx_hash")
+  receiptId  String   @map("receipt_id")
+  /// `<log index>.<data entry>.<token index>`, or `oneclick` for an unverified-chain payout.
+  eventKey   String   @map("event_key")
+  amount     Decimal  @db.Decimal(78, 0)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+  payment  Payment  @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([livemode, txHash, receiptId, eventKey], map: "settlement_claims_event_key")
+  @@index([merchantId])
+  @@map("settlement_claims")
 }
 
 model Refund {

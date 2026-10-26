@@ -137,7 +137,12 @@ describe('NearRpc.txStatus', () => {
         if (mode === 'down') throw new Error('socket hang up');
         return {
           status: { SuccessValue: '' },
-          transaction: { hash: 'H', signer_id: 'solver.near', receiver_id: INTENTS },
+          transaction: {
+            hash: 'H',
+            signer_id: 'relayer.near',
+            receiver_id: INTENTS,
+            actions: [{ Delegate: { delegate_action: { sender_id: 'shopper.near' } } }],
+          },
           transaction_outcome: {
             id: 'H',
             outcome: { logs: [], status: { SuccessReceiptId: 'r1' } },
@@ -148,18 +153,31 @@ describe('NearRpc.txStatus', () => {
               outcome: { logs: ['a'], status: { SuccessValue: '' }, executor_id: INTENTS },
             },
             { id: 'r2', outcome: { logs: ['b'], status: { Failure: {} }, executor_id: 'x.near' } },
+            // Neither SuccessValue nor SuccessReceiptId: never trusted as a success.
+            { id: 'r3', outcome: { logs: ['c'], status: 'Unknown', executor_id: INTENTS } },
+            { id: 'r4', outcome: { logs: ['d'], status: {}, executor_id: INTENTS } },
           ],
+          receipts: [{ receipt_id: 'r1', predecessor_id: 'shopper.near' }],
         } as T;
       },
     };
     const rpc = new NearRpc(transport);
     await expect(rpc.txStatus('H', INTENTS)).resolves.toEqual({
       hash: 'H',
-      signerId: 'solver.near',
+      signerId: 'relayer.near',
       receiverId: INTENTS,
+      delegateSenderIds: ['shopper.near'],
       receipts: [
-        { receiptId: 'r1', executorId: INTENTS, logs: ['a'], ok: true },
+        {
+          receiptId: 'r1',
+          executorId: INTENTS,
+          logs: ['a'],
+          ok: true,
+          predecessorId: 'shopper.near',
+        },
         { receiptId: 'r2', executorId: 'x.near', logs: ['b'], ok: false },
+        { receiptId: 'r3', executorId: INTENTS, logs: ['c'], ok: false },
+        { receiptId: 'r4', executorId: INTENTS, logs: ['d'], ok: false },
       ],
     });
     expect(calls[0]).toEqual({

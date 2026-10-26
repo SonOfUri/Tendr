@@ -29,7 +29,7 @@ import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { getRedis } from '../lib/redis.js';
 import { nearClient, type NearClient } from '../near/client.js';
-import { creditedAmount } from '../near/events.js';
+import { matchingCredits } from '../near/events.js';
 import { holdPaymentInTx } from './hold.js';
 import {
   OneClickError,
@@ -144,6 +144,7 @@ export interface WatcherDeps {
     livemode: boolean;
     chain: string;
     originAsset: string;
+    depositAddress: string;
     originTxHashes: string[];
   }): Promise<string[]>;
 }
@@ -155,6 +156,7 @@ async function defaultResolveSenders(input: {
   livemode: boolean;
   chain: string;
   originAsset: string;
+  depositAddress: string;
   originTxHashes: string[];
 }): Promise<string[]> {
   if (!input.livemode) return [];
@@ -302,7 +304,7 @@ async function pollQuote(q0: QuoteRow): Promise<PollResult> {
     return result('none', true);
   }
   if (now.getTime() >= q0.createdAt.getTime() + WATCH_MAX_MS) {
-    await stopWatching(q0.id, now);
+    await stopAfterWindow(q0.id, now);
     return result('none', true);
   }
 
@@ -315,7 +317,7 @@ async function pollQuote(q0: QuoteRow): Promise<PollResult> {
       depositAddress: q0.depositAddress,
       err: String(err),
     });
-    await scheduleNext(q0, now);
+    await scheduleNext(q0, now, false);
     return result('none', false);
   }
 
@@ -339,15 +341,63 @@ async function pollQuote(q0: QuoteRow): Promise<PollResult> {
 async function stopWatching(quoteId: string, now: Date): Promise<void> {
   await prisma.quote.updateMany({
     where: { id: quoteId, watchStoppedAt: null },
-    data: { watchStoppedAt: now, watchNextAt: null },
+    data: { watchStoppedAt: now, watchNextAt: null, watchPolledAt: now },
   });
 }
 
-async function scheduleNext(q: QuoteRow, now: Date): Promise<void> {
+/** Records an ops event once per payment (`payment.verification_blocked` / `_timeout`). */
+async function opsEventOnce(
+  ctx: ScopeContext,
+  paymentId: string,
+  type: 'payment.verification_blocked' | 'payment.verification_timeout',
+  payload: object,
+): Promise<void> {
+  await tenantTransaction(ctx, async (tx) => {
+    await lockRow(tx, 'payments', paymentId);
+    const seen = await tx.event.findFirst({
+      where: { aggregateType: 'payment', aggregateId: paymentId, type },
+      select: { id: true },
+    });
+    if (seen) return;
+    await recordEvent(tx, ctx, { aggregateType: 'payment', aggregateId: paymentId, type, payload });
+  });
+  log('error', `OPS ALERT: ${type}`, { paymentId, ...payload });
+}
+
+/**
+ * The 24 h window is over: polling stops. A payment 1Click reported SUCCESS for but whose
+ * settlement transfer was never verified raises `payment.verification_timeout` for ops.
+ */
+async function stopAfterWindow(quoteId: string, now: Date): Promise<void> {
+  await stopWatching(quoteId, now);
+  const p = await prisma.payment.findFirst({ where: { quoteId } });
+  if (
+    p &&
+    (p.status === 'PROCESSING' || p.status === 'SCREENING_PENDING') &&
+    p.oneclickStatus === 'SUCCESS'
+  ) {
+    await opsEventOnce(
+      { merchantId: p.merchantId, livemode: p.livemode },
+      p.id,
+      'payment.verification_timeout',
+      {
+        payment_id: p.id,
+        session_id: p.sessionId,
+        quote_id: quoteId,
+      },
+    );
+  }
+}
+
+/** Sets the next poll; `polled` records a completed poll (not a failed 1Click call). */
+async function scheduleNext(q: QuoteRow, now: Date, polled = true): Promise<void> {
   const fast = await viewedRecently(q.sessionId);
   await prisma.quote.updateMany({
     where: { id: q.id, watchStoppedAt: null },
-    data: { watchNextAt: new Date(now.getTime() + (fast ? FAST_POLL_MS : SLOW_POLL_MS)) },
+    data: {
+      watchNextAt: new Date(now.getTime() + (fast ? FAST_POLL_MS : SLOW_POLL_MS)),
+      ...(polled ? { watchPolledAt: now } : {}),
+    },
   });
 }
 
@@ -373,7 +423,7 @@ export async function scanDueDeposits(
   let n = 0;
   for (const q of due) {
     if (now.getTime() >= q.createdAt.getTime() + WATCH_MAX_MS) {
-      await stopWatching(q.id, now);
+      await stopAfterWindow(q.id, now);
       continue;
     }
     const claim = await prisma.quote.updateMany({
@@ -419,15 +469,6 @@ async function detect(q: QuoteRow, status: StatusResponse): Promise<Payment | nu
   const ctx = { merchantId: q.merchantId, livemode: q.livemode };
   const chain = await chainOf(q.livemode, q.originAssetId);
   const origin = status.swapDetails.originChainTxHashes.map((h) => h.hash);
-  const senders = status.swapDetails.senderAddress
-    ? [status.swapDetails.senderAddress]
-    : await deps.resolveSenders({
-        livemode: q.livemode,
-        chain,
-        originAsset: q.originAssetId,
-        originTxHashes: origin,
-      });
-  const sender = senders[0] ?? null;
   const now = deps.now();
   let created: Payment | null;
   try {
@@ -450,8 +491,6 @@ async function detect(q: QuoteRow, status: StatusResponse): Promise<Payment | nu
           originTxHash: origin[0] ?? q.depositTxHash ?? null,
           amountReceived: big(status.swapDetails.depositedAmount).toString(),
           isLate: late,
-          senderAddress: sender,
-          senderAddresses: senders,
           senderChain: chain,
           oneclickStatus: status.status,
           amountInUsd: q.amountInUsd,
@@ -502,23 +541,66 @@ async function detect(q: QuoteRow, status: StatusResponse): Promise<Payment | nu
   }
   if (!created) return prisma.payment.findFirst({ where: { quoteId: q.id } });
 
-  // Every detected sender is screened, connected wallets included; any `block` holds.
-  if (senders.length > 0) {
-    let blocked = false;
-    for (const address of senders) {
-      const { decision } = await deps.screen(ctx, { sessionId: q.sessionId, address, chain });
-      if (decision === 'block') blocked = true;
-    }
-    if (blocked) {
-      await tenantTransaction(ctx, (tx) => holdPaymentInTx(tx, ctx, created!.id));
-    }
-  } else {
-    log('warn', 'watcher: deposit sender unknown; screening deferred to settlement', {
-      paymentId: created.id,
-      chain,
-    });
-  }
+  await syncSenders(created.id, q, status);
   return prisma.payment.findUnique({ where: { id: created.id } });
+}
+
+/** Statuses in which a newly found sender is screened (and a block holds the payment). */
+const SCREENABLE = new Set(['DETECTED', 'PROCESSING', 'SCREENING_PENDING']);
+
+/**
+ * Resolves the senders of every origin transaction of the deposit not resolved yet (a top-up adds
+ * one, possibly from another wallet), records them, and screens each new address — every
+ * detected sender, connected wallets included; any `block` holds the payment. A transaction whose
+ * senders cannot be read stays unresolved (and blocks settlement) until a later poll reads it.
+ */
+async function syncSenders(paymentId: string, q: QuoteRow, status: StatusResponse): Promise<void> {
+  const ctx = { merchantId: q.merchantId, livemode: q.livemode };
+  const p0 = await prisma.payment.findUniqueOrThrow({ where: { id: paymentId } });
+  const hashes = status.swapDetails.originChainTxHashes.map((h) => h.hash);
+  const pending = hashes.filter((h) => !p0.senderOriginHashes.includes(h));
+  if (pending.length === 0) return;
+  const chain = p0.senderChain ?? (await chainOf(q.livemode, q.originAssetId));
+  // Test mode: the simulator names the sender of its latest deposit; live: read the chain.
+  const found = status.swapDetails.senderAddress
+    ? [status.swapDetails.senderAddress]
+    : await deps.resolveSenders({
+        livemode: q.livemode,
+        chain,
+        originAsset: q.originAssetId,
+        depositAddress: q.depositAddress,
+        originTxHashes: pending,
+      });
+  if (found.length === 0) {
+    log('warn', 'watcher: deposit sender unknown; settlement waits for screening', {
+      paymentId,
+      chain,
+      pending,
+    });
+    return;
+  }
+  const fresh = await tenantTransaction(ctx, async (tx) => {
+    await lockRow(tx, 'payments', paymentId);
+    const p = await tx.payment.findUniqueOrThrow({ where: { id: paymentId } });
+    const add = found.filter((a) => !p.senderAddresses.includes(a));
+    await tx.payment.updateMany({
+      where: { id: p.id, merchantId: ctx.merchantId, livemode: ctx.livemode },
+      data: {
+        senderAddresses: [...p.senderAddresses, ...add],
+        senderOriginHashes: [...new Set([...p.senderOriginHashes, ...pending])],
+        senderAddress: p.senderAddress ?? found[0]!,
+        senderChain: chain,
+      },
+    });
+    return { add, status: p.status };
+  });
+  if (!SCREENABLE.has(fresh.status)) return;
+  let blocked = false;
+  for (const address of fresh.add) {
+    const { decision } = await deps.screen(ctx, { sessionId: q.sessionId, address, chain });
+    if (decision === 'block') blocked = true;
+  }
+  if (blocked) await tenantTransaction(ctx, (tx) => holdPaymentInTx(tx, ctx, paymentId));
 }
 
 // ─── advancing a payment ─────────────────────────────────────────────────────
@@ -559,6 +641,10 @@ async function advance(
     },
   });
   payment = await prisma.payment.findUniqueOrThrow({ where: { id: paymentId } });
+  if (SCREENABLE.has(payment.status)) {
+    await syncSenders(payment.id, q, status);
+    payment = await prisma.payment.findUniqueOrThrow({ where: { id: paymentId } });
+  }
 
   const outcome = classify(
     q,
@@ -575,7 +661,9 @@ async function advance(
   }
   if (DONE_PAYMENT.has(payment.status)) return { outcome, done: true };
   if (payment.status === 'REFUNDING') {
-    // Waiting for 1Click's own refund after a FAILED swap; returns via the store are Task 8's.
+    // A recorded refund is final here (returns via the store are Task 8's). Otherwise this is a
+    // FAILED swap waiting for 1Click's own refund.
+    if (payment.refundsRecorded.length > 0) return { outcome, done: true };
     if (status.status === 'REFUNDED') {
       await refund(l, payment, payment.isLate ? 'late' : 'failed', status);
       return { outcome, done: true };
@@ -639,20 +727,23 @@ async function failed(l: Loaded, payment: Payment): Promise<void> {
     const p = await tx.payment.findUniqueOrThrow({ where: { id: payment.id } });
     if (p.status !== 'PROCESSING' && p.status !== 'DETECTED') return;
     await transitionPayment(tx, ctx, p.id, 'REFUNDING', { reason: 'failed' });
-    await releaseSession(tx, ctx, session.id, p.id);
+    await releaseSession(tx, ctx, session.id, p.id, { reopen: true });
   });
 }
 
 /**
- * The session no longer waits on this payment: a PROCESSING session with no other deposit in
- * flight goes back to PENDING_DEPOSIT while unexpired (a new quote; spec "Builder-check calls"),
- * else REFUNDED; a LATE_DEPOSIT session becomes REFUNDED.
+ * The session no longer waits on this payment. A PROCESSING session with no other deposit in
+ * flight goes back to PENDING_DEPOSIT (a new quote) only when `reopen` (an underpay retry or a
+ * FAILED swap; Ruling C15 as amended) and it is unexpired; otherwise — late or sanctions refunds —
+ * it is REFUNDED. LATE_DEPOSIT, and HELD / SCREENING_PENDING with nothing else open, become
+ * REFUNDED.
  */
 async function releaseSession(
   tx: Prisma.TransactionClient,
   ctx: ScopeContext,
   sessionId: string,
   paymentId: string,
+  opts: { reopen: boolean },
 ): Promise<void> {
   await lockRow(tx, 'sessions', sessionId);
   const s = await tx.session.findFirstOrThrow({
@@ -673,9 +764,15 @@ async function releaseSession(
     await transitionSession(tx, ctx, s.id, 'REFUNDED', { payment_id: paymentId });
   } else if (s.status === 'PROCESSING' && !(await otherInFlight(tx, s.id, paymentId))) {
     const unexpired = s.expiresAt.getTime() > deps.now().getTime();
-    await transitionSession(tx, ctx, s.id, unexpired ? 'PENDING_DEPOSIT' : 'REFUNDED', {
-      payment_id: paymentId,
-    });
+    await transitionSession(
+      tx,
+      ctx,
+      s.id,
+      opts.reopen && unexpired ? 'PENDING_DEPOSIT' : 'REFUNDED',
+      {
+        payment_id: paymentId,
+      },
+    );
   }
 }
 
@@ -756,12 +853,17 @@ async function refund(
       }
       return false;
     }
+    // Once per payment and reason: a second poll (or the sweeper) is a no-op.
+    if (p.refundsRecorded.includes(reason)) return false;
     if (reason === 'late') await markLateInTx(tx, ctx, l, p);
     if (p.status !== 'REFUNDING') await transitionPayment(tx, ctx, p.id, 'REFUNDING', { reason });
     if (direct) await transitionPayment(tx, ctx, p.id, 'REFUNDED', { reason });
     await tx.payment.updateMany({
       where: { id: p.id, merchantId: ctx.merchantId, livemode: ctx.livemode },
-      data: { refundedAmount: refunded.toString() },
+      data: {
+        refundedAmount: refunded.toString(),
+        refundsRecorded: [...p.refundsRecorded, reason],
+      },
     });
     const s = await tx.session.findFirstOrThrow({
       where: { id: p.sessionId },
@@ -782,7 +884,9 @@ async function refund(
         refund_reason: status.swapDetails.refundReason ?? null,
       },
     });
-    await releaseSession(tx, ctx, p.sessionId, p.id);
+    await releaseSession(tx, ctx, p.sessionId, p.id, {
+      reopen: reason === 'underpaid' || reason === 'failed',
+    });
     return true;
   });
   if (changed && !direct && refunded > 0n) {
@@ -818,21 +922,29 @@ async function late(l: Loaded, payment: Payment, status: StatusResponse): Promis
     return false;
   }
   if (status.status !== 'SUCCESS') return false;
-  const v = await verify(l, payment, status);
+  const v = await verifyOrReport(l, payment, status);
   if (!v) return false;
   const amountOut = big(status.swapDetails.amountOut) || toBig(q.amountOut);
-  const changed = await tenantTransaction(ctx, async (tx) => {
-    await lockRow(tx, 'payments', payment.id);
-    const p = await tx.payment.findUniqueOrThrow({ where: { id: payment.id } });
-    if (p.status !== 'PROCESSING' && p.status !== 'DETECTED') return false;
-    await transitionPayment(tx, ctx, p.id, 'REFUNDING', { reason: 'late' });
-    await tx.payment.updateMany({
-      where: { id: p.id, merchantId: ctx.merchantId, livemode: ctx.livemode },
-      data: { amountOut: amountOut.toString() },
+  let changed: boolean;
+  try {
+    changed = await tenantTransaction(ctx, async (tx) => {
+      await lockRow(tx, 'payments', payment.id);
+      const p = await tx.payment.findUniqueOrThrow({ where: { id: payment.id } });
+      if (p.status !== 'PROCESSING' && p.status !== 'DETECTED') return false;
+      // The late transfer is claimed too: one event is returned (or settles) once.
+      await claimInTx(tx, ctx, p.id, v);
+      await transitionPayment(tx, ctx, p.id, 'REFUNDING', { reason: 'late' });
+      await tx.payment.updateMany({
+        where: { id: p.id, merchantId: ctx.merchantId, livemode: ctx.livemode },
+        data: { amountOut: amountOut.toString() },
+      });
+      // A LATE_DEPOSIT session stays so until the return completes (Task 8).
+      return true;
     });
-    // A LATE_DEPOSIT session stays so until the return completes (Task 8).
-    return true;
-  });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return false;
+    throw err;
+  }
   if (changed) {
     await returnNeeded(payment.id, {
       reason: 'late',
@@ -848,7 +960,14 @@ async function late(l: Loaded, payment: Payment, status: StatusResponse): Promis
 export interface Verification {
   txHash: string;
   verifiedBy: 'receipt' | 'oneclick';
+  /** The claimed transfer event (`oneclick`: no receipt, one claim per destination tx). */
+  receiptId: string;
+  eventKey: string;
+  amount: bigint;
 }
+
+/** `ok`: an unclaimed matching event; `blocked`: the only matching events are already claimed. */
+export type VerifyResult = { ok: Verification } | { blocked: string[] } | null;
 
 function intentsContractFor(livemode: boolean): string {
   return livemode ? env().INTENTS_CONTRACT_LIVE : env().INTENTS_CONTRACT_TEST;
@@ -857,39 +976,68 @@ function intentsContractFor(livemode: boolean): string {
 /** Destination chains with a transfer verifier for wallet payouts (NEP-141 on NEAR). */
 const WALLET_VERIFIED_CHAINS = new Set(['near']);
 
+/** Whether this (tx, receipt, event) is claimed by a payment other than `paymentId`. */
 async function claimedByOther(
   livemode: boolean,
-  txHash: string,
+  c: { txHash: string; receiptId: string; eventKey: string },
   paymentId: string,
 ): Promise<boolean> {
-  const other = await prisma.payment.findFirst({
-    where: { livemode, settleTx: txHash, id: { not: paymentId } },
-    select: { id: true },
+  const row = await prisma.settlementClaim.findFirst({
+    where: { livemode, txHash: c.txHash, receiptId: c.receiptId, eventKey: c.eventKey },
+    select: { paymentId: true },
   });
-  return other !== null;
+  return row !== null && row.paymentId !== paymentId;
+}
+
+/** Records the claim of a transfer event for a payment; a lost race is P2002. */
+async function claimInTx(
+  tx: Prisma.TransactionClient,
+  ctx: ScopeContext,
+  paymentId: string,
+  v: Verification,
+): Promise<void> {
+  const mine = await tx.settlementClaim.findFirst({ where: { paymentId } });
+  if (mine) {
+    if (
+      mine.txHash === v.txHash &&
+      mine.receiptId === v.receiptId &&
+      mine.eventKey === v.eventKey
+    ) {
+      return;
+    }
+    throw new Error(`payment ${paymentId} already claimed another transfer`);
+  }
+  await tx.settlementClaim.create({
+    data: {
+      id: newId('scl'),
+      merchantId: ctx.merchantId,
+      livemode: ctx.livemode,
+      paymentId,
+      txHash: v.txHash,
+      receiptId: v.receiptId,
+      eventKey: v.eventKey,
+      amount: v.amount.toString(),
+    },
+  });
 }
 
 /**
- * Per-transfer verification of a `SUCCESS` (never balance deltas). Null until a destination
- * transaction carries the transfer.
+ * Per-transfer verification of a `SUCCESS` (never balance deltas): an event in one of 1Click's
+ * destination transactions crediting at least the quote's `amount_out` of the settlement asset to
+ * the session's recipient, not claimed by another payment. Among several the smallest sufficient
+ * one is taken (batched settlements: each payment takes its own event).
  */
 export async function verify(
   l: Loaded,
   payment: Payment,
   status: StatusResponse,
-): Promise<Verification | null> {
+): Promise<VerifyResult> {
   const { quote: q, session, ctx } = l;
   const required = toBig(q.amountOut);
   const hashes = status.swapDetails.destinationChainTxHashes.map((h) => h.hash);
+  const blocked: string[] = [];
   const viaReceipts = async (opts: { intentsContract?: string; route: string }) => {
     for (const hash of hashes) {
-      if (await claimedByOther(ctx.livemode, hash, payment.id)) {
-        log('warn', 'watcher: destination tx already settles another payment', {
-          paymentId: payment.id,
-          hash,
-        });
-        continue;
-      }
       let tx;
       try {
         tx = await deps.near(ctx.livemode).txStatus(hash, opts.route);
@@ -898,14 +1046,23 @@ export async function verify(
         continue;
       }
       if (!tx) continue;
-      const credited = creditedAmount(tx.receipts, {
+      const credits = matchingCredits(tx.receipts, {
         assetId: session.destAsset,
         receiver: session.recipient,
         ...(opts.intentsContract ? { intentsContract: opts.intentsContract } : {}),
-      });
-      if (credited >= required) return { txHash: hash, verifiedBy: 'receipt' as const };
+      })
+        .filter((c) => c.amount >= required)
+        .sort((a, b) => (a.amount < b.amount ? -1 : a.amount > b.amount ? 1 : 0));
+      for (const c of credits) {
+        const claim = { txHash: hash, receiptId: c.receiptId, eventKey: c.eventKey };
+        if (await claimedByOther(ctx.livemode, claim, payment.id)) {
+          blocked.push(`${hash}/${c.receiptId}/${c.eventKey}`);
+          continue;
+        }
+        return { ok: { ...claim, verifiedBy: 'receipt' as const, amount: c.amount } };
+      }
     }
-    return null;
+    return blocked.length > 0 ? { blocked } : null;
   };
 
   if (session.recipientType === 'INTENTS') {
@@ -916,31 +1073,53 @@ export async function verify(
     if (!session.destAsset.startsWith('nep141:')) return null;
     return viaReceipts({ route: session.destAsset.slice('nep141:'.length) });
   }
-  // No verifier for this payout chain: 1Click's amountOut and destination tx hash.
+  // No verifier for this payout chain: 1Click's amountOut and destination tx hash (one claim per
+  // destination tx).
   const out = big(status.swapDetails.amountOut);
   const hash = hashes[0];
   if (!hash || out < required) return null;
-  if (await claimedByOther(ctx.livemode, hash, payment.id)) return null;
-  return { txHash: hash, verifiedBy: 'oneclick' };
+  const claim = { txHash: hash, receiptId: '', eventKey: 'oneclick' };
+  if (await claimedByOther(ctx.livemode, claim, payment.id)) return { blocked: [hash] };
+  return { ok: { ...claim, verifiedBy: 'oneclick', amount: out } };
 }
 
-/** The sanctions decision for the payment's sender, screened at or after detection. */
-async function senderDecision(l: Loaded, payment: Payment): Promise<ScreeningOutcome> {
-  const { quote: q, ctx } = l;
-  let senders = paymentSenders(payment);
-  if (senders.length === 0) {
-    senders = await deps.resolveSenders({
-      livemode: ctx.livemode,
-      chain: payment.senderChain ?? 'unknown',
-      originAsset: q.originAssetId,
-      originTxHashes: payment.originTxHash ? [payment.originTxHash] : [],
-    });
-    if (senders.length === 0) return 'unavailable';
-    await prisma.payment.updateMany({
-      where: { id: payment.id },
-      data: { senderAddress: senders[0], senderAddresses: senders },
+/**
+ * `verify`, raising `payment.verification_blocked` (once) for ops when 1Click reports SUCCESS but
+ * the only matching transfer events already settle other payments. Null unless verified.
+ */
+async function verifyOrReport(
+  l: Loaded,
+  payment: Payment,
+  status: StatusResponse,
+): Promise<Verification | null> {
+  const r = await verify(l, payment, status);
+  if (r && 'ok' in r) return r.ok;
+  if (r && 'blocked' in r) {
+    await opsEventOnce(l.ctx, payment.id, 'payment.verification_blocked', {
+      payment_id: payment.id,
+      session_id: payment.sessionId,
+      quote_id: l.quote.id,
+      claimed_events: r.blocked,
     });
   }
+  return null;
+}
+
+/**
+ * The sanctions decision for the deposit: every origin transaction's senders must be known (a
+ * top-up's too) and every sender screened at or after detection; any block blocks, anything
+ * unknown or unavailable is unavailable.
+ */
+async function senderDecision(
+  l: Loaded,
+  payment: Payment,
+  status: StatusResponse,
+): Promise<ScreeningOutcome> {
+  const { ctx } = l;
+  const hashes = status.swapDetails.originChainTxHashes.map((h) => h.hash);
+  if (hashes.some((h) => !payment.senderOriginHashes.includes(h))) return 'unavailable';
+  const senders = paymentSenders(payment);
+  if (senders.length === 0) return 'unavailable';
   const decisions: ScreeningOutcome[] = [];
   for (const address of senders) {
     const row = await prisma.screeningResult.findFirst({
@@ -974,9 +1153,9 @@ async function senderDecision(l: Loaded, payment: Payment): Promise<ScreeningOut
 /** SUCCESS: verify the transfer, gate on screening, settle. Returns true when done. */
 async function trySettle(l: Loaded, payment: Payment, status: StatusResponse): Promise<boolean> {
   const { ctx, session } = l;
-  const v = await verify(l, payment, status);
+  const v = await verifyOrReport(l, payment, status);
   if (!v) return false;
-  const decision = await senderDecision(l, payment);
+  const decision = await senderDecision(l, payment, status);
   if (decision === 'block') {
     await tenantTransaction(ctx, (tx) => holdPaymentInTx(tx, ctx, payment.id));
     return true;
@@ -1045,11 +1224,7 @@ async function settle(
       if (p.isLate || !['PROCESSING', 'SCREENING_PENDING', 'PENDING_DEPOSIT'].includes(s.status)) {
         return 'late';
       }
-      const other = await tx.payment.findFirst({
-        where: { livemode: ctx.livemode, settleTx: v.txHash, id: { not: p.id } },
-        select: { id: true },
-      });
-      if (other) return 'unverified';
+      await claimInTx(tx, ctx, p.id, v);
       const now = deps.now();
       await transitionPayment(tx, ctx, p.id, 'SETTLED', { settle_tx: v.txHash });
       await tx.payment.updateMany({
@@ -1092,7 +1267,7 @@ async function settle(
       return 'settled';
     });
   } catch (err) {
-    // The partial unique index on settle_tx: another payment claimed this transfer first.
+    // The unique claim per (tx, receipt, event): another payment claimed this event first.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
       return 'unverified';
     }
@@ -1142,9 +1317,11 @@ export function registerWatcherHooks(): void {
 /**
  * Scheduled every minute (Ruling C9): PENDING_DEPOSIT sessions past `expires_at` with no deposit
  * in flight → EXPIRED (`timeout`) + `checkout.session.expired`. Each session's watched addresses
- * are polled first, so a deposit made before expiry is attributed, not turned late. A deposit is
- * in flight while a payment is DETECTED / PROCESSING / SCREENING_PENDING, or a reported deposit
- * tx's quote deadline has not passed. Returns how many sessions expired.
+ * must have been polled after the expiry first (the sweep polls a due one itself, under the
+ * scan's lease, never alongside a running poll), so a deposit made before expiry is attributed,
+ * not turned late. A deposit is in flight while a payment is DETECTED / PROCESSING /
+ * SCREENING_PENDING, or a reported deposit tx has no payment yet and its quote deadline plus
+ * SUPERSEDED_GRACE_MS has not passed. Returns how many sessions expired.
  */
 export async function expireSessions(now: Date = deps.now()): Promise<number> {
   const due = await prisma.session.findMany({
@@ -1158,12 +1335,38 @@ export async function expireSessions(now: Date = deps.now()): Promise<number> {
       const quotes = await prisma.quote.findMany({
         where: { sessionId: s.id, watchStoppedAt: null },
       });
-      for (const q of quotes) await pollQuote(q);
+      // Every watched address must have been polled after the session expired. One that was not
+      // is polled here, but only if it is due (never under a running poll's lease); otherwise
+      // the next sweep decides.
+      let waiting = false;
+      for (const q of quotes) {
+        if (q.watchPolledAt && q.watchPolledAt >= s.expiresAt) continue;
+        const due = q.watchNextAt === null || q.watchNextAt <= now;
+        const claim = due
+          ? await prisma.quote.updateMany({
+              where: { id: q.id, watchStoppedAt: null, watchNextAt: q.watchNextAt },
+              data: { watchNextAt: new Date(now.getTime() + POLL_LEASE_MS) },
+            })
+          : { count: 0 };
+        if (claim.count === 0) {
+          waiting = true;
+          continue;
+        }
+        await pollQuote(q);
+      }
+      if (waiting) continue;
       const inFlight = await prisma.payment.count({
         where: { sessionId: s.id, status: { in: ['DETECTED', 'PROCESSING', 'SCREENING_PENDING'] } },
       });
+      // A reported deposit 1Click has not shown yet stays in flight until its quote deadline plus
+      // the grace (once 1Click sees it, its payment is counted above).
       const reported = await prisma.quote.count({
-        where: { sessionId: s.id, depositTxSubmittedAt: { not: null }, deadline: { gt: now } },
+        where: {
+          sessionId: s.id,
+          depositTxSubmittedAt: { not: null },
+          deadline: { gt: new Date(now.getTime() - SUPERSEDED_GRACE_MS) },
+          payments: { none: {} },
+        },
       });
       if (inFlight > 0 || reported > 0) continue;
       const ctx = { merchantId: s.merchantId, livemode: s.livemode };

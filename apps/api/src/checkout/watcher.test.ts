@@ -299,8 +299,13 @@ describe('payment watcher', () => {
         }) as unknown as SimulatedOneClick,
     });
     await poll(qb.deposit_address);
+    await poll(qb.deposit_address);
     expect((await paymentOf(qb.id)).status).toBe('PROCESSING');
     expect((await sessionOf(b.id)).status).toBe('PROCESSING');
+    // Ops are told once that the only matching event is already claimed.
+    const blocked = await eventsOf('payment.verification_blocked');
+    expect(blocked.length).toBe(1);
+    expect(blocked[0]!.aggregateId).toBe((await paymentOf(qb.id)).id);
 
     // Its own transfer settles it.
     setWatcherDeps({ now: clock });
@@ -488,8 +493,8 @@ describe('payment watcher', () => {
     expect((await eventsOf('payment.late')).length).toBe(1);
     const [refunded] = await eventsOf('payment.refunded');
     expect(refunded!.payload).toMatchObject({ reason: 'late' });
-    // The session was released and still takes a new quote.
-    expect((await sessionOf(s.id)).status).toBe('PENDING_DEPOSIT');
+    // A late refund never reopens the session (only underpay retries and failed swaps do).
+    expect((await sessionOf(s.id)).status).toBe('REFUNDED');
   });
 
   it('a deposit after the session expired → LATE_DEPOSIT → REFUNDED', async () => {
@@ -608,6 +613,19 @@ describe('payment watcher', () => {
     await poll(q.deposit_address);
     expect(await prisma.payment.count({ where: { quoteId: q.id } })).toBe(0);
   });
+
+  /** A provider over the simulator that reports `hash` as every address's destination tx. */
+  function batchProvider(hash: string) {
+    return () =>
+      ({
+        status: async (addr: string) => {
+          const st = await sim.status(addr);
+          return st.status === 'SUCCESS'
+            ? { ...st, swapDetails: { ...st.swapDetails, destinationChainTxHashes: [{ hash }] } }
+            : st;
+        },
+      }) as unknown as SimulatedOneClick;
+  }
 
   /** A provider over the simulator that hides its sender (like live 1Click) and can override. */
   function liveLikeProvider(override?: (st: StatusResponse) => StatusResponse) {
@@ -741,6 +759,173 @@ describe('payment watcher', () => {
     expect((await sessionOf(s.id)).status).toBe('REFUNDED');
     expect((await eventsOf('payment.refunded')).length).toBe(1);
     expect(await eventsOf('payment.succeeded')).toEqual([]);
+  });
+
+  it('one destination tx with two transfer events settles two payments (batched)', async () => {
+    const a = await newSession();
+    const qa = await quote(a.client_secret);
+    const b = await newSession();
+    const qb = await quote(b.client_secret);
+    await sim.simulate(qa.deposit_address, 'exact');
+    await sim.simulate(qb.deposit_address, 'exact');
+    const amount = (await prisma.quote.findUniqueOrThrow({ where: { id: qa.id } })).amountOut;
+    const mint = eventLog('nep245', '1.0.0', 'mt_mint', [
+      { owner_id: accountId, token_ids: [USDC], amounts: [amount.toFixed()] },
+    ]);
+    const BATCH = 'batch-tx-hash';
+    fake.scriptTxStatus(BATCH, {
+      hash: BATCH,
+      signerId: 'solver.testnet',
+      receiverId: INTENTS,
+      receipts: [{ receiptId: 'r1', executorId: INTENTS, ok: true, logs: [mint, mint] }],
+    });
+    setWatcherDeps({ now: clock, provider: batchProvider(BATCH) });
+    await poll(qa.deposit_address);
+    await poll(qb.deposit_address);
+    expect((await paymentOf(qa.id)).status).toBe('SETTLED');
+    expect((await paymentOf(qb.id)).status).toBe('SETTLED');
+    const claims = await prisma.settlementClaim.findMany({ orderBy: { eventKey: 'asc' } });
+    expect(claims.map((c) => [c.txHash, c.receiptId, c.eventKey])).toEqual([
+      [BATCH, 'r1', '0.0.0'],
+      [BATCH, 'r1', '1.0.0'],
+    ]);
+  });
+
+  it('one transfer event never settles two payments; the second raises an ops event', async () => {
+    const a = await newSession();
+    const qa = await quote(a.client_secret);
+    const b = await newSession();
+    const qb = await quote(b.client_secret);
+    await sim.simulate(qa.deposit_address, 'exact');
+    await sim.simulate(qb.deposit_address, 'exact');
+    const amount = (await prisma.quote.findUniqueOrThrow({ where: { id: qa.id } })).amountOut;
+    const ONE = 'single-event-tx';
+    fake.scriptTxStatus(ONE, {
+      hash: ONE,
+      signerId: 'solver.testnet',
+      receiverId: INTENTS,
+      receipts: [
+        {
+          receiptId: 'r1',
+          executorId: INTENTS,
+          ok: true,
+          logs: [
+            eventLog('nep245', '1.0.0', 'mt_mint', [
+              { owner_id: accountId, token_ids: [USDC], amounts: [amount.toFixed()] },
+            ]),
+          ],
+        },
+      ],
+    });
+    setWatcherDeps({ now: clock, provider: batchProvider(ONE) });
+    await Promise.allSettled([poll(qa.deposit_address), poll(qb.deposit_address)]);
+    await poll(qa.deposit_address);
+    await poll(qb.deposit_address);
+    const statuses = [(await paymentOf(qa.id)).status, (await paymentOf(qb.id)).status].sort();
+    expect(statuses).toEqual(['PROCESSING', 'SETTLED']);
+    expect(await prisma.settlementClaim.count()).toBe(1);
+    expect((await eventsOf('payment.verification_blocked')).length).toBe(1);
+  });
+
+  it('a top-up from a different, sanctioned sender holds the payment', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'underpay', { senderAddress: WALLET });
+    await poll(q.deposit_address);
+    expect((await paymentOf(q.id)).status).toBe('PROCESSING');
+    await sim.simulate(q.deposit_address, 'topup', { senderAddress: SANCTIONED });
+    await poll(q.deposit_address);
+    const p = await paymentOf(q.id);
+    expect(p.status).toBe('HELD');
+    expect(p.senderAddresses).toEqual([WALLET, SANCTIONED]);
+    expect(p.senderOriginHashes.length).toBe(2);
+    expect(await eventsOf('payment.succeeded')).toEqual([]);
+  });
+
+  it('a top-up whose sender cannot be read keeps the payment from settling', async () => {
+    const resolveSenders = vi.fn(async (i: { originTxHashes: string[] }) =>
+      i.originTxHashes.length === 1 && resolvable.has(i.originTxHashes[0]!) ? [WALLET] : [],
+    );
+    const resolvable = new Set<string>();
+    setWatcherDeps({ now: clock, provider: liveLikeProvider(), resolveSenders });
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'underpay');
+    resolvable.add((await sim.status(q.deposit_address)).swapDetails.originChainTxHashes[0]!.hash);
+    await poll(q.deposit_address);
+    expect((await paymentOf(q.id)).senderAddresses).toEqual([WALLET]);
+    await sim.simulate(q.deposit_address, 'topup'); // its sender lookup fails
+    await poll(q.deposit_address);
+    const p = await paymentOf(q.id);
+    expect(p.status).toBe('SCREENING_PENDING');
+    expect(p.senderOriginHashes.length).toBe(1);
+    expect(await eventsOf('payment.succeeded')).toEqual([]);
+  });
+
+  it('a store-path refund is recorded once (payment.refunded + return) across repeated polls', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'underpay');
+    await poll(q.deposit_address);
+    offset = 13 * 60_000;
+    await Promise.allSettled([poll(q.deposit_address), poll(q.deposit_address)]);
+    // Force more polls of a stopped address (as a racing sweep or hook would).
+    await prisma.quote.update({ where: { id: q.id }, data: { watchStoppedAt: null } });
+    await poll(q.deposit_address);
+    await prisma.quote.update({ where: { id: q.id }, data: { watchStoppedAt: null } });
+    await poll(q.deposit_address);
+    expect((await eventsOf('payment.refunded')).length).toBe(1);
+    expect(returns).toHaveBeenCalledTimes(1);
+    expect((await paymentOf(q.id)).refundsRecorded).toEqual(['underpaid']);
+  });
+
+  it('expiry waits for a reported deposit until its quote deadline plus the grace', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    // Reported by the shopper, not yet seen by 1Click.
+    await prisma.quote.update({
+      where: { id: q.id },
+      data: { depositTxHash: '0xreported', depositTxSubmittedAt: clock() },
+    });
+    offset = 31 * 60_000; // session expired; quote deadline (12 min) + 30 min grace not passed
+    expect(await expireSessions(clock())).toBe(0);
+    expect((await sessionOf(s.id)).status).toBe('PENDING_DEPOSIT');
+    offset = 43 * 60_000;
+    await prisma.quote.update({ where: { id: q.id }, data: { watchNextAt: null } });
+    expect(await expireSessions(clock())).toBe(1);
+    expect((await sessionOf(s.id)).status).toBe('EXPIRED');
+  });
+
+  it('expiry never polls under a running poll lease; it waits for a poll after expiry', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    offset = 31 * 60_000;
+    const statusSpy = vi.spyOn(sim, 'status');
+    // A poll job holds the lease (claimed, not finished).
+    await prisma.quote.update({
+      where: { id: q.id },
+      data: { watchNextAt: new Date(clock().getTime() + 60_000), watchPolledAt: null },
+    });
+    expect(await expireSessions(clock())).toBe(0);
+    expect(statusSpy).not.toHaveBeenCalled();
+    // That poll completes after the expiry: the sweep can expire without polling.
+    await prisma.quote.update({ where: { id: q.id }, data: { watchPolledAt: clock() } });
+    expect(await expireSessions(clock())).toBe(1);
+    expect(statusSpy).not.toHaveBeenCalled();
+  });
+
+  it('the 24 h stop raises payment.verification_timeout for an unverified SUCCESS', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'exact');
+    fake.scriptTxStatus(simulatedDestinationTxHash(q.deposit_address), null);
+    await poll(q.deposit_address);
+    expect((await paymentOf(q.id)).status).toBe('PROCESSING');
+    offset = WATCH_MAX_MS + 60_000;
+    const [r] = await poll(q.deposit_address);
+    expect(r!.stopped).toBe(true);
+    const [ev] = await eventsOf('payment.verification_timeout');
+    expect(ev!.aggregateId).toBe((await paymentOf(q.id)).id);
   });
 
   it('worker jobs: the scan fans out one poll job per address; the poll job settles', async () => {
