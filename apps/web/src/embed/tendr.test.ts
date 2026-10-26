@@ -139,7 +139,17 @@ describe('tendr.js', () => {
       expect(iframe!.getAttribute('src')).toBe(URL_OK);
       expect(iframe!.getAttribute('allow')).toBe('clipboard-write');
       expect(iframe!.getAttribute('title')).toBeTruthy();
+      // The checkout always learns the store page's origin, whatever that page's own policy.
+      expect(iframe!.getAttribute('referrerpolicy')).toBe('strict-origin-when-cross-origin');
       expect(t.doc.body.all().some((e) => e.innerHTMLSet)).toBe(false);
+    });
+
+    it('the modal frames it with ?embed=modal, the #cs fragment untouched', () => {
+      t.tendr.open({ sessionUrl: URL_OK, onEvent: t.onEvent });
+      const [iframe] = t.iframes();
+      const [path, fragment] = URL_OK.split('#');
+      expect(iframe!.getAttribute('src')).toBe(`${path}?embed=modal#${fragment}`);
+      expect(iframe!.getAttribute('referrerpolicy')).toBe('strict-origin-when-cross-origin');
     });
 
     it.each([
@@ -338,18 +348,42 @@ describe('tendr.js', () => {
       expect(t.doc.body.style.overflow).toBe('auto');
     });
 
-    it('traps focus: focus leaving the dialog goes back to the checkout', () => {
+    it('has its own close button, which closes it with no word from the frame', () => {
+      t.tendr.open({ sessionUrl: URL_OK, onEvent: t.onEvent });
+      const dialog = t.doc.body.all().find((e) => e.getAttribute('role') === 'dialog')!;
+      const button = dialog.all().find((e) => e.tagName === 'BUTTON');
+      expect(button).toBeDefined();
+      expect(button!.getAttribute('type')).toBe('button');
+      expect(button!.getAttribute('aria-label')).toBe('Close checkout');
+      expect(button!.style.cssText).not.toMatch(/display:\s*none|visibility:\s*hidden/);
+      button!.dispatch('click', { preventDefault() {} });
+      expect(t.iframes()).toHaveLength(0);
+      expect(t.doc.body.all().some((e) => e.getAttribute('role') === 'dialog')).toBe(false);
+      expect(t.doc.activeElement).toBe(opener);
+      expect(t.doc.body.style.overflow).toBe('auto');
+      expect(t.events).toEqual([{ type: 'close' }]);
+    });
+
+    it('traps focus between the close button and the checkout', () => {
       t.tendr.open({ sessionUrl: URL_OK, onEvent: t.onEvent });
       const [iframe] = t.iframes();
-      // Tabbing out of the frame lands on a sentinel, which hands focus back.
       const dialog = t.doc.body.all().find((e) => e.getAttribute('role') === 'dialog')!;
+      const button = dialog.all().find((e) => e.tagName === 'BUTTON')!;
       const sentinels = dialog.children.filter((c) => c.getAttribute('tabindex') === '0');
       expect(sentinels.length).toBe(2);
-      for (const s of sentinels) {
-        s.focus();
-        expect(t.doc.activeElement).toBe(iframe);
-      }
-      // Focus anywhere else on the page comes back too.
+      // Order: sentinel, close button, checkout, sentinel.
+      expect(dialog.children.indexOf(button)).toBeLessThan(dialog.children.indexOf(iframe!));
+      // Tab past the checkout wraps to the close button; Shift+Tab before the button wraps to the
+      // checkout.
+      sentinels[1]!.focus();
+      expect(t.doc.activeElement).toBe(button);
+      sentinels[0]!.focus();
+      expect(t.doc.activeElement).toBe(iframe);
+      // Focus on the button stays there (it is inside the trap).
+      button.focus();
+      t.doc.dispatch('focusin', { target: button });
+      expect(t.doc.activeElement).toBe(button);
+      // Focus anywhere else on the page comes back to the checkout.
       opener.focus();
       t.doc.dispatch('focusin', { target: opener });
       expect(t.doc.activeElement).toBe(iframe);

@@ -11,6 +11,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { expect, test, type ConsoleMessage, type FrameLocator, type Page } from '@playwright/test';
+import { blockExternal } from './support/network';
 import { API_URL, E2E_CODE_HASH, OTHER_STORE_URL, STORE_URL, WEB_URL } from './support/urls';
 
 const API_DIR = resolve(__dirname, '../../api');
@@ -144,6 +145,10 @@ const events = (page: Page) =>
 const eventTypes = async (page: Page) => (await events(page)).map((e) => e.type as string);
 
 test.describe('checkout', () => {
+  test.beforeEach(async ({ context }) => {
+    await blockExternal(context);
+  });
+
   test('hosted: choose a token, quote, pay, settled, back to the store; the store verifies the signed webhook', async ({
     page,
   }) => {
@@ -200,7 +205,9 @@ test.describe('checkout', () => {
     await opener.click();
     const dialog = page.getByRole('dialog', { name: 'Tendr checkout' });
     await expect(dialog).toBeVisible();
-    await expect(page.locator(FRAME)).toHaveAttribute('src', session.url);
+    // The session URL, plus `?embed=modal` ahead of the untouched #cs fragment.
+    const [path, fragment] = session.url.split('#');
+    await expect(page.locator(FRAME)).toHaveAttribute('src', `${path}?embed=modal#${fragment}`);
     expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden');
     await expect.poll(() => eventTypes(page)).toContain('ready');
 
@@ -236,6 +243,43 @@ test.describe('checkout', () => {
     ).toEqual([]);
   });
 
+  test('modal: on a no-referrer store page it still talks to the store, and the overlay closes itself', async ({
+    page,
+    browser,
+  }) => {
+    const store = seedStore([STORE_URL]);
+    const session = await createSession(store);
+    const query = `?policy=no-referrer&session=${encodeURIComponent(session.url)}`;
+
+    // The store page sends `Referrer-Policy: no-referrer`; the frame's own referrerpolicy still
+    // tells the checkout which page framed it, so tendr:ready arrives.
+    const res = await page.goto(`${STORE_URL}/${query}`);
+    expect(res!.headers()['referrer-policy']).toBe('no-referrer');
+    await page.getByRole('button', { name: 'Pay with crypto' }).click();
+    await expect.poll(() => eventTypes(page)).toContain('ready');
+    // The overlay's own close button (outside the checkout frame) closes it.
+    await page.getByRole('dialog').getByRole('button', { name: 'Close checkout' }).click();
+    await expect(page.locator(FRAME)).toHaveCount(0);
+    expect((await events(page)).at(-1)).toEqual({ type: 'close' });
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('pay');
+    expect(await page.evaluate(() => document.body.style.overflow)).toBe('');
+
+    // On an unregistered origin the checkout can't speak at all (framing refused): the overlay's
+    // button still lets the shopper out.
+    const other = await browser.newContext();
+    await blockExternal(other);
+    const otherPage = await other.newPage();
+    await otherPage.goto(`${OTHER_STORE_URL}/${query}`);
+    await otherPage.getByRole('button', { name: 'Pay with crypto' }).click();
+    await expect(otherPage.getByRole('dialog')).toBeVisible();
+    expect(await otherPage.evaluate(() => document.body.style.overflow)).toBe('hidden');
+    await otherPage.getByRole('dialog').getByRole('button', { name: 'Close checkout' }).click();
+    await expect(otherPage.getByRole('dialog')).toHaveCount(0);
+    expect(await eventTypes(otherPage)).toEqual(['close']);
+    expect(await otherPage.evaluate(() => document.body.style.overflow)).toBe('');
+    await other.close();
+  });
+
   test('widget: inline on a registered store it sizes itself; on an unregistered origin framing is refused', async ({
     page,
     browser,
@@ -259,10 +303,17 @@ test.describe('checkout', () => {
       })
       .toBeLessThanOrEqual(1);
     expect(await iframe.evaluate((el) => el.style.height)).not.toBe('640px');
+    // Esc inside the widget never closes anything.
+    await page.frameLocator(FRAME).getByRole('heading', { name: 'Pay with' }).click();
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(500);
+    expect(await eventTypes(page)).not.toContain('close');
+    await expect(iframe).toHaveCount(1);
 
     // The same store page on an origin that isn't registered: the browser refuses the frame (CSP
     // frame-ancestors), so the checkout never loads and never says it is ready.
     const other = await browser.newContext();
+    await blockExternal(other);
     const otherPage = await other.newPage();
     const refusals: string[] = [];
     otherPage.on('console', (m: ConsoleMessage) => {

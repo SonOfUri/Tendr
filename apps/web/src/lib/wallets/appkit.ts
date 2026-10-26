@@ -6,6 +6,7 @@
 // analytics, email and social logins (the embedded wallet frame), swaps, on-ramp, send, history,
 // Coinbase's SDK. Fonts: the checkout's own, so no font is fetched from Reown.
 import type { AppKit } from '@reown/appkit';
+import { setWalletModalOpen } from './modal-state';
 
 export type AppKitNamespace = 'eip155' | 'solana' | 'bip122';
 
@@ -34,7 +35,7 @@ async function loadAppKit(projectId: string): Promise<AppKit> {
           import('@reown/appkit-adapter-solana'),
           import('@reown/appkit-adapter-bitcoin'),
         ]);
-      return createAppKit({
+      const kit = createAppKit({
         projectId,
         // EVM through the ethers adapter (injected EIP-6963 wallets and WalletConnect). The wagmi
         // adapter pulls in Coinbase's CDP SDK, whose optional x402 modules break the build.
@@ -77,6 +78,9 @@ async function loadAppKit(projectId: string): Promise<AppKit> {
           reownAuthentication: false,
         },
       });
+      // The checkout leaves Esc to this modal while it is open (lib/checkout/escape.ts).
+      kit.subscribeState((st) => setWalletModalOpen(st.open));
+      return kit;
     })().catch((err: unknown) => {
       instance = null;
       throw err;

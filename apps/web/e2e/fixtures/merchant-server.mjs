@@ -2,7 +2,8 @@
 // as http://127.0.0.1:3200 is a second, unregistered origin). It serves:
 //
 // - `/` merchant-site.html, which loads tendr.js from the web server and opens the modal or mounts
-//   the widget for `?session=<session url>&mode=modal|widget`;
+//   the widget for `?session=<session url>&mode=modal|widget`, optionally with its own
+//   `Referrer-Policy` (`&policy=no-referrer`);
 // - `/thanks`, `/cancel`: the store pages the checkout returns to;
 // - `POST /webhooks/:key`: the store's webhook endpoint. It verifies `Tendr-Signature` with the
 //   key's shared secret (HMAC-SHA256 over `t + "." + raw body`, timing-safe, 5 min tolerance) and
@@ -60,8 +61,8 @@ function body(req) {
   });
 }
 
-function send(res, status, type, text) {
-  res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
+function send(res, status, type, text, headers = {}) {
+  res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...headers });
   res.end(text);
 }
 const json = (res, status, value) => send(res, status, 'application/json', JSON.stringify(value));
@@ -83,7 +84,10 @@ const handler = async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true });
     if (req.method === 'GET' && url.pathname === '/') {
-      return send(res, 200, 'text/html; charset=utf-8', page);
+      // `&policy=no-referrer` (or another policy): the store page's own Referrer-Policy.
+      const policy = url.searchParams.get('policy');
+      const headers = policy && /^[a-z-]+$/.test(policy) ? { 'referrer-policy': policy } : {};
+      return send(res, 200, 'text/html; charset=utf-8', page, headers);
     }
     if (req.method === 'GET' && url.pathname === '/thanks')
       return html(res, 'Thanks for your order');

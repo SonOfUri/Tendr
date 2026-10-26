@@ -105,6 +105,9 @@ export default defineConfig({
         API_BASE_URL: API_URL,
         NEXT_PUBLIC_WEBAUTHN_RP_ID: 'localhost',
         TENDR_CHECKOUT_BASE_URL: WEB_URL,
+        // No Reown project, whatever the root .env says: no WalletConnect traffic in the e2e (and
+        // the checkout spec aborts every non-local request anyway).
+        NEXT_PUBLIC_REOWN_PROJECT_ID: '',
       },
     },
     {

@@ -63,12 +63,15 @@ export function createTendr(win: Window, baseUrl: string): Tendr {
   }
 
   /** A frame for the session, plus its message listener (`stop` removes the listener). */
-  function frame(opts: TendrOptions, onClose: () => void) {
+  function frame(opts: TendrOptions, onClose: () => void, src = opts.sessionUrl) {
     const sessionId = sessionOf(opts.sessionUrl);
     const iframe = doc.createElement('iframe');
-    iframe.setAttribute('src', opts.sessionUrl);
+    iframe.setAttribute('src', src);
     iframe.setAttribute('title', FRAME_TITLE);
     iframe.setAttribute('allow', 'clipboard-write');
+    // The checkout posts only to the origin in its document.referrer: send at least the origin,
+    // even from a store page whose own policy is no-referrer or same-origin.
+    iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
     iframe.style.cssText = 'display:block;width:100%;height:640px;border:0;background:transparent';
 
     const emit = (e: TendrEvent) => {
@@ -162,17 +165,35 @@ export function createTendr(win: Window, baseUrl: string): Tendr {
         }
         f.emit({ type: 'close' });
       };
-      const f = frame(opts, close);
+      // `?embed=modal` (never touching the #cs fragment) tells the checkout it may close on Esc.
+      const hash = opts.sessionUrl.indexOf('#');
+      const path = hash < 0 ? opts.sessionUrl : opts.sessionUrl.slice(0, hash);
+      const src = `${path}${path.includes('?') ? '&' : '?'}embed=modal${
+        hash < 0 ? '' : opts.sessionUrl.slice(hash)
+      }`;
+      const f = frame(opts, close, src);
       f.iframe.style.maxWidth = '480px';
       f.iframe.style.borderRadius = '16px';
 
-      // Focus trap: tabbing out of the frame lands on a sentinel, and focus anywhere else on the
-      // page is sent back, so keyboard users stay in the checkout until it closes.
+      // The overlay's own close control: it works even when the checkout cannot talk to this page
+      // (framing refused, origin not registered), so the shopper is never stuck behind it.
+      const button = doc.createElement('button');
+      button.setAttribute('type', 'button');
+      button.setAttribute('aria-label', 'Close checkout');
+      button.textContent = '\u00d7';
+      button.style.cssText =
+        'position:fixed;top:12px;right:12px;width:40px;height:40px;border-radius:20px;' +
+        'border:1px solid #fff;background:#0b1020;color:#fff;font:24px/1 sans-serif;' +
+        'cursor:pointer;z-index:1';
+      button.addEventListener('click', close);
+
+      // Focus trap (close button, then the checkout): tabbing past either end lands on a sentinel
+      // that wraps around, and focus anywhere else on the page is sent back to the checkout.
       const toFrame = () => f.iframe.focus();
-      const sentinel = () => {
+      const sentinel = (to: () => void) => {
         const s = doc.createElement('div');
         s.setAttribute('tabindex', '0');
-        s.addEventListener('focus', toFrame);
+        s.addEventListener('focus', to);
         return s;
       };
       const onKey = (e: KeyboardEvent) => {
@@ -185,9 +206,10 @@ export function createTendr(win: Window, baseUrl: string): Tendr {
         if (!overlay.contains(e.target as Node)) toFrame();
       };
 
-      overlay.appendChild(sentinel());
+      overlay.appendChild(sentinel(toFrame));
+      overlay.appendChild(button);
       overlay.appendChild(f.iframe);
-      overlay.appendChild(sentinel());
+      overlay.appendChild(sentinel(() => button.focus()));
       body.appendChild(overlay);
       body.style.overflow = 'hidden';
       doc.addEventListener('keydown', onKey);

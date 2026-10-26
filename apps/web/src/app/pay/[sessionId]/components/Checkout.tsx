@@ -9,6 +9,7 @@ import {
   type Token,
 } from '@/lib/checkout/api';
 import { createEmbedBridge, type EmbedBridge } from '@/lib/checkout/embed-bridge';
+import { isModalEmbed, shouldForwardEscape } from '@/lib/checkout/escape';
 import { createPoller, type Poller } from '@/lib/checkout/poller';
 import { clearClientSecret, takeClientSecret } from '@/lib/checkout/secret';
 import { screenFor, type ScreenKind } from '@/lib/checkout/status';
@@ -20,6 +21,7 @@ import {
   openWalletWindow,
   postWalletDone,
 } from '@/lib/wallets/popup';
+import { walletModalOpen } from '@/lib/wallets/modal-state';
 import { createDepositReporter, type PendingTx } from '@/lib/wallets/tx-store';
 import { EmailPanel, NeedsAddressPanel } from './ActionPanels';
 import { CheckoutHeader } from './CheckoutHeader';
@@ -247,16 +249,20 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     bridge.ready(screenFor(view, new Date()).bridgeStatus);
   }, [view, sessionId]);
   // Framed by a registered store page: report the page's height (the inline widget sizes its
-  // frame to it), and Esc asks the store page to close (a modal; focus is inside this frame, so
-  // the store page never sees the key itself).
+  // frame to it), and in tendr.js's modal only, an Esc nothing in here handled asks the store page
+  // to close (focus is inside this frame, so the store page never sees the key; lib/checkout/
+  // escape.ts). The widget never closes on Esc.
   const framedForStore = canClose;
   useEffect(() => {
     const bridge = bridgeRef.current;
     if (!framedForStore || !bridge) return;
     const root = document.querySelector('.pay');
     const stopHeight = root ? bridge.watchHeight(root) : () => {};
+    const modal = isModalEmbed(window.location.search);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') bridge.close();
+      if (shouldForwardEscape(e, { modal, walletModalOpen: walletModalOpen(), doc: document })) {
+        bridge.close();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => {

@@ -5,6 +5,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { blockExternal } from './support/network';
 
 const MAIL_DIR = resolve(__dirname, '../../api/.mail');
 const run = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
@@ -78,6 +79,7 @@ test.describe.serial('merchant accounts', () => {
 
   test.beforeAll(async ({ browser }) => {
     ownerContext = await browser.newContext();
+    await blockExternal(ownerContext);
     owner = await ownerContext.newPage();
     await withAuthenticator(owner);
   });
@@ -153,6 +155,7 @@ test.describe.serial('merchant accounts', () => {
 
     // They accept it in their own browser.
     const financeContext = await browser.newContext();
+    await blockExternal(financeContext);
     const finance = await financeContext.newPage();
     await withAuthenticator(finance);
     await finance.goto(inviteUrl);
