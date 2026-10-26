@@ -19,8 +19,8 @@ interface TronWebLike {
     ): Promise<{ result?: { result?: boolean }; transaction?: object }>;
   };
   trx: {
-    sign(tx: object): Promise<object>;
-    sendRawTransaction(tx: object): Promise<{ result?: boolean; txid?: string }>;
+    sign(tx: object): Promise<{ txID?: unknown }>;
+    sendRawTransaction(tx: object): Promise<{ result?: boolean; txid?: string; code?: unknown }>;
   };
 }
 
@@ -96,15 +96,30 @@ export function createTronAdapter(target: PayTarget, deps: { win: TronWindow }):
           }
           unsigned = r.transaction;
         }
-        const signed = await tw.trx.sign(unsigned);
-        const sent = await tw.trx.sendRawTransaction(signed);
-        if (!sent.result || typeof sent.txid !== 'string' || !TXID.test(sent.txid)) {
-          throw new WalletError('failed', { detail: 'not broadcast' });
-        }
-        return { txHash: sent.txid };
       } catch (err) {
         throw toWalletError(err);
       }
+      let signed: { txID?: unknown };
+      try {
+        signed = await tw.trx.sign(unsigned!);
+      } catch (err) {
+        throw toWalletError(err);
+      }
+      // Signed: the tx id is captured BEFORE broadcasting, so whatever happens next the payment
+      // is never forgotten and the pay button never comes back for it (C32).
+      const txId = typeof signed?.txID === 'string' && TXID.test(signed.txID) ? signed.txID : null;
+      if (!txId) throw new WalletError('uncertain', { detail: 'signed without a tx id' });
+      let sent: { result?: boolean; txid?: string; code?: unknown };
+      try {
+        sent = await tw.trx.sendRawTransaction(signed);
+      } catch (err) {
+        throw new WalletError('uncertain', { txHash: txId, cause: err });
+      }
+      if (!sent || sent.result !== true) {
+        // The node refused the broadcast (e.g. not enough bandwidth or energy).
+        throw new WalletError('onchain_failed', { txHash: txId, detail: 'broadcast refused' });
+      }
+      return { txHash: txId };
     },
     async disconnect() {
       address = null;

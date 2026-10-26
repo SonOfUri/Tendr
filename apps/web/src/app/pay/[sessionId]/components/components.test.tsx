@@ -113,12 +113,24 @@ describe('WalletConnect', () => {
     expect(html).toContain('Connect wallet');
   });
 
-  it('hides the pay button once a payment was sent for this quote', () => {
+  it('while blocked: no wallet step at all, only the notice and the "didn\'t go through" control', () => {
     const html = renderToStaticMarkup(
-      <WalletConnect quote={quote} token={NEAR_USDT} paymentSent />,
+      <WalletConnect quote={quote} token={NEAR_USDT} blocked="sent" onDidntGoThrough={() => {}} />,
     );
     expect(html).toContain('Your payment is on its way');
-    expect(html).not.toContain('<button');
+    expect(html).not.toContain('Connect wallet');
+    expect(html).not.toContain('Pay ');
+    expect(html).toContain('My payment didn&#x27;t go through');
+    // A token with no wallet route is blocked too (a popup-reported payment, another tab).
+    const hot = renderToStaticMarkup(
+      <WalletConnect
+        quote={{ ...quote, origin_asset: 'nep245:v2_1.omni.hot.tg:56_11111111111111111111' }}
+        token={{ ...NEAR_USDT, blockchain: 'bsc' }}
+        blocked="uncertain"
+      />,
+    );
+    expect(hot).toContain('Check your wallet before paying again.');
+    expect(hot).not.toContain('<button');
   });
 
   it('a token without a wallet route shows only the manual send', () => {

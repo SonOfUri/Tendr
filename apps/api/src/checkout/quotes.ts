@@ -53,7 +53,11 @@ export const QuoteInputSchema = z
 export type QuoteInput = z.infer<typeof QuoteInputSchema>;
 
 export const DepositInputSchema = z
-  .object({ tx_hash: z.string().regex(/^[\x21-\x7e]{1,256}$/, 'must be a transaction hash') })
+  .object({
+    tx_hash: z.string().regex(/^[\x21-\x7e]{1,256}$/, 'must be a transaction hash'),
+    /** The quote the shopper paid: the hash is only ever attached to that quote. */
+    quote_id: z.string().regex(/^quo_[0-9A-HJKMNP-TV-Z]{26}$/, 'must be a quote id'),
+  })
   .strict();
 
 export const EmailInputSchema = z.object({ email: z.string().trim().max(254).email() }).strict();
@@ -276,12 +280,18 @@ export async function shopperSessionView(ctx: ShopperCtx) {
   // The page is open: the watcher polls this session's addresses every 5 s for a minute.
   await markSessionViewed(s.id);
   const feePayer = feePayerFromDb(s.feePayer);
-  const [store, quote, payments, emailNeeded, refunds] = await Promise.all([
+  const [store, quote, payments, emailNeeded, refunds, submitted] = await Promise.all([
     storeInfo(ctx, s),
     currentQuote(ctx),
     ctx.db.payment.findMany({ where: { sessionId: s.id }, orderBy: { createdAt: 'asc' } }),
     needsEmail(ctx, s),
     shopperRefunds(ctx),
+    // Any quote of this session with a reported deposit (C32: blocks wallet sends in every tab).
+    ctx.db.quote.findFirst({
+      where: { sessionId: s.id, depositTxSubmittedAt: { not: null } },
+      orderBy: { depositTxSubmittedAt: 'desc' },
+      select: { depositTxSubmittedAt: true },
+    }),
   ]);
   return {
     id: s.id,
@@ -312,6 +322,8 @@ export async function shopperSessionView(ctx: ShopperCtx) {
     /** Returns to the shopper; one with `needs_address` waits for "Tell us where to send it". */
     refunds,
     needs_email: emailNeeded,
+    /** When a deposit transaction was last reported for this session (any quote), else null. */
+    deposit_submitted_at: submitted?.depositTxSubmittedAt?.toISOString() ?? null,
     topup: await topupOffer(ctx, payments, watcherNow()),
   };
 }
@@ -607,9 +619,14 @@ const DEPOSIT_OPEN_STATUSES = new Set(['PENDING_DEPOSIT', 'PROCESSING']);
  * Tells 1Click about the shopper's deposit transaction for the current quote and records it on
  * the quote (which blocks re-quoting until the quote's deadline). Refused with SESSION_EXPIRED
  * past the session's lifetime, CONFLICT (409) when the session is past taking payments or the
- * quote's deadline has passed.
+ * quote's deadline has passed, and QUOTE_MISMATCH (409) when `quoteId` is not the current quote:
+ * a hash is never re-attached to a quote other than the one it paid (C32).
  */
-export async function submitDeposit(ctx: ShopperCtx, txHash: string): Promise<void> {
+export async function submitDeposit(
+  ctx: ShopperCtx,
+  txHash: string,
+  quoteId: string,
+): Promise<void> {
   const s = await loadSession(ctx);
   const now = new Date();
   if (s.status === 'EXPIRED' || s.expiresAt.getTime() <= now.getTime()) throw sessionExpired();
@@ -617,6 +634,13 @@ export async function submitDeposit(ctx: ShopperCtx, txHash: string): Promise<vo
     throw conflict('This checkout is no longer taking payments', { status: s.status });
   }
   const q = await requireQuote(ctx);
+  if (q.id !== quoteId) {
+    throw new AppError(
+      'QUOTE_MISMATCH',
+      'This transaction was for a different quote than the current one',
+      409,
+    );
+  }
   if (q.deadline.getTime() <= now.getTime()) {
     throw conflict('This quote has expired; request a new one');
   }

@@ -22,11 +22,16 @@ describe('checkout API client', () => {
     await c.session();
     await c.tokens();
     await c.quote({ origin_asset: 'nep141:eth.test' });
-    await c.deposit('0xabc');
+    await c.deposit('0xabc', 'quo_01JABCDEFGHJKMNPQRSTVWXYZ0');
     await c.email('a@b.example');
     await c.refundAddress({ address: '0x1', chain: 'eth' });
     await c.simulate('exact');
     expect(fetchFn).toHaveBeenCalledTimes(7);
+    const dep = fetchFn.mock.calls.find(([u]) => u.endsWith('/deposit'))!;
+    expect(JSON.parse(String(dep[1]!.body))).toEqual({
+      tx_hash: '0xabc',
+      quote_id: 'quo_01JABCDEFGHJKMNPQRSTVWXYZ0',
+    });
     for (const [url, init] of fetchFn.mock.calls) {
       expect(url).not.toContain(SECRET);
       expect(url).not.toContain('secret');

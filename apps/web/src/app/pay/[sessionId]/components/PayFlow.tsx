@@ -9,7 +9,8 @@ import { RefundAddressField } from './RefundAddressField';
 import { SendDetails } from './SendDetails';
 import { TestModePanel } from './TestModePanel';
 import { TokenPicker } from './TokenPicker';
-import { WalletConnect, type WalletQuoteResult } from './WalletConnect';
+import { autoRequoteDue, type PaymentBlock } from '@/lib/wallets/block';
+import { WalletConnect, type WalletQuoteResult, type WalletSendResult } from './WalletConnect';
 
 type Reason = 'choose' | 'auto' | 'refund' | 'retry' | 'wallet';
 
@@ -32,7 +33,8 @@ export function PayFlow({
   onQuote,
   onRefresh,
   onDepositSent,
-  sentQuoteId = null,
+  blocked = null,
+  onDidntGoThrough,
   openWalletWindow,
 }: {
   view: SessionView;
@@ -43,10 +45,12 @@ export function PayFlow({
   onQuote: (quote: Quote) => void;
   /** Ask for the latest session state now. */
   onRefresh: () => void;
-  /** A connected wallet sent the deposit for `quoteId`: save and report the hash. */
-  onDepositSent?: (txHash: string, quoteId: string) => void;
-  /** The quote a wallet payment was already sent for (its pay button stays hidden). */
-  sentQuoteId?: string | null;
+  /** A connected wallet sent (or may have sent) the deposit: record and report it. */
+  onDepositSent?: (r: WalletSendResult) => void;
+  /** A payment may be on its way (C32): no wallet payment and no automatic re-quote. */
+  blocked?: PaymentBlock;
+  /** The shopper confirmed their payment didn't go through. */
+  onDidntGoThrough?: () => void;
   /** Inside a frame: opens the wallet step in a window. */
   openWalletWindow?: () => Window | null;
 }) {
@@ -109,10 +113,14 @@ export function PayFlow({
   // A price that ran out is replaced once, automatically; the shopper only notices if it moved.
   useEffect(() => {
     if (step !== 'pay' || !token || !quote || loading) return;
-    if (Date.parse(quote.deadline) > now || autoRequoted.current === quote.id) return;
+    // Never while a payment may be on its way: a new quote would move the deposit address.
+    if (
+      !autoRequoteDue({ quote, now, blocked: blocked !== null, lastAutoId: autoRequoted.current })
+    )
+      return;
     autoRequoted.current = quote.id;
     void requote(token, quote.refund_address, 'auto');
-  }, [step, token, quote, loading, now, requote]);
+  }, [step, token, quote, loading, now, requote, blocked]);
 
   if (step === 'choose' || !token) {
     return (
@@ -211,10 +219,11 @@ export function PayFlow({
               token={token}
               livemode={view.livemode}
               sessionId={view.id}
-              paymentSent={sentQuoteId === quote.id}
+              blocked={blocked}
+              onDidntGoThrough={onDidntGoThrough}
               openWalletWindow={openWalletWindow}
               onWalletAddress={(address) => requote(token, address, 'wallet')}
-              onDepositSent={(txHash) => onDepositSent?.(txHash, quote.id)}
+              onDepositSent={onDepositSent}
             />
           )}
 

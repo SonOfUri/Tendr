@@ -18,6 +18,15 @@ describe('wallet error copy (never raw wallet or RPC text)', () => {
     expect(walletErrorCopy(err)).toBe('You cancelled in your wallet.');
   });
 
+  it('after the wallet signed: "check your wallet" or "didn\'t go through", never "try again"', () => {
+    expect(walletErrorCopy(new WalletError('uncertain', { txHash: 'c'.repeat(64) }))).toBe(
+      'Check your wallet before paying again.',
+    );
+    expect(walletErrorCopy(new WalletError('onchain_failed'))).toBe(
+      "Your payment didn't go through in your wallet.",
+    );
+  });
+
   it('a chain mismatch names the network', () => {
     expect(walletErrorCopy(new WalletError('chain_mismatch', { network: 'Base' }))).toBe(
       'Switch your wallet to Base to pay.',

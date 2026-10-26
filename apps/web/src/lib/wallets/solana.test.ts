@@ -103,4 +103,20 @@ describe('Solana deposits', () => {
     expect((err as WalletError).kind).toBe('chain_mismatch');
     expect(sendTransaction).not.toHaveBeenCalled();
   });
+
+  it('a wallet error after it was asked to sign and send is "possibly sent"; a refusal is not', async () => {
+    const { deps: d, sendTransaction } = deps(true);
+    const adapter = createSolanaAdapter(payTargetFor(SOL)!, d);
+    await adapter.connect();
+    sendTransaction.mockRejectedValueOnce(new Error('Transaction was not confirmed in 30 seconds'));
+    expect(((await adapter.sendDeposit(sol).catch((e: unknown) => e)) as WalletError).kind).toBe(
+      'uncertain',
+    );
+    sendTransaction.mockRejectedValueOnce(
+      Object.assign(new Error('User rejected'), { code: 4001 }),
+    );
+    expect(((await adapter.sendDeposit(sol).catch((e: unknown) => e)) as WalletError).kind).toBe(
+      'rejected',
+    );
+  });
 });

@@ -73,8 +73,8 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
 
   app.post(`${CHECKOUT_CLIENT_PREFIX}deposit`, shopper, async (req, reply) => {
     const ctx = ctxOf(req);
-    const { tx_hash } = DepositInputSchema.parse(req.body);
-    await submitDeposit(ctx, tx_hash);
+    const { tx_hash, quote_id } = DepositInputSchema.parse(req.body);
+    await submitDeposit(ctx, tx_hash, quote_id);
     return reply.status(202).send({ submitted: true });
   });
 

@@ -40,6 +40,8 @@ export const ErrorCodes = [
   'WALLET_NOT_ALLOWED',
   /** A deposit for the current quote is on its way; a new quote would orphan its address. */
   'DEPOSIT_IN_PROGRESS',
+  /** A deposit transaction was reported for a quote other than the session's current one. */
+  'QUOTE_MISMATCH',
   /** Returning a held (sanctions) payment's funds needs the typed legal-clearance acknowledgement. */
   'LEGAL_ACK_REQUIRED',
   /** An earlier refund proposal for this return may still execute on chain; it must end there first. */

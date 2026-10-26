@@ -172,4 +172,46 @@ describe('NEAR deposits', () => {
     const err = await adapter.connect().catch((e: unknown) => e);
     expect((err as WalletError).kind).toBe('rejected');
   });
+
+  function walletReturning(outcome: unknown) {
+    return {
+      signIn: vi.fn(async () => [{ accountId: SHOPPER }]),
+      getAccounts: vi.fn(async () => [{ accountId: SHOPPER }]),
+      signOut: vi.fn(async () => {}),
+      signAndSendTransaction: vi.fn(async () => outcome),
+    };
+  }
+  const nearDeps = (wallet: ReturnType<typeof walletReturning>) => ({
+    wallets: async () => [{ id: 'meteor-wallet', name: 'Meteor' }],
+    pickWallet: async () => 'meteor-wallet',
+    wallet: async () => wallet,
+    view: view({ registered: [SHOPPER, DEPOSIT] }),
+  });
+  const HASH = 'BxP4YpWnuBg8mUgyp2bYhNLXUnPvZSmhcW8TztVEMSpy';
+
+  it('a transaction that failed on chain is reported as failed, with its hash', async () => {
+    const adapter = createNearAdapter(
+      payTargetFor(USDT)!,
+      nearDeps(
+        walletReturning({
+          transaction: { hash: HASH },
+          status: { Failure: { ActionError: { index: 0 } } },
+        }),
+      ),
+    );
+    await adapter.connect();
+    const err = await adapter.sendDeposit(usdt).catch((e: unknown) => e);
+    expect((err as WalletError).kind).toBe('onchain_failed');
+    expect((err as WalletError).txHash).toBe(HASH);
+  });
+
+  it('an outcome without a recognisable hash is "possibly sent", never a retry', async () => {
+    const adapter = createNearAdapter(
+      payTargetFor(USDT)!,
+      nearDeps(walletReturning({ odd: true })),
+    );
+    await adapter.connect();
+    const err = await adapter.sendDeposit(usdt).catch((e: unknown) => e);
+    expect((err as WalletError).kind).toBe('uncertain');
+  });
 });

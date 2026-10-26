@@ -133,6 +133,19 @@ function hashOf(outcome: unknown): string | null {
   return typeof h === 'string' && TX_HASH.test(h) ? h : null;
 }
 
+/** The execution outcome reports a failure (the transaction's or any receipt's). */
+function failedOnChain(outcome: unknown): boolean {
+  const o = outcome as {
+    status?: unknown;
+    receipts_outcome?: { outcome?: { status?: unknown } }[];
+  } | null;
+  const failed = (st: unknown) => typeof st === 'object' && st !== null && 'Failure' in st;
+  if (failed(o?.status)) return true;
+  return Array.isArray(o?.receipts_outcome)
+    ? o!.receipts_outcome.some((r) => failed(r?.outcome?.status))
+    : false;
+}
+
 export function createNearAdapter(target: PayTarget, deps: NearDeps): WalletAdapter {
   if (target.family !== 'near') throw new WalletError('failed', { detail: 'not a NEAR asset' });
   let wallet: NearWalletLike | null = null;
@@ -161,15 +174,20 @@ export function createNearAdapter(target: PayTarget, deps: NearDeps): WalletAdap
       assertDepositMatches(target, q);
       if (accountId.endsWith('.testnet'))
         throw new WalletError('chain_mismatch', { network: 'NEAR' });
+      let outcome: unknown;
       try {
         const plan = await planNearDeposit(deps.view, accountId, target, q);
-        const outcome = await wallet.signAndSendTransaction({ signerId: accountId, ...plan });
-        const hash = hashOf(outcome);
-        if (!hash) throw new WalletError('failed', { detail: 'no transaction hash' });
-        return { txHash: hash };
+        outcome = await wallet.signAndSendTransaction({ signerId: accountId, ...plan });
       } catch (err) {
         throw toWalletError(err);
       }
+      // The wallet returned an outcome: from here on, never a plain retry (C32).
+      const hash = hashOf(outcome);
+      if (!hash) throw new WalletError('uncertain', { detail: 'no transaction hash' });
+      if (failedOnChain(outcome)) {
+        throw new WalletError('onchain_failed', { txHash: hash, detail: 'transaction failed' });
+      }
+      return { txHash: hash };
     },
     async disconnect() {
       const w = wallet;

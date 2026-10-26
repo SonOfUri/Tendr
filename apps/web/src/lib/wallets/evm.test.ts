@@ -22,7 +22,12 @@ const eth: DepositRequest = {
 };
 
 /** A fake wallet: records calls; chain switching is accepted or refused. */
-function fakeProvider(opts: { chainId: number; acceptSwitch: boolean; hash?: string }) {
+function fakeProvider(opts: {
+  chainId: number;
+  acceptSwitch: boolean;
+  hash?: string;
+  accounts?: string[];
+}) {
   let chainId = opts.chainId;
   const calls: { method: string; params?: unknown }[] = [];
   const provider: Eip1193 = {
@@ -34,6 +39,8 @@ function fakeProvider(opts: { chainId: number; acceptSwitch: boolean; hash?: str
         chainId = parseInt((params as [{ chainId: string }])[0].chainId, 16);
         return null;
       }
+      if (method === 'eth_accounts')
+        return opts.accounts ?? [SHOPPER.toUpperCase().replace('0X', '0x')];
       if (method === 'eth_sendTransaction') return opts.hash ?? '0x' + 'ab'.repeat(32);
       throw new Error('unexpected ' + method);
     }),
@@ -67,9 +74,15 @@ describe('EVM deposits', () => {
       to: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
       value: '0x0',
       data: encodeErc20Transfer(DEPOSIT, 84000000n),
+      chainId: '0x2105',
     });
     const native = buildEvmDeposit(payTargetFor(ETH)!, eth, SHOPPER);
-    expect(native).toEqual({ from: SHOPPER, to: DEPOSIT, value: '0x775f05a0740001' });
+    expect(native).toEqual({
+      from: SHOPPER,
+      to: DEPOSIT,
+      value: '0x775f05a0740001',
+      chainId: '0x1',
+    });
     expect(BigInt(native.value)).toBe(33600000000000001n);
   });
 
@@ -83,9 +96,12 @@ describe('EVM deposits', () => {
       'eth_chainId',
       'wallet_switchEthereumChain',
       'eth_chainId',
+      'eth_accounts',
       'eth_sendTransaction',
     ]);
     expect(calls[1]!.params).toEqual([{ chainId: '0x2105' }]);
+    // The transaction names the quote's chain.
+    expect((calls[4]!.params as [{ chainId: string }])[0].chainId).toBe('0x2105');
   });
 
   it('a refused chain switch blocks the send', async () => {
@@ -109,11 +125,27 @@ describe('EVM deposits', () => {
     expect(calls).toEqual([]);
   });
 
-  it('refuses to send before connecting, and rejects a malformed hash', async () => {
+  it('refuses to send before connecting; a non-hash reply after signing is "possibly sent"', async () => {
     const { provider } = fakeProvider({ chainId: 8453, acceptSwitch: true, hash: 'nope' });
     const adapter = createEvmAdapter(payTargetFor(USDC_BASE)!, session(provider));
     await expect(adapter.sendDeposit(usdc)).rejects.toBeInstanceOf(WalletError);
     await adapter.connect();
-    await expect(adapter.sendDeposit(usdc)).rejects.toBeInstanceOf(WalletError);
+    const err = await adapter.sendDeposit(usdc).catch((e: unknown) => e);
+    expect((err as WalletError).kind).toBe('uncertain');
+  });
+
+  it('an account switched in the wallet is not paid from: re-quote for it instead', async () => {
+    const other = '0x3333333333333333333333333333333333333333';
+    const { provider, calls } = fakeProvider({
+      chainId: 8453,
+      acceptSwitch: true,
+      accounts: [other],
+    });
+    const adapter = createEvmAdapter(payTargetFor(USDC_BASE)!, session(provider));
+    await adapter.connect();
+    const err = await adapter.sendDeposit(usdc).catch((e: unknown) => e);
+    expect((err as WalletError).kind).toBe('account_changed');
+    expect((err as WalletError).address).toBe(other);
+    expect(calls.some((c) => c.method === 'eth_sendTransaction')).toBe(false);
   });
 });

@@ -1,35 +1,49 @@
-// The connected-wallet deposit's transaction hash, kept so it is never lost and never paid twice.
+// The connected-wallet payment's record, kept so it is never lost and never paid twice (C32).
 //
 // - Saved to sessionStorage (`tendr:tx:<sessionId>`) BEFORE the first POST /deposit, with the
-//   quote it paid. A reload finds it, resubmits it, and the page keeps the pay button hidden for
-//   that quote instead of asking for a second payment.
-// - POST /deposit is retried with backoff on network errors, 5xx and 429. A 4xx refusal (closed
-//   session, expired quote) stops the retries; the record stays (the payment may still arrive and
-//   the watcher finds it by its deposit address).
-// - Blocked storage (private mode, sandboxed frames) falls back to memory: only the reload
-//   convenience is lost.
+//   quote it paid and its state:
+//   - `sent`: the wallet returned a hash;
+//   - `uncertain`: the wallet signed but we can't tell whether it went out (the hash or signed tx id
+//     when there is one, else null);
+//   - `failed`: it failed on chain (hash kept, never reported as a deposit).
+//   While a record exists the page offers no wallet send and no automatic re-quote (block.ts).
+// - POST /deposit always carries the record's OWN quote id, never the page's current one. It is
+//   retried with backoff on network errors, 5xx and 429. A 4xx (QUOTE_MISMATCH: the quote was
+//   superseded; a closed session; an expired quote) stops it for good; the record stays and keeps
+//   blocking. A hash is never re-bound to another quote.
+// - `dismiss()` is the shopper's confirmed "My payment didn't go through": the record is cleared
+//   and the server's `deposit_submitted_at` it was looking at is remembered (`tendr:tx-dismissed:`)
+//   so that one no longer blocks; a newer one would.
+// - Blocked storage (private mode, sandboxed frames) falls back to memory.
 import { CheckoutApiError } from '@/lib/checkout/api';
 
+export type PendingState = 'sent' | 'uncertain' | 'failed';
+
 export interface PendingTx {
-  txHash: string;
+  /** Null when the wallet signed but gave nothing we can report. */
+  txHash: string | null;
   quoteId: string;
-  /** The API acknowledged it (or refused it for good). */
+  /** Nothing more to POST: the API acknowledged or refused it, or there is nothing to report. */
   reported: boolean;
+  state: PendingState;
 }
 
 type TxStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 export const pendingTxKey = (sessionId: string) => `tendr:tx:${sessionId}`;
+const dismissedKey = (sessionId: string) => `tendr:tx-dismissed:${sessionId}`;
 
 const HASH = /^[\x21-\x7e]{1,256}$/;
+const STATES = new Set<unknown>(['sent', 'uncertain', 'failed']);
 
 function parse(raw: string | null): PendingTx | null {
   if (!raw) return null;
   try {
     const o = JSON.parse(raw) as Partial<PendingTx>;
-    if (typeof o.txHash !== 'string' || !HASH.test(o.txHash) || typeof o.quoteId !== 'string')
-      return null;
-    return { txHash: o.txHash, quoteId: o.quoteId, reported: o.reported === true };
+    const hashOk = o.txHash === null || (typeof o.txHash === 'string' && HASH.test(o.txHash));
+    if (!hashOk || typeof o.quoteId !== 'string' || !o.quoteId) return null;
+    const state = STATES.has(o.state) ? (o.state as PendingState) : 'sent';
+    return { txHash: o.txHash ?? null, quoteId: o.quoteId, reported: o.reported === true, state };
   } catch {
     return null;
   }
@@ -47,12 +61,23 @@ export function loadPendingTx(storage: TxStorage, sessionId: string): PendingTx 
 export type ReportOutcome = 'reported' | 'refused' | 'gave_up';
 
 export interface DepositReporter {
-  /** Saves the hash, then POSTs it (with retries). */
+  /** A sent payment: saves the hash for `quoteId`, then POSTs it (with retries). */
   report(txHash: string, quoteId: string): Promise<ReportOutcome>;
-  /** After a reload: POSTs a saved hash that was not acknowledged yet. */
+  /** Any state: saves it; POSTs it when there is a hash and it did not fail on chain. */
+  record(r: {
+    txHash: string | null;
+    quoteId: string;
+    state: PendingState;
+  }): Promise<ReportOutcome>;
+  /** After a reload: POSTs a saved hash that was not acknowledged yet (its own quote only). */
   resume(): Promise<ReportOutcome | null>;
   pending(): PendingTx | null;
+  /** Forgets the record (the session is over). */
   clear(): void;
+  /** "My payment didn't go through", confirmed: clears and remembers the dismissed server time. */
+  dismiss(serverSubmittedAt: string | null): void;
+  /** The server `deposit_submitted_at` the shopper dismissed, if any. */
+  dismissed(): string | null;
 }
 
 /** 1 s, 2 s, 4 s, 8 s, 16 s, then 30 s: about 3 minutes in all. */
@@ -65,12 +90,14 @@ export function createDepositReporter(opts: {
   sessionId: string;
   /** Reading it may throw when storage is blocked. */
   storage: () => TxStorage | undefined;
-  deposit: (txHash: string) => Promise<unknown>;
+  /** POST /deposit for exactly this quote. */
+  deposit: (txHash: string, quoteId: string) => Promise<unknown>;
   sleep?: (ms: number) => Promise<void>;
   delaysMs?: number[];
   onChange?: (p: PendingTx | null) => void;
 }): DepositReporter {
   const key = pendingTxKey(opts.sessionId);
+  const dKey = dismissedKey(opts.sessionId);
   const sleep = opts.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
   const delays = opts.delaysMs ?? DEFAULT_DELAYS_MS;
   const withStorage = <T>(fn: (s: TxStorage) => T): T | null => {
@@ -83,6 +110,7 @@ export function createDepositReporter(opts: {
   };
 
   let current: PendingTx | null = withStorage((s) => parse(s.getItem(key)));
+  let dismissedAt: string | null = withStorage((s) => s.getItem(dKey));
   let inflight: { hash: string; promise: Promise<ReportOutcome> } | null = null;
 
   const save = (p: PendingTx | null) => {
@@ -90,16 +118,19 @@ export function createDepositReporter(opts: {
     withStorage((s) => (p ? s.setItem(key, JSON.stringify(p)) : s.removeItem(key)));
     opts.onChange?.(p);
   };
+  const same = (p: PendingTx) =>
+    current !== null && current.txHash === p.txHash && current.quoteId === p.quoteId;
 
-  const post = async (p: PendingTx): Promise<ReportOutcome> => {
+  const post = async (p: PendingTx & { txHash: string }): Promise<ReportOutcome> => {
     for (let attempt = 0; ; attempt++) {
       try {
-        await opts.deposit(p.txHash);
-        if (current?.txHash === p.txHash) save({ ...p, reported: true });
+        await opts.deposit(p.txHash, p.quoteId);
+        if (same(p)) save({ ...current!, reported: true });
         return 'reported';
       } catch (err) {
         if (!retryable(err)) {
-          if (current?.txHash === p.txHash) save({ ...p, reported: true });
+          // Refused for good (QUOTE_MISMATCH, closed, expired): stop, keep blocking.
+          if (same(p)) save({ ...current!, reported: true });
           return 'refused';
         }
         const wait = delays[attempt];
@@ -109,27 +140,51 @@ export function createDepositReporter(opts: {
     }
   };
 
-  const run = (p: PendingTx) => {
+  const run = (p: PendingTx): Promise<ReportOutcome> => {
+    if (p.reported || p.txHash === null) return Promise.resolve('reported');
     if (inflight?.hash === p.txHash) return inflight.promise;
-    const promise = post(p).finally(() => {
+    const promise = post(p as PendingTx & { txHash: string }).finally(() => {
       if (inflight?.promise === promise) inflight = null;
     });
     inflight = { hash: p.txHash, promise };
     return promise;
   };
 
+  const record: DepositReporter['record'] = ({ txHash, quoteId, state }) => {
+    if (
+      !current ||
+      current.txHash !== txHash ||
+      current.quoteId !== quoteId ||
+      current.state !== state
+    ) {
+      // A failed-on-chain transaction is kept, never reported as a deposit.
+      const reported = txHash === null || state === 'failed';
+      save({
+        txHash,
+        quoteId,
+        state,
+        reported: current?.txHash === txHash && current.reported ? true : reported,
+      });
+    }
+    return run(current!);
+  };
+
   return {
-    report(txHash, quoteId) {
-      if (current?.txHash !== txHash) save({ txHash, quoteId, reported: false });
-      if (current!.reported) return Promise.resolve('reported');
-      return run(current!);
-    },
+    report: (txHash, quoteId) => record({ txHash, quoteId, state: 'sent' }),
+    record,
     async resume() {
       if (!current) return null;
-      if (current.reported) return 'reported';
       return run(current);
     },
     pending: () => current,
     clear: () => save(null),
+    dismiss(serverSubmittedAt) {
+      dismissedAt = serverSubmittedAt;
+      withStorage((s) =>
+        serverSubmittedAt ? s.setItem(dKey, serverSubmittedAt) : s.removeItem(dKey),
+      );
+      save(null);
+    },
+    dismissed: () => dismissedAt,
   };
 }

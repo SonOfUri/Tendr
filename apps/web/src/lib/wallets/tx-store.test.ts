@@ -33,7 +33,12 @@ describe('deposit reporting survives failures and reloads', () => {
     expect(await reporter.report(HASH, 'quo_1')).toBe('reported');
     expect(JSON.parse(seenAtPost!)).toMatchObject({ txHash: HASH, quoteId: 'quo_1' });
     expect(pendingTxKey(SID)).toBe(`tendr:tx:${SID}`);
-    expect(loadPendingTx(storage, SID)).toEqual({ txHash: HASH, quoteId: 'quo_1', reported: true });
+    expect(loadPendingTx(storage, SID)).toEqual({
+      txHash: HASH,
+      quoteId: 'quo_1',
+      reported: true,
+      state: 'sent',
+    });
   });
 
   it('retries a network failure with backoff, then succeeds', async () => {
@@ -52,7 +57,7 @@ describe('deposit reporting survives failures and reloads', () => {
     });
     expect(await reporter.report(HASH, 'quo_1')).toBe('reported');
     expect(deposit).toHaveBeenCalledTimes(3);
-    expect(deposit).toHaveBeenCalledWith(HASH);
+    expect(deposit).toHaveBeenCalledWith(HASH, 'quo_1');
     const waits = sleep.mock.calls.map((c) => c[0]);
     expect(waits).toHaveLength(2);
     expect(waits[1]!).toBeGreaterThan(waits[0]!);
@@ -75,6 +80,7 @@ describe('deposit reporting survives failures and reloads', () => {
       txHash: HASH,
       quoteId: 'quo_1',
       reported: false,
+      state: 'sent',
     });
 
     // Reloaded page: a new reporter finds the hash and posts it.
@@ -87,10 +93,20 @@ describe('deposit reporting survives failures and reloads', () => {
       sleep: async () => {},
       onChange,
     });
-    expect(second.pending()).toEqual({ txHash: HASH, quoteId: 'quo_1', reported: false });
+    expect(second.pending()).toEqual({
+      txHash: HASH,
+      quoteId: 'quo_1',
+      reported: false,
+      state: 'sent',
+    });
     expect(await second.resume()).toBe('reported');
-    expect(deposit).toHaveBeenCalledWith(HASH);
-    expect(onChange).toHaveBeenLastCalledWith({ txHash: HASH, quoteId: 'quo_1', reported: true });
+    expect(deposit).toHaveBeenCalledWith(HASH, 'quo_1');
+    expect(onChange).toHaveBeenLastCalledWith({
+      txHash: HASH,
+      quoteId: 'quo_1',
+      reported: true,
+      state: 'sent',
+    });
     // Already reported: a later resume does not post again.
     expect(await second.resume()).toBe('reported');
     expect(deposit).toHaveBeenCalledTimes(1);
@@ -110,6 +126,73 @@ describe('deposit reporting survives failures and reloads', () => {
     expect(await reporter.report(HASH, 'quo_1')).toBe('refused');
     expect(deposit).toHaveBeenCalledTimes(1);
     expect(loadPendingTx(storage, SID)?.txHash).toBe(HASH);
+  });
+
+  it('a stale record is only ever posted with its own quote; 409 QUOTE_MISMATCH stops it', async () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      pendingTxKey(SID),
+      JSON.stringify({ txHash: HASH, quoteId: 'quo_A', reported: false, state: 'sent' }),
+    );
+    // The page now shows quote B; the API refuses to bind quote A's hash to it.
+    const deposit = vi.fn(async (_h: string, _q: string) => {
+      throw new CheckoutApiError(409, 'QUOTE_MISMATCH', 'different quote');
+    });
+    const reporter = createDepositReporter({
+      sessionId: SID,
+      storage: () => storage,
+      deposit,
+      sleep: async () => {},
+    });
+    expect(await reporter.resume()).toBe('refused');
+    expect(deposit).toHaveBeenCalledTimes(1);
+    expect(deposit).toHaveBeenCalledWith(HASH, 'quo_A');
+    // Kept (so it still blocks), never re-posted.
+    expect(reporter.pending()).toMatchObject({ txHash: HASH, quoteId: 'quo_A' });
+    expect(await reporter.resume()).toBe('reported');
+    expect(deposit).toHaveBeenCalledTimes(1);
+  });
+
+  it('possibly sent: a signed tx id is posted like a hash; no id is kept as a block only', async () => {
+    const storage = memoryStorage();
+    const deposit = vi.fn(async (_h: string, _q: string) => ({ submitted: true }));
+    const reporter = createDepositReporter({
+      sessionId: SID,
+      storage: () => storage,
+      deposit,
+      sleep: async () => {},
+    });
+    await reporter.record({ txHash: 'c'.repeat(64), quoteId: 'quo_1', state: 'uncertain' });
+    expect(deposit).toHaveBeenCalledWith('c'.repeat(64), 'quo_1');
+    await reporter.record({ txHash: null, quoteId: 'quo_1', state: 'uncertain' });
+    expect(loadPendingTx(storage, SID)).toMatchObject({ txHash: null, state: 'uncertain' });
+    // A transaction that failed on chain is kept, never reported as a deposit.
+    deposit.mockClear();
+    await reporter.record({ txHash: 'd'.repeat(64), quoteId: 'quo_1', state: 'failed' });
+    expect(deposit).not.toHaveBeenCalled();
+    expect(loadPendingTx(storage, SID)).toMatchObject({ txHash: 'd'.repeat(64), state: 'failed' });
+  });
+
+  it("the didn't-go-through confirm clears the record and remembers the dismissed server time", async () => {
+    const storage = memoryStorage();
+    const reporter = createDepositReporter({
+      sessionId: SID,
+      storage: () => storage,
+      deposit: async () => ({ submitted: true }),
+      sleep: async () => {},
+    });
+    await reporter.report(HASH, 'quo_1');
+    reporter.dismiss('2026-10-26T12:01:00.000Z');
+    expect(reporter.pending()).toBeNull();
+    expect(loadPendingTx(storage, SID)).toBeNull();
+    expect(reporter.dismissed()).toBe('2026-10-26T12:01:00.000Z');
+    // Survives a reload.
+    const again = createDepositReporter({
+      sessionId: SID,
+      storage: () => storage,
+      deposit: async () => ({ submitted: true }),
+    });
+    expect(again.dismissed()).toBe('2026-10-26T12:01:00.000Z');
   });
 
   it('works in memory when storage is blocked', async () => {

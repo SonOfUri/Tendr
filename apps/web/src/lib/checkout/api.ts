@@ -94,6 +94,8 @@ export interface SessionView {
   payments: SessionPayment[];
   refunds: SessionRefund[];
   needs_email: boolean;
+  /** When a deposit was reported for this session (any quote, any tab), else null. */
+  deposit_submitted_at?: string | null;
   topup: TopupOffer | null;
 }
 
@@ -172,7 +174,7 @@ export interface CheckoutClient {
   tokens(): Promise<{ tokens: Token[] }>;
   quote(input: QuoteInput): Promise<Quote>;
   /** Reports the shopper's deposit transaction (the connected-wallet flow). */
-  deposit(txHash: string): Promise<{ submitted: boolean }>;
+  deposit(txHash: string, quoteId: string): Promise<{ submitted: boolean }>;
   email(email: string): Promise<{ ok: boolean }>;
   refundAddress(input: RefundAddressInput): Promise<RefundAddressResult>;
   /** Test mode only. */
@@ -195,7 +197,7 @@ export function createCheckoutClient(opts: {
     session: () => get('session'),
     tokens: () => get('tokens'),
     quote: (input) => post('quote', input),
-    deposit: (txHash) => post('deposit', { tx_hash: txHash }),
+    deposit: (txHash, quoteId) => post('deposit', { tx_hash: txHash, quote_id: quoteId }),
     email: (email) => post('email', { email }),
     refundAddress: (input) => post('refund-address', input),
     simulate: (scenario) => post('simulate', { scenario }),

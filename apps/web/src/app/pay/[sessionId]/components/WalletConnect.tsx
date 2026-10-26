@@ -1,12 +1,22 @@
 'use client';
 
-import { useMemo, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import type { Quote, Token } from '@/lib/checkout/api';
 import { publicEnv } from '@/lib/env';
+import type { PaymentBlock } from '@/lib/wallets/block';
 import { adapterFor, needsReown, type WalletRoute } from '@/lib/wallets/index';
+import type { PendingState } from '@/lib/wallets/tx-store';
 
 /** How re-quoting with the connected wallet as the return address went. */
 export type WalletQuoteResult = 'ok' | 'refused' | 'failed';
+
+/** What a wallet send produced: a hash, or "possibly sent" / "failed" after the wallet signed. */
+export interface WalletSendResult {
+  txHash: string | null;
+  /** The quote this payment was for (bound before the wallet opened). */
+  quoteId: string;
+  state: PendingState;
+}
 
 /**
  * The connect-wallet slot: connect (Reown AppKit for EVM, Solana and Bitcoin, TronLink, NEAR
@@ -30,12 +40,14 @@ export interface WalletConnectProps {
    * return address, so money that needs to come back goes straight to that wallet.
    */
   onWalletAddress?: (address: string) => Promise<WalletQuoteResult> | void;
-  /** The deposit transaction was sent: the page saves and reports it so it is seen sooner. */
-  onDepositSent?: (txHash: string) => void;
+  /** The wallet sent (or may have sent) a payment: the page records and reports it. */
+  onDepositSent?: (r: WalletSendResult) => void;
   /** Test mode: wallets connect, but no payment is ever sent from them. */
   livemode?: boolean;
-  /** A payment for this quote was already sent: no pay button. */
-  paymentSent?: boolean;
+  /** A payment may already be on its way (C32): no wallet payment at all, just a notice. */
+  blocked?: PaymentBlock;
+  /** The shopper confirmed "My payment didn't go through". */
+  onDidntGoThrough?: () => void;
   sessionId?: string;
   /** Inside a frame: opens this checkout in a window for the wallet step (null if blocked). */
   openWalletWindow?: () => Window | null;
@@ -43,8 +55,57 @@ export interface WalletConnectProps {
 
 type Panel = ComponentType<WalletConnectProps & { route: WalletRoute }>;
 
+const BLOCK_COPY: Record<NonNullable<PaymentBlock>, string> = {
+  sent: 'Your payment is on its way. This page updates when it arrives.',
+  uncertain: 'Check your wallet before paying again.',
+  failed: "Your payment didn't go through in your wallet.",
+};
+
+/** "Your payment is on its way", with a confirmed way out when it really didn't go through. */
+export function PaymentSentNotice({
+  blocked,
+  onDidntGoThrough,
+}: {
+  blocked: NonNullable<PaymentBlock>;
+  onDidntGoThrough?: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div className="pay-wallet">
+      <p role="status">{BLOCK_COPY[blocked]}</p>
+      {!onDidntGoThrough ? null : confirming ? (
+        <div className="pay-alert" role="group" aria-label="Confirm the payment didn't go through">
+          <p className="small">
+            Only continue if your wallet shows no payment for this order. Paying twice means waiting
+            for the extra to come back.
+          </p>
+          <div className="pay-wallet-list">
+            <button
+              type="button"
+              className="pay-button pay-button-secondary pay-button-small"
+              onClick={() => {
+                setConfirming(false);
+                onDidntGoThrough();
+              }}
+            >
+              It didn&apos;t go through
+            </button>
+            <button type="button" className="link-button" onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" className="link-button small" onClick={() => setConfirming(true)}>
+          My payment didn&apos;t go through
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function WalletConnect(props: WalletConnectProps) {
-  const { quote, token, paymentSent = false } = props;
+  const { quote, token, blocked = null, onDidntGoThrough } = props;
   const route = useMemo(
     () => adapterFor(quote.origin_asset, token.blockchain),
     [quote.origin_asset, token.blockchain],
@@ -53,6 +114,13 @@ export function WalletConnect(props: WalletConnectProps) {
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
 
+  // A block closes the wallet step; after "didn't go through" it starts again from the button.
+  useEffect(() => {
+    if (blocked) setPanel(null);
+  }, [blocked]);
+
+  if (blocked) return <PaymentSentNotice blocked={blocked} onDidntGoThrough={onDidntGoThrough} />;
+
   if (!route || (needsReown(route.chainFamily) && publicEnv.reownProjectId === null)) {
     return (
       <div className="pay-wallet">
@@ -60,14 +128,6 @@ export function WalletConnect(props: WalletConnectProps) {
           Paying from a connected wallet isn&apos;t available for {token.symbol}. Send it yourself
           using the details below.
         </p>
-      </div>
-    );
-  }
-
-  if (paymentSent) {
-    return (
-      <div className="pay-wallet">
-        <p role="status">Your payment is on its way. This page updates when it arrives.</p>
       </div>
     );
   }

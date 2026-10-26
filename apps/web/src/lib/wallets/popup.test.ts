@@ -14,6 +14,7 @@ const SID = 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0';
 const SECRET = `${SID}_secret_${'0'.repeat(32)}`;
 const ORIGIN = 'https://pay.usetendr.tech';
 const HASH = '0x' + 'ab'.repeat(32);
+const QUOTE_B = 'quo_01JBBBBBBBBBBBBBBBBBBBBBBB';
 
 function fakeWindow() {
   const listeners = new Set<(e: MessageEvent) => void>();
@@ -57,16 +58,18 @@ describe('the wallet popup fallback', () => {
     expect(openWalletWindow(win as unknown as PopupWindow, SID, SECRET)).toBeNull();
   });
 
-  it("the popup posts only {type, sessionId, txHash} to Tendr's own origin", () => {
+  it("the popup posts only {type, sessionId, txHash, quoteId} to Tendr's own origin", () => {
     const postMessage = vi.fn();
     const win = { location: { origin: ORIGIN }, opener: { postMessage } };
-    expect(postWalletDone(win, SID, HASH)).toBe(true);
+    expect(postWalletDone(win, SID, HASH, QUOTE_B)).toBe(true);
     expect(postMessage).toHaveBeenCalledWith(
-      { type: WALLET_DONE, sessionId: SID, txHash: HASH },
+      { type: WALLET_DONE, sessionId: SID, txHash: HASH, quoteId: QUOTE_B },
       ORIGIN,
     );
     expect(WALLET_DONE).toBe('tendr:wallet-done');
-    expect(postWalletDone({ location: { origin: ORIGIN }, opener: null }, SID, HASH)).toBe(false);
+    expect(postWalletDone({ location: { origin: ORIGIN }, opener: null }, SID, HASH, QUOTE_B)).toBe(
+      false,
+    );
   });
 
   it('the opener accepts the message only from its popup, on its own origin', () => {
@@ -74,18 +77,21 @@ describe('the wallet popup fallback', () => {
     const popup = {} as Window;
     const onDone = vi.fn();
     const stop = listenForWalletDone(win as unknown as PopupWindow, popup, SID, onDone);
-    const good = { type: WALLET_DONE, sessionId: SID, txHash: HASH };
+    const good = { type: WALLET_DONE, sessionId: SID, txHash: HASH, quoteId: QUOTE_B };
 
     win.dispatch({ origin: 'https://shop.example', source: popup, data: good });
     win.dispatch({ origin: ORIGIN, source: {} as Window, data: good });
     win.dispatch({ origin: ORIGIN, source: popup, data: { ...good, sessionId: 'ses_other' } });
     win.dispatch({ origin: ORIGIN, source: popup, data: { ...good, type: 'tendr:status' } });
     win.dispatch({ origin: ORIGIN, source: popup, data: { ...good, txHash: 'x'.repeat(300) } });
+    win.dispatch({ origin: ORIGIN, source: popup, data: { ...good, quoteId: undefined } });
+    win.dispatch({ origin: ORIGIN, source: popup, data: { ...good, quoteId: 'not a quote' } });
     win.dispatch({ origin: ORIGIN, source: popup, data: 'tendr:wallet-done' });
     expect(onDone).not.toHaveBeenCalled();
 
     win.dispatch({ origin: ORIGIN, source: popup, data: good });
-    expect(onDone).toHaveBeenCalledWith(HASH);
+    // The popup's own quote (it may have re-quoted), never the opener's.
+    expect(onDone).toHaveBeenCalledWith(HASH, QUOTE_B);
     stop();
     expect(win.listeners.size).toBe(0);
   });

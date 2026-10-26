@@ -13,11 +13,18 @@ import { createPoller, type Poller } from '@/lib/checkout/poller';
 import { clearClientSecret, takeClientSecret } from '@/lib/checkout/secret';
 import { screenFor, type ScreenKind } from '@/lib/checkout/status';
 import { publicEnv } from '@/lib/env';
-import { isWalletWindow, openWalletWindow, postWalletDone } from '@/lib/wallets/popup';
+import { paymentBlock } from '@/lib/wallets/block';
+import {
+  isWalletWindow,
+  listenForWalletDone,
+  openWalletWindow,
+  postWalletDone,
+} from '@/lib/wallets/popup';
 import { createDepositReporter, type PendingTx } from '@/lib/wallets/tx-store';
 import { EmailPanel, NeedsAddressPanel } from './ActionPanels';
 import { CheckoutHeader } from './CheckoutHeader';
 import { PayFlow } from './PayFlow';
+import type { WalletSendResult } from './WalletConnect';
 import { CheckingScreen, StatusScreen } from './StatusScreens';
 import { useNow } from './useNow';
 
@@ -59,6 +66,9 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   const [walletWindow, setWalletWindow] = useState(false);
   // A connected-wallet deposit already sent (kept across reloads: lib/wallets/tx-store.ts).
   const [pendingTx, setPendingTx] = useState<PendingTx | null>(null);
+  // The server `deposit_submitted_at` the shopper confirmed didn't go through (C32).
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
+  const stopPopupListener = useRef<(() => void) | null>(null);
   const now = useNow();
 
   useEffect(() => {
@@ -79,7 +89,8 @@ export function Checkout({ sessionId }: { sessionId: string }) {
         ? createDepositReporter({
             sessionId,
             storage: () => window.sessionStorage,
-            deposit: (txHash) => client.deposit(txHash),
+            // Always the record's own quote: a hash is never re-bound to a newer quote.
+            deposit: (txHash, quoteId) => client.deposit(txHash, quoteId),
             onChange: setPendingTx,
           })
         : null,
@@ -92,6 +103,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     if (!reporter) return;
     setPendingTx(reporter.pending());
+    setDismissedAt(reporter.dismissed());
     void reporter.resume().then((r) => {
       if (r) pollerRef.current?.poke();
     });
@@ -109,6 +121,15 @@ export function Checkout({ sessionId }: { sessionId: string }) {
           if (terminal) {
             clearClientSecret(sessionId, window);
             reporterRef.current?.clear();
+          } else if (v.status !== 'PENDING_DEPOSIT') {
+            // The session moved on (the deposit was seen): the block ends here, and should the
+            // session come back to PENDING_DEPOSIT (a short payment) this deposit no longer counts.
+            const r = reporterRef.current;
+            const at = v.deposit_submitted_at ?? null;
+            if (r && (r.pending() || (at && r.dismissed() !== at))) {
+              r.dismiss(at);
+              setDismissedAt(at);
+            }
           }
           return { terminal, intervalMs: pollMs };
         } catch (err) {
@@ -142,24 +163,50 @@ export function Checkout({ sessionId }: { sessionId: string }) {
 
   const refresh = useCallback(() => pollerRef.current?.poke(), []);
 
-  // A connected wallet sent the deposit: save the hash, report it (with retries), and in the
-  // wallet window tell the framed checkout that opened it, then close.
+  // A connected wallet sent (or may have sent) the deposit: record it (this blocks any further
+  // wallet payment), report a hash with its own quote id, and in the wallet window tell the
+  // framed checkout that opened it, then close.
   const onDepositSent = useCallback(
-    (txHash: string, quoteId: string) => {
+    (r: WalletSendResult) => {
       if (!reporter) return;
-      const reported = reporter.report(txHash, quoteId).finally(refresh);
+      const reported = reporter.record(r).finally(refresh);
       refresh();
-      if (walletWindow && postWalletDone(window, sessionId, txHash)) {
-        const wait = new Promise((r) => setTimeout(r, 2000));
+      if (
+        walletWindow &&
+        r.txHash !== null &&
+        r.state !== 'failed' &&
+        postWalletDone(window, sessionId, r.txHash, r.quoteId)
+      ) {
+        const wait = new Promise((res) => setTimeout(res, 2000));
         void Promise.race([reported, wait]).finally(() => window.close());
       }
     },
     [reporter, refresh, walletWindow, sessionId],
   );
-  const openWallet = useCallback(
-    () => (secret ? openWalletWindow(window, sessionId, secret) : null),
-    [secret, sessionId],
-  );
+  // The wallet window: its result is recorded with the WINDOW's quote id, never this page's.
+  const openWallet = useCallback(() => {
+    if (!secret) return null;
+    const w = openWalletWindow(window, sessionId, secret);
+    if (w) {
+      stopPopupListener.current?.();
+      stopPopupListener.current = listenForWalletDone(window, w, sessionId, (txHash, quoteId) => {
+        stopPopupListener.current?.();
+        stopPopupListener.current = null;
+        onDepositSent({ txHash, quoteId, state: 'sent' });
+      });
+    }
+    return w;
+  }, [secret, sessionId, onDepositSent]);
+  useEffect(() => () => stopPopupListener.current?.(), []);
+
+  // "My payment didn't go through", confirmed: drop the record and the server time it saw. The
+  // page may then fetch a new price, which the API grants only when it allows one.
+  const onDidntGoThrough = useCallback(() => {
+    const at = view?.deposit_submitted_at ?? null;
+    reporter?.dismiss(at);
+    setDismissedAt(at);
+    refresh();
+  }, [reporter, view?.deposit_submitted_at, refresh]);
   const onQuote = useCallback((q: Quote) => setView((v) => (v ? { ...v, quote: q } : v)), []);
 
   const screen = view ? screenFor(view, new Date(now)) : null;
@@ -249,7 +296,13 @@ export function Checkout({ sessionId }: { sessionId: string }) {
             onQuote={onQuote}
             onRefresh={refresh}
             onDepositSent={onDepositSent}
-            sentQuoteId={pendingTx?.quoteId ?? null}
+            blocked={paymentBlock({
+              status: view.status,
+              pending: pendingTx,
+              depositSubmittedAt: view.deposit_submitted_at ?? null,
+              dismissedSubmittedAt: dismissedAt,
+            })}
+            onDidntGoThrough={onDidntGoThrough}
             openWalletWindow={walletWindow ? undefined : openWallet}
           />
         ) : tokensFailed ? (

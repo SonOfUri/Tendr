@@ -9,22 +9,43 @@ export type WalletErrorKind =
   | 'chain_mismatch'
   /** No wallet could be reached here (not installed, or not reachable inside a frame). */
   | 'unavailable'
-  /** Anything else (including a request that does not match the quote). */
-  | 'failed';
+  /** Anything else BEFORE the wallet signed (including a request that doesn't match the quote). */
+  | 'failed'
+  /**
+   * The wallet signed (returned a signature, tx id or outcome) but we can't tell whether the
+   * payment went out: treated as possibly sent, never retried from the pay button (C32).
+   */
+  | 'uncertain'
+  /** The transaction was sent and failed on chain (or the network refused it). Hash kept. */
+  | 'onchain_failed'
+  /** EVM: the wallet switched accounts since connecting; re-quote for `address`, don't send. */
+  | 'account_changed';
 
 export class WalletError extends Error {
   readonly kind: WalletErrorKind;
   /** The network to switch to (chain_mismatch). */
   readonly network?: string;
+  /** The transaction's hash or id when the wallet gave one (uncertain, onchain_failed). */
+  readonly txHash?: string;
+  /** The wallet's current account (account_changed). */
+  readonly address?: string;
 
   constructor(
     kind: WalletErrorKind,
-    opts: { network?: string; cause?: unknown; detail?: string } = {},
+    opts: {
+      network?: string;
+      txHash?: string;
+      address?: string;
+      cause?: unknown;
+      detail?: string;
+    } = {},
   ) {
     super(opts.detail ?? kind);
     this.name = 'WalletError';
     this.kind = kind;
     if (opts.network) this.network = opts.network;
+    if (opts.txHash) this.txHash = opts.txHash;
+    if (opts.address) this.address = opts.address;
     if (opts.cause !== undefined) (this as { cause?: unknown }).cause = opts.cause;
   }
 }
@@ -51,6 +72,9 @@ export function toWalletError(err: unknown): WalletError {
   return new WalletError('failed', { cause: err });
 }
 
+export const CHECK_WALLET_COPY = 'Check your wallet before paying again.';
+export const PAYMENT_FAILED_COPY = "Your payment didn't go through in your wallet.";
+
 export const SEND_FAILED_COPY =
   "Your wallet couldn't send this payment. Try again or pay by sending manually.";
 
@@ -62,6 +86,10 @@ export function walletErrorCopy(err: unknown): string {
       return 'You cancelled in your wallet.';
     case 'chain_mismatch':
       return `Switch your wallet to ${e.network ?? 'the right network'} to pay.`;
+    case 'uncertain':
+      return CHECK_WALLET_COPY;
+    case 'onchain_failed':
+      return PAYMENT_FAILED_COPY;
     default:
       return SEND_FAILED_COPY;
   }

@@ -3,7 +3,9 @@
 //
 // - The framed checkout opens `/pay/<id>?wallet=1#cs=<secret>` with window.open (from the
 //   shopper's click). The fragment never reaches a server; the boot script strips it on load.
-// - The popup completes the wallet step and posts `{ type: 'tendr:wallet-done', sessionId, txHash }`
+// - The popup completes the wallet step and posts
+//   `{ type: 'tendr:wallet-done', sessionId, txHash, quoteId }` (quoteId: the quote the popup paid,
+//   which may be newer than the opener's)
 //   to its opener on Tendr's own origin (never '*', never the store's origin), then closes.
 // - The opener accepts it only when `event.origin` is its own origin AND `event.source` is the
 //   popup it opened. The message only reports a hash; nothing is marked paid by it.
@@ -14,6 +16,8 @@ export interface WalletDoneMessage {
   type: typeof WALLET_DONE;
   sessionId: string;
   txHash: string;
+  /** The quote the popup paid; the opener records this one, never its own. */
+  quoteId: string;
 }
 
 export interface PopupWindow {
@@ -24,6 +28,7 @@ export interface PopupWindow {
 }
 
 const HASH = /^[\x21-\x7e]{1,256}$/;
+const QUOTE_ID = /^quo_[0-9A-HJKMNP-TV-Z]{26}$/;
 
 export function walletWindowUrl(origin: string, sessionId: string, secret: string): string {
   return `${origin}/pay/${encodeURIComponent(sessionId)}?wallet=1#cs=${encodeURIComponent(secret)}`;
@@ -54,9 +59,10 @@ export function postWalletDone(
   },
   sessionId: string,
   txHash: string,
+  quoteId: string,
 ): boolean {
   if (!win.opener) return false;
-  const msg: WalletDoneMessage = { type: WALLET_DONE, sessionId, txHash };
+  const msg: WalletDoneMessage = { type: WALLET_DONE, sessionId, txHash, quoteId };
   try {
     win.opener.postMessage(msg, win.location.origin);
     return true;
@@ -65,19 +71,20 @@ export function postWalletDone(
   }
 }
 
-/** In the opener: calls `onDone(txHash)` for the popup's message. Returns the unsubscribe. */
+/** In the opener: calls `onDone(txHash, quoteId)` for the popup's message. Returns the unsubscribe. */
 export function listenForWalletDone(
   win: PopupWindow,
   popup: Window,
   sessionId: string,
-  onDone: (txHash: string) => void,
+  onDone: (txHash: string, quoteId: string) => void,
 ): () => void {
   const handler = (e: MessageEvent) => {
     if (e.origin !== win.location.origin || e.source !== popup) return;
     const d = e.data as Partial<WalletDoneMessage> | null;
     if (!d || typeof d !== 'object' || d.type !== WALLET_DONE || d.sessionId !== sessionId) return;
     if (typeof d.txHash !== 'string' || !HASH.test(d.txHash)) return;
-    onDone(d.txHash);
+    if (typeof d.quoteId !== 'string' || !QUOTE_ID.test(d.quoteId)) return;
+    onDone(d.txHash, d.quoteId);
   };
   win.addEventListener('message', handler);
   return () => win.removeEventListener('message', handler);

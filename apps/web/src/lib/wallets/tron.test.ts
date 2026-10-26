@@ -39,8 +39,13 @@ function fakeTron(opts: { host?: string; approve?: boolean } = {}) {
       })),
     },
     trx: {
-      sign: vi.fn(async (tx: object) => ({ ...tx, signature: ['s'] })),
-      sendRawTransaction: vi.fn(async () => ({ result: true, txid: TXID })),
+      sign: vi.fn(async (tx: object) => ({ ...tx, signature: ['s'], txID: TXID })),
+      sendRawTransaction: vi.fn(
+        async (_tx: object): Promise<{ result?: boolean; txid?: string; code?: string }> => ({
+          result: true,
+          txid: TXID,
+        }),
+      ),
     },
   };
   const win: TronWindow = {
@@ -110,5 +115,25 @@ describe('Tron deposits (TronLink)', () => {
       adapter.sendDeposit({ ...trx, amount: '9007199254740993' }),
     ).rejects.toBeInstanceOf(WalletError);
     expect(tronWeb.transactionBuilder.sendTrx).not.toHaveBeenCalled();
+  });
+
+  it('signed, then the broadcast failed: possibly sent, with the signed tx id kept', async () => {
+    const { win, tronWeb } = fakeTron();
+    tronWeb.trx.sendRawTransaction.mockRejectedValueOnce(new Error('network down'));
+    const adapter = createTronAdapter(payTargetFor(USDT)!, { win });
+    await adapter.connect();
+    const err = await adapter.sendDeposit(usdt).catch((e: unknown) => e);
+    expect((err as WalletError).kind).toBe('uncertain');
+    expect((err as WalletError).txHash).toBe(TXID);
+  });
+
+  it('a broadcast the network refused is a failed payment, with its tx id kept', async () => {
+    const { win, tronWeb } = fakeTron();
+    tronWeb.trx.sendRawTransaction.mockResolvedValueOnce({ result: false, code: 'BANDWITH_ERROR' });
+    const adapter = createTronAdapter(payTargetFor(TRX)!, { win });
+    await adapter.connect();
+    const err = await adapter.sendDeposit(trx).catch((e: unknown) => e);
+    expect((err as WalletError).kind).toBe('onchain_failed');
+    expect((err as WalletError).txHash).toBe(TXID);
   });
 });

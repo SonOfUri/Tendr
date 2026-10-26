@@ -48,7 +48,7 @@ export function createBitcoinAdapter(
         throw toWalletError(err);
       }
       if (typeof txid !== 'string' || !TXID.test(txid)) {
-        throw new WalletError('failed', { detail: 'no transaction id' });
+        throw new WalletError('uncertain', { detail: 'no transaction id' });
       }
       return { txHash: txid };
     },

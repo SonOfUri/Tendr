@@ -275,12 +275,21 @@ describe('shopper checkout routes', () => {
 
   it('submits a deposit tx hash for the current quote', async () => {
     const s = await newSession();
-    const noQuote = await call('POST', 'deposit', s.client_secret, { tx_hash: '0xabc' });
+    const noQuote = await call('POST', 'deposit', s.client_secret, {
+      tx_hash: '0xabc',
+      quote_id: 'quo_01JABCDEFGHJKMNPQRSTVWXYZ0',
+    });
     expect(noQuote.statusCode, noQuote.body).toBe(409);
+    // quote_id is required.
+    const missing = await call('POST', 'deposit', s.client_secret, { tx_hash: '0xabc' });
+    expect(missing.statusCode, missing.body).toBe(400);
 
     const q = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();
     const spy = vi.spyOn(sim, 'submitDeposit');
-    const res = await call('POST', 'deposit', s.client_secret, { tx_hash: '0xabc123' });
+    const res = await call('POST', 'deposit', s.client_secret, {
+      tx_hash: '0xabc123',
+      quote_id: q.id,
+    });
     expect(res.statusCode, res.body).toBe(202);
     expect(spy).toHaveBeenCalledWith('0xabc123', q.deposit_address);
     expect((await sim.status(q.deposit_address)).status).toBe('KNOWN_DEPOSIT_TX');
@@ -395,9 +404,10 @@ describe('shopper checkout routes', () => {
   it('refuses a new quote while a reported deposit is in flight (409 DEPOSIT_IN_PROGRESS)', async () => {
     const s = await newSession();
     const q = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();
-    expect((await call('POST', 'deposit', s.client_secret, { tx_hash: '0xfeed' })).statusCode).toBe(
-      202,
-    );
+    expect(
+      (await call('POST', 'deposit', s.client_secret, { tx_hash: '0xfeed', quote_id: q.id }))
+        .statusCode,
+    ).toBe(202);
     const row = await prisma.quote.findUniqueOrThrow({ where: { id: q.id } });
     expect(row.depositTxHash).toBe('0xfeed');
     expect(row.depositTxSubmittedAt).not.toBeNull();
@@ -413,17 +423,65 @@ describe('shopper checkout routes', () => {
       where: { id: q.id },
       data: { deadline: new Date(Date.now() - 1000) },
     });
-    const late = await call('POST', 'deposit', s.client_secret, { tx_hash: '0xbeef' });
+    const late = await call('POST', 'deposit', s.client_secret, {
+      tx_hash: '0xbeef',
+      quote_id: q.id,
+    });
     expect(late.statusCode, late.body).toBe(409);
     const again = await call('POST', 'quote', s.client_secret, { origin_asset: USDC });
     expect(again.statusCode, again.body).toBe(201);
   });
 
+  it('never attaches a hash to a quote other than the one it paid (409 QUOTE_MISMATCH)', async () => {
+    const s = await newSession();
+    const a = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();
+    const b = (await call('POST', 'quote', s.client_secret, { origin_asset: USDC })).json();
+    const spy = vi.spyOn(sim, 'submitDeposit');
+    // A hash for the superseded quote A is refused, not re-bound to the current quote B.
+    const stale = await call('POST', 'deposit', s.client_secret, {
+      tx_hash: '0xstale',
+      quote_id: a.id,
+    });
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(stale.json().error.code).toBe('QUOTE_MISMATCH');
+    expect(spy).not.toHaveBeenCalled();
+    const rows = await prisma.quote.findMany({ where: { sessionId: s.id } });
+    expect(rows.every((r) => r.depositTxHash === null)).toBe(true);
+    // The current quote's own id is accepted.
+    const ok = await call('POST', 'deposit', s.client_secret, {
+      tx_hash: '0xgood',
+      quote_id: b.id,
+    });
+    expect(ok.statusCode, ok.body).toBe(202);
+  });
+
+  it('the session view shows deposit_submitted_at once any quote has a reported deposit', async () => {
+    const s = await newSession();
+    const q = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();
+    expect((await call('GET', 'session', s.client_secret)).json().deposit_submitted_at).toBeNull();
+    await call('POST', 'deposit', s.client_secret, { tx_hash: '0xfeed', quote_id: q.id });
+    const view = (await call('GET', 'session', s.client_secret)).json();
+    const row = await prisma.quote.findUniqueOrThrow({ where: { id: q.id } });
+    expect(view.deposit_submitted_at).toBe(row.depositTxSubmittedAt!.toISOString());
+    // Still shown after that quote is superseded (another tab must stay blocked).
+    await prisma.quote.update({
+      where: { id: q.id },
+      data: { deadline: new Date(Date.now() - 1000) },
+    });
+    await call('POST', 'quote', s.client_secret, { origin_asset: USDC });
+    const later = (await call('GET', 'session', s.client_secret)).json();
+    expect(later.quote.id).not.toBe(q.id);
+    expect(later.deposit_submitted_at).toBe(row.depositTxSubmittedAt!.toISOString());
+  });
+
   it('refuses a deposit report once the session is closed', async () => {
     const s = await newSession();
-    await call('POST', 'quote', s.client_secret, { origin_asset: ETH });
+    const q = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();
     await prisma.session.update({ where: { id: s.id }, data: { status: 'SETTLED' } });
-    const res = await call('POST', 'deposit', s.client_secret, { tx_hash: '0xabc' });
+    const res = await call('POST', 'deposit', s.client_secret, {
+      tx_hash: '0xabc',
+      quote_id: q.id,
+    });
     expect(res.statusCode, res.body).toBe(409);
   });
 

@@ -97,22 +97,27 @@ export function createSolanaAdapter(
       if (!(await deps.session.ensureNetwork())) {
         throw new WalletError('chain_mismatch', { network: 'Solana' });
       }
-      let signature: unknown;
+      let connection: SolanaConnectionLike;
+      let tx: Transaction;
       try {
-        const connection = await deps.connection();
+        connection = await deps.connection();
         const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-        const tx = new Transaction({
-          feePayer: publicKey(address),
-          blockhash,
-          lastValidBlockHeight,
-        });
+        tx = new Transaction({ feePayer: publicKey(address), blockhash, lastValidBlockHeight });
         tx.add(...instructions);
-        signature = await provider.sendTransaction(tx, connection as never);
       } catch (err) {
         throw toWalletError(err);
       }
+      let signature: unknown;
+      try {
+        // The wallet signs AND broadcasts here: past a refusal, a throw (a confirmation timeout,
+        // a dropped connection) may come after the transaction went out. Possibly sent (C32).
+        signature = await provider.sendTransaction(tx, connection as never);
+      } catch (err) {
+        const e = toWalletError(err);
+        throw e.kind === 'rejected' ? e : new WalletError('uncertain', { cause: err });
+      }
       if (typeof signature !== 'string' || !SIGNATURE.test(signature)) {
-        throw new WalletError('failed', { detail: 'no signature' });
+        throw new WalletError('uncertain', { detail: 'no signature' });
       }
       return { txHash: signature };
     },

@@ -42,12 +42,18 @@ export interface EvmTx {
   to: string;
   value: string;
   data?: string;
+  /** The quote's chain: a wallet on another chain must refuse rather than send there. */
+  chainId: string;
 }
 
 /** The transaction that pays `q` from `from`. */
 export function buildEvmDeposit(target: PayTarget, q: DepositRequest, from: string): EvmTx {
   const amount = assertDepositMatches(target, q);
-  if (target.kind === 'native') return { from, to: q.depositAddress, value: toHexQuantity(amount) };
+  if (target.chainId === undefined) throw new WalletError('failed', { detail: 'no chain id' });
+  const chainId = toHexQuantity(BigInt(target.chainId));
+  if (target.kind === 'native') {
+    return { from, to: q.depositAddress, value: toHexQuantity(amount), chainId };
+  }
   if (!target.contract || !ADDRESS.test(target.contract)) {
     throw new WalletError('failed', { detail: 'no token contract' });
   }
@@ -56,6 +62,7 @@ export function buildEvmDeposit(target: PayTarget, q: DepositRequest, from: stri
     to: target.contract,
     value: '0x0',
     data: encodeErc20Transfer(q.depositAddress, amount),
+    chainId,
   };
 }
 
@@ -106,14 +113,26 @@ export function createEvmAdapter(target: PayTarget, session: EvmSession): Wallet
       // Checked before the wallet is touched: never a different asset or amount.
       const tx = buildEvmDeposit(target, q, address);
       await ensureEvmChain(provider, chainId, network);
+      // The wallet may have switched accounts since connecting: the quote returns money to the
+      // connected address, so a different account is re-quoted instead of paid from.
+      const accounts = await provider.request({ method: 'eth_accounts' }).catch(() => null);
+      const current = Array.isArray(accounts) ? accounts[0] : undefined;
+      if (typeof current !== 'string' || !ADDRESS.test(current)) {
+        throw new WalletError('failed', { detail: 'no account' });
+      }
+      if (current.toLowerCase() !== address.toLowerCase()) {
+        address = current;
+        throw new WalletError('account_changed', { address: current });
+      }
       let hash: unknown;
       try {
         hash = await provider.request({ method: 'eth_sendTransaction', params: [tx] });
       } catch (err) {
         throw toWalletError(err);
       }
+      // The wallet answered after signing: from here on it may have been sent (C32).
       if (typeof hash !== 'string' || !TX_HASH.test(hash)) {
-        throw new WalletError('failed', { detail: 'no transaction hash' });
+        throw new WalletError('uncertain', { detail: 'no transaction hash' });
       }
       return { txHash: hash };
     },

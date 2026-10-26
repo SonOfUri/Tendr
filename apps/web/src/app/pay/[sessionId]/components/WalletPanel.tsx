@@ -6,8 +6,9 @@ import { formatUnits, shortAddress } from '@/lib/checkout/format';
 import { publicEnv } from '@/lib/env';
 import { toWalletError, walletErrorCopy } from '@/lib/wallets/errors';
 import type { ChainFamily, WalletAdapter, WalletRoute } from '@/lib/wallets/index';
+import { mustRequoteBeforeSend } from '@/lib/wallets/block';
 import { sameAddress } from '@/lib/wallets/match';
-import { isFramed, listenForWalletDone } from '@/lib/wallets/popup';
+import { isFramed } from '@/lib/wallets/popup';
 import type { WalletConnectProps, WalletQuoteResult } from './WalletConnect';
 
 // The wallet step after "Connect wallet" was clicked (loaded on demand by WalletConnect.tsx):
@@ -44,14 +45,13 @@ export function WalletPanel({
   onWalletAddress,
   onDepositSent,
   livemode = true,
-  paymentSent = false,
+  blocked = null,
   sessionId,
   openWalletWindow,
 }: WalletConnectProps & { route: WalletRoute }) {
   const adapterRef = useRef<WalletAdapter | null>(null);
   const sendingRef = useRef(false);
   const started = useRef(false);
-  const stopListening = useRef<(() => void) | null>(null);
   const nearPick = useRef<((id: string | null) => void) | null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
   const [address, setAddress] = useState<string | null>(null);
@@ -61,14 +61,13 @@ export function WalletPanel({
   const [nearWallets, setNearWallets] = useState<{ id: string; name: string }[] | null>(null);
 
   // Mounted by the "Connect wallet" click: start connecting right away. Unmounting (another
-  // token, or the payment went out) drops the wallet connection and any popup listener.
+  // token, or a payment went out) drops the wallet connection.
   useEffect(() => {
     if (!started.current) {
       started.current = true;
       void connect();
     }
     return () => {
-      stopListening.current?.();
       nearPick.current?.(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -153,24 +152,48 @@ export function WalletPanel({
 
   async function pay() {
     const adapter = adapterRef.current;
-    if (!adapter || sendingRef.current) return;
+    if (!adapter || !address || sendingRef.current || blocked) return;
     sendingRef.current = true;
     setMessage(null);
     setOfferWindow(false);
-    setPhase('sending');
+    // Bound before the wallet opens: a re-quote while it is open never changes what is recorded.
+    const quoteId = quote.id;
     try {
-      const { txHash } = await adapter.sendDeposit({
-        depositAddress: quote.deposit_address,
-        assetId: quote.origin_asset,
-        amount: quote.amount_in,
-        decimals: token.decimals,
-      });
-      onDepositSent?.(txHash);
-    } catch (err) {
-      fail(err, 'send');
+      // The price may have run out while the shopper read it: renew it, never open the wallet.
+      if (mustRequoteBeforeSend(quote.deadline, Date.now())) {
+        setMessage("Your price ran out, so we've updated it. Check the amount, then pay.");
+        await quoteForWallet(adapter, address);
+        return;
+      }
+      setPhase('sending');
+      try {
+        const { txHash } = await adapter.sendDeposit({
+          depositAddress: quote.deposit_address,
+          assetId: quote.origin_asset,
+          amount: quote.amount_in,
+          decimals: token.decimals,
+        });
+        onDepositSent?.({ txHash, quoteId, state: 'sent' });
+      } catch (err) {
+        const e = toWalletError(err);
+        if (e.kind === 'uncertain' || e.kind === 'onchain_failed') {
+          // The wallet signed: the page blocks every further wallet payment (C32).
+          onDepositSent?.({
+            txHash: e.txHash ?? null,
+            quoteId,
+            state: e.kind === 'uncertain' ? 'uncertain' : 'failed',
+          });
+        } else if (e.kind === 'account_changed' && e.address) {
+          setAddress(e.address);
+          setMessage('Your wallet switched accounts, so we updated the price for this one.');
+          await quoteForWallet(adapter, e.address);
+        } else {
+          fail(err, 'send');
+        }
+      }
     } finally {
       sendingRef.current = false;
-      setPhase('ready');
+      setPhase((p) => (p === 'idle' ? p : 'ready'));
     }
   }
 
@@ -192,23 +215,10 @@ export function WalletPanel({
       );
       return;
     }
-    stopListening.current?.();
-    stopListening.current = listenForWalletDone(window, w, sessionId, (txHash) => {
-      stopListening.current?.();
-      stopListening.current = null;
-      onDepositSent?.(txHash);
-    });
+    // The page listens for the window's result (Checkout.tsx) and records the window's quote.
     setOfferWindow(false);
     setMessage(null);
     setPhase('popup');
-  }
-
-  if (paymentSent) {
-    return (
-      <div className="pay-wallet">
-        <p role="status">Your payment is on its way. This page updates when it arrives.</p>
-      </div>
-    );
   }
 
   const amount = formatUnits(quote.amount_in, token.decimals);
@@ -220,7 +230,7 @@ export function WalletPanel({
     quote,
     now: Date.now(),
     livemode,
-    paymentSent,
+    paymentSent: blocked !== null,
     busy,
   });
 
