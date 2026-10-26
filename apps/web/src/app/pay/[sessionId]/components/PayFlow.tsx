@@ -9,7 +9,12 @@ import { RefundAddressField } from './RefundAddressField';
 import { SendDetails } from './SendDetails';
 import { TestModePanel } from './TestModePanel';
 import { TokenPicker } from './TokenPicker';
-import { autoRequoteDue, showManualSend, type PaymentBlock } from '@/lib/wallets/block';
+import {
+  autoRequoteDue,
+  freshQuoteDue,
+  showManualSend,
+  type PaymentBlock,
+} from '@/lib/wallets/block';
 import { WalletConnect, type WalletQuoteResult, type WalletSendResult } from './WalletConnect';
 
 type Reason = 'choose' | 'auto' | 'refund' | 'retry' | 'wallet';
@@ -69,6 +74,8 @@ export function PayFlow({
   // A wallet send in flight: the quote it pays is never replaced under it (C33).
   const [walletSending, setWalletSending] = useState(false);
   const autoRequoted = useRef<string | null>(null);
+  // The current quote vanished (the watcher reopened the session and superseded it, C34).
+  const freshRequested = useRef(false);
 
   const quote =
     view.quote && token && view.quote.origin_asset === token.asset_id ? view.quote : null;
@@ -114,6 +121,22 @@ export function PayFlow({
       current && current.origin_asset === t.asset_id && Date.parse(current.deadline) > Date.now();
     if (!live) void requote(t, null, 'choose');
   }
+
+  // A reopened session has no current quote: fetch a new price (a fresh deposit address) once.
+  useEffect(() => {
+    if (view.quote) freshRequested.current = false;
+    const due = freshQuoteDue({
+      onPayStep: step === 'pay' && token !== null,
+      hasQuote: view.quote !== null,
+      loading,
+      failed: failure !== null,
+      blocked: blocked !== null,
+      alreadyTried: freshRequested.current,
+    });
+    if (!due || !token) return;
+    freshRequested.current = true;
+    void requote(token, null, 'auto');
+  }, [view.quote, step, token, loading, failure, blocked, requote]);
 
   // A price that ran out is replaced once, automatically; the shopper only notices if it moved.
   useEffect(() => {

@@ -271,6 +271,31 @@ async function needsEmail(ctx: ShopperCtx, s: SessionRow): Promise<boolean> {
 }
 
 /**
+ * When a deposit was last reported for this session that the watcher has not accounted for yet
+ * (C32-C34): a quote counts when its `depositTxSubmittedAt` is later than its newest payment row's
+ * `createdAt`, or it has no payment row. A reported deposit the watcher already recorded stops
+ * counting (a reopened session is not stuck behind it); a second report on the same quote after
+ * that counts again. Prisma can't compare columns, so this is computed here.
+ */
+async function depositSubmittedAt(ctx: ShopperCtx, sessionId: string): Promise<Date | null> {
+  const quotes = await ctx.db.quote.findMany({
+    where: { sessionId, depositTxSubmittedAt: { not: null } },
+    select: {
+      depositTxSubmittedAt: true,
+      payments: { select: { createdAt: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+    },
+  });
+  let latest: Date | null = null;
+  for (const q of quotes) {
+    const at = q.depositTxSubmittedAt!;
+    const newest = q.payments[0]?.createdAt;
+    if (newest && at.getTime() <= newest.getTime()) continue;
+    if (!latest || at.getTime() > latest.getTime()) latest = at;
+  }
+  return latest;
+}
+
+/**
  * The shopper-safe view: merchant display name and logo, amount, status, expiry, the current quote
  * and payments with shopper-facing states. Never merchant ids, account ids, metadata, the external
  * reference or other sessions.
@@ -286,14 +311,7 @@ export async function shopperSessionView(ctx: ShopperCtx) {
     ctx.db.payment.findMany({ where: { sessionId: s.id }, orderBy: { createdAt: 'asc' } }),
     needsEmail(ctx, s),
     shopperRefunds(ctx),
-    // Any quote of this session with a reported deposit the watcher has not recorded yet (C32,
-    // C33): blocks wallet sends in every tab. Once a payment row exists for that quote, whatever
-    // its outcome, it stops counting, so a session the watcher reopens is not stuck behind it.
-    ctx.db.quote.findFirst({
-      where: { sessionId: s.id, depositTxSubmittedAt: { not: null }, payments: { none: {} } },
-      orderBy: { depositTxSubmittedAt: 'desc' },
-      select: { depositTxSubmittedAt: true },
-    }),
+    depositSubmittedAt(ctx, s.id),
   ]);
   return {
     id: s.id,
@@ -325,7 +343,7 @@ export async function shopperSessionView(ctx: ShopperCtx) {
     refunds,
     needs_email: emailNeeded,
     /** When a deposit transaction was last reported for this session (any quote), else null. */
-    deposit_submitted_at: submitted?.depositTxSubmittedAt?.toISOString() ?? null,
+    deposit_submitted_at: submitted?.toISOString() ?? null,
     topup: await topupOffer(ctx, payments, watcherNow()),
   };
 }

@@ -69,12 +69,18 @@ describe('Bitcoin deposits', () => {
     expect(((await adapter.sendDeposit(req).catch((e: unknown) => e)) as WalletError).kind).toBe(
       'uncertain',
     );
-    // AppKit's wallet-standard connector refuses sendTransfer before anything is signed.
-    d.sendTransfer.mockRejectedValueOnce(
-      Object.assign(new Error('Method sendTransfer is not supported'), {
-        name: 'MethodNotSupportedError',
-      }),
-    );
+    // AppKit's wallet-standard connector refuses sendTransfer before anything is signed. The
+    // real class (the package does not export it, so it is loaded by file path).
+    const errorModule =
+      '../../../../../node_modules/@reown/appkit-adapter-bitcoin/dist/esm/src/errors/MethodNotSupportedError.js';
+    const { MethodNotSupportedError } = (await import(/* @vite-ignore */ errorModule)) as {
+      MethodNotSupportedError: new (walletId: string, method: string, log?: string) => Error;
+    };
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const real = new MethodNotSupportedError('wallet-standard', 'sendTransfer', 'Use signPSBT');
+    quiet.mockRestore();
+    expect(real.name).toBe('MethodNotSupported');
+    d.sendTransfer.mockRejectedValueOnce(real);
     expect(((await adapter.sendDeposit(req).catch((e: unknown) => e)) as WalletError).kind).toBe(
       'failed',
     );

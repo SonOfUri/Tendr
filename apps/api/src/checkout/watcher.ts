@@ -710,6 +710,24 @@ async function reopen(l: Loaded, payment: Payment, reason: string): Promise<void
       reason,
       payment_id: payment.id,
     });
+    await supersedeCurrentQuote(tx, ctx, session.id);
+  });
+}
+
+/**
+ * A reopened session never takes a second deposit at an address that already holds one (C34):
+ * the current quote is superseded in the same locked transaction, so a retry always needs a fresh
+ * quote and deposit address. The watcher keeps polling the superseded quote through its grace
+ * period (the deposit already made there still finishes: refund, late, …).
+ */
+async function supersedeCurrentQuote(
+  tx: Prisma.TransactionClient,
+  ctx: ScopeContext,
+  sessionId: string,
+): Promise<void> {
+  await tx.quote.updateMany({
+    where: { merchantId: ctx.merchantId, livemode: ctx.livemode, sessionId, supersededAt: null },
+    data: { supersededAt: deps.now() },
   });
 }
 
@@ -764,15 +782,11 @@ async function releaseSession(
     await transitionSession(tx, ctx, s.id, 'REFUNDED', { payment_id: paymentId });
   } else if (s.status === 'PROCESSING' && !(await otherInFlight(tx, s.id, paymentId))) {
     const unexpired = s.expiresAt.getTime() > deps.now().getTime();
-    await transitionSession(
-      tx,
-      ctx,
-      s.id,
-      opts.reopen && unexpired ? 'PENDING_DEPOSIT' : 'REFUNDED',
-      {
-        payment_id: paymentId,
-      },
-    );
+    const reopen = opts.reopen && unexpired;
+    await transitionSession(tx, ctx, s.id, reopen ? 'PENDING_DEPOSIT' : 'REFUNDED', {
+      payment_id: paymentId,
+    });
+    if (reopen) await supersedeCurrentQuote(tx, ctx, s.id);
   }
 }
 

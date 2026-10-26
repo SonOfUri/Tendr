@@ -390,6 +390,49 @@ describe('payment watcher', () => {
     expect(returns).not.toHaveBeenCalled();
   });
 
+  it('a reopen supersedes the quote: a retry needs a fresh address, the old one is refused (C34)', async () => {
+    setWatcherDeps({ now: clock, topupEnabled: () => false });
+    const s = await newSession();
+    const a = await quote(s.client_secret, { origin_asset: ETH, refund_address: WALLET });
+    await sim.simulate(a.deposit_address, 'underpay');
+    await poll(a.deposit_address);
+    // Reopened before A's deadline (top-ups off): A is superseded in the same transaction.
+    expect((await sessionOf(s.id)).status).toBe('PENDING_DEPOSIT');
+    const rowA = await prisma.quote.findUniqueOrThrow({ where: { id: a.id } });
+    expect(rowA.supersededAt).not.toBeNull();
+    const view = (await call('GET', 'session', s.client_secret)).json();
+    expect(view.quote).toBeNull();
+    // A wallet deposit report against old A is refused (no current quote: CONFLICT).
+    const stale = await call('POST', 'deposit', s.client_secret, {
+      tx_hash: '0xagain',
+      quote_id: a.id,
+    });
+    expect(stale.statusCode, stale.body).toBe(409);
+    // A new quote is allowed at once, with a fresh deposit address.
+    const b = await quote(s.client_secret, { origin_asset: ETH, refund_address: WALLET });
+    expect(b.deposit_address).not.toBe(a.deposit_address);
+    const staleAgain = await call('POST', 'deposit', s.client_secret, {
+      tx_hash: '0xagain',
+      quote_id: a.id,
+    });
+    expect(staleAgain.json().error.code).toBe('QUOTE_MISMATCH');
+    // The watcher keeps polling superseded A through its grace period.
+    expect(rowA.watchStoppedAt).toBeNull();
+  });
+
+  it('a failed swap reopens with the quote superseded too (C34)', async () => {
+    const s = await newSession();
+    const a = await quote(s.client_secret, { origin_asset: ETH, refund_address: WALLET });
+    await sim.simulate(a.deposit_address, 'failed');
+    await poll(a.deposit_address);
+    expect((await sessionOf(s.id)).status).toBe('PENDING_DEPOSIT');
+    expect(
+      (await prisma.quote.findUniqueOrThrow({ where: { id: a.id } })).supersededAt,
+    ).not.toBeNull();
+    const b = await call('POST', 'quote', s.client_secret, { origin_asset: ETH });
+    expect(b.statusCode, b.body).toBe(201);
+  });
+
   it('connected wallet whose actual sender differs and is sanctioned → HELD', async () => {
     const s = await newSession();
     const q = await quote(s.client_secret, { origin_asset: ETH, refund_address: WALLET });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   autoRequoteDue,
+  freshQuoteDue,
   mustRequoteBeforeSend,
   paymentBlock,
   showBlockNotice,
@@ -135,5 +136,37 @@ describe('round 2 (C33)', () => {
     expect(showBlockNotice('sent', true)).toBe(false);
     expect(showBlockNotice('sent', false)).toBe(true);
     expect(showBlockNotice(null, false)).toBe(false);
+  });
+});
+
+describe('round 3 (C34)', () => {
+  it('after a reopen superseded the quote, a new price is fetched once (never the old address)', () => {
+    const base = {
+      onPayStep: true,
+      hasQuote: false,
+      loading: false,
+      failed: false,
+      blocked: false,
+      alreadyTried: false,
+    };
+    expect(freshQuoteDue(base)).toBe(true);
+    expect(freshQuoteDue({ ...base, hasQuote: true })).toBe(false);
+    expect(freshQuoteDue({ ...base, alreadyTried: true })).toBe(false);
+    expect(freshQuoteDue({ ...base, loading: true })).toBe(false);
+    expect(freshQuoteDue({ ...base, failed: true })).toBe(false);
+    expect(freshQuoteDue({ ...base, blocked: true })).toBe(false);
+    expect(freshQuoteDue({ ...base, onPayStep: false })).toBe(false);
+  });
+
+  it('an acknowledged record stays blocked while the server counts its deposit', () => {
+    const acked: PendingTx = { ...SENT_A, acknowledged: true };
+    expect(
+      paymentBlock({
+        status: 'PENDING_DEPOSIT',
+        pending: acked,
+        depositSubmittedAt: AT,
+        dismissedSubmittedAt: null,
+      }),
+    ).toBe('sent');
   });
 });

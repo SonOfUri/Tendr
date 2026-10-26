@@ -67,3 +67,25 @@ export function showManualSend(blocked: PaymentBlock, deadline: string, now: num
 export function showBlockNotice(blocked: PaymentBlock, sending: boolean): boolean {
   return blocked !== null && !sending;
 }
+
+/**
+ * The session is taking payments but has no current quote (the watcher reopened it and superseded
+ * the old one, C34): fetch a new price once, so the old deposit address is never shown again.
+ */
+export function freshQuoteDue(opts: {
+  onPayStep: boolean;
+  hasQuote: boolean;
+  loading: boolean;
+  failed: boolean;
+  blocked: boolean;
+  alreadyTried: boolean;
+}): boolean {
+  return (
+    opts.onPayStep &&
+    !opts.hasQuote &&
+    !opts.loading &&
+    !opts.failed &&
+    !opts.blocked &&
+    !opts.alreadyTried
+  );
+}

@@ -15,6 +15,23 @@ const TXID = /^[0-9a-fA-F]{64}$/;
 const MAINNET_ADDRESS =
   /^(bc1[02-9ac-hj-np-z]{11,71}|BC1[02-9AC-HJ-NP-Z]{11,71}|[13][1-9A-HJ-NP-Za-km-z]{25,34})$/;
 
+/**
+ * AppKit's MethodNotSupportedError (not exported by the adapter package): its `name` is
+ * 'MethodNotSupported' and its message 'Wallet call is not supported', with `method`. The
+ * wallet-standard connector raises it for sendTransfer before anything is signed.
+ */
+function walletCannotSend(err: unknown): boolean {
+  const e = (typeof err === 'object' && err !== null ? err : {}) as {
+    name?: unknown;
+    message?: unknown;
+    method?: unknown;
+  };
+  return (
+    e.name === 'MethodNotSupported' ||
+    (e.message === 'Wallet call is not supported' && e.method === 'sendTransfer')
+  );
+}
+
 export function createBitcoinAdapter(
   target: PayTarget,
   deps: { session: AppKitSession<BitcoinProviderLike> },
@@ -46,7 +63,7 @@ export function createBitcoinAdapter(
         });
       } catch (err) {
         // AppKit's wallet-standard connector refuses sendTransfer before anything is signed.
-        if ((err as { name?: unknown } | null)?.name === 'MethodNotSupportedError') {
+        if (walletCannotSend(err)) {
           throw new WalletError('failed', { cause: err, detail: 'wallet cannot send' });
         }
         throw afterSignError(err);

@@ -493,6 +493,24 @@ describe('shopper checkout routes', () => {
     expect(view.deposit_submitted_at).toBeNull();
   });
 
+  it('a deposit reported after the quote already has a payment row still counts (C34b)', async () => {
+    const s = await newSession();
+    const q = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();
+    const payment = await createRow('Payment', merchant.id, false, {
+      sessionId: s.id,
+      quoteId: q.id,
+      status: 'REFUNDING',
+    });
+    // The quote's existing payment is older than a new deposit report on the same quote.
+    const later = new Date((payment.createdAt as Date).getTime() + 60_000);
+    await prisma.quote.update({
+      where: { id: q.id },
+      data: { depositTxHash: '0xsecond', depositTxSubmittedAt: later },
+    });
+    const view = (await call('GET', 'session', s.client_secret)).json();
+    expect(view.deposit_submitted_at).toBe(later.toISOString());
+  });
+
   it('refuses a deposit report once the session is closed', async () => {
     const s = await newSession();
     const q = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();
