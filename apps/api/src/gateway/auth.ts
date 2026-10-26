@@ -108,7 +108,10 @@ async function resolveApiKey(raw: string): Promise<Resolved | null> {
   const scopes = key.scopes.filter((s): s is Scope => KNOWN_SCOPES.has(s));
   const base = { merchantId: key.merchantId, livemode: key.livemode, apiKeyId: key.id, scopes };
   return {
-    principal: { kind: key.kind === 'publishable' ? 'publishable_key' : 'secret_key', ...base },
+    principal:
+      key.kind === 'publishable'
+        ? { kind: 'publishable_key', ...base }
+        : { kind: 'secret_key', ...base, connectionId: key.connectionId },
     signing: { signingSecretRef: key.signingSecretRef, signingRequired: key.signingRequired },
   };
 }

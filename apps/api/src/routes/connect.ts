@@ -1,0 +1,86 @@
+// Connect routes (WooCommerce plugin spec §2, §3 "Go live"):
+// - `POST /v1/connect/authorize` — the approval screen: owner/admin (`settings:manage`) with a fresh
+//   passkey (step-up). Creates the connection and a single-use code; the response is the redirect.
+// - `POST /v1/connect/token` — public, server to server, 10 / minute / IP. Code + PKCE verifier +
+//   site → the connection's credentials, once. Every failure is the same INVALID_GRANT.
+// - `GET /v1/connect/status`, `POST /v1/connect/disconnect` — a connection key only (ruling W1: a
+//   `secret_key` whose api key row has `connection_id`; any other secret key is 403).
+// - `GET /v1/connections`, `DELETE /v1/connections/:id` — the dashboard's Connected sites
+//   (`settings:manage`; removing needs step-up).
+import { ConnectAuthorizeRequestSchema } from '@tendr/contracts';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import {
+  authorize,
+  connectStatus,
+  disconnect,
+  listConnections,
+  redeem,
+  removeConnection,
+} from '../connect/authorize.js';
+import { requireDashboardUser, requirePrincipal } from '../gateway/principal.js';
+import { forbidden, unauthorized } from '../lib/errors.js';
+
+const manage = {
+  principals: ['dashboard_user' as const],
+  permission: 'settings:manage' as const,
+};
+const manageStepUp = { ...manage, stepUp: true };
+const connectionKey = { principals: ['secret_key' as const] };
+
+/** The request's connection key; 403 for a secret key the store created by hand. */
+function connectionCtx(req: FastifyRequest) {
+  const p = requirePrincipal(req);
+  if (p.kind !== 'secret_key' || !req.db) throw unauthorized();
+  if (!p.connectionId) throw forbidden('This endpoint needs a connection key');
+  return {
+    merchantId: p.merchantId,
+    livemode: p.livemode,
+    db: req.db,
+    connectionId: p.connectionId,
+  };
+}
+
+export type ConnectRouteOptions = {
+  /** Per-IP limiter for `/v1/connect/token` (`createRateLimiters().connectToken`). */
+  tokenRateLimit: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
+};
+
+export const connectRoutes: FastifyPluginAsync<ConnectRouteOptions> = async (app, opts) => {
+  app.post('/v1/connect/authorize', { config: { auth: manageStepUp } }, async (req) => {
+    const p = requireDashboardUser(req);
+    const input = ConnectAuthorizeRequestSchema.parse(req.body);
+    return authorize({ merchantId: p.merchantId, userId: p.userId }, input);
+  });
+
+  // Limited before the body is read (`onRequest`), instead of the generic per-IP public limit.
+  app.post(
+    '/v1/connect/token',
+    {
+      config: { auth: 'public', publicLimit: 'route' },
+      onRequest: opts.tokenRateLimit,
+    },
+    async (req, reply) => {
+      reply.header('cache-control', 'no-store');
+      return redeem(req.body);
+    },
+  );
+
+  app.get('/v1/connect/status', { config: { auth: connectionKey } }, async (req) =>
+    connectStatus(connectionCtx(req)),
+  );
+
+  app.post('/v1/connect/disconnect', { config: { auth: connectionKey } }, async (req, reply) => {
+    await disconnect(connectionCtx(req).connectionId);
+    return reply.status(204).send();
+  });
+
+  app.get('/v1/connections', { config: { auth: manage } }, async (req) => ({
+    connections: await listConnections(requireDashboardUser(req).merchantId),
+  }));
+
+  app.delete<{ Params: { id: string } }>(
+    '/v1/connections/:id',
+    { config: { auth: manageStepUp } },
+    async (req) => removeConnection(requireDashboardUser(req).merchantId, req.params.id),
+  );
+};

@@ -25,6 +25,7 @@ import {
   sweepDueDeliveries,
   type DeliverJobData,
 } from './checkout/webhooks.js';
+import { sweepConnections } from './connect/authorize.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
 // Registers every event handler; must load before the dispatcher runs (see dispatchOnce).
@@ -48,6 +49,8 @@ import { closeClient, createRedis, whenReady } from './lib/redis.js';
 const HEALTH_CHECK_TIMEOUT_MS = 1000;
 /** Re-screens SCREENING_PENDING payments (backoff is per payment); runs every minute. */
 export const RETRY_SCREENINGS_JOB = 'retry-pending-screenings';
+/** Deletes expired Connect credentials and revokes connections never redeemed; every minute. */
+export const SWEEP_CONNECTIONS_JOB = 'sweep-connections';
 /** The payment watcher's queue: the 5 s scan, one poll job per due address, the expiry sweep. */
 export const CHECKOUT_QUEUE = 'tendr-checkout';
 export const SCAN_DEPOSITS_JOB = 'scan-deposits';
@@ -128,6 +131,10 @@ async function processMaintenanceJob(job: Job): Promise<void> {
   if (job.name === RETRY_SCREENINGS_JOB) {
     const n = await retryPendingScreenings();
     if (n > 0) log('info', 'retried pending screenings', { count: n });
+    return;
+  }
+  if (job.name === SWEEP_CONNECTIONS_JOB) {
+    await sweepConnections();
     return;
   }
   if (job.name !== PURGE_IDEMPOTENCY_JOB) throw new Error(`unknown maintenance job ${job.name}`);
@@ -288,6 +295,12 @@ export async function startWorker(
     RETRY_SCREENINGS_JOB,
     { every: 60_000 },
     { name: RETRY_SCREENINGS_JOB },
+  );
+
+  await maintenanceQueue.upsertJobScheduler(
+    SWEEP_CONNECTIONS_JOB,
+    { every: 60_000 },
+    { name: SWEEP_CONNECTIONS_JOB },
   );
 
   await accountsQueue.upsertJobScheduler(

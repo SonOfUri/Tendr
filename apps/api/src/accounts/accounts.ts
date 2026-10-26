@@ -698,6 +698,15 @@ export async function goLiveStatus(merchantId: string, threshold = 1): Promise<G
   };
 }
 
+/**
+ * How many active passkeys the store's signers hold in all. One means a single lost device locks
+ * every signer out (the `single_key` nudge); the recovery kit does not change that count.
+ */
+export async function signerPasskeyCount(merchantId: string): Promise<number> {
+  const signers = await signerSet(prisma, merchantId);
+  return signers.reduce((n, s) => n + s.keys.length, 0);
+}
+
 export interface GoLiveStatus {
   checklist: {
     ok: boolean;

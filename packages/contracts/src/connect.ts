@@ -58,3 +58,72 @@ export const ConnectTokenResponseSchema = z.object({
   live: ConnectModeCredentialsSchema,
 });
 export type ConnectTokenResponse = z.infer<typeof ConnectTokenResponseSchema>;
+
+/** A PKCE S256 challenge: base64url (no padding) of a sha256 digest. */
+const S256_CHALLENGE = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * `POST /v1/connect/authorize` body (the approval screen, owner/admin with a fresh passkey).
+ * `return_url` must be http(s), on the same origin as `site_url`, with no fragment (checked by the
+ * API). `state` is echoed back untouched.
+ */
+export const ConnectAuthorizeRequestSchema = z
+  .object({
+    site_url: z.string().min(1).max(2048),
+    return_url: z.string().min(1).max(2048),
+    state: z
+      .string()
+      .min(1)
+      .max(512)
+      .regex(/^[\x21-\x7e]+$/, 'printable ASCII without spaces'),
+    code_challenge: z.string().regex(S256_CHALLENGE, 'a base64url S256 challenge'),
+    code_challenge_method: z.literal('S256'),
+    platform: ConnectionPlatformSchema,
+    plugin_version: z
+      .string()
+      .min(1)
+      .max(32)
+      .regex(/^[0-9A-Za-z.+-]+$/),
+  })
+  .strict();
+export type ConnectAuthorizeRequest = z.infer<typeof ConnectAuthorizeRequestSchema>;
+
+/** `POST /v1/connect/authorize` response: where the popup goes next (`?code=…&state=…`). */
+export const ConnectAuthorizeResponseSchema = z.object({ redirect: z.string() });
+export type ConnectAuthorizeResponse = z.infer<typeof ConnectAuthorizeResponseSchema>;
+
+/** Why a connection cannot take payments in its key's mode yet (`GET /v1/connect/status`). */
+export const ConnectBlockingCodeValues = [
+  'store_inactive',
+  'live_account_missing',
+  'live_account_pending',
+  'test_account_pending',
+  'payout_missing',
+] as const;
+export type ConnectBlockingCode = (typeof ConnectBlockingCodeValues)[number];
+
+/** `GET /v1/connect/status` response. `href` is a dashboard page that fixes the item. */
+export const ConnectStatusResponseSchema = z.object({
+  connection_id: z.string(),
+  mode: z.enum(['test', 'live']),
+  ready: z.boolean(),
+  blocking: z.array(
+    z.object({ code: z.enum(ConnectBlockingCodeValues), message: z.string(), href: z.string() }),
+  ),
+  nudges: z.array(
+    z.object({ code: z.literal('single_key'), message: z.string(), href: z.string() }),
+  ),
+});
+export type ConnectStatusResponse = z.infer<typeof ConnectStatusResponseSchema>;
+
+/** One row of the dashboard's Connected sites (`GET /v1/connections`). */
+export const ConnectedSiteSchema = z.object({
+  id: z.string(),
+  site_url: z.string(),
+  platform: ConnectionPlatformSchema,
+  connected_by: z.object({ user_id: z.string(), email: z.string() }),
+  created_at: z.string(),
+  last_used_at: z.string().nullable(),
+  status: z.enum(['active', 'revoked']),
+});
+export type ConnectedSite = z.infer<typeof ConnectedSiteSchema>;

@@ -246,8 +246,9 @@ export async function createConnection(
  * Revokes a connection: sets `revoked_at`, revokes its keys (they fail auth with 401 at once) and
  * deactivates its webhook endpoints (the rows stay for their delivery history).
  *
- * The checkout domain is touched only by a dashboard removal (ruling W4; spec §2.7: a Disconnect
- * from the site "does not remove the domain"). When this connection added the domain:
+ * The checkout domain is touched only by a dashboard removal, or by the sweeper revoking a
+ * connection that was never redeemed (`'expired'`) (ruling W4; spec §2.7: a Disconnect from the
+ * site "does not remove the domain"). When this connection added the domain:
  * - another live connection of the store on that origin → ownership (`added_domain`) passes to
  *   it, so the domain keeps an owner;
  * - none → the domain is removed from `checkout_domains`.
@@ -260,7 +261,7 @@ export async function createConnection(
 export async function revokeConnection(
   tx: Tx,
   connectionId: string,
-  by: 'site' | 'dashboard',
+  by: 'site' | 'dashboard' | 'expired',
 ): Promise<void> {
   assertTransaction(tx);
   const found = await tx.connection.findUnique({
@@ -292,7 +293,7 @@ export async function revokeConnection(
   let removedDomain: string | null = null;
   let domainOwner: string | null = null;
   const domain = connection.addedDomain;
-  if (by === 'dashboard' && domain) {
+  if (by !== 'site' && domain) {
     const peer = await tx.connection.findFirst({
       where: { merchantId, siteOrigin: domain, revokedAt: null, id: { not: connectionId } },
       orderBy: { createdAt: 'asc' },

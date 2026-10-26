@@ -18,7 +18,7 @@ import {
   type GasPayer,
 } from '@tendr/contracts';
 import { z } from 'zod';
-import type { ScopeContext, ScopedDb } from '../db/scoped.js';
+import { scopedDb, type ScopeContext, type ScopedDb } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
@@ -31,8 +31,11 @@ import { depositInFlight } from './in-flight.js';
 import { resolvePayers } from './pricing.js';
 import { tokenInfo } from './tokens.js';
 
-/** The tenant (merchant + mode) plus its scoped client: the request's principal and `req.db`. */
-export type CheckoutCtx = ScopeContext & { db: ScopedDb };
+/**
+ * The tenant (merchant + mode) plus its scoped client: the request's principal and `req.db`.
+ * `connectionId` is the Connect connection of the authenticating key, when it is one.
+ */
+export type CheckoutCtx = ScopeContext & { db: ScopedDb; connectionId?: string | null };
 
 /** Tendr's fee when the merchant has no fee plan in effect (basis points). */
 export const DEFAULT_FEE_BPS = 50;
@@ -107,6 +110,54 @@ function accountNotReady(message: string): AppError {
   return new AppError('ACCOUNT_NOT_READY', message, 409);
 }
 
+/** Why a store cannot take payments in a mode yet (the cause of ACCOUNT_NOT_READY). */
+export type ReadinessGap = 'account_missing' | 'account_pending' | 'payout_missing';
+
+type Account = NonNullable<Awaited<ReturnType<ScopedDb['merchantAccount']['findFirst']>>>;
+type Settlement = NonNullable<Awaited<ReturnType<ScopedDb['settlementConfig']['findFirst']>>>;
+
+/** A store's readiness to take payments in one mode: what a new session needs, or what is missing. */
+export type Readiness =
+  | { ready: true; account: Account; settlement: Settlement; recipient: string }
+  | { ready: false; gap: ReadinessGap; message: string };
+
+const notReady = (gap: ReadinessGap, message: string): Readiness => ({
+  ready: false,
+  gap,
+  message,
+});
+
+/**
+ * Whether the store can take payments in `livemode` (default: the context's mode): an active
+ * merchant account, a settlement config, and a payout destination (the account itself in intents
+ * mode, the saved address in wallet mode). The one place these checks live: `createSession`
+ * refuses with ACCOUNT_NOT_READY on a gap, and `GET /v1/connect/status` reports it.
+ */
+export async function readinessFor(
+  ctx: CheckoutCtx,
+  livemode: boolean = ctx.livemode,
+): Promise<Readiness> {
+  const db =
+    livemode === ctx.livemode ? ctx.db : scopedDb({ merchantId: ctx.merchantId, livemode });
+  const [account, settlement] = await Promise.all([
+    db.merchantAccount.findFirst({ orderBy: { createdAt: 'desc' } }),
+    db.settlementConfig.findFirst({ orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }] }),
+  ]);
+  const noAccount = 'The store has no active account in this mode yet';
+  if (!account) return notReady('account_missing', noAccount);
+  if (account.status !== 'active') return notReady('account_pending', noAccount);
+  if (!settlement) {
+    return notReady('payout_missing', 'The store has no settlement settings in this mode yet');
+  }
+  // The payout destination: the mode's merchant account, or the saved address in wallet mode.
+  const recipient =
+    settlement.payoutMode === 'intents' ? account.nearAccountId : settlement.payoutAddress;
+  if (!recipient) {
+    return notReady('payout_missing', 'The store has no payout address in this mode yet');
+  }
+  return { ready: true, account, settlement, recipient };
+}
+
 /** The hosted checkout page of a session (no secret). */
 export function hostedUrl(id: string): string {
   return `${env().CHECKOUT_BASE_URL.replace(/\/+$/, '')}/pay/${id}`;
@@ -157,15 +208,14 @@ export async function createSession(
   input: CreateSessionInput,
 ): Promise<CreatedSession> {
   const { db } = ctx;
-  const [account, settlement, merchant] = await Promise.all([
-    db.merchantAccount.findFirst({ where: { status: 'active' } }),
-    db.settlementConfig.findFirst({ orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }] }),
+  const [readiness, merchant] = await Promise.all([
+    readinessFor(ctx),
     db.merchant.findFirstOrThrow({
       select: { defaultFeePayer: true, defaultGasPayer: true },
     }),
   ]);
-  if (!account) throw accountNotReady('The store has no active account in this mode yet');
-  if (!settlement) throw accountNotReady('The store has no settlement settings in this mode yet');
+  if (!readiness.ready) throw accountNotReady(readiness.message);
+  const { account, settlement, recipient } = readiness;
 
   // Currency and amount precision.
   const currency = input.amount_currency;
@@ -182,11 +232,6 @@ export async function createSession(
       { allowed: ['USD', settlement.destAssetId] },
     );
   }
-
-  // The payout destination: the mode's merchant account, or the saved address in wallet mode.
-  const recipient =
-    settlement.payoutMode === 'intents' ? account.nearAccountId : settlement.payoutAddress;
-  if (!recipient) throw accountNotReady('The store has no payout address in this mode yet');
 
   const link = input.payment_link_id
     ? await db.paymentLink.findFirst({
@@ -247,6 +292,7 @@ export async function createSession(
           merchantId: t.merchantId,
           livemode: t.livemode,
           paymentLinkId: link?.id ?? null,
+          connectionId: ctx.connectionId ?? null,
           externalRef: input.external_ref,
           amountMode: 'EXACT_OUT',
           amount: input.amount,

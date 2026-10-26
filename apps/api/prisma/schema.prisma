@@ -1383,6 +1383,9 @@ model Connection {
   siteOrigin        String             @map("site_origin")
   connectedByUserId String             @map("connected_by_user_id")
   addedDomain       String?            @map("added_domain")
+  /// Set when `/v1/connect/token` handed the credentials out. A connection never redeemed is
+  /// revoked by the sweeper after 10 minutes.
+  redeemedAt        DateTime?          @map("redeemed_at")
   lastUsedAt        DateTime?          @map("last_used_at")
   revokedAt         DateTime?          @map("revoked_at")
   createdAt         DateTime           @default(now()) @map("created_at")
@@ -1405,16 +1408,20 @@ model Connection {
 /// the plugin's `return_url` and the PKCE S256 `code_challenge`. Only the sha256 of the raw code
 /// is stored. Infrastructure: never reachable through a scoped client.
 model ConnectAuthCode {
-  id            String    @id
-  codeHash      String    @unique @map("code_hash")
-  connectionId  String    @map("connection_id")
-  returnUrl     String    @map("return_url")
-  codeChallenge String    @map("code_challenge")
-  expiresAt     DateTime  @map("expires_at")
-  usedAt        DateTime? @map("used_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
+  id             String    @id
+  codeHash       String    @unique @map("code_hash")
+  connectionId   String    @map("connection_id")
+  returnUrl      String    @map("return_url")
+  codeChallenge  String    @map("code_challenge")
+  /// The connection's issued raw credentials (JSON), KeyVault-encrypted, until `/token` hands
+  /// them out once; the secret row is deleted on redemption or once the code expires.
+  credentialsRef String?   @map("credentials_ref")
+  expiresAt      DateTime  @map("expires_at")
+  usedAt         DateTime? @map("used_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
 
-  connection Connection @relation(fields: [connectionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  connection  Connection @relation(fields: [connectionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  credentials Secret?    @relation(fields: [credentialsRef], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([connectionId])
   @@map("connect_auth_codes")
@@ -1430,6 +1437,7 @@ model Secret {
 
   apiKeys          ApiKey[]
   webhookEndpoints WebhookEndpoint[]
+  connectAuthCodes ConnectAuthCode[]
 
   @@map("secrets")
 }

@@ -11,6 +11,7 @@
 //   frame_origins    60 / session id  the public frame-origins route (C26), instead of `public`:
 //                                     the web middleware calls it from one server IP
 //   frame_origins_global 20000 / all  ceiling across every session id on that route
+//   connect_token    10 / IP          `POST /v1/connect/token` (public), instead of `public`
 //
 // Counters are keyed by ids (principalRef) and IPs, never by raw credentials. Fails open:
 // if Redis is unreachable the request is let through and a warning is logged.
@@ -37,7 +38,9 @@ export type RateLimitKind =
   /** The public frame-origins route, per session id (C26). */
   | 'frame_origins'
   /** The public frame-origins route, across all session ids. */
-  | 'frame_origins_global';
+  | 'frame_origins_global'
+  /** The Connect code exchange, per IP. */
+  | 'connect_token';
 
 export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   ip_global: 3000,
@@ -50,6 +53,7 @@ export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   session_quote: 8,
   frame_origins: 60,
   frame_origins_global: 20_000,
+  connect_token: 10,
 };
 
 declare module 'fastify' {
@@ -90,7 +94,13 @@ type Hook = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 export async function createRateLimiters(
   app: FastifyInstance,
   opts: RateLimitOptions,
-): Promise<{ ip: Hook; principal: Hook; sessionQuote: Hook; frameOrigins: Hook }> {
+): Promise<{
+  ip: Hook;
+  principal: Hook;
+  sessionQuote: Hook;
+  frameOrigins: Hook;
+  connectToken: Hook;
+}> {
   await app.register(rateLimit, {
     global: false,
     redis: opts.redis,
@@ -118,6 +128,7 @@ export async function createRateLimiters(
     session_quote: make('session_quote'),
     frame_origins: make('frame_origins'),
     frame_origins_global: make('frame_origins_global'),
+    connect_token: make('connect_token'),
   };
 
   async function enforce(
@@ -161,6 +172,10 @@ export async function createRateLimiters(
       await enforce(req, reply, 'frame_origins_global', 'fo:all');
       const id = (req.params as { sessionId?: string } | undefined)?.sessionId ?? '';
       await enforce(req, reply, 'frame_origins', `fo:${SESSION_ID.test(id) ? id : 'invalid'}`);
+    },
+    /** Route-level hook for `POST /v1/connect/token`: `connect_token` per IP. */
+    connectToken: async (req, reply) => {
+      await enforce(req, reply, 'connect_token', `ct:${req.ip}`);
     },
     ip: async (req, reply) => {
       if (!isV1(req.routeOptions.url)) return;

@@ -50,6 +50,11 @@ export const ErrorCodes = [
   'AMOUNT_UNKNOWN',
   /** Connecting a site would add its origin past the store's checkout-domain limit (20). */
   'DOMAIN_LIMIT',
+  /**
+   * `POST /v1/connect/token`: the authorization code is unknown, used, expired, revoked, or does not
+   * match the verifier or site. One code and message for every cause, so nothing is revealed.
+   */
+  'INVALID_GRANT',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

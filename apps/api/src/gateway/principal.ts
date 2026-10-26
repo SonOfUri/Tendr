@@ -10,7 +10,16 @@ import { AppError, forbidden, unauthorized } from '../lib/errors.js';
 type Base = { merchantId: string; livemode: boolean };
 
 export type Principal =
-  | (Base & { kind: 'secret_key'; apiKeyId: string; scopes: Scope[] })
+  | (Base & {
+      kind: 'secret_key';
+      apiKeyId: string;
+      scopes: Scope[];
+      /**
+       * Set when the key was issued by Connect for one site (a "connection key", ruling W1);
+       * null for a key the store created by hand.
+       */
+      connectionId: string | null;
+    })
   | (Base & { kind: 'publishable_key'; apiKeyId: string; scopes: Scope[] })
   | (Base & { kind: 'session_client'; sessionId: string })
   // A person acting in one store (dashboard session cookie + Tendr-Merchant/Tendr-Livemode).

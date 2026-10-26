@@ -37,6 +37,31 @@ export async function getSecret(ref: string): Promise<string> {
   return value;
 }
 
+/**
+ * Decrypts the secret `ref` and deletes its row, in the caller's transaction: a secret handed out
+ * exactly once (Connect credentials). Never cached. Returns null when the row is gone.
+ */
+export async function takeSecret(
+  ref: string,
+  db: Pick<Prisma.TransactionClient, 'secret'>,
+): Promise<string | null> {
+  const row = await db.secret.findUnique({ where: { id: ref } });
+  if (!row) return null;
+  const value = Buffer.from(await getKeyVault().decrypt(row.ciphertext, row.id)).toString('utf8');
+  await db.secret.delete({ where: { id: ref } });
+  cache.delete(ref);
+  return value;
+}
+
+/** Deletes the secret `ref` (no-op when already gone), in the caller's transaction. */
+export async function deleteSecret(
+  ref: string,
+  db: Pick<Prisma.TransactionClient, 'secret'>,
+): Promise<void> {
+  await db.secret.deleteMany({ where: { id: ref } });
+  cache.delete(ref);
+}
+
 /** Test-only: drops every cached plaintext. */
 export function clearSecretCache(): void {
   cache.clear();

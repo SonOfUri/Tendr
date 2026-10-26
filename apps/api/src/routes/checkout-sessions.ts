@@ -17,7 +17,9 @@ const read = { principals: ['secret_key' as const], scope: 'sessions:read' as co
 function ctxOf(req: FastifyRequest): CheckoutCtx {
   const p = requirePrincipal(req);
   if (p.kind === 'user_session' || !req.db) throw unauthorized();
-  return { merchantId: p.merchantId, livemode: p.livemode, db: req.db };
+  // A session records the connection whose key created it (WooCommerce plugin spec §2.6).
+  const connectionId = p.kind === 'secret_key' ? p.connectionId : null;
+  return { merchantId: p.merchantId, livemode: p.livemode, db: req.db, connectionId };
 }
 
 export const checkoutSessionRoutes: FastifyPluginAsync = async (app) => {
