@@ -24,11 +24,24 @@
 //   refund address) are only recorded (status confirmed, no proposal): 1Click already sent them.
 // - `account.proposal.executed` on a refund proposal → refund `confirmed`, `refund.sent`, and the
 //   payment (and a late / held session) completes as REFUNDED.
-import { Prisma, type Event, type Payment, type Quote, type Refund } from '@prisma/client';
+import {
+  Prisma,
+  type AccountProposal,
+  type Event,
+  type Payment,
+  type Quote,
+  type Refund,
+} from '@prisma/client';
 import { SMALL_OVERPAY_USD } from '@tendr/contracts';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import { createSystemDraftInTx, SUPPORTED_CHAINS } from '../accounts/proposals.js';
+import {
+  applyProposalView,
+  createSystemDraftInTx,
+  SUPPORTED_CHAINS,
+  type ContractProposalView,
+} from '../accounts/proposals.js';
+import { nearClient } from '../near/client.js';
 import {
   poaRouteError,
   poaTokenOf,
@@ -467,6 +480,7 @@ export async function draftReturn(
         kind: 'refund',
         action,
         reason: `return to sender: ${r.reason} (${r.id})`,
+        refundId: r.id,
       });
       await tx.refund.updateMany({
         where: { id: r.id, ...tenantOf(ctx) },
@@ -917,7 +931,11 @@ export async function onRefundProposalExecuted(e: Event): Promise<void> {
   if (!ctx || !proposalId) return;
   const txHash = (e.payload as { txHash?: unknown }).txHash;
   let refunds = await prisma.refund.findMany({ where: { proposalId, ...tenantOf(ctx) } });
-  if (refunds.length === 0) refunds = await detachedRefundsFor(ctx, proposalId);
+  if (refunds.length === 0) {
+    const detached = await detachedRefundFor(ctx, proposalId);
+    if (!detached) return;
+    refunds = [detached];
+  }
   for (const r of refunds) {
     await tenantTransaction(ctx, async (tx) => {
       await lockRefund(tx, ctx, r.id);
@@ -959,27 +977,48 @@ export async function onRefundProposalExecuted(e: Event): Promise<void> {
 }
 
 /**
- * A refund the chain executed after we detached its proposal (a draft cancelled only in Postgres
- * whose relay still landed, the chain outranking the local cancel): matched by the executed
- * action's payment, amount and destination, so the return is still confirmed once.
+ * A refund proposal executed with no refund linked to it: the chain executed a proposal whose
+ * refund we had detached (a draft cancelled only in Postgres whose relay still landed). Its refund
+ * is found by the exact back-link `account_proposals.refund_id`, and only if that refund is still
+ * waiting unlinked (or already confirmed by this proposal — a replay, ignored). Anything else — no
+ * back-link, an unknown refund, a refund linked to another proposal or already sent — is never
+ * guessed at: a warning and an internal `refund.needs_review` (keyed on the proposal) for a person.
  */
-async function detachedRefundsFor(ctx: ScopeContext, proposalId: string): Promise<Refund[]> {
+async function detachedRefundFor(ctx: ScopeContext, proposalId: string): Promise<Refund | null> {
   const prop = await prisma.accountProposal.findFirst({
     where: { id: proposalId, ...tenantOf(ctx) },
-    select: { action: true },
+    select: { kind: true, refundId: true },
   });
-  const a = (prop?.action as { refund?: Record<string, unknown> } | null)?.refund;
-  if (!a || typeof a.payment_id !== 'string') return [];
-  return prisma.refund.findMany({
-    where: {
-      paymentId: a.payment_id,
-      ...tenantOf(ctx),
-      proposalId: null,
-      status: 'pending',
-      amount: String(a.amount),
-      destination: String(a.destination),
-    },
+  if (!prop || prop.kind !== 'refund') return null;
+  const r = prop.refundId
+    ? await prisma.refund.findFirst({ where: { id: prop.refundId, ...tenantOf(ctx) } })
+    : null;
+  if (r && r.proposalId === null && r.status === 'pending') return r;
+  if (r && r.proposalId === proposalId && r.status === 'confirmed') return null;
+  log('warn', 'OPS ALERT: an executed refund proposal matches no waiting refund', {
+    proposalId,
+    refundId: prop.refundId,
+    refundProposalId: r?.proposalId ?? null,
+    refundStatus: r?.status ?? null,
   });
+  await tenantTransaction(ctx, async (tx) => {
+    const seen = await tx.event.findFirst({
+      where: { aggregateId: proposalId, type: REFUND_NEEDS_REVIEW, ...tenantOf(ctx) },
+      select: { id: true },
+    });
+    if (seen) return;
+    await recordEvent(tx, ctx, {
+      aggregateType: 'account_proposal',
+      aggregateId: proposalId,
+      type: REFUND_NEEDS_REVIEW,
+      payload: {
+        proposal_id: proposalId,
+        refund_id: prop.refundId,
+        review_reason: 'executed_unmatched',
+      },
+    });
+  });
+  return null;
 }
 
 /** Internal event (not a webhook type): a return went to the merchant's review queue. */
@@ -1056,6 +1095,47 @@ export async function onRefundProposalCancelled(e: Event): Promise<void> {
   const proposalId = proposalIdOf(e);
   if (!ctx || !proposalId) return;
   await detachProposal(ctx, proposalId, REVIEW.proposalCancelled);
+}
+
+/**
+ * Whether a proposal the mirror shows as ended really cannot execute any more. A draft cancelled
+ * only in Postgres after a relay was attempted (`relay_claimed_at` still set — the cancel went
+ * through a stale claim — or a relayed transaction on record) may be live on chain: the contract's
+ * `get_proposal` view decides. Absent, cancelled, expired or failed there → ended. Pending,
+ * timelocked, executing or executed → not ended: the mirror is brought up to date from the view
+ * (which revives the local-only cancel and re-links the refund, proposals.ts). A view that
+ * cannot be read → not ended (the next sweep asks again). Every other ended status is final.
+ */
+async function endedOnChain(ctx: ScopeContext, prop: AccountProposal): Promise<boolean> {
+  if (prop.status !== 'cancelled' || (prop.relayClaimedAt === null && prop.lastTxHash === null)) {
+    return true;
+  }
+  const account = await prisma.merchantAccount.findFirst({
+    where: { id: prop.accountId, ...tenantOf(ctx) },
+    select: { nearAccountId: true },
+  });
+  if (!account?.nearAccountId) return false;
+  let v: ContractProposalView | null;
+  try {
+    v = await nearClient(ctx.livemode).view<ContractProposalView | null>(
+      account.nearAccountId,
+      'get_proposal',
+      { id: prop.onchainId },
+    );
+  } catch (err) {
+    log('warn', 'refund sweep: get_proposal failed; not detaching', {
+      proposalId: prop.id,
+      err: String(err),
+    });
+    return false;
+  }
+  if (!v || ['cancelled', 'expired', 'failed'].includes(v.status)) return true;
+  await tenantTransaction(ctx, (tx) => applyProposalView(tx, ctx, prop.id, v));
+  log('warn', 'refund sweep: a locally cancelled refund draft is live on chain', {
+    proposalId: prop.id,
+    chainStatus: v.status,
+  });
+  return false;
 }
 
 /** Review reason for a proposal that ended without executing. */
@@ -1176,20 +1256,23 @@ export async function sweepReturns(): Promise<number> {
   }
 
   // Linked proposals that ended without executing (a draft cancelled in Postgres records no
-  // event; a missed cancelled / failed event): detach them into the review queue.
+  // event; a missed cancelled / failed event): detach them into the review queue — except a
+  // draft cancelled in Postgres that may have reached the chain (see `endedOnChain`).
   const ended = await prisma.refund.findMany({
     where: {
       status: { in: ['pending', 'submitted'] },
       proposal: { status: { in: ['cancelled', 'expired', 'failed'] } },
     },
-    include: { proposal: { select: { status: true } } },
+    include: { proposal: true },
     orderBy: { createdAt: 'asc' },
     take: SWEEP_BATCH,
   });
   for (const r of ended) {
-    await run('ended', r.id, () =>
-      detachProposal(ctxOf(r), r.proposalId!, ENDED_REVIEW[r.proposal!.status]!),
-    );
+    await run('ended', r.id, async () => {
+      const ctx = ctxOf(r);
+      if (!(await endedOnChain(ctx, r.proposal!))) return;
+      await detachProposal(ctx, r.proposalId!, ENDED_REVIEW[r.proposal!.status]!);
+    });
   }
 
   // Pending returns with a destination and no draft yet (screening was down, account busy, …).

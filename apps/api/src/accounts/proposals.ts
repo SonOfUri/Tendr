@@ -261,7 +261,7 @@ const SYSTEM_KINDS: ReadonlySet<ProposalKind> = new Set(['refund']);
 export async function createSystemDraftInTx(
   tx: Prisma.TransactionClient,
   ctx: ScopeContext,
-  input: { kind: ProposalKind; action: unknown; reason: string },
+  input: { kind: ProposalKind; action: unknown; reason: string; refundId?: string },
 ): Promise<AccountProposal> {
   const action = ActionSchema.parse(input.action);
   const kind = kindOf(action);
@@ -282,6 +282,7 @@ export async function createSystemDraftInTx(
       salt: salt.toString('base64'),
       status: 'draft',
       createdByUserId: null,
+      refundId: input.refundId ?? null,
     },
   });
   log('info', 'system draft created', { proposalId: created.id, kind, reason: input.reason });
@@ -291,7 +292,7 @@ export async function createSystemDraftInTx(
 /** `createSystemDraftInTx` in its own transaction. */
 export async function createSystemDraft(
   ctx: ScopeContext,
-  input: { kind: ProposalKind; action: unknown; reason: string },
+  input: { kind: ProposalKind; action: unknown; reason: string; refundId?: string },
 ): Promise<ProposalView> {
   const created = await tenantTransaction(ctx, (tx) => createSystemDraftInTx(tx, ctx, input));
   return getProposal(ctx, created.id);
@@ -866,7 +867,8 @@ export async function applyProposalEvents(
   // A draft cancelled only in Postgres does not outrank the chain: if the contract reports on it,
   // the proposal exists on chain after all, so the events decide.
   const aboutIt = events.some((e) => e.data.proposal_id === p.onchainId);
-  if (aboutIt && (await isLocalOnlyCancel(tx, ctx, p))) status = 'draft';
+  const revivable = aboutIt && (await isLocalOnlyCancel(tx, ctx, p));
+  if (revivable) status = 'draft';
   let readyAt = p.readyAt;
   let executedAt = p.executedAt;
   let reached = false;
@@ -930,6 +932,7 @@ export async function applyProposalEvents(
   if (reached && !settled && ASYNC_KINDS.has(p.kind) && (status === 'pending' || timelockOver)) {
     advance('executing');
   }
+  if (revivable && status !== 'cancelled') await relinkRevivedRefundTx(tx, ctx, p, status);
   return tx.accountProposal.update({
     where: { id: p.id },
     data: { status, readyAt, executedAt, ...(txHash ? { lastTxHash: txHash } : {}) },
@@ -1146,6 +1149,60 @@ async function isLocalOnlyCancel(
   return landedApprovals === 0;
 }
 
+/** Review reasons a refund gets when its proposal was taken to have ended (checkout refunds.ts). */
+const DETACHED_REVIEW = ['proposal_cancelled', 'proposal_expired', 'transfer_failed'];
+const REVIVED: ReadonlySet<ProposalStatus> = new Set([
+  'draft',
+  'pending',
+  'timelocked',
+  'executing',
+  'executed',
+]);
+
+/**
+ * A system-drafted refund proposal came back from a local-only cancel (the chain outranks it): its
+ * return (`account_proposals.refund_id`) is linked to it again and leaves the review queue, so the
+ * merchant cannot draft a second transfer while this one can still execute. A refund already
+ * linked to another proposal is left alone and logged (two live transfers for one return).
+ */
+export async function relinkRevivedRefundTx(
+  tx: Prisma.TransactionClient,
+  ctx: ScopeContext,
+  p: Pick<AccountProposal, 'id' | 'kind' | 'refundId'>,
+  status: ProposalStatus,
+): Promise<void> {
+  if (p.kind !== 'refund' || !p.refundId || !REVIVED.has(status)) return;
+  const tenant = { merchantId: ctx.merchantId, livemode: ctx.livemode };
+  const { count } = await tx.refund.updateMany({
+    where: {
+      id: p.refundId,
+      ...tenant,
+      proposalId: null,
+      status: 'pending',
+      reviewReason: { in: DETACHED_REVIEW },
+    },
+    data: { proposalId: p.id, reviewReason: null },
+  });
+  if (count > 0) {
+    log('warn', 'refund re-linked to a revived proposal', {
+      proposalId: p.id,
+      refundId: p.refundId,
+    });
+    return;
+  }
+  const r = await tx.refund.findFirst({
+    where: { id: p.refundId, ...tenant },
+    select: { proposalId: true },
+  });
+  if (r && r.proposalId !== null && r.proposalId !== p.id) {
+    log('error', 'OPS ALERT: a revived refund proposal while its refund has another proposal', {
+      proposalId: p.id,
+      refundId: p.refundId,
+      otherProposalId: r.proposalId,
+    });
+  }
+}
+
 /**
  * A relay landed for this proposal: a draft (or a locally cancelled draft, which the chain
  * overrides) becomes `pending`, and any relay claim is cleared.
@@ -1159,11 +1216,13 @@ export async function markOnChain(
     where: { id, merchantId: ctx.merchantId, livemode: ctx.livemode },
   });
   if (!p) throw notFound('Proposal not found');
-  const reopen = p.status === 'draft' || (await isLocalOnlyCancel(tx, ctx, p));
+  const revived = await isLocalOnlyCancel(tx, ctx, p);
+  const reopen = p.status === 'draft' || revived;
   await tx.accountProposal.update({
     where: { id: p.id },
     data: { relayClaimedAt: null, ...(reopen ? { status: 'pending' as const } : {}) },
   });
+  if (revived) await relinkRevivedRefundTx(tx, ctx, p, 'pending');
 }
 
 export async function upsertApproval(
@@ -1220,12 +1279,13 @@ export async function applyProposalView(
   });
   if (!p) throw notFound('Proposal not found');
   let current = p.status as ProposalStatus;
-  if (await isLocalOnlyCancel(tx, ctx, p)) current = 'draft';
+  const revivable = await isLocalOnlyCancel(tx, ctx, p);
+  if (revivable) current = 'draft';
   const readyAt = v.ready_at !== null ? nsToDate(v.ready_at) : null;
   const target: ProposalStatus =
     v.status === 'pending' ? (readyAt ? 'timelocked' : 'pending') : v.status;
   const status = TERMINAL(current) || RANK[target] < RANK[current] ? current : target;
-  return tx.accountProposal.update({
+  const updated = await tx.accountProposal.update({
     where: { id: p.id },
     data: {
       status,
@@ -1233,6 +1293,8 @@ export async function applyProposalView(
       ...(status === 'executed' && !p.executedAt ? { executedAt: new Date() } : {}),
     },
   });
+  if (revivable && status !== 'cancelled') await relinkRevivedRefundTx(tx, ctx, p, status);
+  return updated;
 }
 
 /**

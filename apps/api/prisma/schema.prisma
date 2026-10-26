@@ -646,6 +646,8 @@ model AccountProposal {
   /// An expired proposal holds its creator's pending slot on chain until `execute` marks it
   /// expired there. Set once the executor job settled it (I3).
   expirySettledAt DateTime?      @map("expiry_settled_at")
+  /// For a system-drafted `refund` proposal: the refund it returns (exact back-link, set once).
+  refundId        String?        @map("refund_id")
   createdAt       DateTime       @default(now()) @map("created_at")
   updatedAt       DateTime       @updatedAt @map("updated_at")
 
@@ -658,6 +660,7 @@ model AccountProposal {
   @@unique([accountId, onchainId])
   @@unique([id, merchantId, livemode])
   @@index([merchantId, livemode, status])
+  @@index([refundId])
   @@map("account_proposals")
 }
 

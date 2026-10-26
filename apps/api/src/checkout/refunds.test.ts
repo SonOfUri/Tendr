@@ -7,6 +7,9 @@ import { MemoryMailer, setMailer } from '../auth/mailer.js';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { fakeNearClient, resetNearClients } from '../near/client.js';
+import type { FakeNearClient } from '../near/fake.js';
+import { applyProposalView, markOnChain } from '../accounts/proposals.js';
+import { tenantTransaction } from '../db/tenant-transaction.js';
 import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
 import { isolatedSimStore } from '../test/sim-1click.js';
 import { isExchangeAddress, setExchangeAddresses } from './exchanges.js';
@@ -86,6 +89,8 @@ describe('return to sender', () => {
   let testKey: string;
   let sim: SimulatedOneClick;
   let mailer: MemoryMailer;
+  let fake: FakeNearClient;
+  let accountNear: string;
   let offset = 0;
   const clock = () => new Date(Date.now() + offset);
   let logSpy: ReturnType<typeof vi.spyOn>;
@@ -96,7 +101,7 @@ describe('return to sender', () => {
     await sim1click.clear();
     resetTokenCache();
     resetNearClients();
-    fakeNearClient(false);
+    fake = fakeNearClient(false);
     offset = 0;
     sim = new SimulatedOneClick({ store: sim1click.store(), now: clock });
     resetOneClickProviders({ simulated: sim });
@@ -113,7 +118,8 @@ describe('return to sender', () => {
       defaultFeePayer: 'merchant',
       defaultGasPayer: 'buyer',
     });
-    await createRow('MerchantAccount', merchant.id, false, { status: 'active' });
+    const account = await createRow('MerchantAccount', merchant.id, false, { status: 'active' });
+    accountNear = account.nearAccountId as string;
     await createRow('SettlementConfig', merchant.id, false, {
       destAssetId: USDC,
       destChain: 'near',
@@ -217,7 +223,12 @@ describe('return to sender', () => {
     expect(r!.returnFee?.toFixed()).toBe(ETH_FEE_WEI.toString());
     expect(r!.amount.toFixed()).toBe((excess - ETH_FEE_WEI).toString());
     const prop = await prisma.accountProposal.findUniqueOrThrow({ where: { id: r!.proposalId! } });
-    expect(prop).toMatchObject({ kind: 'refund', status: 'draft', createdByUserId: null });
+    expect(prop).toMatchObject({
+      kind: 'refund',
+      status: 'draft',
+      createdByUserId: null,
+      refundId: r!.id,
+    });
     expect(prop.action).toEqual({
       refund: {
         asset: ETH,
@@ -612,6 +623,126 @@ describe('return to sender', () => {
       reviewReason: null,
     });
     expect(await eventsOf('refund.sent')).toHaveLength(1);
+  });
+
+  const chainView = (status: string) => ({
+    id: 'x',
+    status,
+    approvals: [],
+    valid_approvals: 0,
+    ready_at: null,
+  });
+
+  it('a Postgres-cancelled draft with a stale relay claim is not detached while live on chain', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    const proposalId = r!.proposalId!;
+    // Cancelled through a stale claim: the relay may have landed.
+    await prisma.accountProposal.update({
+      where: { id: proposalId },
+      data: { status: 'cancelled', relayClaimedAt: new Date(Date.now() - 10 * 60_000) },
+    });
+    fake.scriptView(accountNear, 'get_proposal', () => chainView('pending'));
+    await sweepReturns();
+    expect(await prisma.refund.findUniqueOrThrow({ where: { id: r!.id } })).toMatchObject({
+      proposalId,
+      reviewReason: null,
+    });
+    // The mirror follows the chain: the local-only cancel is revived.
+    expect(
+      (await prisma.accountProposal.findUniqueOrThrow({ where: { id: proposalId } })).status,
+    ).toBe('pending');
+    expect(await eventsOf('refund.needs_review')).toEqual([]);
+  });
+
+  it('a Postgres-cancelled draft with a relay claim is detached once the chain shows it absent', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    await prisma.accountProposal.update({
+      where: { id: r!.proposalId! },
+      data: { status: 'cancelled', relayClaimedAt: new Date(Date.now() - 10 * 60_000) },
+    });
+    // The view cannot be read: nothing is detached.
+    fake.scriptView(accountNear, 'get_proposal', () => {
+      throw new Error('rpc down');
+    });
+    await sweepReturns();
+    expect((await refundsOf(p.id))[0]!.proposalId).not.toBeNull();
+    fake.scriptView(accountNear, 'get_proposal', () => null);
+    await sweepReturns();
+    expect((await refundsOf(p.id))[0]).toMatchObject({
+      proposalId: null,
+      reviewReason: 'proposal_cancelled',
+    });
+  });
+
+  it('a detached refund is re-linked when its proposal comes back from a local-only cancel', async () => {
+    const a = await overpaid();
+    const [ra] = await refundsOf(a.p.id);
+    const pa = ra!.proposalId!;
+    await prisma.accountProposal.update({ where: { id: pa }, data: { status: 'cancelled' } });
+    await sweepReturns();
+    expect((await refundsOf(a.p.id))[0]!.proposalId).toBeNull();
+    // A relay landed after all (markOnChain).
+    await tenantTransaction(ctx(), (tx, c) => markOnChain(tx, c, pa));
+    expect(await prisma.refund.findUniqueOrThrow({ where: { id: ra!.id } })).toMatchObject({
+      proposalId: pa,
+      reviewReason: null,
+    });
+
+    const b = await overpaid();
+    const [rb] = await refundsOf(b.p.id);
+    const pb = rb!.proposalId!;
+    await prisma.accountProposal.update({ where: { id: pb }, data: { status: 'cancelled' } });
+    await sweepReturns();
+    expect((await refundsOf(b.p.id))[0]!.proposalId).toBeNull();
+    // The contract's view shows it timelocked (applyProposalView).
+    await tenantTransaction(ctx(), (tx, c) =>
+      applyProposalView(tx, c, pb, {
+        ...chainView('pending'),
+        ready_at: String(BigInt(Date.now() + 3_600_000) * 1_000_000n),
+      } as never),
+    );
+    expect(await prisma.refund.findUniqueOrThrow({ where: { id: rb!.id } })).toMatchObject({
+      proposalId: pb,
+      reviewReason: null,
+    });
+  });
+
+  it('an executed refund proposal that matches no waiting refund confirms nothing and flags review', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    const original = r!.proposalId!;
+    // A second (stray) proposal for the same refund executes while the refund is on the first.
+    const stray = await prisma.accountProposal.create({
+      data: {
+        id: newId('prop'),
+        merchantId: merchant.id,
+        livemode: false,
+        accountId: (await prisma.accountProposal.findUniqueOrThrow({ where: { id: original } }))
+          .accountId,
+        onchainId: 'f'.repeat(64),
+        kind: 'refund',
+        action: {},
+        salt: '',
+        status: 'executed',
+        refundId: r!.id,
+      },
+    });
+    await onRefundProposalExecuted(await proposalEvent('account.proposal.executed', stray.id));
+    await onRefundProposalExecuted(await proposalEvent('account.proposal.executed', stray.id));
+    expect(await prisma.refund.findUniqueOrThrow({ where: { id: r!.id } })).toMatchObject({
+      status: 'pending',
+      proposalId: original,
+    });
+    expect(await eventsOf('refund.sent')).toEqual([]);
+    const flagged = await eventsOf('refund.needs_review');
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0]!.payload).toMatchObject({
+      proposal_id: stray.id,
+      refund_id: r!.id,
+      review_reason: 'executed_unmatched',
+    });
   });
 
   it('a held return whose delivered amount is unknown is refused for review', async () => {
