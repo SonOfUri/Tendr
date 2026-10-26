@@ -17,6 +17,14 @@ import {
 import { retryPendingScreenings } from './checkout/screening.js';
 import { sweepReturns } from './checkout/refunds.js';
 import { expireSessions, pollDeposit, scanDueDeposits } from './checkout/watcher.js';
+import {
+  attemptDelivery,
+  DELIVER_WEBHOOK_JOB,
+  setWebhookQueue,
+  SWEEP_WEBHOOKS_JOB,
+  sweepDueDeliveries,
+  type DeliverJobData,
+} from './checkout/webhooks.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
 // Registers every event handler; must load before the dispatcher runs (see dispatchOnce).
@@ -50,6 +58,23 @@ export const SWEEP_RETURNS_JOB = 'sweep-returns';
 export const SWEEP_RETURNS_EVERY_MS = 60_000;
 export const SCAN_DEPOSITS_EVERY_MS = 5_000;
 export const EXPIRE_SESSIONS_EVERY_MS = 60_000;
+/** Merchant webhook sends (one job per attempt, delayed for retries) and the due-retry sweep. */
+export const WEBHOOKS_QUEUE = 'tendr-webhooks';
+export const SWEEP_WEBHOOKS_EVERY_MS = 60_000;
+
+/** Runs one webhooks-queue job. */
+export async function processWebhookJob(job: Pick<Job, 'name' | 'data'>): Promise<void> {
+  if (job.name === DELIVER_WEBHOOK_JOB) {
+    await attemptDelivery((job.data as DeliverJobData).deliveryId);
+    return;
+  }
+  if (job.name === SWEEP_WEBHOOKS_JOB) {
+    const n = await sweepDueDeliveries();
+    if (n > 0) log('info', 'webhook sweep queued due deliveries', { count: n });
+    return;
+  }
+  throw new Error(`unknown webhooks job ${job.name}`);
+}
 
 interface PollJobData {
   depositAddress: string;
@@ -225,7 +250,15 @@ export async function startWorker(
     (job: Job) => processCheckoutJob(job, checkoutQueue),
     { ...setup, concurrency: 10 },
   );
+  // Merchant webhooks: each send waits up to 10 s on the merchant's server, so many at once.
+  const webhooksQueue = new Queue(WEBHOOKS_QUEUE, setup);
+  setWebhookQueue(webhooksQueue);
+  const webhooksWorker = new Worker(WEBHOOKS_QUEUE, processWebhookJob, {
+    ...setup,
+    concurrency: 20,
+  });
   const workers = [
+    webhooksWorker,
     eventsWorker,
     maintenanceWorker,
     accountsWorker,
@@ -282,6 +315,12 @@ export async function startWorker(
     { name: SWEEP_RETURNS_JOB },
   );
 
+  await webhooksQueue.upsertJobScheduler(
+    SWEEP_WEBHOOKS_JOB,
+    { every: SWEEP_WEBHOOKS_EVERY_MS },
+    { name: SWEEP_WEBHOOKS_JOB },
+  );
+
   const stopDispatcher =
     opts.dispatcher === false
       ? async () => {}
@@ -299,11 +338,17 @@ export async function startWorker(
       await stopDispatcher();
       await Promise.all(workers.map((w) => w.close()));
       await Promise.all(
-        [eventsQueue, maintenanceQueue, accountsQueue, executorsQueue, checkoutQueue].map((q) =>
-          q.close(),
-        ),
+        [
+          eventsQueue,
+          maintenanceQueue,
+          accountsQueue,
+          executorsQueue,
+          checkoutQueue,
+          webhooksQueue,
+        ].map((q) => q.close()),
       );
       setAccountJobs(null);
+      setWebhookQueue(null);
       await closeConnection(connection);
       await health.close();
     },

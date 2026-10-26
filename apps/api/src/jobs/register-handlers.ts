@@ -11,6 +11,7 @@ import {
 } from '../accounts/accounts.js';
 import { registerRefundHooks } from '../checkout/refunds.js';
 import { registerWatcherHooks } from '../checkout/watcher.js';
+import { registerWebhookHandlers } from '../checkout/webhooks.js';
 import { registerAccountHandlers } from './account-notices.js';
 import { registerEventHandler } from './handlers.js';
 
@@ -38,3 +39,7 @@ registerWatcherHooks();
 // Return to sender: the watcher's `onReturnNeeded` hook queues refund drafts; executed / failed
 // refund proposals complete or flag the return.
 registerRefundHooks();
+
+// Merchant webhooks: each merchant-facing checkout event fans out to the store's endpoints of its
+// mode (internal ops events are never delivered — ruling C23).
+registerWebhookHandlers();

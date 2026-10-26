@@ -1099,6 +1099,12 @@ model WebhookDelivery {
   attempt        Int       @default(0)
   statusCode     Int?      @map("status_code")
   nextRetryAt    DateTime? @map("next_retry_at")
+  /// pending (retrying) | delivered | failed (gave up after the retry window; resend still allowed)
+  status         String    @default("pending")
+  firstAttemptAt DateTime? @map("first_attempt_at")
+  lastAttemptAt  DateTime? @map("last_attempt_at")
+  deliveredAt    DateTime? @map("delivered_at")
+  lastError      String?   @map("last_error")
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
@@ -1110,6 +1116,7 @@ model WebhookDelivery {
   @@index([merchantId])
   @@index([endpointId])
   @@index([eventId])
+  @@index([status, nextRetryAt])
   @@map("webhook_deliveries")
 }
 
