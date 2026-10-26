@@ -56,7 +56,9 @@
     "FX_PROVIDER",
     "FX_API_KEY",
     "FX_FIXED_RATES",
-    "VERIFY_CHAINALYSIS_API_KEY"
+    "VERIFY_CHAINALYSIS_API_KEY",
+    "E2E_API_HOST",
+    "NEAR_FAKE_TIMELOCK_SECONDS"
   ],
   "tasks": {
     "build": {

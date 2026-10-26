@@ -719,6 +719,83 @@ USD amount matches `amount / rate` rounded up.
 - Underpay top-ups are off in live mode until the mainnet check confirms that 1Click accumulates
   them.
 
+## WooCommerce plugin
+
+`apps/woocommerce/` is the WordPress plugin **tendr: Pay with crypto** (PHP 8.0+, WordPress 6.4+,
+WooCommerce 8.5+, GPL-2.0-or-later, text domain `tendr`). Stores install it from
+`https://usetendr.tech/downloads/woocommerce`, connect in one click (Connect popup, passkey), and
+take crypto payments in the classic and Blocks checkouts. Refunds clicked in WooCommerce become
+signer-approved proposals. Everything PHP runs in Docker through `@wordpress/env`; nothing is
+installed on the host.
+
+| Command (all `--workspace=@tendr/woocommerce`) | What it does                                                    |
+| ---------------------------------------------- | --------------------------------------------------------------- |
+| `npm run env:start:tests` then `test:php`      | PHPUnit in the tests site (:8891); HTTP is mocked               |
+| `npm run lint:php`                             | PHPCS (WordPress + PHPCompatibilityWP 8.0+)                     |
+| `npm run env:start`                            | A dev site on :8890 (admin / password) pointed at the local API |
+| `npm run build:zip`                            | Builds `dist/tendr-pay-with-crypto-<version>.zip` + `.sha256`   |
+| `npm run env:start:e2e`                        | The two e2e sites (:8892 with Plugin Check, :8893)              |
+| `npm run plugin-check`                         | WordPress.org Plugin Check on the built zip, in the :8892 site  |
+
+The end-to-end test (`apps/web/e2e/woocommerce.spec.ts`) needs Docker plus the e2e Postgres and
+Redis, and runs with `npm run test:e2e:woocommerce --workspace=@tendr/web`. Its global setup builds
+the zip and resets both sites. Each site installs the zip through **Plugins → Add New → Upload**,
+connects through the popup (sign-up, store, passkey, recovery kit, approve), pays in the Blocks
+checkout, converts an NGN order, refunds through a signer approval, checks that the second site
+gets none of the first site's events, re-connects and disconnects (the old keys get 401), and
+checks that a guest never sees the method in test mode. WordPress calls the API at
+`host.docker.internal:4100`; on Linux set `E2E_API_HOST=0.0.0.0` so the API is reachable there.
+
+**Plugin Check.** `npm run plugin-check` must report no errors. Two decisions are encoded in
+`apps/woocommerce/scripts/plugin-check.mjs`:
+
+- the check runs with `--slug=tendr`, because the text domain is `tendr`. A WordPress.org listing
+  must get the slug `tendr`, or the text domain must change to the slug it gets;
+- `plugin_updater_detected` is ignored: the pilot updates from its own feed (below). The
+  WordPress.org build must drop `includes/class-tendr-updater.php`.
+
+**Updates.** The plugin reads `<TENDR_CHECKOUT_BASE>/v1/plugins/woocommerce/update.json` (default
+`https://usetendr.tech`, https only; an http local origin is accepted only outside `production`).
+It offers an update only when the feed's version is greater than the installed one and the
+package is a `.zip` under `/downloads/woocommerce/` on the feed's origin. Before WordPress installs
+it, the plugin downloads the package itself and checks its sha256 against the feed; on a mismatch
+it deletes the file and the update stops.
+
+**Releasing a version.**
+
+1. Bump the version in `tendr-pay-with-crypto.php` (header and `TENDR_VERSION`), the readme's
+   `Stable tag`, its changelog, and `apps/woocommerce/package.json`. `build-zip` refuses a mismatch.
+2. Run `npm run build:zip --workspace=@tendr/woocommerce`. It writes the zip to
+   `apps/woocommerce/dist/`, copies it to `apps/web/public/downloads/woocommerce/`, and rewrites
+   `manifest.json` there (version, file, sha256, requires, tested, requires_php). The zip is
+   deterministic: the same source gives the same sha256.
+3. Commit `manifest.json` (the zips are gitignored) and deploy the web app with the zip in place.
+   The feed (`GET /v1/plugins/woocommerce/update.json`) and the downloads page then offer it. Never
+   commit a manifest whose zip is not published with it: stores would be offered a 404.
+
+The committed manifest stays the `0.0.0` placeholder until the first release, so the feed answers
+404 and stores see no update.
+
+**Manual live checklist** (not automated; the e2e covers test mode only):
+
+- [ ] On a real https WordPress site with pretty permalinks, install the released zip from
+      `https://usetendr.tech/downloads/woocommerce` and check its sha256 against the page.
+- [ ] Connect through the popup on usetendr.tech; the settings page shows "Connected to …" and no
+      key appears anywhere in WP admin.
+- [ ] In tendr, finish going live (live account, signers plus recovery key ≥ 2, payout). "Switch to
+      live mode" lists what is missing until then, and switches once the store is ready.
+- [ ] Pay one small live order in each checkout (Blocks and classic) and check the order note,
+      the "You got paid" email and the payout.
+- [ ] Refund part of it from WooCommerce: the order stays unrefunded until the signers approve,
+      then shows the refund.
+- [ ] **FX provider for non-USD stores:** live uses Open Exchange Rates (`FX_PROVIDER=openexchangerates`,
+      `FX_API_KEY`) on a plan whose rates refresh well inside 10 minutes; see
+      [Live checklist (FX for non-USD stores)](#mainnet-checks-for-checkout). Then pay one live
+      order on an NGN or EUR store and check the order note's rate, source and time.
+- [ ] Publish a newer zip and check that a connected site offers "Update now", installs it, and
+      that a tampered zip (wrong sha256) is refused.
+- [ ] Disconnect: the site's keys get 401 and the site disappears from Connected sites.
+
 ## Scripts
 
 | Script                                                   | Description                                         |

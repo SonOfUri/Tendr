@@ -47,6 +47,10 @@ require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-webhooks.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-order-sync.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-refunds.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-test-purchase.php';
+require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-updater.php';
+
+// Updates work even when WooCommerce is missing, so a fixed version can always be installed.
+Tendr_Updater::register();
 
 register_activation_hook( __FILE__, array( 'Tendr_Webhooks', 'activate' ) );
 register_deactivation_hook( __FILE__, array( 'Tendr_Webhooks', 'deactivate' ) );

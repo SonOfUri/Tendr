@@ -149,7 +149,8 @@ final class Tendr_Webhooks {
 		$suppress = $wpdb->suppress_errors();
 		$wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- a plugin-owned log table, not cacheable.
 			$wpdb->prepare(
-				"DELETE FROM {$table} WHERE received_at < %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name from $wpdb->prefix.
+				'DELETE FROM %i WHERE received_at < %s',
+				$table,
 				gmdate( 'Y-m-d H:i:s', time() - self::RETENTION_DAYS * DAY_IN_SECONDS )
 			)
 		);
@@ -161,7 +162,7 @@ final class Tendr_Webhooks {
 	 */
 	public static function uninstall(): void {
 		global $wpdb;
-		$wpdb->query( 'DROP TABLE IF EXISTS ' . self::table() ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.SchemaChange -- the plugin's own table, removed on uninstall.
+		$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', self::table() ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.DirectDatabaseQuery.SchemaChange -- the plugin's own table, removed on uninstall.
 		delete_option( self::DB_OPTION );
 		wp_clear_scheduled_hook( self::PRUNE_HOOK );
 	}
@@ -324,7 +325,7 @@ final class Tendr_Webhooks {
 
 		global $wpdb;
 		$table = self::table();
-		$state = $wpdb->get_var( $wpdb->prepare( "SELECT state FROM {$table} WHERE event_id = %s", $event_id ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- plugin table; must not be cached.
+		$state = $wpdb->get_var( $wpdb->prepare( 'SELECT state FROM %i WHERE event_id = %s', $table, $event_id ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- plugin table; must not be cached.
 		if ( null === $state ) {
 			// Released between the insert and this read; tendr retries.
 			return 'busy';
@@ -335,7 +336,8 @@ final class Tendr_Webhooks {
 		// A claim older than CLAIM_TTL belongs to a request that died: take it over atomically.
 		$taken = $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 			$wpdb->prepare(
-				"UPDATE {$table} SET received_at = %s WHERE event_id = %s AND state = %d AND received_at < %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				'UPDATE %i SET received_at = %s WHERE event_id = %s AND state = %d AND received_at < %s',
+				$table,
 				$now,
 				$event_id,
 				self::STATE_CLAIMED,
@@ -363,7 +365,8 @@ final class Tendr_Webhooks {
 		$suppress = $wpdb->suppress_errors();
 		$rows     = $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 			$wpdb->prepare(
-				"INSERT IGNORE INTO {$table} (event_id, received_at, state) VALUES (%s, %s, %d)", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				'INSERT IGNORE INTO %i (event_id, received_at, state) VALUES (%s, %s, %d)',
+				$table,
 				$event_id,
 				$now,
 				self::STATE_CLAIMED

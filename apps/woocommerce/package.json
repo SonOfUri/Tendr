@@ -12,7 +12,11 @@
     "composer": "wp-env run cli --config=.wp-env.tests.json --env-cwd=wp-content/plugins/tendr-pay-with-crypto composer",
     "composer:install": "npm run composer -- install --no-interaction --no-progress --quiet",
     "test:php": "npm run composer:install && wp-env run cli --config=.wp-env.tests.json --env-cwd=wp-content/plugins/tendr-pay-with-crypto vendor/bin/phpunit",
-    "lint:php": "npm run composer:install && wp-env run cli --config=.wp-env.tests.json --env-cwd=wp-content/plugins/tendr-pay-with-crypto vendor/bin/phpcs"
+    "lint:php": "npm run composer:install && wp-env run cli --config=.wp-env.tests.json --env-cwd=wp-content/plugins/tendr-pay-with-crypto vendor/bin/phpcs",
+    "build:zip": "node scripts/build-zip.mjs",
+    "env:start:e2e": "wp-env start --config=.wp-env.e2e.json && wp-env start --config=.wp-env.e2e-b.json",
+    "env:stop:e2e": "wp-env stop --config=.wp-env.e2e.json && wp-env stop --config=.wp-env.e2e-b.json",
+    "plugin-check": "node scripts/plugin-check.mjs"
   },
   "devDependencies": {
     "@wordpress/env": "11.17.0"

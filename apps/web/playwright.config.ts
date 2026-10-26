@@ -44,8 +44,17 @@ function channel(): string | undefined {
   }
 }
 
+/**
+ * Where the e2e API listens. The WooCommerce spec (playwright.woocommerce.config.ts) runs
+ * WordPress in Docker, which calls the API through host.docker.internal: on Linux (CI) that is the
+ * Docker bridge, so the API must listen on every interface there.
+ */
+const API_HOST = process.env.E2E_API_HOST ?? '127.0.0.1';
+
 export default defineConfig({
   testDir: './e2e',
+  // The WooCommerce spec needs WordPress in Docker (wp-env): its own config and CI job.
+  testIgnore: ['**/woocommerce.spec.ts'],
   timeout: 300_000,
   expect: { timeout: 20_000 },
   // One flow shares one database and server; run the specs one at a time.
@@ -74,7 +83,7 @@ export default defineConfig({
         // A Redis DB of its own, so dev workers never pick up these jobs.
         REDIS_URL: process.env.E2E_REDIS_URL ?? 'redis://localhost:6380/7',
         API_PORT: String(API_PORT),
-        API_HOST: '127.0.0.1',
+        API_HOST,
         API_BASE_URL: API_URL,
         WEB_URL,
         // Session URLs point at this web server, and its origin gets the shopper routes' CORS.

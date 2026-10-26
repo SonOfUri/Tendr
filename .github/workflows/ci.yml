@@ -181,6 +181,106 @@ jobs:
         run: npm run test:php --workspace=@tendr/woocommerce
       - name: PHPCS
         run: npm run lint:php --workspace=@tendr/woocommerce
+      - name: Build the plugin zip
+        # Writes apps/woocommerce/dist/tendr-pay-with-crypto-<version>.zip and its sha256, and the
+        # web app's update-feed manifest (in this throwaway checkout only).
+        run: npm run build:zip --workspace=@tendr/woocommerce
+      - name: Upload the plugin zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: tendr-pay-with-crypto
+          path: |
+            apps/woocommerce/dist/*.zip
+            apps/woocommerce/dist/*.sha256
+          retention-days: 30
+
+  woocommerce-e2e:
+    # The plugin end to end (apps/web/e2e/woocommerce.spec.ts): two WordPress + WooCommerce sites in
+    # wp-env (:8892, :8893) install the freshly built zip and connect to the e2e API (:4100) and web
+    # (:3100) in test mode. WordPress reaches the API through host.docker.internal (wp-env maps it
+    # to the Docker host), so the API listens on every interface here. Also runs WordPress.org's
+    # Plugin Check on the zip. Its own job, so the main e2e job stays fast.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tendr
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tendr"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tendr
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tendr
+      REDIS_URL: redis://localhost:6379
+      E2E_REDIS_URL: redis://localhost:6379/7
+      E2E_API_HOST: 0.0.0.0
+      KEYVAULT_DRIVER: local
+      LOCAL_KEYVAULT_PATH: .keyvault/ci-e2e.json
+      NEAR_CLIENT_DRIVER: fake
+      NEAR_FAKE_SIMULATE: '1'
+      MAIL_DRIVER: log
+      LOG_LEVEL: warn
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Build packages
+        run: |
+          npm run build --workspace=@tendr/contracts
+          npm run build --workspace=@tendr/sdk
+          npm run build --workspace=@tendr/ui
+      - name: Generate Prisma client
+        run: npm run db:generate --workspace=@tendr/api
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      - name: Migrate test database
+        run: npm run db:migrate:test --workspace=@tendr/api
+      - name: Build the plugin zip
+        run: npm run build:zip --workspace=@tendr/woocommerce -- --no-publish
+      - name: Cache wp-env downloads
+        # WordPress, WooCommerce and Plugin Check zips (pinned in the .wp-env.e2e*.json files).
+        uses: actions/cache@v4
+        with:
+          path: ~/.wp-env
+          key: wp-env-e2e-${{ hashFiles('apps/woocommerce/.wp-env.e2e.json', 'apps/woocommerce/.wp-env.e2e-b.json', 'package-lock.json') }}
+      - name: Start the WordPress sites
+        run: npm run env:start:e2e --workspace=@tendr/woocommerce
+      - name: Plugin Check (no errors)
+        run: npm run plugin-check --workspace=@tendr/woocommerce
+      - name: WooCommerce end-to-end tests
+        run: npm run test:e2e:woocommerce --workspace=@tendr/web
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces-woocommerce
+          path: apps/web/test-results
+          retention-days: 7
 
   onchain:
     runs-on: ubuntu-latest

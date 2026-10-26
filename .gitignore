@@ -41,3 +41,7 @@ apps/web/public/v1/tendr.js
 
 # WooCommerce plugin dev tooling (Composer runs in wp-env)
 apps/woocommerce/vendor/
+
+# WooCommerce plugin release zips (built by apps/woocommerce/scripts/build-zip.mjs; published with
+# the web app, not committed)
+apps/web/public/downloads/woocommerce/*.zip

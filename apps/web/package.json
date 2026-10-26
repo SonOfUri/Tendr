@@ -11,7 +11,8 @@
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:woocommerce": "playwright test --config=playwright.woocommerce.config.ts"
   },
   "dependencies": {
     "@ethersproject/sha2": "5.8.0",
