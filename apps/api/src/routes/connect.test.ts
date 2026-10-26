@@ -517,9 +517,10 @@ describe('connect routes', () => {
 
   // ─── un-redeemed sweeper ────────────────────────────────────────────────────
 
-  it('sweeps connections never redeemed after 10 minutes, removing the domain they added', async () => {
-    const pending = await approve();
+  it('sweeps connections never redeemed after 10 minutes; a domain they did not add stays', async () => {
     const redeemed = await connect(admin);
+    // A later approval for the same site, never redeemed (the working connection keeps going).
+    const pending = await approve();
     // A second site whose domain the store added by hand.
     await prisma.merchant.update({
       where: { id: merchant.id },
@@ -568,5 +569,181 @@ describe('connect routes', () => {
     expect(m.checkoutDomains).not.toContain(SITE);
     const keys = await prisma.apiKey.findMany();
     expect(keys.every((k) => k.revokedAt !== null)).toBe(true);
+  });
+
+  // ─── fix round 1 ────────────────────────────────────────────────────────────
+
+  it('authorize refuses a missing CSRF token and a store the person is not a member of', async () => {
+    const { challenge } = pkce();
+    const noCsrf = await app.inject({
+      method: 'POST',
+      url: '/v1/connect/authorize',
+      headers: dashHeaders(admin, { merchantId: merchant.id, csrf: null }),
+      payload: authorizeBody(challenge),
+    });
+    expect(noCsrf.statusCode).toBe(403);
+    const other = await createMerchant();
+    await member(other.id, 'owner');
+    const cross = await authorize(admin, authorizeBody(challenge), other.id);
+    expect(cross.statusCode).toBe(403);
+    expect(await prisma.connection.count()).toBe(0);
+  });
+
+  it('token: transport-level failures are the same INVALID_GRANT', async () => {
+    const raw = (payload: string, headers: Record<string, string>) =>
+      app.inject({ method: 'POST', url: '/v1/connect/token', payload, headers });
+    expectInvalidGrant(await raw('{"code":', { 'content-type': 'application/json' }));
+    expectInvalidGrant(
+      await raw('code=x', { 'content-type': 'application/x-www-form-urlencoded' }),
+    );
+    expectInvalidGrant(await raw('{"code":"x"}', { 'content-type': 'text/plain' }));
+    expectInvalidGrant(await raw('{"code":"x"}', {}));
+    expectInvalidGrant(
+      await raw(JSON.stringify({ code: 'x'.repeat(20_000) }), {
+        'content-type': 'application/json',
+      }),
+    );
+    expectInvalidGrant(await raw('', { 'content-type': 'application/json' }));
+  });
+
+  it('token: a rate-limited call stays 429 RATE_LIMITED', async () => {
+    const body = { code: 'nope', code_verifier: pkce().verifier, site_url: SITE };
+    for (let i = 0; i < 10; i += 1) await token(body);
+    const res = await token(body);
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error.code).toBe('RATE_LIMITED');
+  });
+
+  async function endpointsOf(connectionId: string) {
+    return prisma.webhookEndpoint.findMany({ where: { connectionId } });
+  }
+
+  it('re-connect: the old keys get 401 and its endpoints go inactive; the new ones work; the domain moves', async () => {
+    const first = await connect();
+    // Another subdirectory site on the same origin is a different site and stays.
+    const { challenge, verifier } = pkce();
+    const sub = await authorize(
+      admin,
+      authorizeBody(challenge, { site_url: `${SITE}/blog`, return_url: `${SITE}/blog/return` }),
+    );
+    const subCode = new URL(sub.json().redirect as string).searchParams.get('code')!;
+    const subRes = await token({
+      code: subCode,
+      code_verifier: verifier,
+      site_url: `${SITE}/blog`,
+    });
+    expect(subRes.statusCode).toBe(200);
+    const blog = ConnectTokenResponseSchema.parse(subRes.json());
+
+    expect(
+      (await prisma.connection.findUniqueOrThrow({ where: { id: first.connection_id } }))
+        .addedDomain,
+    ).toBe(SITE);
+    const second = await connect();
+
+    for (const key of [first.test.secret_key, first.live.secret_key]) {
+      expect((await status(key)).statusCode).toBe(401);
+    }
+    expect((await endpointsOf(first.connection_id)).every((e) => !e.active)).toBe(true);
+    expect((await status(second.test.secret_key)).statusCode).toBe(200);
+    expect((await status(second.live.secret_key)).statusCode).toBe(200);
+    expect((await endpointsOf(second.connection_id)).every((e) => e.active)).toBe(true);
+    expect((await status(blog.test.secret_key)).statusCode).toBe(200);
+
+    const oldC = await prisma.connection.findUniqueOrThrow({ where: { id: first.connection_id } });
+    const newC = await prisma.connection.findUniqueOrThrow({ where: { id: second.connection_id } });
+    expect(oldC.revokedAt).not.toBeNull();
+    expect(oldC.addedDomain).toBeNull();
+    expect(newC.addedDomain).toBe(SITE);
+    expect(
+      (await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } })).checkoutDomains,
+    ).toContain(SITE);
+  });
+
+  it('re-connect: an abandoned second approval leaves the working connection alone', async () => {
+    const first = await connect();
+    await approve(); // never redeemed
+    expect((await status(first.test.secret_key)).statusCode).toBe(200);
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 11 * 60_000 });
+    expect(await sweepConnections()).toBe(1);
+    vi.useRealTimers();
+    expect((await status(first.test.secret_key)).statusCode).toBe(200);
+    const c = await prisma.connection.findUniqueOrThrow({ where: { id: first.connection_id } });
+    expect(c).toMatchObject({ revokedAt: null, addedDomain: SITE });
+    expect(
+      (await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } })).checkoutDomains,
+    ).toContain(SITE);
+  });
+
+  it('re-connect to a different store leaves the first store’s connection alone', async () => {
+    const first = await connect();
+    const other = await createMerchant();
+    const otherAdmin = await member(other.id, 'admin');
+    const second = await connect(otherAdmin, other.id);
+    expect((await status(first.test.secret_key)).statusCode).toBe(200);
+    expect((await status(second.test.secret_key)).statusCode).toBe(200);
+  });
+
+  it('redeem racing the sweeper: exactly one wins, consistently', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const { code, verifier } = await approve();
+      const pending = await prisma.connection.findFirstOrThrow({
+        where: { redeemedAt: null, revokedAt: null },
+      });
+      // Old enough for the sweeper while the code is still valid.
+      await prisma.connection.update({
+        where: { id: pending.id },
+        data: { createdAt: new Date(Date.now() - 11 * 60_000) },
+      });
+      const [res, swept] = await Promise.all([
+        token({ code, code_verifier: verifier, site_url: SITE }),
+        sweepConnections(),
+      ]);
+      const c = await prisma.connection.findUniqueOrThrow({ where: { id: pending.id } });
+      if (res.statusCode === 200) {
+        expect(swept).toBe(0);
+        expect(c).toMatchObject({ revokedAt: null });
+        expect(c.redeemedAt).not.toBeNull();
+        expect((await status(res.json().test.secret_key)).statusCode).toBe(200);
+        // Disconnect so the next round's connection is the only pending one.
+        await app.inject({
+          method: 'POST',
+          url: '/v1/connect/disconnect',
+          headers: { authorization: `Bearer ${res.json().test.secret_key}` },
+        });
+      } else {
+        expectInvalidGrant(res);
+        expect(swept).toBe(1);
+        expect(c.revokedAt).not.toBeNull();
+        expect(c.redeemedAt).toBeNull();
+      }
+      expect(await prisma.secret.count({ where: { purpose: 'connect_credentials' } })).toBe(0);
+    }
+  });
+
+  it('redeem racing a dashboard removal: no deadlock, and the connection ends revoked', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const { code, verifier } = await approve();
+      const pending = await prisma.connection.findFirstOrThrow({
+        where: { redeemedAt: null, revokedAt: null },
+      });
+      const [res, del] = await Promise.all([
+        token({ code, code_verifier: verifier, site_url: SITE }),
+        app.inject({
+          method: 'DELETE',
+          url: `/v1/connections/${pending.id}`,
+          headers: dashHeaders(admin, { merchantId: merchant.id }),
+        }),
+      ]);
+      expect(del.statusCode).toBe(200);
+      const c = await prisma.connection.findUniqueOrThrow({ where: { id: pending.id } });
+      expect(c.revokedAt).not.toBeNull();
+      if (res.statusCode === 200) {
+        expect((await status(res.json().test.secret_key)).statusCode).toBe(401);
+      } else {
+        expectInvalidGrant(res);
+      }
+      expect(await prisma.secret.count({ where: { purpose: 'connect_credentials' } })).toBe(0);
+    }
   });
 });

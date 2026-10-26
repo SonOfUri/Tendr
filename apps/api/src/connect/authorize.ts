@@ -165,6 +165,7 @@ export async function redeem(body: unknown): Promise<ConnectTokenResponse> {
       connection: {
         select: {
           id: true,
+          merchantId: true,
           siteUrl: true,
           revokedAt: true,
           redeemedAt: true,
@@ -191,8 +192,12 @@ export async function redeem(body: unknown): Promise<ConnectTokenResponse> {
     row.connection.merchant.status === 'active';
   if (!ok || !row || !ref) throw invalidGrant();
 
+  const merchantId = row.connection.merchantId;
+  const site = connected;
   return prisma.$transaction(async (tx) => {
-    // Connection first, then the code: the sweeper locks in the same order.
+    // One lock order everywhere (revokeConnection, the sweeper, a dashboard removal): the store,
+    // then the connection, then its codes.
+    await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId} FOR UPDATE`;
     const claimed = await tx.connection.updateMany({
       where: { id: row.connectionId, revokedAt: null, redeemedAt: null },
       data: { redeemedAt: now },
@@ -205,9 +210,17 @@ export async function redeem(body: unknown): Promise<ConnectTokenResponse> {
     if (used.count !== 1) throw invalidGrant();
     const raw = await takeSecret(ref, tx);
     if (raw === null) throw invalidGrant();
-    const credentials = ConnectTokenResponseSchema.pick({ test: true, live: true }).parse(
-      JSON.parse(raw),
-    );
+    let credentials: Pick<ConnectTokenResponse, 'test' | 'live'>;
+    try {
+      credentials = ConnectTokenResponseSchema.pick({ test: true, live: true }).parse(
+        JSON.parse(raw),
+      );
+    } catch {
+      // Never log `raw`: it is the connection's keys.
+      throw invalidGrant();
+    }
+
+    await replacePreviousConnections(tx, merchantId, row.connectionId, site);
 
     const connection = await tx.connection.findUniqueOrThrow({
       where: { id: row.connectionId },
@@ -234,6 +247,46 @@ export async function redeem(body: unknown): Promise<ConnectTokenResponse> {
       ...credentials,
     };
   });
+}
+
+/**
+ * Re-connect (spec §2.9, ruling W5): once a new connection for a site is redeemed, the store's
+ * other live connections for the same site (origin + path) are revoked as a Disconnect from the
+ * site would (`'site'`: the domain stays). When one of them owned the domain (`added_domain`),
+ * ownership passes to the new connection, so a later dashboard removal can still take it away.
+ * Runs in the redeem transaction, holding the store lock, so an approval that is never redeemed
+ * never breaks a working site.
+ */
+async function replacePreviousConnections(
+  tx: Tx,
+  merchantId: string,
+  connectionId: string,
+  site: string,
+): Promise<void> {
+  const fresh = await tx.connection.findUniqueOrThrow({ where: { id: connectionId } });
+  const peers = await tx.connection.findMany({
+    where: {
+      merchantId,
+      siteOrigin: fresh.siteOrigin,
+      revokedAt: null,
+      id: { not: connectionId },
+    },
+    select: { id: true, siteUrl: true, addedDomain: true },
+  });
+  let ownedDomain = fresh.addedDomain;
+  for (const peer of peers) {
+    if (siteKey(peer.siteUrl) !== site) continue; // another subdirectory site on that origin
+    await revokeConnection(tx, peer.id, 'site');
+    await dropHeldCredentials(tx, peer.id); // an older approval never redeemed
+    if (peer.addedDomain && !ownedDomain) {
+      ownedDomain = peer.addedDomain;
+      await tx.connection.update({ where: { id: peer.id }, data: { addedDomain: null } });
+      await tx.connection.update({
+        where: { id: connectionId },
+        data: { addedDomain: ownedDomain },
+      });
+    }
+  }
 }
 
 // ─── status ──────────────────────────────────────────────────────────────────

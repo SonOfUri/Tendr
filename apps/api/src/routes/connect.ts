@@ -9,16 +9,19 @@
 //   (`settings:manage`; removing needs step-up).
 import { ConnectAuthorizeRequestSchema } from '@tendr/contracts';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import { ZodError } from 'zod';
 import {
   authorize,
   connectStatus,
   disconnect,
+  invalidGrant,
   listConnections,
   redeem,
   removeConnection,
 } from '../connect/authorize.js';
 import { requireDashboardUser, requirePrincipal } from '../gateway/principal.js';
-import { forbidden, unauthorized } from '../lib/errors.js';
+import { AppError, forbidden, unauthorized } from '../lib/errors.js';
+import { log } from '../lib/logger.js';
 
 const manage = {
   principals: ['dashboard_user' as const],
@@ -40,6 +43,33 @@ function connectionCtx(req: FastifyRequest) {
   };
 }
 
+export const TOKEN_BODY_LIMIT = 16_384;
+
+/**
+ * `/v1/connect/token` answers every client failure with the same INVALID_GRANT, transport-level
+ * ones included (unparseable JSON, a missing or wrong content type, a body over the limit), so
+ * nothing distinguishes one cause from another. A rate limit stays 429 (RATE_LIMITED); server
+ * errors are logged without the body and stay 500.
+ */
+function tokenErrorHandler(error: unknown, req: FastifyRequest, reply: FastifyReply) {
+  const requestId = req.id;
+  const status =
+    error instanceof AppError ? error.status : (error as { statusCode?: number }).statusCode;
+  if (status === 429) {
+    return reply.status(429).send({
+      error: { code: 'RATE_LIMITED', message: 'Too many requests', requestId },
+    });
+  }
+  if (error instanceof ZodError || (status !== undefined && status >= 400 && status < 500)) {
+    const e = invalidGrant();
+    return reply.status(e.status).send({ error: { code: e.code, message: e.message, requestId } });
+  }
+  log('error', 'connect token failed', { requestId, err: String(error) });
+  return reply.status(500).send({
+    error: { code: 'INTERNAL_ERROR', message: 'Internal server error', requestId },
+  });
+}
+
 export type ConnectRouteOptions = {
   /** Per-IP limiter for `/v1/connect/token` (`createRateLimiters().connectToken`). */
   tokenRateLimit: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -58,6 +88,9 @@ export const connectRoutes: FastifyPluginAsync<ConnectRouteOptions> = async (app
     {
       config: { auth: 'public', publicLimit: 'route' },
       onRequest: opts.tokenRateLimit,
+      // The request is a few hundred bytes; anything larger is not a grant.
+      bodyLimit: TOKEN_BODY_LIMIT,
+      errorHandler: tokenErrorHandler,
     },
     async (req, reply) => {
       reply.header('cache-control', 'no-store');
