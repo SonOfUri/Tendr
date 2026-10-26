@@ -53,6 +53,9 @@
     "EVM_RPC_URLS",
     "CHECKOUT_BASE_URL",
     "SCREENING_TEST_BLOCKLIST",
+    "FX_PROVIDER",
+    "FX_API_KEY",
+    "FX_FIXED_RATES",
     "VERIFY_CHAINALYSIS_API_KEY"
   ],
   "tasks": {

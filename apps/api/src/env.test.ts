@@ -8,11 +8,12 @@ const gcp = {
   GCP_KMS_KEYRING: 'tendr',
   GCP_CREDENTIALS_JSON: '{"type":"service_account","client_email":"a@b","private_key":"k"}',
 };
-/** Production has no WebAuthn defaults, and needs a 1Click API key. */
+/** Production has no WebAuthn defaults, and needs a 1Click API key and an FX API key. */
 const webauthn = {
   WEBAUTHN_RP_ID: 'usetendr.tech',
   WEBAUTHN_ORIGINS: 'https://dashboard.usetendr.tech',
   ONECLICK_API_KEY: 'jwt',
+  FX_API_KEY: 'oxr',
 };
 
 describe('loadEnv keyvault rules', () => {
@@ -171,6 +172,7 @@ describe('loadEnv dashboard auth and mail', () => {
     WEBAUTHN_RP_ID: 'usetendr.tech',
     WEBAUTHN_ORIGINS: 'https://dashboard.usetendr.tech',
     ONECLICK_API_KEY: 'jwt',
+    FX_API_KEY: 'oxr',
   };
 
   it('defaults WebAuthn to localhost and parses the origin list', () => {
@@ -297,5 +299,38 @@ describe('loadEnv checkout pricing', () => {
     );
     expect(() => loadEnv({ ...base, CHECKOUT_GAS_MAX_USD: '-1' })).toThrow(/CHECKOUT_GAS_MAX_USD/);
     expect(() => loadEnv({ ...base, CHECKOUT_GAS_MAX_USD: '2e3' })).toThrow(/CHECKOUT_GAS_MAX_USD/);
+  });
+});
+
+describe('loadEnv FX', () => {
+  const prod = {
+    ...base,
+    ...gcp,
+    ...webauthn,
+    NODE_ENV: 'production',
+    KEYVAULT_DRIVER: 'gcp',
+  };
+
+  it('defaults to the fixed provider outside production, openexchangerates in production', () => {
+    const dev = loadEnv({ ...base, NODE_ENV: 'development' });
+    expect(dev.FX_PROVIDER).toBe('fixed');
+    expect(dev.FX_FIXED_RATES).toEqual({});
+    expect(loadEnv(prod).FX_PROVIDER).toBe('openexchangerates');
+  });
+
+  it('refuses the fixed provider in production, and a live provider without FX_API_KEY', () => {
+    expect(() => loadEnv({ ...prod, FX_PROVIDER: 'fixed' })).toThrow(/FX_PROVIDER/);
+    const { FX_API_KEY: _key, ...noKey } = prod;
+    expect(() => loadEnv(noKey)).toThrow(/FX_API_KEY/);
+    expect(() => loadEnv({ ...base, FX_PROVIDER: 'openexchangerates' })).toThrow(/FX_API_KEY/);
+    expect(() => loadEnv({ ...base, FX_PROVIDER: 'ecb' })).toThrow(/FX_PROVIDER/);
+  });
+
+  it('parses FX_FIXED_RATES as currency → positive decimal string', () => {
+    const e = loadEnv({ ...base, FX_FIXED_RATES: '{"NGN":"1602.04","JPY":"151.5"}' });
+    expect(e.FX_FIXED_RATES).toEqual({ NGN: '1602.04', JPY: '151.5' });
+    for (const bad of ['not json', '[]', '{"NGN":1602.04}', '{"NGN":"0"}', '{"ngn":"1"}']) {
+      expect(() => loadEnv({ ...base, FX_FIXED_RATES: bad }), bad).toThrow(/FX_FIXED_RATES/);
+    }
   });
 });

@@ -27,6 +27,13 @@ import { sha256 } from '../lib/crypto.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { toJsonDecimal } from '../lib/serialize.js';
+import {
+  convertToUsd,
+  getUsdRate,
+  minorUnits,
+  unsupportedCurrency,
+  type UsdConversion,
+} from './fx.js';
 import { depositInFlight } from './in-flight.js';
 import { resolvePayers } from './pricing.js';
 import { tokenInfo } from './tokens.js';
@@ -58,6 +65,10 @@ export const CreateSessionSchema = z
   .object({
     /** A positive decimal string; precision is checked against the currency below. */
     amount: z.string().regex(AMOUNT_RE, 'must be a decimal string like "25.10"'),
+    /**
+     * `USD`, any ISO 4217 code in the FX table (converted to USD once, at creation), or exactly the
+     * settlement asset id.
+     */
     amount_currency: z.string().min(1).max(200),
     external_ref: z.string().min(1).max(255),
     success_url: httpUrl,
@@ -199,9 +210,15 @@ async function isExternalRefConflict(
 }
 
 /**
- * Creates a checkout session. Throws UNSUPPORTED_CURRENCY (400) for a currency other than USD or
- * the settlement asset, ACCOUNT_NOT_READY (409) without an active merchant account or a settlement
- * config in this mode, CONFLICT (409) when `external_ref` belongs to an open or paid session.
+ * Creates a checkout session. A non-USD ISO 4217 total is converted to USD here, once, at the
+ * mode's FX rate (fx.ts; test mode always uses the fixed provider): the session stores the USD
+ * amount plus the original amount, currency, rate, source and the rate's timestamp, and an
+ * `Idempotency-Key` replay returns the stored session without fetching a new rate.
+ *
+ * Throws UNSUPPORTED_CURRENCY (400) for a currency that is neither an ISO 4217 code in the table
+ * nor the settlement asset, FX_RATE_UNAVAILABLE (503) when no current rate is available,
+ * ACCOUNT_NOT_READY (409) without an active merchant account or a settlement config in this mode,
+ * CONFLICT (409) when `external_ref` belongs to an open or paid session.
  */
 export async function createSession(
   ctx: CheckoutCtx,
@@ -217,20 +234,27 @@ export async function createSession(
   if (!readiness.ready) throw accountNotReady(readiness.message);
   const { account, settlement, recipient } = readiness;
 
-  // Currency and amount precision.
-  const currency = input.amount_currency;
+  // Currency and amount precision. A non-USD ISO total is converted to USD now, once; the session
+  // is then priced in USD like any other.
+  let currency = input.amount_currency;
+  let amount = input.amount;
+  let fx: UsdConversion | null = null;
   if (currency === 'USD') {
-    assertAmount(input.amount, USD_DECIMALS, 'USD');
+    assertAmount(amount, USD_DECIMALS, 'USD');
   } else if (currency === settlement.destAssetId) {
     const token = await tokenInfo(ctx.livemode, currency);
-    assertAmount(input.amount, Math.min(token.decimals, AMOUNT_MAX_SCALE), currency);
+    assertAmount(amount, Math.min(token.decimals, AMOUNT_MAX_SCALE), currency);
   } else {
-    throw new AppError(
-      'UNSUPPORTED_CURRENCY',
-      `amount_currency must be USD or the settlement asset (${settlement.destAssetId})`,
-      400,
-      { allowed: ['USD', settlement.destAssetId] },
-    );
+    const minor = minorUnits(currency);
+    if (minor === undefined) throw unsupportedCurrency(currency, settlement.destAssetId);
+    // Precision first, so a malformed amount never costs a provider call.
+    assertAmount(amount, minor, currency);
+    const rate = await getUsdRate(currency, new Date(), { livemode: ctx.livemode });
+    fx = convertToUsd(amount, currency, rate);
+    // The USD amount must pass the same checks as an amount given in USD.
+    assertAmount(fx.usd, USD_DECIMALS, 'USD');
+    amount = fx.usd;
+    currency = 'USD';
   }
 
   const link = input.payment_link_id
@@ -295,8 +319,13 @@ export async function createSession(
           connectionId: ctx.connectionId ?? null,
           externalRef: input.external_ref,
           amountMode: 'EXACT_OUT',
-          amount: input.amount,
+          amount,
           amountCurrency: currency,
+          originalAmount: fx?.amount ?? null,
+          originalCurrency: fx?.currency ?? null,
+          fxRate: fx?.rate ?? null,
+          fxSource: fx?.source ?? null,
+          fxAsOf: fx?.asOf ?? null,
           destAsset: settlement.destAssetId,
           destChain: settlement.destChain,
           recipient,
@@ -369,6 +398,17 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
     expired_reason: s.expiredReason,
     amount: s.amount.toFixed(),
     amount_currency: s.amountCurrency,
+    /** The order total as the store priced it, when it was converted from another currency. */
+    original_amount:
+      s.originalAmount && s.originalCurrency
+        ? s.originalAmount.toFixed(minorUnits(s.originalCurrency) ?? 2)
+        : null,
+    original_currency: s.originalCurrency,
+    /** The conversion at creation: "1 USD = rate <original_currency>"; null when not converted. */
+    fx:
+      s.fxRate && s.fxSource && s.fxAsOf
+        ? { rate: s.fxRate.toFixed(), source: s.fxSource, as_of: s.fxAsOf.toISOString() }
+        : null,
     settlement_asset: s.destAsset,
     settlement_chain: s.destChain,
     external_ref: s.externalRef,

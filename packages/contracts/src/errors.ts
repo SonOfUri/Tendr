@@ -26,7 +26,7 @@ export const ErrorCodes = [
   'QUOTE_TOO_SMALL',
   /** The real quote drifted from the dry-quote target past the tolerance; request a new quote. */
   'QUOTE_PRICE_MOVED',
-  /** A checkout `amount_currency` that is neither `USD` nor the merchant's settlement asset. */
+  /** A checkout `amount_currency` that is neither an ISO 4217 code we support nor the settlement asset. */
   'UNSUPPORTED_CURRENCY',
   /** The store cannot take payments in this mode yet: no active merchant account or settlement config. */
   'ACCOUNT_NOT_READY',
@@ -55,6 +55,11 @@ export const ErrorCodes = [
    * match the verifier or site. One code and message for every cause, so nothing is revealed.
    */
   'INVALID_GRANT',
+  /**
+   * A non-USD checkout session cannot be priced: the FX provider failed, or its rate is more than
+   * 10 minutes old. Never served from a stale rate; retry shortly or offer another payment method.
+   */
+  'FX_RATE_UNAVAILABLE',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

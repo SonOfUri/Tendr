@@ -164,6 +164,51 @@ const EnvSchema = z
      * Base URL of the hosted checkout page; a session's `url` is
      * `${CHECKOUT_BASE_URL}/pay/{id}#cs={client_secret}`. No trailing slash needed.
      */
+    /**
+     * FX rate provider for non-USD order totals (live mode). `fixed` reads FX_FIXED_RATES; test
+     * mode always uses `fixed`, whatever this says. Default: `openexchangerates` in production,
+     * `fixed` otherwise. Production refuses `fixed`.
+     */
+    FX_PROVIDER: z.preprocess(blankAsUnset, z.enum(['fixed', 'openexchangerates']).optional()),
+    /** The live FX provider's key (Open Exchange Rates app id). Required for a live provider. */
+    FX_API_KEY: optionalString,
+    /**
+     * Fixed FX rates as JSON `{"NGN":"1602.04"}`: "1 USD = R <code>", decimal strings (never JSON
+     * numbers, so no float ever touches a rate). Tests and test mode only.
+     */
+    FX_FIXED_RATES: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .default('{}')
+        .transform((text, ctx) => {
+          let v: unknown;
+          try {
+            v = JSON.parse(text);
+          } catch {
+            v = null;
+          }
+          const ok =
+            v !== null &&
+            typeof v === 'object' &&
+            !Array.isArray(v) &&
+            Object.entries(v).every(
+              ([code, rate]) =>
+                /^[A-Z]{3}$/.test(code) &&
+                typeof rate === 'string' &&
+                /^\d+(\.\d+)?$/.test(rate) &&
+                /[1-9]/.test(rate),
+            );
+          if (!ok) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: 'must be a JSON object of currency code to positive decimal string',
+            });
+            return z.NEVER;
+          }
+          return v as Record<string, string>;
+        }),
+    ),
     SCREENING_TEST_BLOCKLIST: z.preprocess(
       blankAsUnset,
       z.string().default('0x000000000000000000000000000000000000dead'),
@@ -215,6 +260,22 @@ const EnvSchema = z
         code: z.ZodIssueCode.custom,
         path: ['NEAR_CLIENT_DRIVER'],
         message: 'fake is not allowed in production (set NEAR_CLIENT_DRIVER=rpc)',
+      });
+    }
+    const fxProvider =
+      e.FX_PROVIDER ?? (e.NODE_ENV === 'production' ? 'openexchangerates' : 'fixed');
+    if (e.NODE_ENV === 'production' && fxProvider === 'fixed') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['FX_PROVIDER'],
+        message: 'fixed is not allowed in production (set FX_PROVIDER=openexchangerates)',
+      });
+    }
+    if (fxProvider !== 'fixed' && !e.FX_API_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['FX_API_KEY'],
+        message: `required with FX_PROVIDER=${fxProvider}`,
       });
     }
     if (e.NODE_ENV === 'production') {
@@ -290,6 +351,7 @@ const EnvSchema = z
     WEBAUTHN_ORIGINS: e.WEBAUTHN_ORIGINS
       ? splitList(e.WEBAUTHN_ORIGINS)
       : ['http://localhost:3000'],
+    FX_PROVIDER: e.FX_PROVIDER ?? (e.NODE_ENV === 'production' ? 'openexchangerates' : 'fixed'),
     MAIL_DRIVER:
       e.MAIL_DRIVER ??
       ({ development: 'log', test: 'memory', production: 'unconfigured' } as const)[e.NODE_ENV],

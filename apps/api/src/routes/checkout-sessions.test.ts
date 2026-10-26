@@ -2,9 +2,10 @@ import type { Merchant } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
+import { fixedFxProvider, resetFxCache } from '../checkout/fx.js';
 import { simulatedOneClick } from '../checkout/oneclick/index.js';
 import { resetTokenCache } from '../checkout/tokens.js';
-import { env } from '../env.js';
+import { env, loadEnv } from '../env.js';
 import { sha256 } from '../lib/crypto.js';
 import { prisma } from '../lib/prisma.js';
 import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
@@ -170,8 +171,8 @@ describe('checkout session routes', () => {
   });
 
   describe('amount and currency', () => {
-    it('rejects EUR with UNSUPPORTED_CURRENCY', async () => {
-      const res = await create(body({ amount_currency: 'EUR' }));
+    it.each(['XYZ', 'ngn', 'EURO'])('rejects %j with UNSUPPORTED_CURRENCY', async (code) => {
+      const res = await create(body({ amount_currency: code }));
       expect(res.statusCode).toBe(400);
       expect(res.json().error.code).toBe('UNSUPPORTED_CURRENCY');
     });
@@ -244,6 +245,168 @@ describe('checkout session routes', () => {
       );
       expect(bad.statusCode).toBe(400);
       expect(bad.json().error.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('non-USD amounts (FX)', () => {
+    const NOW_RATE = { rate: '1602.04', source: 'fixed' };
+
+    beforeEach(async () => {
+      await resetFxCache();
+    });
+    afterEach(() => {
+      loadEnv();
+    });
+
+    it('converts NGN 78500.00 at 1 USD = 1602.04 NGN to USD 49.01 and stores the conversion', async () => {
+      const before = Date.now();
+      const res = await create(body({ amount: '78500.00', amount_currency: 'NGN' }));
+      expect(res.statusCode, res.body).toBe(201);
+      const row = await prisma.session.findUniqueOrThrow({ where: { id: res.json().id } });
+      expect(row.amount.toFixed()).toBe('49.01');
+      expect(row.amountCurrency).toBe('USD');
+      expect(row.originalAmount?.toFixed()).toBe('78500');
+      expect(row.originalCurrency).toBe('NGN');
+      expect(row.fxRate?.toFixed()).toBe('1602.04');
+      expect(row.fxSource).toBe('fixed');
+      expect(row.fxAsOf!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    });
+
+    it('stored fields round-trip on GET', async () => {
+      const id = (await create(body({ amount: '78500.00', amount_currency: 'NGN' }))).json().id;
+      const row = await prisma.session.findUniqueOrThrow({ where: { id } });
+      const view = (await get(id)).json();
+      expect(view.amount).toBe('49.01');
+      expect(view.amount_currency).toBe('USD');
+      expect(view.original_amount).toBe('78500.00');
+      expect(view.original_currency).toBe('NGN');
+      expect(view.fx).toEqual({
+        rate: '1602.04',
+        source: 'fixed',
+        as_of: row.fxAsOf!.toISOString(),
+      });
+      // 0-dp and 3-dp currencies print with their own minor units.
+      const jpy = (
+        await create(body({ amount: '1000', amount_currency: 'JPY', external_ref: 'j-1' }))
+      ).json().id;
+      const jv = (await get(jpy)).json();
+      expect(jv.original_amount).toBe('1000');
+      expect(jv.amount).toBe('6.61');
+      const kwd = (
+        await create(body({ amount: '1.2', amount_currency: 'KWD', external_ref: 'k-1' }))
+      ).json().id;
+      expect((await get(kwd)).json().original_amount).toBe('1.200');
+    });
+
+    it('USD session unchanged and fx null', async () => {
+      const id = (await create(body())).json().id;
+      const row = await prisma.session.findUniqueOrThrow({ where: { id } });
+      expect(row.originalAmount).toBeNull();
+      expect(row.originalCurrency).toBeNull();
+      expect(row.fxRate).toBeNull();
+      expect(row.fxSource).toBeNull();
+      expect(row.fxAsOf).toBeNull();
+      const view = (await get(id)).json();
+      expect(view.amount).toBe('25.1');
+      expect(view.amount_currency).toBe('USD');
+      expect(view.original_amount).toBeNull();
+      expect(view.original_currency).toBeNull();
+      expect(view.fx).toBeNull();
+      // The settlement-asset path is unchanged too, and never asks for a rate.
+      const spy = vi.spyOn(fixedFxProvider(), 'rate');
+      const asset = await create(
+        body({ amount_currency: 'nep141:usdc.test', amount: '1.5', external_ref: 'a-1' }),
+      );
+      expect(asset.statusCode, asset.body).toBe(201);
+      expect((await get(asset.json().id)).json().fx).toBeNull();
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('KWD 1.234 (3 dp) accepted; KWD 1.2345 rejected before any rate is fetched', async () => {
+      const ok = await create(body({ amount: '1.234', amount_currency: 'KWD' }));
+      expect(ok.statusCode, ok.body).toBe(201);
+      const spy = vi.spyOn(fixedFxProvider(), 'rate');
+      const bad = await create(
+        body({ amount: '1.2345', amount_currency: 'KWD', external_ref: 'k-2' }),
+      );
+      expect(bad.statusCode).toBe(400);
+      expect(bad.json().error.code).toBe('VALIDATION_ERROR');
+      const jpy = await create(
+        body({ amount: '1000.5', amount_currency: 'JPY', external_ref: 'j-2' }),
+      );
+      expect(jpy.statusCode).toBe(400);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('rate 11 min old → 503 FX_RATE_UNAVAILABLE, and no session', async () => {
+      vi.spyOn(fixedFxProvider(), 'rate').mockResolvedValue({
+        ...NOW_RATE,
+        asOf: new Date(Date.now() - 11 * 60_000),
+      });
+      const res = await create(body({ amount: '78500.00', amount_currency: 'NGN' }));
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error.code).toBe('FX_RATE_UNAVAILABLE');
+      expect(await prisma.session.count()).toBe(0);
+    });
+
+    it('provider error → 503 FX_RATE_UNAVAILABLE', async () => {
+      vi.spyOn(fixedFxProvider(), 'rate').mockRejectedValue(new Error('provider down'));
+      const res = await create(body({ amount: '78500.00', amount_currency: 'NGN' }));
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error.code).toBe('FX_RATE_UNAVAILABLE');
+      expect(res.body).not.toContain('provider down');
+    });
+
+    it('cache hit within 60 s does not call the provider', async () => {
+      const spy = vi.spyOn(fixedFxProvider(), 'rate');
+      for (const ref of ['c-1', 'c-2', 'c-3']) {
+        const r = await create(body({ amount: '100', amount_currency: 'NGN', external_ref: ref }));
+        expect(r.statusCode, r.body).toBe(201);
+      }
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it('test mode always uses the fixed provider, whatever FX_PROVIDER says', async () => {
+      loadEnv({ ...process.env, FX_PROVIDER: 'openexchangerates', FX_API_KEY: 'k' });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+      const res = await create(body({ amount: '78500.00', amount_currency: 'NGN' }));
+      expect(res.statusCode, res.body).toBe(201);
+      expect((await get(res.json().id)).json().fx.source).toBe('fixed');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('the converted USD amount must pass the amount checks', async () => {
+      // 20 integer digits of KWD at 1 USD = 0.307 KWD is a 21-digit USD amount: too large.
+      const res = await create(
+        body({ amount: '99999999999999999999.999', amount_currency: 'KWD' }),
+      );
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('VALIDATION_ERROR');
+      expect(res.json().error.message).toMatch(/too large/);
+      // The smallest JPY amount still converts to a positive USD amount (one cent, rounded up).
+      const tiny = await create(body({ amount: '1', amount_currency: 'JPY', external_ref: 't' }));
+      expect(tiny.statusCode, tiny.body).toBe(201);
+      expect((await get(tiny.json().id)).json().amount).toBe('0.01');
+    });
+
+    it('an Idempotency-Key replay returns the stored conversion without a new rate', async () => {
+      const spy = vi.spyOn(fixedFxProvider(), 'rate');
+      const payload = body({ amount: '78500.00', amount_currency: 'NGN' });
+      const first = await create(payload, testKey, 'fx-idem');
+      expect(first.statusCode, first.body).toBe(201);
+      expect(spy).toHaveBeenCalledTimes(1);
+      // Drop the rate cache and move the rate: a replay must not fetch or re-convert.
+      await resetFxCache();
+      spy.mockResolvedValue({ rate: '9999', source: 'fixed', asOf: new Date() });
+      const replay = await create(payload, testKey, 'fx-idem');
+      expect(replay.statusCode).toBe(201);
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(replay.json()).toEqual(first.json());
+      expect(spy).toHaveBeenCalledTimes(1);
+      const view = (await get(first.json().id)).json();
+      expect(view.amount).toBe('49.01');
+      expect(view.fx.rate).toBe('1602.04');
+      expect(await prisma.session.count()).toBe(1);
     });
   });
 

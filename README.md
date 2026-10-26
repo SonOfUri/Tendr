@@ -257,9 +257,25 @@ curl -X POST http://localhost:4000/v1/checkout/sessions \
 #  "expires_at":"...","status":"PENDING_DEPOSIT"}
 ```
 
-- `amount_currency` is `USD` (at most 2 decimals) or exactly the store's settlement asset id.
-  Anything else gets `400 UNSUPPORTED_CURRENCY`. The settlement asset and destination come from
-  the store's settings, and the request cannot set them.
+- `amount_currency` is `USD` (at most 2 decimals), any ISO 4217 currency code (see below), or
+  exactly the store's settlement asset id. Anything else gets `400 UNSUPPORTED_CURRENCY`. The
+  settlement asset and destination come from the store's settings, and the request cannot set them.
+- A non-USD total (`NGN`, `EUR`, `JPY`, …) is converted to USD **once, at creation**:
+  - The amount may have at most the currency's ISO minor units (`JPY 1000`, `NGN 78500.00`,
+    `KWD 1.234`; `KWD 1.2345` is a `400 VALIDATION_ERROR`).
+  - Rates read the way a merchant does: **"1 USD = R <currency>"**, and `usd = amount / R`, rounded
+    **up** to the cent so the store never receives less than the order total at the quoted rate.
+    Example: `NGN 78500.00` at `1 USD = 1602.04 NGN` is `USD 49.01` (78500 / 1602.04 = 49.00002…).
+    The arithmetic is exact (scaled bigint), never floating point.
+  - The USD amount must pass the same checks as an amount sent in USD. The session is then priced
+    in USD as usual: `amount` / `amount_currency` on the session are the USD values.
+  - Rates are cached per currency for 60 s. If the provider fails, or its rate (by the provider's
+    own timestamp) is more than 10 minutes old, the session is refused with
+    `503 FX_RATE_UNAVAILABLE`; there is no fallback to a stale rate. Show the shopper "Crypto
+    payment is unavailable right now" and offer the store's other payment methods.
+  - An `Idempotency-Key` replay returns the stored session; it never fetches a new rate.
+  - Test mode always uses the fixed-rate provider (`FX_FIXED_RATES`), whatever `FX_PROVIDER` says.
+    Live mode uses `FX_PROVIDER` (`openexchangerates` in production, with `FX_API_KEY`).
 - Optional fields:
   - `customer_email`, used only for refund contact and receipts;
   - `metadata`, up to 50 string keys;
@@ -275,7 +291,10 @@ curl -X POST http://localhost:4000/v1/checkout/sessions \
 - Without an active merchant account and settlement settings in that mode, you get
   `409 ACCOUNT_NOT_READY`.
 - `GET /v1/checkout/sessions/:id` (`sessions:read`) returns the session with its payments,
-  refunds and totals.
+  refunds and totals. A converted session also has `original_amount` (in the currency's minor
+  units, e.g. `"78500.00"`), `original_currency` and
+  `fx: { rate, source, as_of }` (`rate` is "1 USD = rate <original_currency>", `as_of` is the
+  rate's own timestamp). For a USD or settlement-asset session these are `null`.
 - `POST /v1/checkout/sessions/:id/expire` cancels an open session. It becomes `EXPIRED` with
   reason `canceled`. While a deposit is in flight it is refused with `409 DEPOSIT_IN_PROGRESS`
   (`details.reason: deposit_in_progress`), so an on-time payment is never turned late.
@@ -567,6 +586,19 @@ fee share, 1Click's fee and the spread.
   opens in a popup, the payment goes through, and the frame shows the result.
 - Pay in wNEAR from a NEAR wallet that holds only NEAR. The checkout wraps the shortfall first.
 - Pay Tron USDT through TronLink.
+
+**Live checklist (FX for non-USD stores):** the live FX provider is
+[Open Exchange Rates](https://openexchangerates.org) (`FX_PROVIDER=openexchangerates`,
+`FX_API_KEY` = its app id), called over HTTPS at `/api/latest.json?symbols=<code>` (USD base, so a
+rate is already "1 USD = R <code>"; `asOf` is the response's `timestamp`). Limits to check against
+the current price list before going live: the free plan (about 1,000 requests a month, hourly
+updates) is fine for wiring and a smoke test, but its hourly timestamps are usually more than
+10 minutes old, so most live sessions would get `503 FX_RATE_UNAVAILABLE`. Live needs a plan whose
+rates refresh well inside 10 minutes (the Unlimited plan, 5-minute updates, at the time of writing)
+and a request quota of at least one call per active currency per minute (the cache is 60 s, so
+about 44,000 requests a month per currency in steady use). Then: create one NGN and one EUR live
+session and check `fx.source` is `openexchangerates`, `fx.as_of` is under 10 minutes old, and the
+USD amount matches `amount / rate` rounded up.
 
 ### Known limitations
 

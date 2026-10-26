@@ -920,6 +920,15 @@ model Session {
   /// The connection whose key created the session (from `api_keys.connection_id`); null for
   /// sessions created with a hand-made key, a payment link or the dashboard.
   connectionId     String?               @map("connection_id")
+  /// A non-USD order total converted to USD at creation (`amount` is then the USD amount, rounded
+  /// up to the cent). `fxRate` reads "1 USD = fxRate <originalCurrency>"; `fxAsOf` is the rate's
+  /// own timestamp from `fxSource`. All null for USD and settlement-asset sessions (CHECK in
+  /// migration session_fx).
+  originalAmount   Decimal?              @map("original_amount") @db.Decimal(38, 18)
+  originalCurrency String?               @map("original_currency")
+  fxRate           Decimal?              @map("fx_rate") @db.Decimal(38, 18)
+  fxSource         String?               @map("fx_source")
+  fxAsOf           DateTime?             @map("fx_as_of")
   createdAt        DateTime              @default(now()) @map("created_at")
   updatedAt        DateTime              @updatedAt @map("updated_at")
 
