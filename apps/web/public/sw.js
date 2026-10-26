@@ -25,9 +25,13 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
   if (url.pathname.startsWith('/api/')) return;
   if (url.pathname.startsWith('/checkout/')) return;
+  // The checkout page itself is never touched.
+  if (url.pathname.startsWith('/pay/')) return;
   if (url.pathname.includes('session')) return;
 
-  if (request.mode === 'navigate') {
+  // Only top-level pages. A framed navigation (the checkout modal or widget on a store) re-fetched
+  // from here loses `Sec-Fetch-Dest: iframe`, so its CSP would only let tendr itself frame it.
+  if (request.mode === 'navigate' && request.destination === 'document') {
     event.respondWith(
       fetch(request).catch(() => caches.match('/offline.html')),
     );
