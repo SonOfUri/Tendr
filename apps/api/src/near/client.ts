@@ -368,7 +368,13 @@ function build(livemode: boolean): { client: NearClient; fake?: FakeNearClient }
     dailyYocto: e.FUNDING_DAILY_CAP_YOCTO,
   };
   if (e.NEAR_CLIENT_DRIVER === 'fake') {
-    const fake = new FakeNearClient(config, { simulateContracts: e.NEAR_FAKE_SIMULATE });
+    const fake = new FakeNearClient(config, {
+      simulateContracts: e.NEAR_FAKE_SIMULATE,
+      timelockNs:
+        e.NEAR_FAKE_TIMELOCK_SECONDS === undefined
+          ? undefined
+          : BigInt(e.NEAR_FAKE_TIMELOCK_SECONDS) * 1_000_000_000n,
+    });
     return { client: new CappedNearClient(fake, config, caps), fake };
   }
   const rpc = new NearRpc(

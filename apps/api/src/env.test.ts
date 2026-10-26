@@ -133,6 +133,21 @@ describe('loadEnv NEAR settings', () => {
     ).toThrow(/NEAR_FAKE_SIMULATE/);
   });
 
+  it('NEAR_FAKE_TIMELOCK_SECONDS: only with the contract simulator', () => {
+    const dev = { ...base, NODE_ENV: 'development' };
+    expect(loadEnv(dev).NEAR_FAKE_TIMELOCK_SECONDS).toBeUndefined();
+    expect(
+      loadEnv({ ...dev, NEAR_FAKE_SIMULATE: '1', NEAR_FAKE_TIMELOCK_SECONDS: '5' })
+        .NEAR_FAKE_TIMELOCK_SECONDS,
+    ).toBe(5);
+    expect(() => loadEnv({ ...dev, NEAR_FAKE_TIMELOCK_SECONDS: '5' })).toThrow(
+      /NEAR_FAKE_TIMELOCK_SECONDS/,
+    );
+    expect(() =>
+      loadEnv({ ...dev, NEAR_FAKE_SIMULATE: '1', NEAR_FAKE_TIMELOCK_SECONDS: '0' }),
+    ).toThrow(/NEAR_FAKE_TIMELOCK_SECONDS/);
+  });
+
   it('API tests never run the contract simulator (setup-env pins it off)', () => {
     expect(process.env.NEAR_FAKE_SIMULATE).toBe('0');
   });

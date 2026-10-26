@@ -89,16 +89,25 @@ export class FakeNearClient implements NearClient {
   /**
    * With `simulateContracts`, provisioned accounts run an in-memory merchant-account contract
    * (fake-contract.ts) that answers unscripted calls and views with the contract's events; the
-   * intents verifier answers `mt_batch_balance_of` with zeros. Local dev and end-to-end tests
+   * intents verifier answers `mt_batch_balance_of` with what its `deposit` credited. Local dev and end-to-end tests
    * only. Scripted logs, views and failures still take precedence.
    */
   readonly contracts: FakeMerchantContracts | null;
 
+  /**
+   * With `simulateContracts`, the mock intents verifier's balances: what its test-only `deposit`
+   * credited (simulated 1Click settlements), keyed `<account>|<token>`. Nothing debits them:
+   * withdrawals and refunds move no funds in the simulation.
+   */
+  private readonly intentBalances = new Map<string, bigint>();
+
   constructor(
     readonly scope: ProvisionScope,
-    opts: { simulateContracts?: boolean } = {},
+    opts: { simulateContracts?: boolean; timelockNs?: bigint } = {},
   ) {
-    this.contracts = opts.simulateContracts ? new FakeMerchantContracts() : null;
+    this.contracts = opts.simulateContracts
+      ? new FakeMerchantContracts(undefined, opts.timelockNs)
+      : null;
   }
 
   /** Logs returned by `call(contractId, method)` (e.g. NEP-297 `EVENT_JSON:` lines). */
@@ -235,6 +244,16 @@ export class FakeNearClient implements NearClient {
     let logs = typeof scripted === 'function' ? scripted(args) : (scripted ?? []);
     if (
       scripted === undefined &&
+      this.contracts &&
+      contractId === this.scope.intentsContractId &&
+      method === 'deposit'
+    ) {
+      const a = args as { account_id: string; token_id: string; amount: string };
+      const k = `${a.account_id}|${a.token_id}`;
+      this.intentBalances.set(k, (this.intentBalances.get(k) ?? 0n) + BigInt(a.amount));
+    }
+    if (
+      scripted === undefined &&
       signer === 'relayer-accounts' &&
       this.contracts?.has(contractId)
     ) {
@@ -284,7 +303,10 @@ export class FakeNearClient implements NearClient {
       const simulated = this.contracts.view(contractId, method, args as Record<string, unknown>);
       if (simulated !== undefined) return simulated as T;
       if (contractId === this.scope.intentsContractId && method === 'mt_batch_balance_of') {
-        return (args as { token_ids: string[] }).token_ids.map(() => '0') as T;
+        const a = args as { account_id: string; token_ids: string[] };
+        return a.token_ids.map((t) =>
+          (this.intentBalances.get(`${a.account_id}|${t}`) ?? 0n).toString(),
+        ) as T;
       }
     }
     if (!answer) throw new Error(`FakeNearClient: no view scripted for ${k}`);

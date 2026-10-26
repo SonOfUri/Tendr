@@ -93,7 +93,14 @@ const u128 = (v: string | null | undefined) => (v === null || v === undefined ? 
 export class FakeMerchantContracts {
   private readonly accounts = new Map<string, AccountState>();
 
-  constructor(private readonly now: () => bigint = () => BigInt(Date.now()) * NS_PER_MS) {}
+  constructor(
+    private readonly now: () => bigint = () => BigInt(Date.now()) * NS_PER_MS,
+    /**
+     * The timelock delay. The WooCommerce e2e shortens it (`NEAR_FAKE_TIMELOCK_SECONDS`) so a
+     * store refund, which is timelocked above the refund cap, executes within the run.
+     */
+    private readonly timelockNs: bigint = SIM_TIMELOCK_DELAY_NS,
+  ) {}
 
   has(accountId: string): boolean {
     return this.accounts.has(accountId);
@@ -341,7 +348,7 @@ export class FakeMerchantContracts {
     if (valid < s.threshold) return logs;
     if (p.readyAt !== null && p.timelockEpoch === s.epoch) return logs;
     if (this.needsTimelock(s, p.action)) {
-      p.readyAt = now + SIM_TIMELOCK_DELAY_NS;
+      p.readyAt = now + this.timelockNs;
       p.timelockEpoch = s.epoch;
       return [
         ...logs,

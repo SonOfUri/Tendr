@@ -63,6 +63,12 @@ const EnvSchema = z
       .enum(['0', '1'])
       .optional()
       .transform((v) => v === '1'),
+    /**
+     * Seconds the simulated contract's timelocks last (default 24 h, as on chain). Only the
+     * WooCommerce e2e shortens it, so a timelocked store refund executes within the run. Only with
+     * the contract simulator (`NEAR_FAKE_SIMULATE=1`).
+     */
+    NEAR_FAKE_TIMELOCK_SECONDS: z.coerce.number().int().min(1).max(86_400).optional(),
     NEAR_RPC_URL_LIVE: z.string().url().default('https://rpc.mainnet.near.org'),
     NEAR_RPC_URL_TEST: z.string().url().default('https://rpc.testnet.near.org'),
     NEAR_PARENT_ACCOUNT_LIVE: z.string().min(1).default('tendr.near'),
@@ -253,6 +259,13 @@ const EnvSchema = z
       });
     }
     const driver = e.NEAR_CLIENT_DRIVER ?? (e.NODE_ENV === 'production' ? 'rpc' : 'fake');
+    if (e.NEAR_FAKE_TIMELOCK_SECONDS !== undefined && !e.NEAR_FAKE_SIMULATE) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['NEAR_FAKE_TIMELOCK_SECONDS'],
+        message: 'NEAR_FAKE_TIMELOCK_SECONDS only applies to the contract simulator',
+      });
+    }
     if (e.NEAR_FAKE_SIMULATE && driver !== 'fake') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

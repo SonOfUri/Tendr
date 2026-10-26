@@ -10,10 +10,10 @@ const key = (n: number) => ({ ed25519: Buffer.alloc(32, n).toString('base64') })
 const SIGNER = 'per_01AAAAAAAAAAAAAAAAAAAAAAAA';
 const OTHER = 'per_01BBBBBBBBBBBBBBBBBBBBBBBB';
 
-function client(threshold = 1, recoveryKey: string | null = null) {
+function client(threshold = 1, recoveryKey: string | null = null, timelockNs?: bigint) {
   const f = new FakeNearClient(
     { livemode: false, parentAccountId: 'tendr.testnet', intentsContractId: 'intents-mock.x' },
-    { simulateContracts: true },
+    { simulateContracts: true, timelockNs },
   );
   const init: InitConfigJson = {
     signers: [
@@ -31,8 +31,8 @@ function client(threshold = 1, recoveryKey: string | null = null) {
   return { f, init };
 }
 
-async function provisioned(threshold = 1, recoveryKey: string | null = null) {
-  const { f, init } = client(threshold, recoveryKey);
+async function provisioned(threshold = 1, recoveryKey: string | null = null, timelockNs?: bigint) {
+  const { f, init } = client(threshold, recoveryKey, timelockNs);
   await f.provisionAccount({
     merchantId: 'mer_x',
     livemode: false,
@@ -234,5 +234,55 @@ describe('FakeNearClient with simulated merchant-account contracts', () => {
       intentsContractId: 'intents-mock.x',
     });
     expect(plain.contracts).toBeNull();
+  });
+
+  it('a shorter simulated timelock (NEAR_FAKE_TIMELOCK_SECONDS, the WooCommerce e2e) lets a refund execute', async () => {
+    const f = await provisioned(1, null, 50_000_000n); // 50 ms
+    const refund: ActionJson = {
+      refund: {
+        payment_id: 'pay_1',
+        asset: 'nep141:usdc.test',
+        amount: '500000',
+        destination_chain: 'near',
+        destination: 'shopper.testnet',
+        route: { poa: { token_contract: 'usdc.test' } },
+      },
+    };
+    const { id, events } = await propose(f, refund);
+    // Above the refund cap (0 by default): timelocked, only for the shortened delay.
+    expect(events.map((e) => e.event)).toEqual([
+      'proposal_created',
+      'proposal_approved',
+      'timelock_started',
+    ]);
+    const early = await f.call('relayer-accounts', ACCOUNT, 'execute', { proposal_id: id });
+    expect(early.failure).toMatch(/timelocked/);
+    await new Promise((r) => setTimeout(r, 80));
+    const done = await f.call('relayer-accounts', ACCOUNT, 'execute', { proposal_id: id });
+    expect(parseAccountEvents(done.successLogs).map((e) => e.event)).toEqual(['proposal_executed']);
+  });
+
+  it('deposits to the mock intents verifier show in its balances (simulated settlements)', async () => {
+    const f = await provisioned();
+    const balances = () =>
+      f.view<string[]>('intents-mock.x', 'mt_batch_balance_of', {
+        account_id: ACCOUNT,
+        token_ids: ['nep141:usdc.test', 'nep141:other.test'],
+      });
+    expect(await balances()).toEqual(['0', '0']);
+    for (const amount of ['1000000', '250000']) {
+      const res = await f.call('relayer-accounts', 'intents-mock.x', 'deposit', {
+        account_id: ACCOUNT,
+        token_id: 'nep141:usdc.test',
+        amount,
+      });
+      expect(res.topLevelStatus).toBe('success');
+    }
+    await f.call('relayer-accounts', 'intents-mock.x', 'deposit', {
+      account_id: 'someone-else.testnet',
+      token_id: 'nep141:usdc.test',
+      amount: '7',
+    });
+    expect(await balances()).toEqual(['1250000', '0']);
   });
 });
