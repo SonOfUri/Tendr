@@ -1041,31 +1041,34 @@ model SettlementClaim {
 }
 
 model Refund {
-  id                  String           @id
-  merchantId          String           @map("merchant_id")
-  livemode            Boolean
-  paymentId           String           @map("payment_id")
-  reason              RefundReason
-  refundTxHash        String?          @map("refund_tx_hash")
-  status              ExternalTxStatus @default(pending)
+  id                    String           @id
+  merchantId            String           @map("merchant_id")
+  livemode              Boolean
+  paymentId             String           @map("payment_id")
+  reason                RefundReason
+  refundTxHash          String?          @map("refund_tx_hash")
+  status                ExternalTxStatus @default(pending)
   /// The project 2 `refund` proposal that returns the money (null when 1Click refunds directly).
-  proposalId          String?          @map("proposal_id")
+  proposalId            String?          @map("proposal_id")
   /// Where the money goes; null while `needs_address`.
-  destination         String?          @map("destination")
-  destinationChain    String?          @map("destination_chain")
-  assetId             String           @map("asset_id")
-  amount              Decimal          @db.Decimal(78, 0)
+  destination           String?          @map("destination")
+  destinationChain      String?          @map("destination_chain")
+  assetId               String           @map("asset_id")
+  amount                Decimal          @db.Decimal(78, 0)
   /// The sender is a known exchange: no return address until the shopper gives one.
-  needsAddress        Boolean          @default(false) @map("needs_address")
+  needsAddress          Boolean          @default(false) @map("needs_address")
   /// A signer typed the legal-clearance acknowledgement (required to refund a held payment).
-  acknowledgedLegalAt DateTime?        @map("acknowledged_legal_at")
+  acknowledgedLegalAt   DateTime?        @map("acknowledged_legal_at")
   /// Estimated cross-chain return fee deducted from the gross return (`amount` is net).
-  returnFee           Decimal?         @map("return_fee") @db.Decimal(78, 0)
+  returnFee             Decimal?         @map("return_fee") @db.Decimal(78, 0)
   /// Set when the return needs a person before a draft: `sanctions`, `needs_swap_route`,
   /// `price_unavailable` or `no_sender`.
-  reviewReason        String?          @map("review_reason")
-  createdAt           DateTime         @default(now()) @map("created_at")
-  updatedAt           DateTime         @updatedAt @map("updated_at")
+  reviewReason          String?          @map("review_reason")
+  /// sha256 (hex) of the single-use return-address token emailed to the shopper (Ruling C20).
+  addressTokenHash      String?          @map("address_token_hash")
+  addressTokenExpiresAt DateTime?        @map("address_token_expires_at")
+  createdAt             DateTime         @default(now()) @map("created_at")
+  updatedAt             DateTime         @updatedAt @map("updated_at")
 
   merchant Merchant         @relation(fields: [merchantId], references: [id])
   payment  Payment          @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)

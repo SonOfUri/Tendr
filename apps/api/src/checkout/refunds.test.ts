@@ -14,7 +14,9 @@ import { resetOneClickProviders, SimulatedOneClick } from './oneclick/index.js';
 import {
   draftReturn,
   netOfReturnFee,
+  onRefundProposalCancelled,
   onRefundProposalExecuted,
+  onRefundProposalFailed,
   queueHeldReturn,
   queueReturn,
   registerRefundHooks,
@@ -280,7 +282,9 @@ describe('return to sender', () => {
       template: 'refund_needs_address',
       data: { merchant_name: 'Bean Shop', refund_id: r!.id },
     });
-    expect(mailer.sent[0]!.data.checkout_url).toContain(`/pay/${s.id}`);
+    expect(mailer.sent[0]!.data.refund_address_url).toMatch(
+      new RegExp(`/pay/${s.id}/refund-address\\?t=${r!.id}\\.`),
+    );
     let view = (await call('GET', 'session', s.client_secret)).json();
     expect(view.needs_email).toBe(false); // the store gave one
     expect(view.refunds).toEqual([
@@ -324,19 +328,22 @@ describe('return to sender', () => {
     expect((await refundsOf(p.id))[0]!.needsAddress).toBe(true);
   });
 
-  it('a sanctioned shopper-provided address is 403 and the return goes to review', async () => {
-    const { s, p } = await overpaid({ sender: BINANCE, email: 'ada@example.com' });
-    const res = await call('POST', 'refund-address', s.client_secret, {
+  it('a sanctioned shopper-provided address is refused alone; the shopper can give another', async () => {
+    const { s, p } = await overpaid({ sender: BINANCE });
+    let res = await call('POST', 'refund-address', s.client_secret, {
       address: SANCTIONED,
       chain: 'eth',
     });
     expect(res.statusCode, res.body).toBe(403);
     expect(res.json().error.code).toBe('WALLET_NOT_ALLOWED');
     const [r] = await refundsOf(p.id);
-    expect(r).toMatchObject({ status: 'failed', reviewReason: 'sanctions', proposalId: null });
+    expect(r).toMatchObject({ status: 'pending', needsAddress: true, reviewReason: null });
     expect(await prisma.accountProposal.count()).toBe(0);
-    expect(await eventsOf('payment.held')).toHaveLength(1);
-    expect((await call('GET', 'session', s.client_secret)).json().needs_email).toBe(false);
+    expect(await eventsOf('payment.held')).toEqual([]);
+    expect((await call('GET', 'session', s.client_secret)).json().needs_email).toBe(true);
+    res = await call('POST', 'refund-address', s.client_secret, { address: WALLET, chain: 'eth' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await refundsOf(p.id))[0]!.proposalId).not.toBeNull();
   });
 
   it('a sanctioned sender destination is never drafted (screened right before drafting)', async () => {
@@ -471,6 +478,170 @@ describe('return to sender', () => {
     expect(await prisma.accountProposal.count()).toBe(0);
   });
 
+  /** The token from the latest `refund_needs_address` email. */
+  const mailedToken = () =>
+    decodeURIComponent(
+      new URL(mailer.sent.at(-1)!.data.refund_address_url!).searchParams.get('t')!,
+    );
+  const byToken = (payload: Record<string, unknown>) =>
+    app.inject({ method: 'POST', url: '/v1/checkout/refund-address', payload });
+
+  it('the emailed link: a valid token works once; reused, expired or wrong-refund tokens are 401', async () => {
+    const a = await overpaid({ sender: BINANCE, email: 'ada@example.com' });
+    const tokenA = mailedToken();
+    const b = await overpaid({ sender: BINANCE, email: 'bob@example.com' });
+    const tokenB = mailedToken();
+    const [ra] = await refundsOf(a.p.id);
+    const [rb] = await refundsOf(b.p.id);
+    expect(ra!.addressTokenHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(ra!.addressTokenHash).not.toContain(tokenA.split('.')[1]);
+
+    // Wrong refund: B's secret under A's refund id.
+    const forged = `${ra!.id}.${tokenB.split('.')[1]}`;
+    let res = await byToken({ token: forged, address: WALLET, chain: 'eth' });
+    expect(res.statusCode, res.body).toBe(401);
+    res = await byToken({ token: 'garbage', address: WALLET, chain: 'eth' });
+    expect(res.statusCode).toBe(401);
+
+    // A sanctioned address is refused without consuming the token.
+    res = await byToken({ token: tokenA, address: SANCTIONED, chain: 'eth' });
+    expect(res.statusCode, res.body).toBe(403);
+
+    res = await byToken({ token: tokenA, address: WALLET, chain: 'eth' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ refund_id: ra!.id, status: 'pending_approval' });
+    const doneA = await prisma.refund.findUniqueOrThrow({ where: { id: ra!.id } });
+    expect(doneA).toMatchObject({
+      needsAddress: false,
+      destination: WALLET,
+      addressTokenHash: null,
+    });
+    expect(doneA.proposalId).not.toBeNull();
+    // Reused.
+    res = await byToken({ token: tokenA, address: WALLET, chain: 'eth' });
+    expect(res.statusCode).toBe(401);
+
+    // Expired.
+    await prisma.refund.update({
+      where: { id: rb!.id },
+      data: { addressTokenExpiresAt: new Date(Date.now() - 1000) },
+    });
+    res = await byToken({ token: tokenB, address: WALLET, chain: 'eth' });
+    expect(res.statusCode).toBe(401);
+    expect((await prisma.refund.findUniqueOrThrow({ where: { id: rb!.id } })).needsAddress).toBe(
+      true,
+    );
+  });
+
+  it('a draft cancelled in Postgres: the sweeper detaches it into review (refund.needs_review)', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    await prisma.accountProposal.update({
+      where: { id: r!.proposalId! },
+      data: { status: 'cancelled' },
+    });
+    await sweepReturns();
+    const after = await prisma.refund.findUniqueOrThrow({ where: { id: r!.id } });
+    expect(after).toMatchObject({
+      proposalId: null,
+      status: 'pending',
+      reviewReason: 'proposal_cancelled',
+    });
+    const [ev] = await eventsOf('refund.needs_review');
+    expect(ev!.payload).toMatchObject({
+      refund_id: r!.id,
+      proposal_id: r!.proposalId,
+      review_reason: 'proposal_cancelled',
+    });
+    // Not re-drafted automatically; a second sweep changes nothing.
+    await sweepReturns();
+    expect(await eventsOf('refund.needs_review')).toHaveLength(1);
+    expect(await prisma.accountProposal.count()).toBe(1);
+  });
+
+  async function proposalEvent(type: string, proposalId: string, payload: object = {}) {
+    return prisma.event.create({
+      data: {
+        id: newId('evt'),
+        merchantId: merchant.id,
+        livemode: false,
+        aggregateType: 'account_proposal',
+        aggregateId: proposalId,
+        type,
+        payload: { proposalId, kind: 'refund', txHash: 'tx-1', ...payload },
+      },
+    });
+  }
+
+  it('an on-chain cancel or expiry sends the return to review', async () => {
+    const one = await overpaid();
+    const [r1] = await refundsOf(one.p.id);
+    await onRefundProposalCancelled(
+      await proposalEvent('account.proposal.cancelled', r1!.proposalId!),
+    );
+    expect(await prisma.refund.findUniqueOrThrow({ where: { id: r1!.id } })).toMatchObject({
+      proposalId: null,
+      reviewReason: 'proposal_cancelled',
+    });
+
+    const two = await overpaid();
+    const [r2] = await refundsOf(two.p.id);
+    await onRefundProposalFailed(
+      await proposalEvent('account.proposal.failed', r2!.proposalId!, { reason: 'expired' }),
+    );
+    expect(await prisma.refund.findUniqueOrThrow({ where: { id: r2!.id } })).toMatchObject({
+      proposalId: null,
+      reviewReason: 'proposal_expired',
+    });
+    expect(await eventsOf('refund.needs_review')).toHaveLength(2);
+  });
+
+  it('a locally cancelled draft the chain executes anyway is still confirmed once', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    const proposalId = r!.proposalId!;
+    await prisma.accountProposal.update({
+      where: { id: proposalId },
+      data: { status: 'cancelled' },
+    });
+    await sweepReturns();
+    await onRefundProposalExecuted(await proposalEvent('account.proposal.executed', proposalId));
+    expect(await prisma.refund.findUniqueOrThrow({ where: { id: r!.id } })).toMatchObject({
+      status: 'confirmed',
+      proposalId,
+      reviewReason: null,
+    });
+    expect(await eventsOf('refund.sent')).toHaveLength(1);
+  });
+
+  it('a held return whose delivered amount is unknown is refused for review', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'exact', { senderAddress: SANCTIONED });
+    await poll(q.deposit_address);
+    const p = await paymentOf(q.id);
+    expect(p.status).toBe('HELD');
+    const real = await sim.status(q.deposit_address);
+    vi.spyOn(sim, 'status').mockResolvedValue({
+      ...real,
+      swapDetails: { ...real.swapDetails, amountOut: undefined },
+    });
+    const r = (await queueHeldReturn(ctx(), p.id))!;
+    expect(r).toMatchObject({ reviewReason: 'amount_unknown', proposalId: null });
+    expect(r.amount.toFixed()).toBe('0');
+    await prisma.refund.update({ where: { id: r.id }, data: { acknowledgedLegalAt: new Date() } });
+    expect(await draftReturn(ctx(), r.id)).toMatchObject({ proposalId: null });
+    expect(await prisma.accountProposal.count()).toBe(0);
+  });
+
+  it('setShopperEmail mails only when it set the email', async () => {
+    const { s } = await overpaid({ sender: BINANCE });
+    await prisma.session.update({ where: { id: s.id }, data: { customerEmail: 'x@example.com' } });
+    const res = await call('POST', 'email', s.client_secret, { email: 'ada@example.com' });
+    expect(res.statusCode).toBe(409); // the email is no longer needed
+    expect(mailer.sent).toEqual([]);
+  });
+
   it('a held payment draft without the legal acknowledgement is refused', async () => {
     const s = await newSession();
     const q = await quote(s.client_secret);
@@ -478,8 +649,12 @@ describe('return to sender', () => {
     await poll(q.deposit_address);
     const p = await paymentOf(q.id);
     expect(p.status).toBe('HELD');
-    const r = await queueHeldReturn(ctx(), p.id);
+    const r = (await queueHeldReturn(ctx(), p.id))!;
     expect(r).toMatchObject({ reason: 'sanctions', assetId: USDC, proposalId: null });
+    // Sized from 1Click's reported amountOut (not the quote estimate), less the $0.50 return fee.
+    const delivered = BigInt((await sim.status(q.deposit_address)).swapDetails.amountOut!);
+    expect(r.returnFee?.toFixed()).toBe('500000');
+    expect(r.amount.toFixed()).toBe((delivered - 500_000n).toString());
     await expect(draftReturn(ctx(), r.id)).rejects.toMatchObject({ code: 'LEGAL_ACK_REQUIRED' });
     await sweepReturns();
     expect(await prisma.accountProposal.count()).toBe(0);

@@ -631,12 +631,13 @@ export async function submitDeposit(ctx: ShopperCtx, txHash: string): Promise<vo
 export async function setShopperEmail(ctx: ShopperCtx, email: string): Promise<void> {
   const s = await loadSession(ctx);
   if (!(await needsEmail(ctx, s))) throw conflict('No email is needed for this checkout');
-  await ctx.db.session.updateMany({
+  const { count } = await ctx.db.session.updateMany({
     where: { id: s.id, customerEmail: null },
     data: { customerEmail: email.toLowerCase() },
   });
-  // The email is for refund contact: send the return-address link now.
-  await emailWaitingReturns(ctx);
+  // The email is for refund contact: send the return-address link now — only when this call set
+  // it (a concurrent call that lost the race must not mail again, or mail a different address).
+  if (count > 0) await emailWaitingReturns(ctx);
 }
 
 /**

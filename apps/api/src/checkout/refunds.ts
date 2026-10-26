@@ -26,6 +26,7 @@
 //   payment (and a late / held session) completes as REFUNDED.
 import { Prisma, type Event, type Payment, type Quote, type Refund } from '@prisma/client';
 import { SMALL_OVERPAY_USD } from '@tendr/contracts';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { createSystemDraftInTx, SUPPORTED_CHAINS } from '../accounts/proposals.js';
 import {
@@ -40,7 +41,8 @@ import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { recordEvent } from '../events/record.js';
 import { transitionPayment, transitionSession } from '../events/transitions.js';
-import { AppError, conflict, notFound } from '../lib/errors.js';
+import { env } from '../env.js';
+import { AppError, conflict, notFound, unauthorized } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
@@ -51,7 +53,7 @@ import { gasEstimateUsd } from './gas-estimates.js';
 import { HOLD_NOTICE } from './hold.js';
 import { screenAddress, type ScreeningOutcome } from './screening.js';
 import type { ShopperCtx } from './quotes.js';
-import { hostedUrl } from './sessions.js';
+import { providerFor, type StatusResponse } from './oneclick/index.js';
 import { tokenInfo } from './tokens.js';
 import { onReturnNeeded, type ReturnReason } from './watcher.js';
 
@@ -70,6 +72,9 @@ export const REVIEW = {
   unsupportedChain: 'unsupported_chain',
   draftRejected: 'draft_rejected',
   transferFailed: 'transfer_failed',
+  proposalCancelled: 'proposal_cancelled',
+  proposalExpired: 'proposal_expired',
+  amountUnknown: 'amount_unknown',
 } as const;
 
 // ─── dependencies ────────────────────────────────────────────────────────────
@@ -499,16 +504,17 @@ async function markReview(ctx: ScopeContext, refundId: string, reason: string): 
 }
 
 /**
- * The destination screened as sanctioned: no draft, ever. The refund is failed with
- * `review_reason = sanctions`, and `payment.held` (with the non-custodial notice) is recorded
- * once for the payment.
+ * The destination screened as sanctioned: no draft, ever. A pending, undrafted refund is failed
+ * with `review_reason = sanctions`, and `payment.held` (with the non-custodial notice) is recorded
+ * once for the payment. A refund already drafted or done is left alone.
  */
 async function blockReturn(ctx: ScopeContext, refundId: string): Promise<Refund> {
   return tenantTransaction(ctx, async (tx) => {
     await lockRefund(tx, ctx, refundId);
     const r = await tx.refund.findFirstOrThrow({ where: { id: refundId, ...tenantOf(ctx) } });
+    if (r.status !== 'pending' || r.proposalId !== null) return r;
     await tx.refund.updateMany({
-      where: { id: r.id, ...tenantOf(ctx) },
+      where: { id: r.id, ...tenantOf(ctx), status: 'pending', proposalId: null },
       data: { status: 'failed', reviewReason: REVIEW.sanctions, needsAddress: false },
     });
     await lockPayment(tx, ctx, r.paymentId);
@@ -548,37 +554,104 @@ async function blockReturn(ctx: ScopeContext, refundId: string): Promise<Refund>
 }
 
 /**
- * Queues the return of a HELD (sanctions) payment's funds, which 1Click swapped into the merchant
- * account (`amount_out` of the settlement asset). The row is a review item: drafting it needs
- * `acknowledged_legal_at` (set by the dashboard action, Task 10) and, as every return, a
- * destination that does not screen as sanctioned.
+ * The amount of a held payment that verifiably reached the merchant account, or null when it
+ * cannot be told: the claimed settlement transfer, else the verified `amount_out` recorded on the
+ * payment, else 1Click's reported `amountOut` for a SUCCESS, else the amount 1Click refunded into
+ * the account (a store-path refund). Never the quote's estimate.
  */
-export async function queueHeldReturn(ctx: ScopeContext, paymentId: string): Promise<Refund> {
+async function heldAmount(
+  ctx: ScopeContext,
+  p: Payment,
+  q: Quote,
+  destAsset: string,
+): Promise<{ assetId: string; amount: bigint } | null> {
+  const claim = await prisma.settlementClaim.findFirst({
+    where: { paymentId: p.id, ...tenantOf(ctx) },
+  });
+  if (claim && claim.amount.gt(0)) {
+    return { assetId: destAsset, amount: BigInt(claim.amount.toFixed(0)) };
+  }
+  if (p.oneclickStatus === 'SUCCESS') {
+    if (p.amountOut?.gt(0)) return { assetId: destAsset, amount: BigInt(p.amountOut.toFixed(0)) };
+    let status: StatusResponse;
+    try {
+      status = await providerFor(ctx.livemode).status(q.depositAddress);
+    } catch (err) {
+      log('warn', 'held return: 1Click status unavailable', { paymentId: p.id, err: String(err) });
+      throw new AppError('PROVIDER_UNAVAILABLE', 'The swap provider is unavailable; retry', 503);
+    }
+    const out = status.status === 'SUCCESS' ? status.swapDetails.amountOut : undefined;
+    return out && /^\d+$/.test(out) && BigInt(out) > 0n
+      ? { assetId: destAsset, amount: BigInt(out) }
+      : null;
+  }
+  if (q.refundType !== 'ORIGIN_CHAIN' && p.refundedAmount?.gt(0)) {
+    return { assetId: q.originAssetId, amount: BigInt(p.refundedAmount.toFixed(0)) };
+  }
+  return null;
+}
+
+/**
+ * Queues the return of a HELD (sanctions) payment's funds that reached the merchant account,
+ * sized from the verified delivered amount (`heldAmount`) less the estimated return fee. An
+ * unknown amount is a review item (`amount_unknown`, amount 0); a net under SMALL_OVERPAY_USD is
+ * kept. Drafting needs `acknowledged_legal_at` (the dashboard action, Task 10) and, as every
+ * return, a destination that does not screen as sanctioned.
+ */
+export async function queueHeldReturn(
+  ctx: ScopeContext,
+  paymentId: string,
+): Promise<Refund | null> {
   const p = await prisma.payment.findFirst({ where: { id: paymentId, ...tenantOf(ctx) } });
   if (!p) throw notFound('Payment not found');
   if (p.status !== 'HELD') throw conflict('Only a held payment is returned this way');
+  const existing = await prisma.refund.findFirst({
+    where: { paymentId: p.id, reason: 'sanctions', ...tenantOf(ctx) },
+  });
+  if (existing) return existing;
   const s = await prisma.session.findFirstOrThrow({
     where: { id: p.sessionId, ...tenantOf(ctx) },
     select: { destAsset: true },
   });
   const q = await prisma.quote.findFirstOrThrow({ where: { id: p.quoteId, ...tenantOf(ctx) } });
-  // Swapped (1Click SUCCESS): the settlement asset's amount_out. Refunded into the account (a
-  // store-path refund of a short or failed deposit): the origin asset 1Click refunded.
-  let held: { assetId: string; amount: Prisma.Decimal } | null = null;
-  if (p.oneclickStatus === 'SUCCESS') {
-    held = { assetId: s.destAsset, amount: p.amountOut ?? q.amountOut };
-  } else if (q.refundType !== 'ORIGIN_CHAIN' && p.refundedAmount?.gt(0)) {
-    held = { assetId: q.originAssetId, amount: p.refundedAmount };
-  }
-  if (!held || held.amount.lte(0)) throw conflict('Nothing reached the merchant account');
+  const held = await heldAmount(ctx, p, q, s.destAsset);
   const chain = p.senderChain ? contractChainOf(p.senderChain) : null;
-  const { refund } = await insertRefund(ctx, {
+  const base = {
     paymentId: p.id,
-    reason: 'sanctions',
-    assetId: held.assetId,
-    amount: held.amount.toFixed(0),
+    reason: 'sanctions' as const,
     destination: p.senderAddress,
     destinationChain: chain,
+  };
+  if (!held) {
+    const { refund } = await insertRefund(ctx, {
+      ...base,
+      assetId: s.destAsset,
+      amount: '0',
+      reviewReason: REVIEW.amountUnknown,
+    });
+    return refund;
+  }
+  const perUnit = await usdPerUnit(ctx.livemode, held.assetId, q);
+  if (!perUnit || !p.senderChain) {
+    const { refund } = await insertRefund(ctx, {
+      ...base,
+      assetId: held.assetId,
+      amount: held.amount.toString(),
+      reviewReason: perUnit ? REVIEW.noSender : REVIEW.priceUnavailable,
+    });
+    return refund;
+  }
+  const feeUsd = D(gasEstimateUsd(p.senderChain));
+  const { fee, net, netUsd } = netOfReturnFee(held.amount, perUnit, feeUsd);
+  if (net <= 0n || netUsd.lt(SMALL_OVERPAY_USD)) {
+    await keepSmall(ctx, p.id, 'sanctions');
+    return null;
+  }
+  const { refund } = await insertRefund(ctx, {
+    ...base,
+    assetId: held.assetId,
+    amount: net.toString(),
+    returnFee: fee.toString(),
     reviewReason: p.senderAddress ? (chain ? null : REVIEW.unsupportedChain) : REVIEW.noSender,
   });
   return refund;
@@ -596,26 +669,89 @@ export const RefundAddressInputSchema = z
   })
   .strict();
 
+/** `POST /v1/checkout/refund-address` (the emailed link): the token instead of a client secret. */
+export const RefundAddressTokenInputSchema = z
+  .object({
+    token: z.string().min(1).max(256),
+    address: z.string().trim().min(1).max(128),
+    chain: z.string().trim().min(1).max(32),
+  })
+  .strict();
+
 const walletNotAllowed = () =>
   new AppError('WALLET_NOT_ALLOWED', 'This address cannot receive the refund', 403);
+const invalidInput = (msg: string, details?: unknown) =>
+  new AppError('VALIDATION_ERROR', msg, 400, details);
 
 /**
- * The shopper says where an exchange-sent return should go (Ruling C3): format check, route
- * check, sanctions screen (block → 403 WALLET_NOT_ALLOWED, and the return goes to review), then
- * the address is stored, `needs_address` clears and the draft is created.
+ * Validates and screens a shopper-provided return address for refund `r`, then stores it
+ * (clearing `needs_address` and any emailed token in one conditional update — for the emailed
+ * link, conditional on that token, which consumes it) and drafts. A sanctioned address is refused
+ * (403 WALLET_NOT_ALLOWED) without touching the refund or the payment: it is the shopper's
+ * suggestion, not the sender, and they may give another. Screening unavailable → 503.
+ */
+async function fillAddress(
+  ctx: ScopeContext,
+  r: Refund & { sessionId: string },
+  input: { address: string; chain: string },
+  tokenHash?: string,
+) {
+  const chain = contractChainOf(input.chain);
+  if (!chain) throw invalidInput('Refunds cannot be sent on this network');
+  const oneclick = oneclickChainOf(chain);
+  if (!isValidAddress(oneclick, input.address)) {
+    throw invalidInput(`That is not a valid ${oneclick} address`, { field: 'address' });
+  }
+  if (!returnRoute(r.assetId, chain, input.address)) {
+    throw invalidInput('This refund cannot be sent on that network', {
+      chains: returnChainsOf(r.assetId).map(oneclickChainOf),
+    });
+  }
+  const { decision } = await deps.screen(ctx, {
+    sessionId: r.sessionId,
+    address: input.address,
+    chain: oneclick,
+  });
+  if (decision === 'unavailable') {
+    throw new AppError('PROVIDER_UNAVAILABLE', 'Please try again in a few minutes', 503);
+  }
+  if (decision === 'block') {
+    log('warn', 'shopper return address refused: sanctioned', { refundId: r.id });
+    throw walletNotAllowed();
+  }
+  const { count } = await prisma.refund.updateMany({
+    where: {
+      id: r.id,
+      ...tenantOf(ctx),
+      needsAddress: true,
+      status: 'pending',
+      ...(tokenHash ? { addressTokenHash: tokenHash } : {}),
+    },
+    data: {
+      destination: input.address,
+      destinationChain: chain,
+      needsAddress: false,
+      addressTokenHash: null,
+      addressTokenExpiresAt: null,
+    },
+  });
+  if (count === 0) {
+    if (tokenHash) throw invalidToken();
+    throw conflict('This refund already has an address');
+  }
+  const drafted = await draftIfReadyScreened(ctx, r.id);
+  return { refund_id: drafted.id, status: drafted.proposalId ? 'pending_approval' : 'queued' };
+}
+
+/**
+ * The shopper says where an exchange-sent return should go (Ruling C3), from the checkout page
+ * (client secret): format check, route check, sanctions screen, then the address is stored,
+ * `needs_address` clears and the draft is created.
  */
 export async function provideRefundAddress(
   ctx: ShopperCtx,
   input: z.infer<typeof RefundAddressInputSchema>,
 ) {
-  const chain = contractChainOf(input.chain);
-  const invalid = (msg: string, details?: unknown) =>
-    new AppError('VALIDATION_ERROR', msg, 400, details);
-  if (!chain) throw invalid('Refunds cannot be sent on this network');
-  const oneclick = oneclickChainOf(chain);
-  if (!isValidAddress(oneclick, input.address)) {
-    throw invalid(`That is not a valid ${oneclick} address`, { field: 'address' });
-  }
   const waiting = await ctx.db.refund.findMany({
     where: {
       needsAddress: true,
@@ -625,32 +761,59 @@ export async function provideRefundAddress(
     },
   });
   if (waiting.length === 0) throw notFound('No refund is waiting for an address');
-  if (waiting.length > 1) throw invalid('Say which refund (refund_id)');
-  const r = waiting[0]!;
-  if (!returnRoute(r.assetId, chain, input.address)) {
-    throw invalid('This refund cannot be sent on that network', {
-      chains: returnChainsOf(r.assetId).map(oneclickChainOf),
-    });
-  }
-  const { decision } = await deps.screen(ctx, {
-    sessionId: ctx.sessionId,
-    address: input.address,
-    chain: oneclick,
+  if (waiting.length > 1) throw invalidInput('Say which refund (refund_id)');
+  return fillAddress(ctx, { ...waiting[0]!, sessionId: ctx.sessionId }, input);
+}
+
+// ─── emailed return-address link (Ruling C20) ────────────────────────────────
+
+/** How long an emailed return-address link stays valid. */
+export const ADDRESS_TOKEN_TTL_MS = 7 * 24 * 3_600_000;
+const sha256Hex = (s: string) => createHash('sha256').update(s).digest('hex');
+const invalidToken = () => unauthorized('This link is invalid or has expired');
+
+/**
+ * Mints a single-use token bound to refund `refundId` (`<refund id>.<32 random bytes,
+ * base64url>`), storing only its sha256 and a 7-day expiry. A new token replaces any earlier one.
+ */
+async function mintAddressToken(ctx: ScopeContext, refundId: string): Promise<string> {
+  const token = `${refundId}.${randomBytes(32).toString('base64url')}`;
+  await prisma.refund.updateMany({
+    where: { id: refundId, ...tenantOf(ctx) },
+    data: {
+      addressTokenHash: sha256Hex(token),
+      addressTokenExpiresAt: new Date(Date.now() + ADDRESS_TOKEN_TTL_MS),
+    },
   });
-  if (decision === 'unavailable') {
-    throw new AppError('PROVIDER_UNAVAILABLE', 'Please try again in a few minutes', 503);
-  }
-  if (decision === 'block') {
-    await blockReturn(ctx, r.id);
-    throw walletNotAllowed();
-  }
-  const { count } = await prisma.refund.updateMany({
-    where: { id: r.id, ...tenantOf(ctx), needsAddress: true, status: 'pending' },
-    data: { destination: input.address, destinationChain: chain, needsAddress: false },
+  return token;
+}
+
+/**
+ * `POST /v1/checkout/refund-address` (public, per-IP limited): the emailed link. The token names
+ * its refund; an unknown, used, expired or mismatched token is 401 UNAUTHORIZED. Otherwise the
+ * same validation, screening and draft as `provideRefundAddress`; success consumes the token.
+ */
+export async function provideRefundAddressByToken(
+  input: z.infer<typeof RefundAddressTokenInputSchema>,
+) {
+  const dot = input.token.indexOf('.');
+  const refundId = dot > 0 ? input.token.slice(0, dot) : '';
+  if (!refundId) throw invalidToken();
+  const r = await prisma.refund.findUnique({
+    where: { id: refundId },
+    include: { payment: { select: { sessionId: true } } },
   });
-  if (count === 0) throw conflict('This refund already has an address');
-  const drafted = await draftIfReadyScreened(ctx, r.id);
-  return { refund_id: drafted.id, status: drafted.proposalId ? 'pending_approval' : 'queued' };
+  const hash = sha256Hex(input.token);
+  const valid =
+    !!r?.addressTokenHash &&
+    !!r.addressTokenExpiresAt &&
+    r.addressTokenExpiresAt.getTime() > Date.now() &&
+    timingSafeEqual(Buffer.from(r.addressTokenHash, 'hex'), Buffer.from(hash, 'hex')) &&
+    r.needsAddress &&
+    r.status === 'pending';
+  if (!r || !valid) throw invalidToken();
+  const ctx = { merchantId: r.merchantId, livemode: r.livemode };
+  return fillAddress(ctx, { ...r, sessionId: r.payment.sessionId }, input, hash);
 }
 
 async function draftIfReadyScreened(ctx: ScopeContext, refundId: string): Promise<Refund> {
@@ -700,6 +863,8 @@ export async function emailNeedsAddress(ctx: ScopeContext, refundId: string): Pr
   } catch {
     // Token list unavailable: base units.
   }
+  const token = await mintAddressToken(ctx, r.id);
+  const base = env().CHECKOUT_BASE_URL.replace(/\/+$/, '');
   try {
     await getMailer().send({
       to: s.customerEmail,
@@ -708,7 +873,7 @@ export async function emailNeedsAddress(ctx: ScopeContext, refundId: string): Pr
         merchant_name: s.merchant.name,
         amount,
         refund_id: r.id,
-        checkout_url: hostedUrl(s.id),
+        refund_address_url: `${base}/pay/${s.id}/refund-address?t=${encodeURIComponent(token)}`,
       },
     });
     return true;
@@ -751,7 +916,8 @@ export async function onRefundProposalExecuted(e: Event): Promise<void> {
   const proposalId = proposalIdOf(e);
   if (!ctx || !proposalId) return;
   const txHash = (e.payload as { txHash?: unknown }).txHash;
-  const refunds = await prisma.refund.findMany({ where: { proposalId, ...tenantOf(ctx) } });
+  let refunds = await prisma.refund.findMany({ where: { proposalId, ...tenantOf(ctx) } });
+  if (refunds.length === 0) refunds = await detachedRefundsFor(ctx, proposalId);
   for (const r of refunds) {
     await tenantTransaction(ctx, async (tx) => {
       await lockRefund(tx, ctx, r.id);
@@ -761,6 +927,7 @@ export async function onRefundProposalExecuted(e: Event): Promise<void> {
         where: { id: r.id, ...tenantOf(ctx) },
         data: {
           status: 'confirmed',
+          proposalId,
           refundTxHash: typeof txHash === 'string' ? txHash : null,
           reviewReason: null,
         },
@@ -791,16 +958,112 @@ export async function onRefundProposalExecuted(e: Event): Promise<void> {
   }
 }
 
-/** `account.proposal.failed` on a refund proposal (the transfer failed): the return goes to review. */
+/**
+ * A refund the chain executed after we detached its proposal (a draft cancelled only in Postgres
+ * whose relay still landed, the chain outranking the local cancel): matched by the executed
+ * action's payment, amount and destination, so the return is still confirmed once.
+ */
+async function detachedRefundsFor(ctx: ScopeContext, proposalId: string): Promise<Refund[]> {
+  const prop = await prisma.accountProposal.findFirst({
+    where: { id: proposalId, ...tenantOf(ctx) },
+    select: { action: true },
+  });
+  const a = (prop?.action as { refund?: Record<string, unknown> } | null)?.refund;
+  if (!a || typeof a.payment_id !== 'string') return [];
+  return prisma.refund.findMany({
+    where: {
+      paymentId: a.payment_id,
+      ...tenantOf(ctx),
+      proposalId: null,
+      status: 'pending',
+      amount: String(a.amount),
+      destination: String(a.destination),
+    },
+  });
+}
+
+/** Internal event (not a webhook type): a return went to the merchant's review queue. */
+export const REFUND_NEEDS_REVIEW = 'refund.needs_review';
+
+/**
+ * The refund's proposal will never execute (cancelled, expired or its transfer failed): the
+ * proposal link is cleared and the return goes to the review queue (`review_reason`), from which
+ * the merchant can draft it again (Task 10). Records the internal `refund.needs_review` event (not
+ * a webhook). Only refunds still linked to `proposalId` and not yet sent are touched.
+ */
+async function detachProposal(
+  ctx: ScopeContext,
+  proposalId: string,
+  reviewReason: string,
+): Promise<number> {
+  const linked = await prisma.refund.findMany({
+    where: { proposalId, ...tenantOf(ctx), status: { in: ['pending', 'submitted'] } },
+    select: { id: true },
+  });
+  let n = 0;
+  for (const { id } of linked) {
+    const did = await tenantTransaction(ctx, async (tx) => {
+      await lockRefund(tx, ctx, id);
+      const r = await tx.refund.findFirstOrThrow({ where: { id, ...tenantOf(ctx) } });
+      if (r.proposalId !== proposalId || !['pending', 'submitted'].includes(r.status)) {
+        return false;
+      }
+      await tx.refund.updateMany({
+        where: { id, ...tenantOf(ctx) },
+        data: { proposalId: null, status: 'pending', reviewReason },
+      });
+      const p = await tx.payment.findFirstOrThrow({
+        where: { id: r.paymentId, ...tenantOf(ctx) },
+        select: { sessionId: true },
+      });
+      await recordEvent(tx, ctx, {
+        aggregateType: 'refund',
+        aggregateId: id,
+        type: REFUND_NEEDS_REVIEW,
+        payload: {
+          refund_id: id,
+          payment_id: r.paymentId,
+          session_id: p.sessionId,
+          proposal_id: proposalId,
+          review_reason: reviewReason,
+        },
+      });
+      return true;
+    });
+    if (did) {
+      n++;
+      log('warn', 'return to sender needs review: proposal ended', { refundId: id, reviewReason });
+    }
+  }
+  return n;
+}
+
+/**
+ * `account.proposal.failed` on a refund proposal: an expiry (`reason: expired`) or a failed
+ * transfer. The return goes back to review (`proposal_expired` / `transfer_failed`).
+ */
 export async function onRefundProposalFailed(e: Event): Promise<void> {
   const ctx = eventCtx(e);
   const proposalId = proposalIdOf(e);
   if (!ctx || !proposalId) return;
-  await prisma.refund.updateMany({
-    where: { proposalId, ...tenantOf(ctx), status: { in: ['pending', 'submitted'] } },
-    data: { status: 'failed', reviewReason: REVIEW.transferFailed },
-  });
+  const expired = (e.payload as { reason?: unknown }).reason === 'expired';
+  await detachProposal(ctx, proposalId, expired ? REVIEW.proposalExpired : REVIEW.transferFailed);
 }
+
+/** `account.proposal.cancelled` on a refund proposal: the return goes back to review. */
+export async function onRefundProposalCancelled(e: Event): Promise<void> {
+  const ctx = eventCtx(e);
+  const proposalId = proposalIdOf(e);
+  if (!ctx || !proposalId) return;
+  await detachProposal(ctx, proposalId, REVIEW.proposalCancelled);
+}
+
+/** Review reason for a proposal that ended without executing. */
+const ENDED_REVIEW: Readonly<Record<string, string>> = {
+  cancelled: REVIEW.proposalCancelled,
+  expired: REVIEW.proposalExpired,
+  failed: REVIEW.transferFailed,
+};
 
 // ─── sweeper ─────────────────────────────────────────────────────────────────
 
@@ -811,7 +1074,8 @@ const viaStore = { OR: [{ refundType: null }, { refundType: 'INTENTS' as const }
  * Every minute (worker): the safety net behind the post-commit `onReturnNeeded` hook. Queues
  * returns the hook missed (a store-path refund, an overpay excess, a swapped late deposit with no
  * refund row), records direct 1Click refunds, and retries pending returns that have a destination
- * but no draft yet. Returns how many returns it touched.
+ * but no draft yet, and detaches refunds whose proposal was cancelled, expired or failed into the
+ * review queue. Returns how many returns it touched.
  */
 export async function sweepReturns(): Promise<number> {
   let n = 0;
@@ -911,6 +1175,23 @@ export async function sweepReturns(): Promise<number> {
     );
   }
 
+  // Linked proposals that ended without executing (a draft cancelled in Postgres records no
+  // event; a missed cancelled / failed event): detach them into the review queue.
+  const ended = await prisma.refund.findMany({
+    where: {
+      status: { in: ['pending', 'submitted'] },
+      proposal: { status: { in: ['cancelled', 'expired', 'failed'] } },
+    },
+    include: { proposal: { select: { status: true } } },
+    orderBy: { createdAt: 'asc' },
+    take: SWEEP_BATCH,
+  });
+  for (const r of ended) {
+    await run('ended', r.id, () =>
+      detachProposal(ctxOf(r), r.proposalId!, ENDED_REVIEW[r.proposal!.status]!),
+    );
+  }
+
   // Pending returns with a destination and no draft yet (screening was down, account busy, …).
   const pending = await prisma.refund.findMany({
     where: {
@@ -935,6 +1216,7 @@ export async function sweepReturns(): Promise<number> {
 
 export const REFUND_EXECUTED_HANDLER = 'checkout-refund-executed';
 export const REFUND_FAILED_HANDLER = 'checkout-refund-failed';
+export const REFUND_CANCELLED_HANDLER = 'checkout-refund-cancelled';
 
 /** Registers `queueReturn` as the watcher hook and the proposal-outcome handlers (once). */
 export function registerRefundHooks(): void {
@@ -949,5 +1231,8 @@ export function registerRefundHooks(): void {
   }
   if (!handlerNamesFor(T.proposalFailed).includes(REFUND_FAILED_HANDLER)) {
     registerEventHandler(T.proposalFailed, REFUND_FAILED_HANDLER, onRefundProposalFailed);
+  }
+  if (!handlerNamesFor(T.proposalCancelled).includes(REFUND_CANCELLED_HANDLER)) {
+    registerEventHandler(T.proposalCancelled, REFUND_CANCELLED_HANDLER, onRefundProposalCancelled);
   }
 }

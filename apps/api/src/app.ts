@@ -11,7 +11,11 @@ import { AppError } from './lib/errors.js';
 import { log } from './lib/logger.js';
 import { accountRoutes } from './routes/accounts.js';
 import { authRoutes } from './routes/auth.js';
-import { CHECKOUT_CLIENT_PREFIX, checkoutClientRoutes } from './routes/checkout-client.js';
+import {
+  CHECKOUT_CLIENT_PREFIX,
+  CHECKOUT_REFUND_ADDRESS_PATH,
+  checkoutClientRoutes,
+} from './routes/checkout-client.js';
 import { checkoutSessionRoutes } from './routes/checkout-sessions.js';
 import { healthRoutes } from './routes/health.js';
 import { merchantRoutes } from './routes/merchants.js';
@@ -94,7 +98,11 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   const checkoutOrigin = new URL(env().CHECKOUT_BASE_URL).origin;
   await app.register(cors, {
     delegator: (req, cb) => {
-      if ((req.url ?? '').startsWith(CHECKOUT_CLIENT_PREFIX)) {
+      const url = req.url ?? '';
+      if (
+        url.startsWith(CHECKOUT_CLIENT_PREFIX) ||
+        url.split('?')[0] === CHECKOUT_REFUND_ADDRESS_PATH
+      ) {
         cb(null, { origin: [checkoutOrigin], credentials: false });
       } else {
         cb(null, { origin: origins, credentials: true });

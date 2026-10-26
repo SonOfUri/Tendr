@@ -16,12 +16,19 @@ import {
   submitDeposit,
   type ShopperCtx,
 } from '../checkout/quotes.js';
-import { provideRefundAddress, RefundAddressInputSchema } from '../checkout/refunds.js';
+import {
+  provideRefundAddress,
+  provideRefundAddressByToken,
+  RefundAddressInputSchema,
+  RefundAddressTokenInputSchema,
+} from '../checkout/refunds.js';
 import { requirePrincipal } from '../gateway/principal.js';
 import { notFound, unauthorized } from '../lib/errors.js';
 
 /** Path prefix of the shopper routes (app.ts scopes the checkout-origin CORS rule to it). */
 export const CHECKOUT_CLIENT_PREFIX = '/v1/checkout/client/';
+/** The emailed return-address link's route (token-authenticated; same checkout-origin CORS). */
+export const CHECKOUT_REFUND_ADDRESS_PATH = '/v1/checkout/refund-address';
 
 const shopper = { config: { auth: { principals: ['session_client' as const] } } };
 
@@ -84,6 +91,13 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
       return provideRefundAddress(ctx, input);
     },
   );
+
+  // Ruling C20: the emailed return-address link. Public (the single-use token authenticates it;
+  // a bad token is 401), so the gateway's per-IP `public` limit applies.
+  app.post(CHECKOUT_REFUND_ADDRESS_PATH, { config: { auth: 'public' } }, async (req) => {
+    const input = RefundAddressTokenInputSchema.parse(req.body);
+    return provideRefundAddressByToken(input);
+  });
 
   app.post(`${CHECKOUT_CLIENT_PREFIX}simulate`, shopper, async (req) => {
     const ctx = ctxOf(req);
