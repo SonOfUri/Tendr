@@ -258,8 +258,10 @@ curl -X POST http://localhost:4000/v1/checkout/sessions \
 ```
 
 - `amount_currency` is `USD` (at most 2 decimals), any ISO 4217 currency code (see below), or
-  exactly the store's settlement asset id. Anything else gets `400 UNSUPPORTED_CURRENCY`. The
-  settlement asset and destination come from the store's settings, and the request cannot set them.
+  exactly the store's settlement asset id. Anything else gets `400 UNSUPPORTED_CURRENCY`, with
+  `details.allowed: ["ISO 4217 code", "<settlement asset id>"]` (this used to be
+  `["USD", "<settlement asset id>"]`; `USD` is one of the ISO codes). The settlement asset and
+  destination come from the store's settings, and the request cannot set them.
 - A non-USD total (`NGN`, `EUR`, `JPY`, …) is converted to USD **once, at creation**:
   - The amount may have at most the currency's ISO minor units (`JPY 1000`, `NGN 78500.00`,
     `KWD 1.234`; `KWD 1.2345` is a `400 VALIDATION_ERROR`).
@@ -271,11 +273,19 @@ curl -X POST http://localhost:4000/v1/checkout/sessions \
     in USD as usual: `amount` / `amount_currency` on the session are the USD values.
   - Rates are cached per currency for 60 s. If the provider fails, or its rate (by the provider's
     own timestamp) is more than 10 minutes old, the session is refused with
-    `503 FX_RATE_UNAVAILABLE`; there is no fallback to a stale rate. Show the shopper "Crypto
-    payment is unavailable right now" and offer the store's other payment methods.
+    `503 FX_RATE_UNAVAILABLE`; there is no fallback to a stale rate. A stale cached rate is
+    refetched rather than served, and a rate that arrives stale is never cached. Show the shopper
+    "Crypto payment is unavailable right now" and offer the store's other payment methods.
+  - Live sanity band: the last good live rate per currency is kept for 7 days. A new rate more
+    than 50% away from it in either direction is refused (`503 FX_RATE_UNAVAILABLE`, logged). The
+    first rate ever seen for a currency is accepted.
   - An `Idempotency-Key` replay returns the stored session; it never fetches a new rate.
-  - Test mode always uses the fixed-rate provider (`FX_FIXED_RATES`), whatever `FX_PROVIDER` says.
-    Live mode uses `FX_PROVIDER` (`openexchangerates` in production, with `FX_API_KEY`).
+  - Test mode always uses built-in **test rates**: approximate round rates for every currency in
+    WooCommerce's default list, not market rates, so `fx.source` is `"fixed (test rates)"`.
+    `FX_FIXED_RATES` overrides entries. This holds whatever `FX_PROVIDER` says, production included.
+  - Live mode always uses the live adapter (`FX_PROVIDER=openexchangerates` with `FX_API_KEY`) and
+    never fixed rates, whatever `FX_PROVIDER`, `FX_FIXED_RATES` or `NODE_ENV` say. With no live
+    provider or key configured, live non-USD sessions get `503 FX_RATE_UNAVAILABLE`.
 - Optional fields:
   - `customer_email`, used only for refund contact and receipts;
   - `metadata`, up to 50 string keys;

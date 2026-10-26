@@ -10,9 +10,16 @@
 // and the division is an exact bigint ceiling division. Minor units come from the static ISO-4217
 // table below, never from the provider.
 //
+// MODES. Test mode always uses the built-in fixed test rates (TEST_FX_RATES, overridable entry by
+// entry with FX_FIXED_RATES). Live mode always uses the live adapter (FX_PROVIDER +
+// FX_API_KEY) and never fixed rates, whatever FX_PROVIDER, FX_FIXED_RATES or NODE_ENV says: with
+// no live provider or key configured, a live non-USD session is FX_RATE_UNAVAILABLE.
+//
 // Rates are cached per currency in Redis for 60 s. A rate whose own timestamp (the provider's,
 // not our fetch time) is older than 10 minutes, or any provider failure, is FX_RATE_UNAVAILABLE
-// (503): there is never a fallback to a stale rate. Concurrent misses are coalesced in-process and,
+// (503): there is never a fallback to a stale rate. A stale cache entry counts as a miss, and a
+// rate that is already stale when it arrives is never cached. In live mode a new rate more than
+// 50% away from the last good rate for that currency (kept 7 days) is refused as implausible. Concurrent misses are coalesced in-process and,
 // across processes, behind a short Redis lock, so a burst never stampedes the provider.
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
@@ -27,12 +34,17 @@ export const FX_CACHE_TTL_S = 60;
 export const FX_MAX_AGE_MS = 10 * 60_000;
 /** Tolerated clock skew for a provider timestamp slightly in our future. */
 const FX_FUTURE_SKEW_MS = 2 * 60_000;
-/** How long one process holds the cross-process fetch lock. */
+/** How long one process holds the cross-process fetch lock (longer than the wait below). */
 const FX_LOCK_MS = 5_000;
-/** How long a process waits for another process's fetch before fetching itself. */
-const FX_LOCK_WAIT_MS = 2_000;
-const FX_LOCK_POLL_MS = 50;
 const FX_FETCH_TIMEOUT_MS = 3_000;
+/**
+ * How long a process waits for another process's fetch before fetching itself: at least the
+ * holder's whole fetch timeout, so a slow-but-alive holder is not doubled up on.
+ */
+const FX_LOCK_WAIT_MS = FX_FETCH_TIMEOUT_MS + 500;
+const FX_LOCK_POLL_MS = 50;
+/** The last good live rate per currency is kept this long, for the sanity band. */
+const FX_LAST_GOOD_TTL_S = 7 * 24 * 3600;
 
 /**
  * ISO 4217 minor units (decimal places) for every currency a store may price in. Covers every code
@@ -249,20 +261,76 @@ export function convertToUsd(amount: string, currency: string, rate: FxRate): Us
 // Providers
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * TEST-MODE ONLY. Approximate, round rates ("1 USD = R <code>") so test-mode sessions in any
+ * WooCommerce currency convert without configuration. They are NOT market rates and are never
+ * used in live mode (fxProviderFor). `FX_FIXED_RATES` overrides entries.
+ */
+// prettier-ignore
+export const TEST_FX_RATES: Readonly<Record<string, string>> = Object.freeze({
+  AED: '3.67', AFN: '70', ALL: '90', AMD: '390', ANG: '1.79', AOA: '900', ARS: '1000',
+  AUD: '1.5', AWG: '1.79', AZN: '1.7',
+  BAM: '1.8', BBD: '2', BDT: '120', BGN: '1.8', BHD: '0.376', BIF: '2900', BMD: '1',
+  BND: '1.3', BOB: '6.9', BRL: '5.5', BSD: '1', BTN: '85', BWP: '13.5', BYN: '3.3', BZD: '2',
+  CAD: '1.4', CDF: '2800', CHF: '0.9', CLP: '950', CNY: '7.2', COP: '4000', CRC: '510',
+  CUP: '24', CVE: '100', CZK: '23',
+  DJF: '178', DKK: '6.9', DOP: '60', DZD: '135',
+  EGP: '49', ERN: '15', ETB: '120', EUR: '0.92',
+  FJD: '2.25', FKP: '0.79',
+  GBP: '0.79', GEL: '2.7', GHS: '15', GIP: '0.79', GMD: '70', GNF: '8600', GTQ: '7.7',
+  GYD: '210',
+  HKD: '7.8', HNL: '25', HTG: '132', HUF: '360',
+  IDR: '16000', ILS: '3.7', INR: '85', IQD: '1310', IRR: '42000', ISK: '140',
+  JMD: '157', JOD: '0.709', JPY: '150',
+  KES: '130', KGS: '87', KHR: '4000', KMF: '450', KPW: '900', KRW: '1400', KWD: '0.307',
+  KYD: '0.83', KZT: '500',
+  LAK: '21000', LBP: '89500', LKR: '300', LRD: '190', LSL: '18', LYD: '4.8',
+  MAD: '9.5', MDL: '17.5', MGA: '4500', MKD: '56', MMK: '2100', MNT: '3400', MOP: '8',
+  MRU: '40', MUR: '45', MVR: '15.4', MWK: '1730', MXN: '18', MYR: '4.5', MZN: '64',
+  NAD: '18', NGN: '1600', NIO: '36.7', NOK: '10.5', NPR: '135', NZD: '1.7',
+  OMR: '0.385',
+  PAB: '1', PEN: '3.7', PGK: '4', PHP: '57', PKR: '280', PLN: '3.9', PYG: '7800',
+  QAR: '3.64',
+  RON: '4.6', RSD: '108', RUB: '90', RWF: '1400',
+  SAR: '3.75', SBD: '8.4', SCR: '14', SDG: '600', SEK: '10.5', SGD: '1.3', SHP: '0.79',
+  SLE: '22.5', SOS: '571', SRD: '35', SSP: '4500', STN: '22.5', SYP: '13000', SZL: '18',
+  THB: '33', TJS: '10.6', TMT: '3.5', TND: '3.1', TOP: '2.35', TRY: '41', TTD: '6.8',
+  TWD: '31', TZS: '2600',
+  UAH: '41', UGX: '3700', USD: '1', UYU: '40', UZS: '12700',
+  VED: '100', VES: '100', VND: '25000', VUV: '120',
+  WST: '2.75',
+  XAF: '600', XCD: '2.7', XOF: '600', XPF: '110',
+  YER: '250',
+  ZAR: '18', ZMW: '27', ZWG: '27',
+  BYR: '33000', CUC: '1', HRK: '6.9', SLL: '22500', VEF: '100',
+  BTC: '0.00001', GGP: '0.79', IMP: '0.79', JEP: '0.79', IRT: '4200', PRB: '16', RMB: '7.2',
+});
+
+/** `fx.source` of a test-mode conversion. */
+export const TEST_FX_SOURCE = 'fixed (test rates)';
+
 const fixedProvider: FxProvider = {
   id: 'fixed',
   /**
-   * Rates from `FX_FIXED_RATES` (JSON `{"NGN":"1602.04"}`, "1 USD = R <code>"). A fixed table is
-   * current by definition, so `asOf` is the time of the call. Tests and test mode only.
+   * TEST-MODE ONLY: TEST_FX_RATES, with `FX_FIXED_RATES` (JSON `{"NGN":"1602.04"}`) overriding
+   * entries. A fixed table is current by definition, so `asOf` is the time of the call.
    */
   async rate(base) {
-    const rate = env().FX_FIXED_RATES[base];
-    if (rate === undefined) throw new Error(`FX_FIXED_RATES has no rate for ${base}`);
-    return { rate, source: 'fixed', asOf: new Date() };
+    const rate = env().FX_FIXED_RATES[base] ?? TEST_FX_RATES[base];
+    if (rate === undefined) throw new Error(`no test rate for ${base}`);
+    return { rate, source: TEST_FX_SOURCE, asOf: new Date() };
   },
 };
 
-/** The fixed-rate provider (`FX_FIXED_RATES`). */
+/** No live provider (or no key) configured: every live rate is unavailable. */
+const unconfiguredProvider: FxProvider = {
+  id: 'unconfigured',
+  rate() {
+    return Promise.reject(new Error('no live FX provider configured (FX_PROVIDER, FX_API_KEY)'));
+  },
+};
+
+/** The fixed test-rate provider (test mode only). */
 export function fixedFxProvider(): FxProvider {
   return fixedProvider;
 }
@@ -322,11 +390,18 @@ export function openExchangeRatesProvider(apiKey: string): FxProvider {
   };
 }
 
-/** The provider for a mode: test mode always uses `fixed`; live mode uses `FX_PROVIDER`. */
+/**
+ * The provider for a mode. Test mode always uses the fixed test rates. Live mode always uses the
+ * live adapter, never fixed rates: with no live provider (`FX_PROVIDER=fixed`) or no `FX_API_KEY`,
+ * it gets a provider that always fails, so the session is FX_RATE_UNAVAILABLE.
+ */
 export function fxProviderFor(livemode: boolean): FxProvider {
+  if (!livemode) return fixedProvider;
   const e = env();
-  if (!livemode || e.FX_PROVIDER === 'fixed') return fixedProvider;
-  return openExchangeRatesProvider(e.FX_API_KEY ?? '');
+  if (e.FX_PROVIDER === 'openexchangerates' && e.FX_API_KEY) {
+    return openExchangeRatesProvider(e.FX_API_KEY);
+  }
+  return unconfiguredProvider;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -340,6 +415,9 @@ export const fxCacheKey = (providerId: string, currency: string) =>
   `${PREFIX}${providerId}:${currency}`;
 export const fxLockKey = (providerId: string, currency: string) =>
   `${PREFIX}lock:${providerId}:${currency}`;
+/** The last good live rate for a currency (the sanity band's reference), kept 7 days. */
+export const fxLastGoodKey = (providerId: string, currency: string) =>
+  `${PREFIX}last:${providerId}:${currency}`;
 
 /** In-process single-flight: one provider call per (provider, currency) at a time. */
 const inflight = new Map<string, Promise<FxRate>>();
@@ -359,6 +437,55 @@ export interface FxOptions {
   provider?: FxProvider;
   /** Defaults to the process-wide client. */
   redis?: Redis;
+}
+
+/** Whether a rate is usable at `now`: at most 10 minutes old, and not far in the future. */
+function isFresh(rate: { asOf: Date }, now: Date): boolean {
+  const age = now.getTime() - rate.asOf.getTime();
+  return age <= FX_MAX_AGE_MS && age >= -FX_FUTURE_SKEW_MS;
+}
+
+/**
+ * The live sanity band: `next` is within 50% of `last` in either direction
+ * (0.5 × last ≤ next ≤ 1.5 × last), compared exactly by cross-multiplication.
+ */
+export function withinSanityBand(next: string, last: string): boolean {
+  const n = parseExact(next);
+  const l = parseExact(last);
+  if (!n || !l) return false;
+  // Bring both to one scale: n·10^ls vs l·10^ns.
+  const nn = n.digits * 10n ** BigInt(l.scale);
+  const ll = l.digits * 10n ** BigInt(n.scale);
+  return 2n * nn >= ll && 2n * nn <= 3n * ll;
+}
+
+/**
+ * Live mode: refuses a rate more than 50% away from the last good one (provider glitch, wrong
+ * unit, bad currency mapping), and records an accepted rate as the new last good one. The first
+ * rate ever seen is accepted. Redis down: fails open (no reference to compare to).
+ */
+async function checkSanityBand(redis: Redis, provider: FxProvider, rate: FxRate): Promise<void> {
+  const key = fxLastGoodKey(provider.id, rate.currency);
+  let last: string | null = null;
+  try {
+    last = await redis.get(key);
+  } catch {
+    last = null;
+  }
+  if (last && validRate(last) && !withinSanityBand(rate.rate, last)) {
+    log('warn', 'fx rate outside the sanity band', {
+      provider: provider.id,
+      currency: rate.currency,
+      rate: rate.rate,
+      last_good: last,
+    });
+    throw fxUnavailable(rate.currency);
+  }
+  try {
+    await redis.set(key, rate.rate, 'EX', FX_LAST_GOOD_TTL_S);
+  } catch (err) {
+    log('warn', 'fx last-good write failed', { err: String(err) });
+  }
 }
 
 async function readCache(redis: Redis, key: string, currency: string): Promise<FxRate | null> {
@@ -398,8 +525,18 @@ async function writeCache(redis: Redis, key: string, rate: FxRate): Promise<void
 
 const RELEASE_LOCK = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`;
 
-/** Fetches one rate behind the cross-process lock, then caches it. */
-async function fetchRate(redis: Redis, provider: FxProvider, currency: string): Promise<FxRate> {
+/**
+ * Fetches one rate behind the cross-process lock, then caches it. A rate already stale at `now`
+ * is returned (the caller refuses it) but never cached, so the next request fetches again rather
+ * than waiting out the TTL. In live mode a fresh rate must pass the sanity band first.
+ */
+async function fetchRate(
+  redis: Redis,
+  provider: FxProvider,
+  currency: string,
+  now: Date,
+  livemode: boolean,
+): Promise<FxRate> {
   const key = fxCacheKey(provider.id, currency);
   const lockKey = fxLockKey(provider.id, currency);
   const token = randomUUID();
@@ -415,7 +552,7 @@ async function fetchRate(redis: Redis, provider: FxProvider, currency: string): 
     for (let waited = 0; waited < FX_LOCK_WAIT_MS; waited += FX_LOCK_POLL_MS) {
       await new Promise((r) => setTimeout(r, FX_LOCK_POLL_MS));
       const cached = await readCache(redis, key, currency);
-      if (cached) return cached;
+      if (cached && isFresh(cached, now)) return cached;
     }
     // The holder died or is slow: fetch ourselves.
   }
@@ -438,6 +575,8 @@ async function fetchRate(redis: Redis, provider: FxProvider, currency: string): 
       throw fxUnavailable(currency);
     }
     const rate: FxRate = { currency, rate: quote.rate, source: quote.source, asOf };
+    if (!isFresh(rate, now)) return rate;
+    if (livemode) await checkSanityBand(redis, provider, rate);
     await writeCache(redis, key, rate);
     return rate;
   } finally {
@@ -457,17 +596,19 @@ export async function getUsdRate(currency: string, now: Date, opts: FxOptions): 
   const redis = opts.redis ?? getRedis();
   const key = fxCacheKey(provider.id, currency);
 
+  // A stale cache entry is a miss: fetch a fresh rate rather than refuse for the rest of the TTL.
   let rate = await readCache(redis, key, currency);
-  if (!rate) {
+  if (!rate || !isFresh(rate, now)) {
     let pending = inflight.get(key);
     if (!pending) {
-      pending = fetchRate(redis, provider, currency).finally(() => inflight.delete(key));
+      pending = fetchRate(redis, provider, currency, now, opts.livemode).finally(() =>
+        inflight.delete(key),
+      );
       inflight.set(key, pending);
     }
     rate = await pending;
   }
-  const age = now.getTime() - rate.asOf.getTime();
-  if (age > FX_MAX_AGE_MS || age < -FX_FUTURE_SKEW_MS) throw fxUnavailable(currency);
+  if (!isFresh(rate, now)) throw fxUnavailable(currency);
   return rate;
 }
 

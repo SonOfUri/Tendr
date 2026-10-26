@@ -318,11 +318,12 @@ describe('loadEnv FX', () => {
     expect(loadEnv(prod).FX_PROVIDER).toBe('openexchangerates');
   });
 
-  it('refuses the fixed provider in production, and a live provider without FX_API_KEY', () => {
+  it('refuses the fixed provider and a missing FX_API_KEY in production only', () => {
     expect(() => loadEnv({ ...prod, FX_PROVIDER: 'fixed' })).toThrow(/FX_PROVIDER/);
     const { FX_API_KEY: _key, ...noKey } = prod;
     expect(() => loadEnv(noKey)).toThrow(/FX_API_KEY/);
-    expect(() => loadEnv({ ...base, FX_PROVIDER: 'openexchangerates' })).toThrow(/FX_API_KEY/);
+    // Outside production a missing key is allowed: live non-USD sessions are then 503.
+    expect(loadEnv({ ...base, FX_PROVIDER: 'openexchangerates' }).FX_API_KEY).toBeUndefined();
     expect(() => loadEnv({ ...base, FX_PROVIDER: 'ecb' })).toThrow(/FX_PROVIDER/);
   });
 

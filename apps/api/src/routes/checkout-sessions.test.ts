@@ -249,7 +249,7 @@ describe('checkout session routes', () => {
   });
 
   describe('non-USD amounts (FX)', () => {
-    const NOW_RATE = { rate: '1602.04', source: 'fixed' };
+    const NOW_RATE = { rate: '1602.04', source: 'fixed (test rates)' };
 
     beforeEach(async () => {
       await resetFxCache();
@@ -268,7 +268,7 @@ describe('checkout session routes', () => {
       expect(row.originalAmount?.toFixed()).toBe('78500');
       expect(row.originalCurrency).toBe('NGN');
       expect(row.fxRate?.toFixed()).toBe('1602.04');
-      expect(row.fxSource).toBe('fixed');
+      expect(row.fxSource).toBe('fixed (test rates)');
       expect(row.fxAsOf!.getTime()).toBeGreaterThanOrEqual(before - 1000);
     });
 
@@ -282,7 +282,7 @@ describe('checkout session routes', () => {
       expect(view.original_currency).toBe('NGN');
       expect(view.fx).toEqual({
         rate: '1602.04',
-        source: 'fixed',
+        source: 'fixed (test rates)',
         as_of: row.fxAsOf!.toISOString(),
       });
       // 0-dp and 3-dp currencies print with their own minor units.
@@ -371,8 +371,34 @@ describe('checkout session routes', () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch');
       const res = await create(body({ amount: '78500.00', amount_currency: 'NGN' }));
       expect(res.statusCode, res.body).toBe(201);
-      expect((await get(res.json().id)).json().fx.source).toBe('fixed');
+      expect((await get(res.json().id)).json().fx.source).toBe('fixed (test rates)');
       expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('test-mode NGN with no FX_FIXED_RATES converts at the built-in test rate', async () => {
+      loadEnv({ ...process.env, FX_FIXED_RATES: '' });
+      const res = await create(body({ amount: '78500.00', amount_currency: 'NGN' }));
+      expect(res.statusCode, res.body).toBe(201);
+      const view = (await get(res.json().id)).json();
+      // 78500 / 1600 = 49.0625, rounded up.
+      expect(view.fx).toMatchObject({ rate: '1600', source: 'fixed (test rates)' });
+      expect(view.amount).toBe('49.07');
+    });
+
+    it('a live key with FX_FIXED_RATES set and no FX_API_KEY is 503, never fixed rates', async () => {
+      loadEnv({ ...process.env, FX_PROVIDER: 'fixed', FX_API_KEY: undefined });
+      await createRow('MerchantAccount', merchant.id, true, { status: 'active' });
+      await createRow('SettlementConfig', merchant.id, true, {
+        destAssetId: 'nep141:usdc.test',
+        destChain: 'near',
+        payoutMode: 'intents',
+        payoutAddress: null,
+        isDefault: true,
+      });
+      const liveKey = (await createApiKey(merchant.id, { livemode: true })).raw;
+      const res = await create(body({ amount: '78500.00', amount_currency: 'NGN' }), liveKey);
+      expect(res.statusCode, res.body).toBe(503);
+      expect(res.json().error.code).toBe('FX_RATE_UNAVAILABLE');
     });
 
     it('the converted USD amount must pass the amount checks', async () => {

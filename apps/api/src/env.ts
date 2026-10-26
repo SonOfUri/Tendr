@@ -161,20 +161,21 @@ const EnvSchema = z
         }),
     ),
     /**
-     * Base URL of the hosted checkout page; a session's `url` is
-     * `${CHECKOUT_BASE_URL}/pay/{id}#cs={client_secret}`. No trailing slash needed.
-     */
-    /**
-     * FX rate provider for non-USD order totals (live mode). `fixed` reads FX_FIXED_RATES; test
-     * mode always uses `fixed`, whatever this says. Default: `openexchangerates` in production,
-     * `fixed` otherwise. Production refuses `fixed`.
+     * Live-mode FX rate provider for non-USD order totals. `openexchangerates` (with FX_API_KEY)
+     * is the live adapter; `fixed` means no live provider, so live non-USD sessions are
+     * FX_RATE_UNAVAILABLE. Live mode never uses fixed rates; test mode always does. Default:
+     * `openexchangerates` in production, `fixed` otherwise. Production refuses `fixed`.
      */
     FX_PROVIDER: z.preprocess(blankAsUnset, z.enum(['fixed', 'openexchangerates']).optional()),
-    /** The live FX provider's key (Open Exchange Rates app id). Required for a live provider. */
+    /**
+     * The live FX provider's key (Open Exchange Rates app id). Required in production; elsewhere,
+     * without it, live non-USD sessions are FX_RATE_UNAVAILABLE.
+     */
     FX_API_KEY: optionalString,
     /**
-     * Fixed FX rates as JSON `{"NGN":"1602.04"}`: "1 USD = R <code>", decimal strings (never JSON
-     * numbers, so no float ever touches a rate). Tests and test mode only.
+     * Test-mode FX rate overrides as JSON `{"NGN":"1602.04"}`: "1 USD = R <code>", decimal strings
+     * (never JSON numbers, so no float ever touches a rate). Entries override the built-in test
+     * table (fx.ts TEST_FX_RATES). Never used in live mode.
      */
     FX_FIXED_RATES: z.preprocess(
       blankAsUnset,
@@ -213,6 +214,10 @@ const EnvSchema = z
       blankAsUnset,
       z.string().default('0x000000000000000000000000000000000000dead'),
     ),
+    /**
+     * Base URL of the hosted checkout page; a session's `url` is
+     * `${CHECKOUT_BASE_URL}/pay/{id}#cs={client_secret}`. No trailing slash needed.
+     */
     CHECKOUT_BASE_URL: z.preprocess(
       blankAsUnset,
       z
@@ -271,11 +276,11 @@ const EnvSchema = z
         message: 'fixed is not allowed in production (set FX_PROVIDER=openexchangerates)',
       });
     }
-    if (fxProvider !== 'fixed' && !e.FX_API_KEY) {
+    if (e.NODE_ENV === 'production' && !e.FX_API_KEY) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['FX_API_KEY'],
-        message: `required with FX_PROVIDER=${fxProvider}`,
+        message: `required in production (FX_PROVIDER=${fxProvider})`,
       });
     }
     if (e.NODE_ENV === 'production') {

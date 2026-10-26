@@ -9,13 +9,17 @@ import {
   FX_MAX_AGE_MS,
   ISO_4217_MINOR_UNITS,
   convertToUsd,
+  TEST_FX_RATES,
+  TEST_FX_SOURCE,
   fixedFxProvider,
   fxCacheKey,
+  fxLastGoodKey,
   fxLockKey,
   fxProviderFor,
   getUsdRate,
   openExchangeRatesProvider,
   resetFxCache,
+  withinSanityBand,
   type FxProvider,
   type FxRate,
 } from './fx.js';
@@ -236,9 +240,7 @@ describe('getUsdRate', () => {
     expect(fn).toHaveBeenCalledTimes(1);
     // Cached for 60 s, per currency.
     expect(FX_CACHE_TTL_S).toBe(60);
-    const keys = await redis.keys('*fx*stub:NGN');
-    expect(keys).toHaveLength(1);
-    const ttl = await redis.ttl(keys[0]!);
+    const ttl = await redis.ttl(fxCacheKey('stub', 'NGN'));
     expect(ttl).toBeGreaterThan(50);
     expect(ttl).toBeLessThanOrEqual(60);
     await getUsdRate('EUR', now, { livemode: true, provider, redis });
@@ -249,12 +251,104 @@ describe('getUsdRate', () => {
     expect(FX_MAX_AGE_MS).toBe(10 * MIN);
     const { provider, fn } = stub('1602.04', 9.5 * MIN);
     await getUsdRate('NGN', now, { livemode: true, provider, redis });
-    // Still cached, but the rate itself has aged past 10 minutes: refused, no fallback.
+    // Still cached, but the rate itself has aged past 10 minutes: the stale entry counts as a
+    // miss, the provider is asked again, and its (still stale) answer is refused: no fallback.
     const err = await rejectionOf(
       getUsdRate('NGN', new Date(now.getTime() + MIN), { livemode: true, provider, redis }),
     );
     expect(err.code).toBe('FX_RATE_UNAVAILABLE');
-    expect(fn).toHaveBeenCalledTimes(1);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('a stale cache hit is a miss: a fresh rate is fetched without waiting out the TTL', async () => {
+    const fn = vi
+      .fn<FxProvider['rate']>()
+      .mockResolvedValueOnce({
+        rate: '1600',
+        source: 'stub',
+        asOf: new Date(now.getTime() - 9.5 * MIN),
+      })
+      .mockResolvedValueOnce({ rate: '1610', source: 'stub', asOf: now });
+    const provider: FxProvider = { id: 'stub', rate: fn };
+    await getUsdRate('NGN', now, { livemode: true, provider, redis });
+    const later = new Date(now.getTime() + MIN);
+    const r = await getUsdRate('NGN', later, { livemode: true, provider, redis });
+    expect(r.rate).toBe('1610');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('a rate stale on arrival is refused and not cached', async () => {
+    const fn = vi
+      .fn<FxProvider['rate']>()
+      .mockResolvedValueOnce({
+        rate: '1600',
+        source: 'stub',
+        asOf: new Date(now.getTime() - 11 * MIN),
+      })
+      .mockResolvedValueOnce({ rate: '1601', source: 'stub', asOf: now });
+    const provider: FxProvider = { id: 'stub', rate: fn };
+    const err = await rejectionOf(getUsdRate('NGN', now, { livemode: true, provider, redis }));
+    expect(err.code).toBe('FX_RATE_UNAVAILABLE');
+    expect(await redis.get(fxCacheKey('stub', 'NGN'))).toBeNull();
+    // The very next request fetches again (no 60 s blackout) and gets the fresh rate.
+    expect((await getUsdRate('NGN', now, { livemode: true, provider, redis })).rate).toBe('1601');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  describe('live sanity band', () => {
+    const quote = (rate: string) => ({ rate, source: 'stub', asOf: now });
+    /** Drops only the 60 s cache, keeping the last good rate. */
+    const dropCache = () => redis.del(fxCacheKey('stub', 'NGN'));
+
+    it('accepts the first rate ever seen and remembers it for 7 days', async () => {
+      const provider: FxProvider = { id: 'stub', rate: vi.fn(async () => quote('1600')) };
+      expect((await getUsdRate('NGN', now, { livemode: true, provider, redis })).rate).toBe('1600');
+      expect(await redis.get(fxLastGoodKey('stub', 'NGN'))).toBe('1600');
+      const ttl = await redis.ttl(fxLastGoodKey('stub', 'NGN'));
+      expect(ttl).toBeGreaterThan(7 * 24 * 3600 - 60);
+      expect(ttl).toBeLessThanOrEqual(7 * 24 * 3600);
+    });
+
+    it('refuses a rate more than 50% away in either direction, and keeps the last good one', async () => {
+      const fn = vi.fn<FxProvider['rate']>();
+      const provider: FxProvider = { id: 'stub', rate: fn };
+      fn.mockResolvedValueOnce(quote('1600'));
+      await getUsdRate('NGN', now, { livemode: true, provider, redis });
+      for (const bad of ['2400.01', '799.99', '16000', '16']) {
+        await dropCache();
+        fn.mockResolvedValueOnce(quote(bad));
+        const err = await rejectionOf(getUsdRate('NGN', now, { livemode: true, provider, redis }));
+        expect(err.code, bad).toBe('FX_RATE_UNAVAILABLE');
+        expect(await redis.get(fxCacheKey('stub', 'NGN')), bad).toBeNull();
+        expect(await redis.get(fxLastGoodKey('stub', 'NGN')), bad).toBe('1600');
+      }
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining('fx rate outside the sanity band'),
+      );
+      // Exactly ±50% is inside the band; an accepted rate becomes the new reference.
+      for (const ok of ['2400', '800']) {
+        await redis.set(fxLastGoodKey('stub', 'NGN'), '1600');
+        await dropCache();
+        fn.mockResolvedValueOnce(quote(ok));
+        expect((await getUsdRate('NGN', now, { livemode: true, provider, redis })).rate).toBe(ok);
+        expect(await redis.get(fxLastGoodKey('stub', 'NGN'))).toBe(ok);
+      }
+    });
+
+    it('does not apply in test mode', async () => {
+      await redis.set(fxLastGoodKey('stub', 'NGN'), '1600');
+      const provider: FxProvider = { id: 'stub', rate: vi.fn(async () => quote('9000')) };
+      expect((await getUsdRate('NGN', now, { livemode: false, provider, redis })).rate).toBe(
+        '9000',
+      );
+    });
+
+    it('compares exactly', () => {
+      expect(withinSanityBand('1.5', '1')).toBe(true);
+      expect(withinSanityBand('1.500000000000000001', '1')).toBe(false);
+      expect(withinSanityBand('0.5', '1.0')).toBe(true);
+      expect(withinSanityBand('0.499999999999999999', '1')).toBe(false);
+    });
   });
 
   it('single-flight: concurrent misses call the provider once', async () => {
@@ -308,16 +402,55 @@ describe('providers', () => {
     loadEnv({ ...process.env, FX_PROVIDER: 'openexchangerates', FX_API_KEY: 'k' });
     expect(fxProviderFor(false).id).toBe('fixed');
     expect(fxProviderFor(true).id).toBe('openexchangerates');
-    loadEnv({ ...process.env, FX_PROVIDER: 'fixed' });
-    expect(fxProviderFor(true).id).toBe('fixed');
   });
 
-  it('the fixed provider reads FX_FIXED_RATES', async () => {
+  it('live mode never uses fixed rates, whatever FX_PROVIDER says', () => {
+    loadEnv({ ...process.env, FX_PROVIDER: 'fixed' });
+    expect(fxProviderFor(true).id).not.toBe('fixed');
+    loadEnv({ ...process.env, FX_PROVIDER: 'openexchangerates', FX_API_KEY: undefined });
+    expect(fxProviderFor(true).id).not.toBe('fixed');
+  });
+
+  it('live with FX_FIXED_RATES set and no key → FX_RATE_UNAVAILABLE', async () => {
+    for (const FX_PROVIDER of ['fixed', 'openexchangerates']) {
+      loadEnv({
+        ...process.env,
+        FX_PROVIDER,
+        FX_API_KEY: undefined,
+        FX_FIXED_RATES: '{"NGN":"1602.04"}',
+      });
+      const redis = createRedis(env().REDIS_URL);
+      await whenReady(redis);
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+      try {
+        const err = await rejectionOf(getUsdRate('NGN', new Date(), { livemode: true, redis }));
+        expect(err.code, FX_PROVIDER).toBe('FX_RATE_UNAVAILABLE');
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        await resetFxCache(redis);
+        await closeClient(redis);
+      }
+    }
+  });
+
+  it('test rates cover every currency, are valid, and are marked as test rates', async () => {
+    loadEnv({ ...process.env, FX_FIXED_RATES: '' });
+    for (const code of Object.keys(ISO_4217_MINOR_UNITS)) {
+      expect(TEST_FX_RATES[code], code).toMatch(/^\d+(\.\d+)?$/);
+      expect(TEST_FX_RATES[code], code).toMatch(/[1-9]/);
+    }
+    const r = await fixedFxProvider().rate('NGN', 'USD');
+    expect(r).toMatchObject({ rate: TEST_FX_RATES.NGN, source: 'fixed (test rates)' });
+    expect(TEST_FX_SOURCE).toBe('fixed (test rates)');
+  });
+
+  it('FX_FIXED_RATES overrides entries of the test table', async () => {
     loadEnv({ ...process.env, FX_FIXED_RATES: '{"NGN":"1602.04"}' });
     const r = await fixedFxProvider().rate('NGN', 'USD');
     expect(r.rate).toBe('1602.04');
-    expect(r.source).toBe('fixed');
-    await expect(fixedFxProvider().rate('EUR', 'USD')).rejects.toThrow(/EUR/);
+    expect(r.source).toBe('fixed (test rates)');
+    expect((await fixedFxProvider().rate('EUR', 'USD')).rate).toBe(TEST_FX_RATES.EUR);
+    await expect(fixedFxProvider().rate('XYZ', 'USD')).rejects.toThrow(/XYZ/);
     expect(() => loadEnv({ ...process.env, FX_FIXED_RATES: '{"NGN":1602.04}' })).toThrow(
       /FX_FIXED_RATES/,
     );
