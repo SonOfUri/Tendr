@@ -50,6 +50,8 @@ export interface SessionPayment {
   overpaid_amount: string | null;
   refunded_amount: string | null;
   kept_small_overpayment: boolean;
+  /** Which returns of this payment were worth under $1 and stay with the store (C41). */
+  kept_small_reasons?: string[];
   origin_tx_hash: string | null;
   created_at: string;
 }
@@ -62,7 +64,9 @@ export interface SessionRefund {
   needs_address: boolean;
   /** Networks the return can go to (only while it needs an address). */
   chains?: string[];
-  /** processing | sent | review */
+  /** What the return is for: overpaid, late, underpaid, failed, … (never an address). */
+  reason?: string;
+  /** processing | sent | review | kept */
   state: string;
 }
 

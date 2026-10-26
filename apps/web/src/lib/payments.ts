@@ -114,6 +114,8 @@ export interface ReviewItem {
   legal_ack_at: string | null;
   legal_ack_by_user_id: string | null;
   screening_unresolved_at: string | null;
+  /** Return reasons kept by the store because they were worth under $1. */
+  kept_small_reasons: string[];
   refunds: Refund[];
   notice?: string;
 }
@@ -255,6 +257,38 @@ export function explorerTxUrl(
 }
 
 /** Words for a refund's state, as the merchant sees it. */
+/** What a held payment's return is for, in the review card. */
+export function returnLabel(reason: string): string {
+  if (reason === 'sanctions') return 'Order amount';
+  if (reason === 'overpaid') return 'Extra paid';
+  return reason.charAt(0).toUpperCase() + reason.slice(1);
+}
+
+/**
+ * The destination forms a held payment's review card shows (C41): one per return still waiting
+ * for a destination — not sent, not kept small, no proposal yet — each with its own `refund_id`.
+ * While the payment is HELD and its order-amount (sanctions) return is not queued yet (nor kept
+ * small), a first form without `refund_id` queues and drafts it.
+ */
+export function heldReturnForms(
+  item: Pick<ReviewItem, 'status' | 'kept_small_reasons' | 'refunds'>,
+): { refundId: string | null; label: string }[] {
+  const forms: { refundId: string | null; label: string }[] = [];
+  if (
+    item.status === 'HELD' &&
+    !item.refunds.some((r) => r.reason === 'sanctions') &&
+    !item.kept_small_reasons.includes('sanctions')
+  ) {
+    forms.push({ refundId: null, label: returnLabel('sanctions') });
+  }
+  const order = (r: Refund) => (r.reason === 'sanctions' ? 0 : 1);
+  for (const r of [...item.refunds].sort((a, b) => order(a) - order(b))) {
+    if (r.status === 'confirmed' || r.proposal_id || r.review_reason === 'kept_small') continue;
+    forms.push({ refundId: r.id, label: returnLabel(r.reason) });
+  }
+  return forms;
+}
+
 export function refundStateWords(r: Refund): string {
   if (r.status === 'confirmed') return 'Sent';
   if (r.needs_address) return 'Waiting for the shopper’s address';

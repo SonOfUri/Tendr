@@ -4,7 +4,9 @@ import {
   explorerTxUrl,
   feeLines,
   formatUsd,
+  heldReturnForms,
   type FeeLine,
+  type Refund,
 } from './payments';
 
 const USDC_TEST = 'nep141:usdc.fakes.testnet';
@@ -97,5 +99,72 @@ describe('checkout settings copy (M-6)', () => {
   it('labels the fee and gas payer defaults as applying to test and live', () => {
     expect(CHECKOUT_DEFAULTS_SCOPE_NOTE).toMatch(/fee and gas/i);
     expect(CHECKOUT_DEFAULTS_SCOPE_NOTE).toMatch(/applies to test and live/i);
+  });
+});
+
+describe('held review card: one destination form per open return (C41)', () => {
+  const refund = (over: Partial<Refund>): Refund => ({
+    id: 'ref_1',
+    payment_id: 'pay_1',
+    reason: 'sanctions',
+    status: 'pending',
+    asset: 'nep141:usdc.test',
+    amount: '1',
+    return_fee: null,
+    destination: null,
+    destination_chain: null,
+    needs_address: false,
+    review_reason: null,
+    proposal_id: null,
+    refund_tx_hash: null,
+    acknowledged_legal_at: null,
+    created_at: '2026-10-26T00:00:00Z',
+    ...over,
+  });
+
+  it('an order-amount return and an excess return each get a form with their own refund_id', () => {
+    const forms = heldReturnForms({
+      status: 'HELD',
+      kept_small_reasons: [],
+      refunds: [
+        refund({ id: 'ref_s', reason: 'sanctions' }),
+        refund({ id: 'ref_o', reason: 'overpaid', review_reason: 'sanctions' }),
+      ],
+    });
+    expect(forms).toEqual([
+      { refundId: 'ref_s', label: 'Order amount' },
+      { refundId: 'ref_o', label: 'Extra paid' },
+    ]);
+  });
+
+  it('a return with a proposal (or sent, or kept) has no form; the others keep theirs', () => {
+    const forms = heldReturnForms({
+      status: 'REFUNDED',
+      kept_small_reasons: [],
+      refunds: [
+        refund({ id: 'ref_s', reason: 'sanctions', proposal_id: 'prop_1' }),
+        refund({ id: 'ref_c', reason: 'late', status: 'confirmed' }),
+        refund({ id: 'ref_k', reason: 'underpaid', status: 'failed', review_reason: 'kept_small' }),
+        refund({ id: 'ref_o', reason: 'overpaid', review_reason: 'sanctions' }),
+      ],
+    });
+    expect(forms).toEqual([{ refundId: 'ref_o', label: 'Extra paid' }]);
+  });
+
+  it('a held payment whose order-amount return is not queued yet gets a form without refund_id', () => {
+    expect(
+      heldReturnForms({
+        status: 'HELD',
+        kept_small_reasons: [],
+        refunds: [refund({ id: 'ref_o', reason: 'overpaid', review_reason: 'sanctions' })],
+      }),
+    ).toEqual([
+      { refundId: null, label: 'Order amount' },
+      { refundId: 'ref_o', label: 'Extra paid' },
+    ]);
+    // Kept small: nothing to queue for the order amount.
+    expect(
+      heldReturnForms({ status: 'HELD', kept_small_reasons: ['sanctions'], refunds: [] }),
+    ).toEqual([]);
   });
 });

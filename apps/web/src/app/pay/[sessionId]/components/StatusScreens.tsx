@@ -2,6 +2,7 @@
 
 import type { CheckoutClient, SessionPayment, SessionView, Token } from '@/lib/checkout/api';
 import { explorerTxUrl, formatUnits, networkName, safeHttpUrl } from '@/lib/checkout/format';
+import { extraPaidNotice } from '@/lib/checkout/returns';
 import type { ScreenState } from '@/lib/checkout/status';
 import { Countdown } from './Countdown';
 import { SendDetails } from './SendDetails';
@@ -118,7 +119,8 @@ export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: 
 
     case 'complete': {
       const paid = paidAmount(view, payment, token);
-      const overpaid = payment?.overpaid_amount && /[1-9]/.test(payment.overpaid_amount);
+      // Kept is said only when nothing of this payment is being returned (C41).
+      const notice = payment ? extraPaidNotice(payment, returns) : null;
       return (
         <section className="pay-section" aria-labelledby="pay-done-title">
           <h2 id="pay-done-title" className="pay-success">
@@ -133,15 +135,17 @@ export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: 
             ) : null}
             <TxLink view={view} payment={payment} token={token} />
           </dl>
-          {payment?.kept_small_overpayment ? (
+          {notice === 'kept' ? (
             <p className="muted small">
               You sent a little extra. Leftovers under $1 aren&apos;t returned, so it stays with the
               store.
             </p>
-          ) : overpaid ? (
+          ) : notice === 'returning' ? (
             <p className="muted small">
               You sent a little extra. It&apos;s being sent back to you.
             </p>
+          ) : notice === 'sent' ? (
+            <p className="muted small">You sent a little extra. It was sent back to you.</p>
           ) : null}
           <StoreLink href={view.success_url}>Return to store</StoreLink>
         </section>

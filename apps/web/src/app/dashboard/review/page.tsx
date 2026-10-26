@@ -9,7 +9,9 @@ import { Status, useAction, useLoad } from '@/components/dashboard/common';
 import { CHAINS, chainLabel, formatAmount } from '@/lib/assets';
 import { api } from '@/lib/api';
 import {
+  heldReturnForms,
   refundStateWords,
+  returnLabel,
   type Refund,
   type ReturnItem,
   type ReviewItem,
@@ -147,7 +149,8 @@ function HeldCard({
 }) {
   const [phrase, setPhrase] = useState('');
   const ack = useAction();
-  const sent = item.refunds.some((r) => r.proposal_id || r.status === 'confirmed');
+  // One form per return still waiting for a destination, each with its own refund_id (C41).
+  const forms = heldReturnForms(item);
 
   async function acknowledge(e: React.FormEvent) {
     e.preventDefault();
@@ -179,9 +182,9 @@ function HeldCard({
       {item.refunds.length > 0 && (
         <ul className="list">
           {item.refunds.map((r) => (
-            <li key={r.id}>
+            <li key={r.id} data-testid={`held-refund-${r.id}`}>
               <span className="grow">
-                <RefundLine r={r} livemode={livemode} />
+                <strong>{returnLabel(r.reason)}</strong> · <RefundLine r={r} livemode={livemode} />
               </span>
             </li>
           ))}
@@ -219,14 +222,18 @@ function HeldCard({
           <p className="muted small">
             Legal clearance confirmed {new Date(item.legal_ack_at).toLocaleString()}.
           </p>
-          {!sent && (
-            <DestinationForm
-              paymentId={item.payment_id}
-              required
-              label="Draft the refund"
-              onDone={onChanged}
-            />
-          )}
+          {forms.map((f) => (
+            <div key={f.refundId ?? 'order'} className="stack">
+              <h3 className="small">{f.label}</h3>
+              <DestinationForm
+                paymentId={item.payment_id}
+                {...(f.refundId ? { refundId: f.refundId } : {})}
+                required
+                label={`Draft the refund: ${f.label.toLowerCase()}`}
+                onDone={onChanged}
+              />
+            </div>
+          ))}
         </>
       )}
     </div>
