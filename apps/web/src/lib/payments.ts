@@ -40,7 +40,7 @@ export interface PaymentList {
   next_cursor: string | null;
 }
 
-export type FeeKind = 'tendr_fee' | 'oneclick_fee' | 'network_fee' | 'gas_reimbursement';
+export type FeeKind = 'tendr_fee' | 'oneclick_fee' | 'network_fee' | 'gas_reimbursement' | 'other';
 
 export interface FeeLine {
   kind: FeeKind;
@@ -191,6 +191,7 @@ const FEE_LABEL: Record<FeeKind, string> = {
   oneclick_fee: '1Click fee and spread',
   network_fee: 'Network fee',
   gas_reimbursement: 'Gas reimbursement',
+  other: 'Other fee',
 };
 
 export interface FormattedFeeLine {

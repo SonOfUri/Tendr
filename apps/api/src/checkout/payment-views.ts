@@ -105,18 +105,25 @@ export async function listPayments(db: ScopedDb, query: z.infer<typeof PaymentLi
 }
 
 /** API names of the revenue sources (the dashboard's fee lines). */
-const FEE_KIND = {
+const FEE_KIND: Readonly<Record<string, Exclude<FeeKind, 'other'>>> = {
   app_fee: 'tendr_fee',
   oneclick_fee: 'oneclick_fee',
   spread: 'oneclick_fee',
   network_fee: 'network_fee',
   gas_reimbursement: 'gas_reimbursement',
-} as const;
+};
+
+export type FeeKind = 'tendr_fee' | 'oneclick_fee' | 'network_fee' | 'gas_reimbursement' | 'other';
+
+/** The fee-line kind of a revenue source; a source this release does not know is `other`. */
+export function feeKindOf(source: string): FeeKind {
+  return Object.hasOwn(FEE_KIND, source) ? FEE_KIND[source]! : 'other';
+}
 /** Lines built on the static per-chain send-fee estimate. */
 const ESTIMATED = new Set(['network_fee', 'gas_reimbursement']);
 
 export interface FeeLine {
-  kind: (typeof FEE_KIND)[keyof typeof FEE_KIND];
+  kind: FeeKind;
   asset: string;
   /** Base units of `asset` (integer string). */
   amount: string;
@@ -152,7 +159,7 @@ export async function getPayment(db: ScopedDb, id: string) {
         gasMaxUsd: p.session.gasMaxUsd,
       });
   const fees: FeeLine[] = lines.map((l) => {
-    const kind = FEE_KIND[l.source];
+    const kind = feeKindOf(l.source);
     return {
       kind,
       asset: l.assetId,

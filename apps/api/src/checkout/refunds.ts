@@ -436,24 +436,40 @@ async function draftIfReady(ctx: ScopeContext, refundId: string): Promise<Refund
  * A no-op for a refund already drafted, done, needing an address or under review. Throws
  * LEGAL_ACK_REQUIRED (409) for a held payment's return without `acknowledged_legal_at`, and
  * PROVIDER_UNAVAILABLE (503) when the destination cannot be screened (fail closed).
+ *
+ * The proposal's action is built from the row as read here, and drafted only if the row under the
+ * lock still has exactly that destination, chain, asset and amount (a concurrent writer changed it
+ * → no draft: CONFLICT 409 when the caller set `expect`, else a no-op the sweeper retries).
+ * `screenedAddress` skips the screen only when it is the row's destination (the caller screened
+ * that very address). With `expect`, a row that does not hold the caller's values is 409.
  */
 export async function draftReturn(
   ctx: ScopeContext,
   refundId: string,
-  opts: { screened?: boolean } = {},
+  opts: {
+    screenedAddress?: string;
+    expect?: { destination: string; destinationChain: string; amount: string };
+  } = {},
 ): Promise<Refund> {
   const r = await prisma.refund.findFirst({
     where: { id: refundId, ...tenantOf(ctx) },
     include: { payment: { select: { status: true, sessionId: true } } },
   });
   if (!r) throw notFound('Refund not found');
+  const changed = () =>
+    conflict('This return was changed by another request; reload and try again');
+  const holds = (row: Refund, e: NonNullable<typeof opts.expect>) =>
+    row.destination === e.destination &&
+    row.destinationChain === e.destinationChain &&
+    row.amount.toFixed(0) === e.amount;
+  if (opts.expect && !holds(r, opts.expect)) throw changed();
   if (r.proposalId || r.status !== 'pending' || r.needsAddress || r.reviewReason) return r;
   if ((r.payment.status === 'HELD' || r.reason === 'sanctions') && !r.acknowledgedLegalAt) {
     throw legalAckRequired();
   }
   if (!r.destination || !r.destinationChain) return r;
   // Screened first: a sanctioned destination is flagged whatever the route.
-  if (!opts.screened) {
+  if (opts.screenedAddress !== r.destination) {
     const { decision } = await deps.screen(ctx, {
       sessionId: r.payment.sessionId,
       address: r.destination,
@@ -484,6 +500,16 @@ export async function draftReturn(
     return await tenantTransaction(ctx, async (tx) => {
       await lockRefund(tx, ctx, r.id);
       const cur = await tx.refund.findFirstOrThrow({ where: { id: r.id, ...tenantOf(ctx) } });
+      // The action (and the screen) are for the row read above: never draft a changed row.
+      const same =
+        cur.destination === r.destination &&
+        cur.destinationChain === r.destinationChain &&
+        cur.assetId === r.assetId &&
+        cur.amount.equals(r.amount);
+      if (!same) {
+        if (opts.expect) throw changed();
+        return cur;
+      }
       if (cur.proposalId || cur.status !== 'pending' || cur.needsAddress || cur.reviewReason) {
         return cur;
       }
@@ -764,7 +790,7 @@ async function fillAddress(
     if (tokenHash) throw invalidToken();
     throw conflict('This refund already has an address');
   }
-  const drafted = await draftIfReadyScreened(ctx, r.id);
+  const drafted = await draftIfReadyScreened(ctx, r.id, input.address);
   return { refund_id: drafted.id, status: drafted.proposalId ? 'pending_approval' : 'queued' };
 }
 
@@ -841,9 +867,13 @@ export async function provideRefundAddressByToken(
   return fillAddress(ctx, { ...r, sessionId: r.payment.sessionId }, input, hash);
 }
 
-async function draftIfReadyScreened(ctx: ScopeContext, refundId: string): Promise<Refund> {
+async function draftIfReadyScreened(
+  ctx: ScopeContext,
+  refundId: string,
+  screenedAddress: string,
+): Promise<Refund> {
   try {
-    return await draftReturn(ctx, refundId, { screened: true });
+    return await draftReturn(ctx, refundId, { screenedAddress });
   } catch (err) {
     log('warn', 'return to sender not drafted yet', { refundId, err: String(err) });
     return prisma.refund.findFirstOrThrow({ where: { id: refundId, ...tenantOf(ctx) } });

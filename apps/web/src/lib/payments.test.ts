@@ -68,6 +68,10 @@ describe('feeLines', () => {
     expect(l!.usd).toBe('$0.13');
   });
 
+  it('an unknown fee kind is labelled "Other fee"', () => {
+    expect(feeLines([line({ kind: 'other' })], false)[0]!.label).toBe('Other fee');
+  });
+
   it('an unknown USD value shows a dash', () => {
     expect(feeLines([line({ amount_usd: null })], false)[0]!.usd).toBe('—');
   });

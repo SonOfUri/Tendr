@@ -296,6 +296,25 @@ function pickRefund(refunds: Refund[], refundId?: string): Refund {
 const sameAddress = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 /**
+ * Addresses a held payment's funds may never go to: every sender of the payment, and every return
+ * destination that screened as sanctioned (`blocked_destination` of the `payment.held` events that
+ * `blockReturn` recorded). A merchant destination of an earlier review re-draft is NOT on it.
+ */
+async function sanctionedAddresses(
+  ctx: ScopeContext,
+  p: Pick<Payment, 'id' | 'senderAddress' | 'senderAddresses'>,
+): Promise<string[]> {
+  const held = await prisma.event.findMany({
+    where: { ...tenantOf(ctx), aggregateId: p.id, type: 'payment.held' },
+    select: { payload: true },
+  });
+  const blocked = held
+    .map((e) => (e.payload as { blocked_destination?: unknown }).blocked_destination)
+    .filter((v): v is string => typeof v === 'string');
+  return [p.senderAddress, ...p.senderAddresses, ...blocked].filter((a): a is string => !!a);
+}
+
+/**
  * Drafts (or drafts again) the return of a payment from the review queue, through Task 8's
  * `draftReturn`. See the module comment for the rules. Returns the refund, or
  * `{ kept_small_overpayment: true }` when the return is worth less than SMALL_OVERPAY_USD.
@@ -342,7 +361,7 @@ export async function refundFromReview(
     r.destination && r.destinationChain
       ? { address: r.destination, chain: r.destinationChain }
       : null;
-  let screened = false;
+  let screenedAddress: string | undefined;
   if (input.destination && input.chain) {
     const chain = contractChainOf(input.chain);
     if (!chain) throw invalid('Refunds cannot be sent on this network', { field: 'chain' });
@@ -350,8 +369,10 @@ export async function refundFromReview(
     if (!isValidAddress(oneclick, input.destination)) {
       throw invalid(`That is not a valid ${oneclick} address`, { field: 'destination' });
     }
-    const blocked = [p.senderAddress, ...p.senderAddresses, ...(sanctioned ? [r.destination] : [])];
-    if (sanctioned && blocked.some((a) => a && sameAddress(a, input.destination!))) {
+    if (
+      sanctioned &&
+      (await sanctionedAddresses(ctx, p)).some((a) => sameAddress(a, input.destination!))
+    ) {
       throw invalid('That is the sanctioned sender: give another destination', {
         field: 'destination',
       });
@@ -378,7 +399,7 @@ export async function refundFromReview(
       throw new AppError('WALLET_NOT_ALLOWED', 'This address cannot receive the refund', 403);
     }
     dest = { address: input.destination, chain };
-    screened = true;
+    screenedAddress = input.destination;
   }
   if (!dest) {
     throw invalid('This return has no destination yet: give one', { field: 'destination' });
@@ -469,6 +490,11 @@ export async function refundFromReview(
       },
     });
   });
-  const drafted = await draftReturn(ctx, r.id, { screened });
+  // Drafted only if the row still holds exactly what this request wrote (a concurrent request
+  // that overwrote it gets 409), and the screen is skipped only for the address screened above.
+  const drafted = await draftReturn(ctx, r.id, {
+    screenedAddress,
+    expect: { destination: dest.address, destinationChain: dest.chain, amount: amount.toString() },
+  });
   return { refund: refundView(drafted), kept_small_overpayment: false };
 }

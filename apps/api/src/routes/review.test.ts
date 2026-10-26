@@ -7,6 +7,7 @@ import { MemoryMailer, setMailer } from '../auth/mailer.js';
 import { setExchangeAddresses } from '../checkout/exchanges.js';
 import { resetOneClickProviders, SimulatedOneClick } from '../checkout/oneclick/index.js';
 import {
+  draftReturn,
   queueHeldReturn,
   registerRefundHooks,
   setRefundDeps,
@@ -20,6 +21,8 @@ import {
   registerWatcherHooks,
   setWatcherDeps,
 } from '../checkout/watcher.js';
+import { tenantTransaction } from '../db/tenant-transaction.js';
+import { recordEvent } from '../events/record.js';
 import { prisma } from '../lib/prisma.js';
 import { fakeNearClient, resetNearClients } from '../near/client.js';
 import type { FakeNearClient } from '../near/fake.js';
@@ -417,5 +420,134 @@ describe('review queue', () => {
     expect(
       (await prisma.refund.findUniqueOrThrow({ where: { id: r.id } })).proposalId,
     ).not.toBeNull();
+  });
+
+  it('two concurrent refund requests with different destinations leave one consistent proposal', async () => {
+    const { p } = await held();
+    await ack(p.id);
+    const screened: string[] = [];
+    setRefundDeps({
+      screen: async (_c, i) => {
+        screened.push(i.address);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { decision: 'allow' };
+      },
+    });
+    const finance = await member('finance');
+    const [a, b] = await Promise.all([
+      refund(p.id, { destination: 'dest-a.testnet', chain: 'near' }, finance),
+      refund(p.id, { destination: 'dest-b.testnet', chain: 'near' }, owner),
+    ]);
+    const proposals = await prisma.accountProposal.findMany();
+    expect(proposals).toHaveLength(1);
+    const [row] = await prisma.refund.findMany({ where: { paymentId: p.id } });
+    const action = (proposals[0]!.action as { refund: { destination: string; amount: string } })
+      .refund;
+    expect(row!.proposalId).toBe(proposals[0]!.id);
+    expect(action.destination).toBe(row!.destination);
+    expect(action.amount).toBe(row!.amount.toFixed(0));
+    const [pending] = await prisma.event.findMany({
+      where: { aggregateId: row!.id, type: 'refund.pending' },
+    });
+    expect(pending!.payload).toMatchObject({ destination: row!.destination });
+    for (const res of [a, b]) {
+      if (res.statusCode === 200) {
+        expect(res.json().refund.destination).toBe(row!.destination);
+      } else {
+        expect(res.statusCode, res.body).toBe(409);
+      }
+    }
+    expect([a.statusCode, b.statusCode]).toContain(200);
+    // The drafted destination was screened.
+    expect(screened).toContain(row!.destination);
+  });
+
+  it('draftReturn refuses a row changed after the caller wrote it, and screens an unscreened address', async () => {
+    const { p } = await held();
+    await ack(p.id);
+    const ctx = { merchantId: merchant.id, livemode: false };
+    const r = (await queueHeldReturn(ctx, p.id))!;
+    await prisma.refund.update({
+      where: { id: r.id },
+      data: {
+        destination: 'dest-b.testnet',
+        destinationChain: 'near',
+        acknowledgedLegalAt: new Date(),
+      },
+    });
+    await expect(
+      draftReturn(ctx, r.id, {
+        screenedAddress: 'dest-a.testnet',
+        expect: {
+          destination: 'dest-a.testnet',
+          destinationChain: 'near',
+          amount: r.amount.toFixed(0),
+        },
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(await prisma.accountProposal.count()).toBe(0);
+    // A screened flag for another address does not skip screening the row's destination.
+    const screened: string[] = [];
+    setRefundDeps({
+      screen: async (_c, i) => {
+        screened.push(i.address);
+        return { decision: 'block' };
+      },
+    });
+    const out = await draftReturn(ctx, r.id, { screenedAddress: 'dest-a.testnet' });
+    expect(screened).toEqual(['dest-b.testnet']);
+    expect(out).toMatchObject({ proposalId: null, reviewReason: 'sanctions' });
+    expect(await prisma.accountProposal.count()).toBe(0);
+  });
+
+  it('a cancelled review re-draft can go to the same merchant address again', async () => {
+    const { p } = await held();
+    await ack(p.id);
+    let res = await refund(p.id, { destination: NEAR_DEST, chain: 'near' });
+    expect(res.statusCode, res.body).toBe(200);
+    const first = res.json().refund.proposal_id as string;
+    await prisma.accountProposal.update({ where: { id: first }, data: { status: 'cancelled' } });
+    await sweepReturns();
+    fake.scriptView(accountNear, 'get_proposal', () => null);
+    res = await refund(p.id, { destination: NEAR_DEST, chain: 'near' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().refund.proposal_id).not.toBe(first);
+    // The sanctioned sender stays refused.
+    await prisma.accountProposal.update({
+      where: { id: res.json().refund.proposal_id },
+      data: { status: 'cancelled' },
+    });
+    await sweepReturns();
+    res = await refund(p.id, { destination: SANCTIONED, chain: 'eth' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('a destination blocked as sanctioned at draft time stays refused for re-drafts', async () => {
+    // The overpay return's draft screens as sanctioned: blockReturn fails it and records
+    // payment.held with the blocked destination.
+    setRefundDeps({ screen: async () => ({ decision: 'block' }) });
+    const { p } = await paid('overpay');
+    setRefundDeps(null);
+    const [r] = await prisma.refund.findMany({ where: { paymentId: p.id } });
+    expect(r).toMatchObject({ status: 'failed', reviewReason: 'sanctions' });
+    // A later block of another destination (e.g. the list changed after a review screen).
+    const ctx = { merchantId: merchant.id, livemode: false };
+    await tenantTransaction(ctx, (tx) =>
+      recordEvent(tx, ctx, {
+        aggregateType: 'payment',
+        aggregateId: p.id,
+        type: 'payment.held',
+        payload: { payment_id: p.id, refund_id: r!.id, blocked_destination: 'blocked.testnet' },
+      }),
+    );
+    let res = await refund(p.id, { destination: 'blocked.testnet', chain: 'near' });
+    expect(res.statusCode).toBe(409); // no acknowledgement yet
+    await ack(p.id);
+    res = await refund(p.id, { destination: 'blocked.testnet', chain: 'near' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toMatch(/sanctioned sender/);
+    res = await refund(p.id, { destination: p.senderAddress!.toLowerCase(), chain: 'eth' });
+    expect(res.statusCode).toBe(400);
+    expect(await prisma.accountProposal.count()).toBe(0);
   });
 });

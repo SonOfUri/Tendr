@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { MemoryMailer, setMailer } from '../auth/mailer.js';
+import { feeKindOf } from '../checkout/payment-views.js';
 import { resetOneClickProviders, SimulatedOneClick } from '../checkout/oneclick/index.js';
 import { registerRefundHooks, setRefundDeps } from '../checkout/refunds.js';
 import { resetTokenCache } from '../checkout/tokens.js';
@@ -17,6 +18,18 @@ import { isolatedSimStore } from '../test/sim-1click.js';
 const sim1click = isolatedSimStore();
 const ETH = 'nep141:eth.omft.near';
 const USDC = 'nep141:usdc.test';
+
+describe('fee line kinds', () => {
+  it('maps every revenue source, and an unknown one to other', () => {
+    expect(feeKindOf('app_fee')).toBe('tendr_fee');
+    expect(feeKindOf('oneclick_fee')).toBe('oneclick_fee');
+    expect(feeKindOf('spread')).toBe('oneclick_fee');
+    expect(feeKindOf('network_fee')).toBe('network_fee');
+    expect(feeKindOf('gas_reimbursement')).toBe('gas_reimbursement');
+    expect(feeKindOf('future_source')).toBe('other');
+    expect(feeKindOf('toString')).toBe('other');
+  });
+});
 
 describe('dashboard payments', () => {
   let app: FastifyInstance;
