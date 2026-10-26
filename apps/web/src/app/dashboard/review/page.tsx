@@ -10,6 +10,7 @@ import { CHAINS, chainLabel, formatAmount } from '@/lib/assets';
 import { api } from '@/lib/api';
 import {
   heldReturnForms,
+  isClosedMerchantRefund,
   refundStateWords,
   returnLabel,
   type Refund,
@@ -250,8 +251,21 @@ function ReturnRow({
   onChanged: () => void;
 }) {
   const redo = useAction();
+  const cancel = useAction();
   const [give, setGive] = useState(false);
-  const canRedraft = !r.proposal_id && !!r.review_reason && !!r.destination;
+  const canRedraft =
+    !r.proposal_id && !!r.review_reason && !!r.destination && !isClosedMerchantRefund(r);
+  // A store refund (POST /v1/refunds) with no proposal yet can be cancelled (W14).
+  const canCancel = r.reason === 'merchant' && !r.proposal_id && !isClosedMerchantRefund(r);
+
+  async function cancelRefund() {
+    const ok = await cancel.run(() =>
+      withStepUp(() =>
+        api(`/v1/review/refunds/${encodeURIComponent(r.id)}/cancel`, { method: 'POST', json: {} }),
+      ),
+    );
+    if (ok !== undefined) onChanged();
+  }
 
   async function redraft() {
     const ok = await redo.run(() =>
@@ -277,6 +291,7 @@ function ReturnRow({
             : 'No destination yet'}
         </span>
         {redo.error && <Alert tone="danger">{redo.error}</Alert>}
+        {cancel.error && <Alert tone="danger">{cancel.error}</Alert>}
         {give && (
           <DestinationForm
             paymentId={r.payment_id}
@@ -289,6 +304,11 @@ function ReturnRow({
       {canRedraft && (
         <Button variant="secondary" onClick={() => void redraft()} disabled={redo.busy}>
           {redo.busy ? 'Drafting…' : 'Draft again'}
+        </Button>
+      )}
+      {canCancel && (
+        <Button variant="secondary" onClick={() => void cancelRefund()} disabled={cancel.busy}>
+          {cancel.busy ? 'Cancelling…' : 'Cancel refund'}
         </Button>
       )}
       {!r.proposal_id && !give && (

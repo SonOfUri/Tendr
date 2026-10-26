@@ -375,6 +375,11 @@ signers approve in the dashboard.
   keys of the connection it replaced when the site re-connected. Anything else is 404.
 - Then follow `refund.pending`, `refund.sent`, `refund.cancelled` and `refund.failed` (see
   Webhooks).
+- `POST /v1/refunds/:id/cancel` (same key and rules) cancels a refund that has no proposal yet:
+  not drafted, or in review. It frees its amount and sends `refund.cancelled`. Cancelling it
+  again returns it unchanged. A refund that already has a proposal is 409 `REFUND_HAS_PROPOSAL`:
+  your signers reject it (or let it expire) in the dashboard instead. The dashboard's review
+  queue has the same action (`money:request`, with a fresh passkey).
 
 ### Registering checkout domains
 

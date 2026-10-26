@@ -73,7 +73,37 @@ export interface Refund {
   proposal_id: string | null;
   refund_tx_hash: string | null;
   acknowledged_legal_at: string | null;
+  /** A store refund's own reference and requested USD amount (null for automatic returns). */
+  refund_external_ref?: string | null;
+  requested_amount_usd?: string | null;
   created_at: string;
+}
+
+/**
+ * Words for a closed store refund, by the review reason that closed it (mirrors the API's
+ * `isClosedMerchantRefund`): its proposal was rejected, expired or failed, or the store cancelled
+ * it before any proposal existed.
+ */
+const CLOSED_MERCHANT_WORDS: Readonly<Record<string, string>> = {
+  proposal_cancelled: 'Cancelled',
+  store_cancelled: 'Cancelled',
+  proposal_expired: 'Expired',
+  transfer_failed: 'Failed',
+};
+
+/**
+ * A store refund (reason `merchant`) that is closed: the store undid it, so it is never drafted
+ * again and needs nothing from anyone (the API's `isClosedMerchantRefund`).
+ */
+export function isClosedMerchantRefund(
+  r: Pick<Refund, 'reason' | 'status' | 'review_reason'>,
+): boolean {
+  return (
+    r.reason === 'merchant' &&
+    r.status !== 'confirmed' &&
+    r.review_reason !== null &&
+    Object.hasOwn(CLOSED_MERCHANT_WORDS, r.review_reason)
+  );
 }
 
 export interface TxRef {
@@ -268,6 +298,7 @@ export function explorerTxUrl(
 export function returnLabel(reason: string): string {
   if (reason === 'sanctions') return 'Order amount';
   if (reason === 'overpaid') return 'Extra paid';
+  if (reason === 'merchant') return 'Store refund';
   return reason.charAt(0).toUpperCase() + reason.slice(1);
 }
 
@@ -291,6 +322,7 @@ export function heldReturnForms(
   const order = (r: Refund) => (r.reason === 'sanctions' ? 0 : 1);
   for (const r of [...item.refunds].sort((a, b) => order(a) - order(b))) {
     if (r.status === 'confirmed' || r.proposal_id || r.review_reason === 'kept_small') continue;
+    if (isClosedMerchantRefund(r)) continue;
     forms.push({ refundId: r.id, label: returnLabel(r.reason) });
   }
   return forms;
@@ -299,6 +331,7 @@ export function heldReturnForms(
 /** Words for a refund's state, as the merchant sees it. */
 export function refundStateWords(r: Refund): string {
   if (r.status === 'confirmed') return 'Sent';
+  if (isClosedMerchantRefund(r)) return CLOSED_MERCHANT_WORDS[r.review_reason!]!;
   if (r.needs_address) return 'Waiting for the shopper’s address';
   if (r.review_reason === 'kept_small') return 'Kept (worth less than $1)';
   if (r.review_reason) return `Needs review: ${r.review_reason.replace(/_/g, ' ')}`;

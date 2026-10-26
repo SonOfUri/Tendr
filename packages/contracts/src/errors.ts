@@ -67,6 +67,11 @@ export const ErrorCodes = [
    * return (with the network cost the merchant pays) is more than the merchant account holds.
    */
   'AMOUNT_EXCEEDS_REFUNDABLE',
+  /**
+   * Cancelling a merchant refund that already has a proposal: the signers reject it (or let it
+   * expire) on the dashboard, and `refund.cancelled` follows.
+   */
+  'REFUND_HAS_PROPOSAL',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

@@ -9,8 +9,10 @@ import {
   AcknowledgeLegalSchema,
   RefundFromReviewSchema,
   refundFromReview,
+  refundView,
   reviewQueue,
 } from '../checkout/review.js';
+import { cancelMerchantRefund } from '../checkout/merchant-refunds.js';
 import { requireDashboardUser } from '../gateway/principal.js';
 
 const read = { principals: ['dashboard_user' as const], permission: 'account:read' as const };
@@ -51,5 +53,20 @@ export const reviewRoutes: FastifyPluginAsync = async (app) => {
         req.params.paymentId,
         RefundFromReviewSchema.parse(req.body ?? {}),
       ),
+  );
+
+  // W14: cancel a store refund that has no proposal yet (in review, or not drafted). Same
+  // permission and step-up as drafting a return: it decides whether money goes out.
+  app.post<{ Params: { refundId: string } }>(
+    '/v1/review/refunds/:refundId/cancel',
+    { config: { auth: refund } },
+    async (req) => {
+      const p = requireDashboardUser(req);
+      const r = await cancelMerchantRefund(
+        { merchantId: p.merchantId, livemode: p.livemode, connectionId: null },
+        req.params.refundId,
+      );
+      return { refund: refundView(r) };
+    },
   );
 };

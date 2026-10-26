@@ -10,8 +10,10 @@ import { LEGAL_ACK_PHRASE } from '@tendr/contracts';
 import { acknowledgeLegal, refundFromReview, reviewQueue } from '../checkout/review.js';
 import type { DashboardUserPrincipal } from '../gateway/principal.js';
 import {
+  draftReturn,
   onRefundProposalCancelled,
   onRefundProposalExecuted,
+  onRefundProposalFailed,
   queueReturn,
   registerRefundHooks,
   setRefundDeps,
@@ -32,7 +34,8 @@ import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { fakeNearClient, resetNearClients } from '../near/client.js';
 import type { FakeNearClient } from '../near/fake.js';
-import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
+import { dashHeaders, loginAs } from '../test/dashboard.js';
+import { createApiKey, createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
 import { isolatedSimStore } from '../test/sim-1click.js';
 
 const sim1click = isolatedSimStore();
@@ -123,7 +126,7 @@ describe('POST /v1/refunds', () => {
   }
 
   /** A paid and settled order (exact payment in ETH from the simulated sender's `eth` wallet). */
-  async function settled(body: Record<string, unknown> = {}) {
+  async function settled(body: Record<string, unknown> = {}, sender?: string) {
     const s = await newSession(body);
     const q = await app.inject({
       method: 'POST',
@@ -133,7 +136,7 @@ describe('POST /v1/refunds', () => {
     });
     expect(q.statusCode, q.body).toBe(201);
     const quote = q.json() as { id: string; deposit_address: string };
-    await sim.simulate(quote.deposit_address, 'exact');
+    await sim.simulate(quote.deposit_address, 'exact', sender ? { senderAddress: sender } : {});
     await pollDeposit(quote.deposit_address, { livemode: false });
     const p = await prisma.payment.findFirstOrThrow({ where: { quoteId: quote.id } });
     expect(p.status).toBe('SETTLED');
@@ -601,5 +604,237 @@ describe('POST /v1/refunds', () => {
       /refunds_merchant_fields_check/,
     );
     await row({ reason: 'merchant', externalRef: 'm2', requestedAmountUsd: '1.00' });
+  });
+
+  // ─── fix round 1 ───────────────────────────────────────────────────────────
+
+  describe('cancel (W14)', () => {
+    const cancel = (id: string, opts: { key?: string } = {}) =>
+      app.inject({
+        method: 'POST',
+        url: `/v1/refunds/${id}/cancel`,
+        headers: { authorization: `Bearer ${opts.key ?? key}` },
+      });
+
+    /** A refund requested while screening is down: pending, no proposal yet. */
+    async function undrafted(p: { id: string }, amount = '40.00', ref = 'u1') {
+      setRefundDeps({ screen: async () => ({ decision: 'unavailable' }) });
+      const res = await refund({ payment: p.id, amount, external_ref: ref });
+      expect(res.statusCode, res.body).toBe(201);
+      setRefundDeps(null);
+      const r = await prisma.refund.findUniqueOrThrow({ where: { id: res.json().id } });
+      expect(r).toMatchObject({ status: 'pending', proposalId: null, reviewReason: null });
+      return r;
+    }
+
+    it('cancels a pending, undrafted refund; frees its amount; never drafted after', async () => {
+      const { p } = await settled();
+      const r = await undrafted(p);
+      expect((await refund({ payment: p.id, amount: '10.00', external_ref: 'x' })).statusCode).toBe(
+        409,
+      );
+      const res = await cancel(r.id);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({
+        id: r.id,
+        status: 'cancelled',
+        refund_external_ref: 'u1',
+      });
+      const [ev] = await eventsOf('refund.cancelled');
+      expect(webhookData(ev!.payload, 'refund.cancelled')).toMatchObject({
+        refund_id: r.id,
+        refund_external_ref: 'u1',
+        status: 'cancelled',
+      });
+      await sweepReturns();
+      expect(await prisma.accountProposal.count()).toBe(0);
+      expect((await reviewQueue(ctx())).returns.map((x) => x.id)).not.toContain(r.id);
+      // Its amount is free again.
+      const again = await refund({ payment: p.id, amount: '40.00', external_ref: 'u2' });
+      expect(again.statusCode, again.body).toBe(201);
+    });
+
+    it('cancels a refund in review (sanctions)', async () => {
+      const { p } = await settled();
+      setRefundDeps({ screen: async () => ({ decision: 'block' }) });
+      const id = (await refund({ payment: p.id, amount: '10.00', external_ref: 'rv' })).json().id;
+      const res = await cancel(id);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().status).toBe('cancelled');
+      expect(await prisma.refund.findUniqueOrThrow({ where: { id } })).toMatchObject({
+        status: 'failed',
+        reviewReason: 'store_cancelled',
+      });
+    });
+
+    it('a refund with a proposal → 409 REFUND_HAS_PROPOSAL', async () => {
+      const { p } = await settled();
+      const id = (await refund({ payment: p.id, amount: '10.00', external_ref: 'hp' })).json().id;
+      const res = await cancel(id);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.code).toBe('REFUND_HAS_PROPOSAL');
+      expect(await eventsOf('refund.cancelled')).toEqual([]);
+    });
+
+    it('cancelling twice returns the same row, with one refund.cancelled', async () => {
+      const { p } = await settled();
+      const r = await undrafted(p);
+      const a = await cancel(r.id);
+      const b = await cancel(r.id);
+      expect(b.statusCode).toBe(200);
+      expect(b.json()).toEqual(a.json());
+      expect(await eventsOf('refund.cancelled')).toHaveLength(1);
+    });
+
+    it('a cancel racing a draft: one of them wins, never both', async () => {
+      for (let i = 0; i < 4; i++) {
+        const { p } = await settled();
+        const r = await undrafted(p, '5.00', `race-${i}`);
+        const [drafted, res] = await Promise.all([
+          draftReturn(ctx(), r.id).catch((e: unknown) => e),
+          cancel(r.id),
+        ]);
+        const row = await prisma.refund.findUniqueOrThrow({ where: { id: r.id } });
+        const proposals = await prisma.accountProposal.count({ where: { refundId: r.id } });
+        if (res.statusCode === 200) {
+          expect(row).toMatchObject({ reviewReason: 'store_cancelled', proposalId: null });
+          expect(proposals).toBe(0);
+        } else {
+          expect(res.json().error.code).toBe('REFUND_HAS_PROPOSAL');
+          expect(row.proposalId).not.toBeNull();
+          expect(proposals).toBe(1);
+          expect((drafted as { proposalId: string }).proposalId).toBe(row.proposalId);
+        }
+      }
+    });
+
+    it("a connection key cannot cancel another connection's refund; a dashboard cancel needs step-up", async () => {
+      const { p, s } = await settled();
+      const a = (await createRow('Connection', merchant.id, false)).id as string;
+      const other = (await createRow('Connection', merchant.id, false)).id as string;
+      await prisma.session.update({ where: { id: s.id }, data: { connectionId: a } });
+      const r = await undrafted(p);
+      const k = await createApiKey(merchant.id, { livemode: false });
+      await prisma.apiKey.update({ where: { id: k.record.id }, data: { connectionId: other } });
+      expect((await cancel(r.id, { key: k.raw })).statusCode).toBe(404);
+
+      const user = await createUser({ emailVerifiedAt: new Date() });
+      await createRow('MerchantUser', merchant.id, false, {
+        userId: user.id,
+        role: 'owner',
+        isSigner: true,
+      });
+      const dash = async (stepUp: boolean) =>
+        app.inject({
+          method: 'POST',
+          url: `/v1/review/refunds/${r.id}/cancel`,
+          headers: dashHeaders(await loginAs(user.id, { stepUp }), {
+            merchantId: merchant.id,
+            livemode: false,
+          }),
+          payload: {},
+        });
+      const noStepUp = await dash(false);
+      expect(noStepUp.json().error.code).toBe('STEP_UP_REQUIRED');
+      expect((await prisma.refund.findUniqueOrThrow({ where: { id: r.id } })).reviewReason).toBe(
+        null,
+      );
+      const ok = await dash(true);
+      expect(ok.statusCode, ok.body).toBe(200);
+      expect(ok.json().refund).toMatchObject({ id: r.id, review_reason: 'store_cancelled' });
+    });
+  });
+
+  it('the sanctions race: a refund requested before the payment was held goes to sanctions review', async () => {
+    const { p } = await settled();
+    setRefundDeps({ screen: async () => ({ decision: 'unavailable' }) });
+    const b = (await refund({ payment: p.id, amount: '5.00', external_ref: 'B' })).json().id;
+    const c = (await refund({ payment: p.id, amount: '5.00', external_ref: 'C' })).json().id;
+    setRefundDeps(null);
+    // Another return of the payment screened as sanctioned in between (`blockReturn`).
+    await prisma.payment.update({ where: { id: p.id }, data: { heldReason: 'sanctions' } });
+    // B's own (retried) draft → sanctions review, no destination, no draft.
+    const drafted = await draftReturn(ctx(), b);
+    expect(drafted).toMatchObject({
+      reviewReason: 'sanctions',
+      destination: null,
+      proposalId: null,
+    });
+    // C, left behind entirely: the sweeper moves it to review.
+    await sweepReturns();
+    expect(await prisma.refund.findUniqueOrThrow({ where: { id: c } })).toMatchObject({
+      reviewReason: 'sanctions',
+      destination: null,
+    });
+    expect(await prisma.accountProposal.count()).toBe(0);
+    const replay = await refund({ payment: p.id, amount: '5.00', external_ref: 'B' });
+    expect(replay.json().status).toBe('review');
+  });
+
+  it('a transfer_failed refund frees its amount', async () => {
+    const { p } = await settled();
+    const first = await refund({ payment: p.id, amount: '40.00', external_ref: 'tf' });
+    const [r] = await refundsOf(p.id);
+    await onRefundProposalFailed(await proposalEvent('account.proposal.failed', r!.proposalId!));
+    expect(await prisma.refund.findUniqueOrThrow({ where: { id: r!.id } })).toMatchObject({
+      reviewReason: 'transfer_failed',
+    });
+    expect((await eventsOf('refund.failed')).length).toBe(1);
+    const again = await refund({ payment: p.id, amount: '40.00', external_ref: 'tf2' });
+    expect(again.statusCode, again.body).toBe(201);
+    const replay = await refund({ payment: p.id, amount: '40.00', external_ref: 'tf' });
+    expect(replay.json()).toMatchObject({ id: first.json().id, status: 'cancelled' });
+  });
+
+  it('a test key cannot refund a live payment (404)', async () => {
+    const live = await createRow('Payment', merchant.id, true, { status: 'SETTLED' });
+    const res = await refund({ payment: live.id, amount: '1.00', external_ref: 'live' });
+    expect(res.statusCode).toBe(404);
+    expect(await prisma.refund.count()).toBe(0);
+  });
+
+  it('a USD request is never clamped, even a cent over', async () => {
+    const { p } = await settled();
+    await refund({ payment: p.id, amount: '40.00', external_ref: 'a' });
+    const res = await refund({ payment: p.id, amount: '9.01', external_ref: 'b' });
+    expect(res.json().error.code).toBe('AMOUNT_EXCEEDS_REFUNDABLE');
+  });
+
+  it('an asset the merchant account does not list counts as a zero balance', async () => {
+    const { p } = await settled();
+    // Not active any more: the balance read lists nothing.
+    await prisma.merchantAccount.updateMany({
+      where: { merchantId: merchant.id },
+      data: { status: 'provisioning' },
+    });
+    const res = await refund({ payment: p.id, amount: '1.00', external_ref: 'z' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('AMOUNT_EXCEEDS_REFUNDABLE');
+  });
+
+  it("an exchange sender's refund is re-grossed for the chain the shopper chooses", async () => {
+    const BINANCE = '0x28C6c06298d514Db089934071355E5743bf21d60';
+    const { s, p } = await settled({}, BINANCE);
+    const res = await refund({ payment: p.id, amount: '10.00', external_ref: 'ex' });
+    expect(res.json().status).toBe('review');
+    let r = await prisma.refund.findUniqueOrThrow({ where: { id: res.json().id } });
+    expect(r).toMatchObject({ needsAddress: true, destination: null });
+    expect(r.amount.toFixed()).toBe((usdc('10.00') + FEE_UNITS).toString());
+    const given = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout/client/refund-address',
+      headers: { authorization: `Bearer ${s.client_secret}` },
+      payload: { address: 'bob.near', chain: 'near' },
+    });
+    expect(given.statusCode, given.body).toBe(200);
+    r = await prisma.refund.findUniqueOrThrow({ where: { id: r.id } });
+    // NEAR's return-fee estimate ($0.01), not the sender chain's ($0.50), on top of $10.00.
+    expect(r.returnFee!.toFixed()).toBe('10000');
+    expect(r.amount.toFixed()).toBe((usdc('10.00') + 10_000n).toString());
+    expect(r.destination).toBe('bob.near');
+    const prop = await prisma.accountProposal.findFirstOrThrow();
+    expect(prop.action).toMatchObject({
+      refund: { amount: r.amount.toFixed(), destination: 'bob.near' },
+    });
   });
 });

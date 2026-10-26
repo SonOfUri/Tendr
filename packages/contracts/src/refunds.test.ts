@@ -61,4 +61,17 @@ describe('deriveRefundStatus', () => {
         [{ paymentId: 'a', reason: 'sanctions', createdAt: new Date(1) }],
       ),
     ).toMatchObject({ refundStatus: 'in_progress', refundReason: 'sanctions' }));
+
+  it('a store refund of part of a settled payment is partially_refunded, then refunded', () => {
+    const refunds = [{ paymentId: 'a', reason: 'merchant' as const, createdAt: new Date(1) }];
+    expect(deriveRefundStatus('SETTLED', [p('a', 'PARTIALLY_REFUNDED')], refunds)).toEqual({
+      refundStatus: 'partially_refunded',
+      refundReason: 'merchant',
+      lateRefundStatus: 'none',
+    });
+    expect(deriveRefundStatus('SETTLED', [p('a', 'REFUNDED')], refunds)).toMatchObject({
+      refundStatus: 'refunded',
+      refundReason: 'merchant',
+    });
+  });
 });

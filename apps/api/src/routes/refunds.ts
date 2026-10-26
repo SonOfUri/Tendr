@@ -1,8 +1,10 @@
 // `POST /v1/refunds` (WooCommerce plugin spec §7): a store refund, drafted as a signer-approved
 // `refund` proposal (checkout/merchant-refunds.ts). Secret keys with `refunds:write` only;
 // idempotent through the gateway's `Idempotency-Key` layer, and per `external_ref`.
+// `POST /v1/refunds/:id/cancel` (W14) cancels one that has no proposal yet.
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import {
+  cancelMerchantRefund,
   MerchantRefundInputSchema,
   merchantRefundView,
   requestMerchantRefund,
@@ -26,4 +28,10 @@ export const refundRoutes: FastifyPluginAsync = async (app) => {
     const { refund, created } = await requestMerchantRefund(ctx, input);
     return reply.status(created ? 201 : 200).send(merchantRefundView(refund));
   });
+
+  app.post<{ Params: { id: string } }>(
+    '/v1/refunds/:id/cancel',
+    { config: { auth: write } },
+    async (req) => merchantRefundView(await cancelMerchantRefund(ctxOf(req), req.params.id)),
+  );
 };

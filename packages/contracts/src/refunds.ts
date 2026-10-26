@@ -1,7 +1,11 @@
 import type { RefundReason } from './enums.js';
 import type { PaymentStatus, SessionStatus } from './states.js';
 
-export type RefundStatus = 'none' | 'in_progress' | 'refunded';
+/**
+ * `partially_refunded`: the store refunded part of a settled payment (merchant refunds, reason
+ * `merchant`); `refunded` once all of it went back.
+ */
+export type RefundStatus = 'none' | 'in_progress' | 'partially_refunded' | 'refunded';
 
 export interface RefundPaymentInput {
   id: string;
@@ -18,6 +22,7 @@ export interface RefundInput {
 function groupStatus(payments: RefundPaymentInput[]): RefundStatus {
   if (payments.some((p) => p.status === 'REFUNDING')) return 'in_progress';
   if (payments.some((p) => p.status === 'REFUNDED')) return 'refunded';
+  if (payments.some((p) => p.status === 'PARTIALLY_REFUNDED')) return 'partially_refunded';
   return 'none';
 }
 

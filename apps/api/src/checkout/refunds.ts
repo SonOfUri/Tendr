@@ -68,7 +68,7 @@ import { registerEventHandler, handlerNamesFor } from '../jobs/handlers.js';
 import { isValidAddress } from './address-format.js';
 import { isExchangeAddress } from './exchanges.js';
 import { gasEstimateUsd } from './gas-estimates.js';
-import { netOfReturnFee, usdPerUnit } from './return-fee.js';
+import { grossUpForReturnFee, netOfReturnFee, usdPerUnit } from './return-fee.js';
 import { HOLD_NOTICE } from './hold.js';
 import { screenAddress, type ScreeningOutcome } from './screening.js';
 import type { ShopperCtx } from './quotes.js';
@@ -95,6 +95,8 @@ export const REVIEW = {
   amountUnknown: 'amount_unknown',
   /** Re-netted for a new destination in the review queue, the return fell under SMALL_OVERPAY_USD. */
   keptSmall: 'kept_small',
+  /** A merchant refund the store cancelled before any proposal existed (terminal, W14). */
+  storeCancelled: 'store_cancelled',
 } as const;
 
 // ─── dependencies ────────────────────────────────────────────────────────────
@@ -377,18 +379,25 @@ export const PROPOSAL_ENDED_REVIEW: ReadonlySet<string> = new Set([
   REVIEW.transferFailed,
 ]);
 
+/** Review reasons that close a merchant refund (`isClosedMerchantRefund`). */
+export const MERCHANT_CLOSED_REVIEW: ReadonlySet<string> = new Set([
+  ...PROPOSAL_ENDED_REVIEW,
+  REVIEW.storeCancelled,
+]);
+
 /**
- * A merchant-initiated refund whose proposal ended without executing (rejected, expired, its
- * transfer failed): closed. The store was told (`refund.cancelled` / `refund.failed`) and undid
- * its own refund, so the row never goes to the review queue, is never drafted again (a new
- * request from the store is a new refund) and no longer counts against the refundable amount.
- * Closing is only this marking (the row stays `pending` + the review reason, with no proposal), so
- * every on-chain safety net still applies to it: a revived proposal re-links it
- * (`relinkRevivedRefundTx`) and an executed detached one confirms it (`detachedRefundFor`) — it
- * then counts again, as the money did leave.
+ * A merchant-initiated refund that is closed: its proposal ended without executing (rejected,
+ * expired, its transfer failed), or the store cancelled it before any proposal existed
+ * (`cancelMerchantRefund`: status `failed` + `store_cancelled`, terminal). The store was told
+ * (`refund.cancelled` / `refund.failed`) and undid its own refund, so the row never goes to the
+ * review queue, is never drafted again (a new request from the store is a new refund) and no
+ * longer counts against the refundable amount. A proposal-ended row is closed only by this
+ * marking (it stays `pending` + the review reason, with no proposal), so every on-chain safety net
+ * still applies to it: a revived proposal re-links it (`relinkRevivedRefundTx`) and an executed
+ * detached one confirms it (`detachedRefundFor`) — it then counts again, as the money did leave.
  */
 export function isClosedMerchantRefund(r: {
-  reason?: string;
+  reason: string;
   status: string;
   reviewReason: string | null;
 }): boolean {
@@ -396,7 +405,7 @@ export function isClosedMerchantRefund(r: {
     r.reason === 'merchant' &&
     r.status !== 'confirmed' &&
     r.reviewReason !== null &&
-    PROPOSAL_ENDED_REVIEW.has(r.reviewReason)
+    MERCHANT_CLOSED_REVIEW.has(r.reviewReason)
   );
 }
 
@@ -406,7 +415,7 @@ export function isClosedMerchantRefund(r: {
  * refund. The review queue and `keepSmall` share this rule (C41).
  */
 export function isOpenReturn(r: {
-  reason?: string;
+  reason: string;
   status: string;
   reviewReason: string | null;
 }): boolean {
@@ -607,6 +616,11 @@ export async function draftReturn(
   const sanctionsHeld =
     r.payment.status === 'HELD' || r.payment.heldReason === 'sanctions' || r.reason === 'sanctions';
   if (sanctionsHeld && !r.acknowledgedLegalAt) {
+    // A merchant refund requested before the payment was held (another return of it screened as
+    // sanctioned in between) would otherwise sit `pending` with no review reason, never drafted
+    // (the sweeper skips held payments) and invisible to the store: it goes to the sanctions
+    // review instead — legal acknowledgement plus a merchant-given destination, or a cancel.
+    if (r.reason === 'merchant') return holdMerchantRefund(ctx, r.id);
     throw legalAckRequired();
   }
   if (!r.destination || !r.destinationChain) return r;
@@ -685,6 +699,37 @@ export async function draftReturn(
     }
     throw err;
   }
+}
+
+/**
+ * A pending, undrafted merchant refund of a payment that became sanctions-held: sanctions review,
+ * with no destination (it can never go back to the sender). Conditional under the refund lock, so
+ * a draft or a cancel that got there first wins.
+ */
+export async function holdMerchantRefund(ctx: ScopeContext, refundId: string): Promise<Refund> {
+  return tenantTransaction(ctx, async (tx) => {
+    await lockRefund(tx, ctx, refundId);
+    await tx.refund.updateMany({
+      where: {
+        id: refundId,
+        ...tenantOf(ctx),
+        reason: 'merchant',
+        status: 'pending',
+        proposalId: null,
+        reviewReason: null,
+      },
+      data: {
+        reviewReason: REVIEW.sanctions,
+        destination: null,
+        destinationChain: null,
+        needsAddress: false,
+        addressTokenHash: null,
+        addressTokenExpiresAt: null,
+      },
+    });
+    log('warn', 'merchant refund of a sanctions-held payment: to review', { refundId });
+    return tx.refund.findFirstOrThrow({ where: { id: refundId, ...tenantOf(ctx) } });
+  });
 }
 
 async function markReview(ctx: ScopeContext, refundId: string, reason: string): Promise<Refund> {
@@ -938,6 +983,23 @@ async function fillAddress(
     log('warn', 'shopper return address refused: sanctioned', { refundId: r.id });
     throw walletNotAllowed();
   }
+  // A store refund (the merchant pays the network cost): the fee is re-estimated for the chain the
+  // shopper chose, on top of the same requested amount.
+  let regross: { amount: string; returnFee: string } | null = null;
+  if (r.reason === 'merchant') {
+    const p = await prisma.payment.findFirstOrThrow({
+      where: { id: r.paymentId, ...tenantOf(ctx) },
+      select: { quoteId: true },
+    });
+    const q = await prisma.quote.findFirstOrThrow({ where: { id: p.quoteId, ...tenantOf(ctx) } });
+    const perUnit = await usdPerUnit(ctx.livemode, r.assetId, q);
+    if (!perUnit || !perUnit.gt(0)) {
+      throw new AppError('PROVIDER_UNAVAILABLE', 'Please try again in a few minutes', 503);
+    }
+    const requested = BigInt(r.amount.toFixed(0)) - BigInt(r.returnFee?.toFixed(0) ?? '0');
+    const { fee } = grossUpForReturnFee(D(0), perUnit, D(gasEstimateUsd(oneclick)));
+    regross = { amount: (requested + fee).toString(), returnFee: fee.toString() };
+  }
   const { count } = await prisma.refund.updateMany({
     where: {
       id: r.id,
@@ -945,8 +1007,10 @@ async function fillAddress(
       needsAddress: true,
       status: 'pending',
       ...(tokenHash ? { addressTokenHash: tokenHash } : {}),
+      ...(regross ? { amount: r.amount, returnFee: r.returnFee } : {}),
     },
     data: {
+      ...(regross ?? {}),
       destination: input.address,
       destinationChain: chain,
       needsAddress: false,
@@ -1056,22 +1120,25 @@ export async function shopperRefunds(ctx: ShopperCtx) {
     where: { payment: { sessionId: ctx.sessionId }, reason: { not: 'sanctions' } },
     orderBy: { createdAt: 'asc' },
   });
-  return rows.map((r) => ({
-    id: r.id,
-    payment_id: r.paymentId,
-    asset: r.assetId,
-    amount: r.amount.toFixed(0),
-    needs_address: r.needsAddress,
-    chains: r.needsAddress ? returnChainsOf(r.assetId).map(oneclickChainOf) : undefined,
-    state:
-      r.status === 'confirmed'
-        ? 'sent'
-        : r.reviewReason === REVIEW.keptSmall
-          ? 'kept'
-          : r.status === 'failed' || r.reviewReason !== null
-            ? 'review'
-            : 'processing',
-  }));
+  // A store refund that was cancelled or ended is not coming: not shown.
+  return rows
+    .filter((r) => !isClosedMerchantRefund(r))
+    .map((r) => ({
+      id: r.id,
+      payment_id: r.paymentId,
+      asset: r.assetId,
+      amount: r.amount.toFixed(0),
+      needs_address: r.needsAddress,
+      chains: r.needsAddress ? returnChainsOf(r.assetId).map(oneclickChainOf) : undefined,
+      state:
+        r.status === 'confirmed'
+          ? 'sent'
+          : r.reviewReason === REVIEW.keptSmall
+            ? 'kept'
+            : r.status === 'failed' || r.reviewReason !== null
+              ? 'review'
+              : 'processing',
+    }));
 }
 
 // ─── email ───────────────────────────────────────────────────────────────────
@@ -1679,6 +1746,24 @@ export async function sweepReturns(): Promise<number> {
       if (!ended) return;
       await detachProposal(ctx, r.proposalId!, ENDED_REVIEW[ended] ?? REVIEW.proposalCancelled);
     });
+  }
+
+  // Merchant refunds left undrafted when their payment became sanctions-held (the loop below
+  // skips them): to the sanctions review, where the store sees them (`holdMerchantRefund`).
+  const heldMerchant = await prisma.refund.findMany({
+    where: {
+      reason: 'merchant',
+      status: 'pending',
+      proposalId: null,
+      reviewReason: null,
+      acknowledgedLegalAt: null,
+      payment: { OR: [{ heldReason: 'sanctions' }, { status: 'HELD' }] },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: SWEEP_BATCH,
+  });
+  for (const r of heldMerchant) {
+    await run('held-merchant', r.id, () => holdMerchantRefund(ctxOf(r), r.id));
   }
 
   // Pending returns with a destination and no draft yet (screening was down, account busy, …).

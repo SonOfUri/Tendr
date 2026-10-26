@@ -38,7 +38,10 @@ import {
   emailNeedsAddress,
   isClosedMerchantRefund,
   lockPayment,
+  lockRefund,
+  REFUND_CANCELLED,
   refundPayload,
+  refundRef,
   REVIEW,
   settledUsdOf,
 } from './refunds.js';
@@ -154,14 +157,14 @@ async function refundableRemaining(
   ctx: ScopeContext,
   paymentId: string,
   settled: Dec,
-): Promise<{ remaining: Dec; counted: number }> {
+): Promise<Dec> {
   const rows = await tx.refund.findMany({
     where: { paymentId, ...tenantOf(ctx), reason: 'merchant' },
     select: { reason: true, status: true, reviewReason: true, requestedAmountUsd: true },
   });
   const counted = rows.filter((r) => !isClosedMerchantRefund(r));
   const committed = counted.reduce((sum, r) => sum.add(r.requestedAmountUsd ?? 0), D(0));
-  return { remaining: settled.sub(committed), counted: counted.length };
+  return settled.sub(committed);
 }
 
 // ─── who may refund what ─────────────────────────────────────────────────────
@@ -258,12 +261,7 @@ export async function requestMerchantRefund(
       externalRef: input.external_ref,
     },
   });
-  if (known) {
-    const n = await prisma.refund.count({
-      where: { paymentId: p0.id, ...tenantOf(ctx), reason: 'merchant' },
-    });
-    return { refund: sameOrConflict(known, asked, n), created: false };
-  }
+  if (known) return { refund: sameOrConflict(known, asked), created: false };
   if (!REFUNDABLE.has(p0.status)) throw notRefundable(p0.status);
 
   const q = await prisma.quote.findFirstOrThrow({ where: { id: p0.quoteId, ...tenantOf(ctx) } });
@@ -281,7 +279,7 @@ export async function requestMerchantRefund(
   const result = await tenantTransaction(ctx, async (tx) => {
     await lockPayment(tx, ctx, p0.id);
     const p = await tx.payment.findFirstOrThrow({ where: { id: p0.id, ...tenantOf(ctx) } });
-    const { remaining, counted } = await refundableRemaining(tx, ctx, p.id, settled);
+    const remaining = await refundableRemaining(tx, ctx, p.id, settled);
     const existing = await tx.refund.findFirst({
       where: {
         paymentId: p.id,
@@ -290,15 +288,15 @@ export async function requestMerchantRefund(
         externalRef: input.external_ref,
       },
     });
-    if (existing) return { refund: sameOrConflict(existing, asked, counted), created: false };
+    if (existing) return { refund: sameOrConflict(existing, asked), created: false };
     if (!REFUNDABLE.has(p.status)) throw notRefundable(p.status);
-    // A refund in the original currency is converted rounding up, each one to the cent: the last
-    // one ("refund the rest") can overshoot what is left by a cent per conversion. That overshoot
-    // — and only that — is clamped, so a full refund in the original currency equals exactly what
-    // is left. Anything more is refused like any other excess.
+    // A refund in the original currency is converted rounding up to the cent, so "refund the
+    // rest" can overshoot what is left by a cent. That overshoot — and only for a converted
+    // request — is clamped, so a full refund in the original currency equals exactly what is
+    // left. Anything more is refused like any other excess.
     let usd = asked.usd;
     if (asked.converted && usd.gt(remaining) && remaining.gt(0)) {
-      if (usd.sub(remaining).lte(roundingTolerance(counted))) usd = remaining;
+      if (usd.sub(remaining).lte(ROUNDING_TOLERANCE)) usd = remaining;
     }
     if (usd.gt(remaining)) {
       throw exceeds('The amount is more than what is left to refund on this payment', {
@@ -334,25 +332,23 @@ export async function requestMerchantRefund(
 }
 
 /**
- * The most a converted amount may overshoot what is left and still be clamped to it: a cent for
- * each conversion that rounded up — the `others` refunds already counted, plus this one.
+ * The most an amount converted from the original currency may overshoot what is left and still
+ * be clamped to it: one cent, the rounding up of this conversion. Never applied to USD requests.
  */
-const roundingTolerance = (others: number) => D(others + 1).div(100);
+const ROUNDING_TOLERANCE = D('0.01');
 
 /**
  * The same `external_ref` again: the existing refund when the amount is the same (for an amount
- * in the original currency, the same up to the clamp it may have had), else 409 CONFLICT.
+ * in the original currency, the same up to the one-cent clamp it may have had), else 409
+ * CONFLICT. The answer depends only on the row and the request, so the pre-lock and the locked
+ * checks always agree.
  */
-function sameOrConflict(
-  existing: Refund,
-  asked: { usd: Dec; converted: boolean },
-  others: number,
-): Refund {
+function sameOrConflict(existing: Refund, asked: { usd: Dec; converted: boolean }): Refund {
   const had = existing.requestedAmountUsd;
   const same =
     !!had &&
     (had.equals(asked.usd) ||
-      (asked.converted && asked.usd.gt(had) && asked.usd.sub(had).lte(roundingTolerance(others))));
+      (asked.converted && asked.usd.gt(had) && asked.usd.sub(had).lte(ROUNDING_TOLERANCE)));
   if (same) return existing;
   throw conflict('This external_ref was already used for a refund of another amount', {
     refund_id: existing.id,
@@ -370,7 +366,8 @@ async function accountBalance(ctx: ScopeContext, asset: string): Promise<bigint 
   try {
     const { balances } = await getBalances(ctx.merchantId, ctx.livemode);
     const b = balances.find((x) => x.asset === asset);
-    return b ? BigInt(b.amount) : null;
+    // An asset the account does not list holds nothing: refused, never waved through.
+    return b ? BigInt(b.amount) : 0n;
   } catch (err) {
     log('warn', 'merchant refund: account balance unavailable; not checked', { err: String(err) });
     return null;
@@ -445,4 +442,85 @@ async function insertMerchantRefund(
     });
   }
   return row;
+}
+
+// ─── cancel (W14) ────────────────────────────────────────────────────────────
+
+const hasProposal = () =>
+  new AppError(
+    'REFUND_HAS_PROPOSAL',
+    'This refund already has a proposal: your signers reject it (or let it expire) on the dashboard',
+    409,
+  );
+
+/**
+ * Cancels a merchant refund that has no proposal: pending and not drafted yet, or in review (any
+ * review reason — sanctions, needs a swap route, no sender, waiting for an address). Terminal:
+ * status `failed` + `store_cancelled` (`isClosedMerchantRefund`), which frees its amount, and the
+ * public `refund.cancelled` (with `refund_external_ref`) once. Cancelling a closed refund again
+ * returns it unchanged. With a linked proposal (or one ever drafted for it, while the refund is
+ * not closed) it is 409 REFUND_HAS_PROPOSAL: the signers end it, and the proposal events tell
+ * the store.
+ *
+ * Decided under the refund lock, then the payment lock (the order `blockReturn` and
+ * `onRefundProposalExecuted` use), so it cannot race a draft: a draft that took the refund lock
+ * first leaves a proposal (→ 409); a draft that comes after finds the row no longer pending and
+ * drafts nothing. `ctx.connectionId` (an API key) applies the same ownership rule as requesting a
+ * refund; null (a dashboard user, or a hand-made key) any refund of the store.
+ */
+export async function cancelMerchantRefund(
+  ctx: MerchantRefundCtx,
+  refundId: string,
+): Promise<Refund> {
+  const r0 = await prisma.refund.findFirst({
+    where: { id: refundId, ...tenantOf(ctx), reason: 'merchant' },
+    include: { payment: { select: { sessionId: true } } },
+  });
+  if (!r0) throw notFound('Refund not found');
+  const s = await prisma.session.findFirstOrThrow({
+    where: { id: r0.payment.sessionId, ...tenantOf(ctx) },
+    select: { id: true, connectionId: true, externalRef: true },
+  });
+  if (!(await mayRefund(ctx, s.connectionId))) throw notFound('Refund not found');
+
+  return tenantTransaction(ctx, async (tx) => {
+    await lockRefund(tx, ctx, r0.id);
+    await lockPayment(tx, ctx, r0.paymentId);
+    const r = await tx.refund.findFirstOrThrow({ where: { id: r0.id, ...tenantOf(ctx) } });
+    if (isClosedMerchantRefund(r)) return r;
+    if (r.status === 'confirmed') throw conflict('This refund was already sent');
+    if (r.proposalId !== null) throw hasProposal();
+    const drafted = await tx.accountProposal.count({
+      where: { refundId: r.id, ...tenantOf(ctx) },
+    });
+    if (drafted > 0) throw hasProposal();
+    await tx.refund.updateMany({
+      where: { id: r.id, ...tenantOf(ctx), proposalId: null },
+      data: {
+        status: 'failed',
+        reviewReason: REVIEW.storeCancelled,
+        needsAddress: false,
+        addressTokenHash: null,
+        addressTokenExpiresAt: null,
+      },
+    });
+    await recordEvent(tx, ctx, {
+      aggregateType: 'refund',
+      aggregateId: r.id,
+      type: REFUND_CANCELLED,
+      payload: {
+        refund_id: r.id,
+        payment_id: r.paymentId,
+        session_id: s.id,
+        external_ref: s.externalRef,
+        ...refundRef(r),
+        asset: r.assetId,
+        amount: r.amount,
+        reason: r.reason,
+        status: 'cancelled',
+      },
+    });
+    log('info', 'merchant refund cancelled by the store', { refundId: r.id });
+    return tx.refund.findFirstOrThrow({ where: { id: r.id, ...tenantOf(ctx) } });
+  });
 }

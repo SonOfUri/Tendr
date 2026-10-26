@@ -5,6 +5,8 @@ import {
   feeLines,
   formatUsd,
   heldReturnForms,
+  isClosedMerchantRefund,
+  refundStateWords,
   type FeeLine,
   type Refund,
 } from './payments';
@@ -166,5 +168,36 @@ describe('held review card: one destination form per open return (C41)', () => {
     expect(
       heldReturnForms({ status: 'HELD', kept_small_reasons: ['sanctions'], refunds: [] }),
     ).toEqual([]);
+  });
+
+  it('a closed store refund gets no form and says how it ended; an open one keeps its form', () => {
+    const closed = [
+      refund({ id: 'ref_c', reason: 'merchant', review_reason: 'proposal_cancelled' }),
+      refund({
+        id: 'ref_x',
+        reason: 'merchant',
+        review_reason: 'store_cancelled',
+        status: 'failed',
+      }),
+      refund({ id: 'ref_e', reason: 'merchant', review_reason: 'proposal_expired' }),
+      refund({ id: 'ref_f', reason: 'merchant', review_reason: 'transfer_failed' }),
+    ];
+    const open = refund({ id: 'ref_m', reason: 'merchant', review_reason: 'sanctions' });
+    expect(
+      heldReturnForms({ status: 'SETTLED', kept_small_reasons: [], refunds: [...closed, open] }),
+    ).toEqual([{ refundId: 'ref_m', label: 'Store refund' }]);
+    expect(closed.map(refundStateWords)).toEqual(['Cancelled', 'Cancelled', 'Expired', 'Failed']);
+    expect(closed.every((r) => isClosedMerchantRefund(r))).toBe(true);
+    expect(isClosedMerchantRefund(open)).toBe(false);
+    // An automatic return whose proposal ended stays actionable (it can be drafted again).
+    const auto = refund({ reason: 'overpaid', review_reason: 'proposal_cancelled' });
+    expect(isClosedMerchantRefund(auto)).toBe(false);
+    expect(refundStateWords(auto)).toBe('Needs review: proposal cancelled');
+    // Sent wins over everything.
+    expect(
+      refundStateWords(
+        refund({ reason: 'merchant', review_reason: 'proposal_cancelled', status: 'confirmed' }),
+      ),
+    ).toBe('Sent');
   });
 });
