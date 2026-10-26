@@ -78,6 +78,45 @@ describe('status poller', () => {
     p.stop();
   });
 
+  it('uses the interval a tick asks for (slow polling on expired/held)', async () => {
+    const tick = vi.fn(async () => ({ terminal: false, intervalMs: 15_000 }));
+    const p = createPoller({ tick, doc: fakeDoc(), onConnection: () => {} });
+    p.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(14_000);
+    expect(tick).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(tick).toHaveBeenCalledTimes(2);
+    p.stop();
+  });
+
+  it('poke() after a terminal stop does nothing (and adds no listener)', async () => {
+    const doc = fakeDoc();
+    const add = vi.spyOn(doc, 'addEventListener');
+    const tick = vi.fn(async () => ({ terminal: true }));
+    const p = createPoller({ tick, doc, onConnection: () => {} });
+    p.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tick).toHaveBeenCalledTimes(1);
+    p.poke();
+    doc.set('hidden');
+    doc.set('visible');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(tick).toHaveBeenCalledTimes(1);
+    expect(add).toHaveBeenCalledTimes(1);
+  });
+
+  it('poke() runs a tick now while polling', async () => {
+    const tick = vi.fn(async () => ({ terminal: false, intervalMs: 15_000 }));
+    const p = createPoller({ tick, doc: fakeDoc(), onConnection: () => {} });
+    p.start();
+    await vi.advanceTimersByTimeAsync(0);
+    p.poke();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tick).toHaveBeenCalledTimes(2);
+    p.stop();
+  });
+
   it('stop() ends polling', async () => {
     const tick = vi.fn(async () => ({ terminal: false }));
     const p = createPoller({ tick, doc: fakeDoc(), onConnection: () => {} });

@@ -810,6 +810,13 @@ code {
   justify-content: center;
 }
 
+.pay-copy-wrap {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .pay-copy {
   flex: none;
   background: none;

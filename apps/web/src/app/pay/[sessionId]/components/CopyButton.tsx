@@ -21,10 +21,23 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
   }
 
   return (
-    <button type="button" className="pay-copy" onClick={() => void copy()} aria-label={label}>
-      <span aria-live="polite">
-        {state === 'copied' ? 'Copied' : state === 'failed' ? 'Select and copy it' : 'Copy'}
+    <span className="pay-copy-wrap">
+      <button type="button" className="pay-copy" onClick={() => void copy()} aria-label={label}>
+        {state === 'copied' ? 'Copied' : 'Copy'}
+      </button>
+      {/* Outside the button: a live region inside a labelled button is not announced. */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {state === 'copied'
+          ? 'Copied'
+          : state === 'failed'
+            ? 'Copy failed. Select it and copy it.'
+            : ''}
       </span>
-    </button>
+      {state === 'failed' ? (
+        <span className="pay-error small" aria-hidden>
+          Select and copy it
+        </span>
+      ) : null}
+    </span>
   );
 }

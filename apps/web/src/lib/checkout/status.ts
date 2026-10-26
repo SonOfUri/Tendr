@@ -1,6 +1,7 @@
 // Maps the API's session view to the screen the shopper sees. Session status leads; the latest
 // payment's shopper-facing state refines PROCESSING. Anything unknown (a new status, a missing
 // field) maps to the safe "Checking your payment…" screen and never throws.
+import { isTerminalSession, SessionStatusSchema } from '@tendr/contracts';
 import type { SessionPayment, SessionRefund, SessionView } from './api';
 import type { BridgeStatus } from './embed-bridge';
 
@@ -28,8 +29,13 @@ export type ScreenAction = 'email' | 'needs_address' | null;
 
 export interface ScreenState {
   kind: ScreenKind;
-  /** Stop polling: nothing more will change that the shopper is waiting on. */
+  /**
+   * Stop polling and forget the client secret: only SETTLED or REFUNDED (the contracts' terminal
+   * session states, C28), and only once nothing is asked of the shopper.
+   */
   terminal: boolean;
+  /** How often to poll while visible: slower while expired or held, waiting on a rare change. */
+  pollMs: number;
   /** What the embed bridge reports (null: nothing). */
   bridgeStatus: BridgeStatus | null;
   action: ScreenAction;
@@ -55,15 +61,15 @@ const BRIDGE: Record<ScreenKind, BridgeStatus | null> = {
   checking: null,
 };
 
-const TERMINAL_KINDS: ReadonlySet<ScreenKind> = new Set([
-  'complete',
-  'refunded',
-  'held',
-  'expired',
-]);
+/** Status polling interval while visible. */
+export const POLL_MS = 2000;
+/**
+ * Polling interval on an expired or held checkout: a late deposit can still land (EXPIRED →
+ * LATE_DEPOSIT) and a hold can still be refunded (HELD → REFUNDED), but rarely and slowly.
+ */
+export const SLOW_POLL_MS = 15_000;
 
-/** Terminal session statuses: a refunding payment inside PROCESSING is still moving. */
-const TERMINAL_SESSION = new Set(['SETTLED', 'REFUNDED', 'HELD', 'EXPIRED']);
+const SLOW_KINDS: ReadonlySet<ScreenKind> = new Set(['expired', 'held']);
 
 function processingKind(p: SessionPayment | null, hasTopup: boolean): ScreenKind {
   switch (p?.state) {
@@ -131,13 +137,12 @@ export function screenFor(v: SessionView, now: Date): ScreenState {
     kind === 'pay' && (latest?.state === 'refunded' || latest?.state === 'refunding')
       ? 'previous_returned'
       : null;
-  const terminal =
-    TERMINAL_KINDS.has(kind) &&
-    (kind === 'expired' || TERMINAL_SESSION.has(v.status)) &&
-    action === null;
+  const status = SessionStatusSchema.safeParse(v?.status);
+  const terminal = status.success && isTerminalSession(status.data) && action === null;
   return {
     kind,
     terminal,
+    pollMs: !terminal && SLOW_KINDS.has(kind) && action === null ? SLOW_POLL_MS : POLL_MS,
     bridgeStatus: BRIDGE[kind],
     action,
     notice,

@@ -13,12 +13,13 @@ export function checkoutSessionIdOf(pathname: string): string | null {
 }
 
 /**
- * Whether a request could be rendered inside a frame, from its `Sec-Fetch-Dest`. A top-level
- * navigation (`document`) or a data fetch (`empty`) is never framed, so `'self'` is enough and the
- * API is not asked. A missing header (older browsers) is looked up.
+ * Whether to look up the frame origins, from the request's `Sec-Fetch-Dest` (C29): only for a
+ * frame load (`iframe` / `frame`). Anything else — a top-level navigation, a data fetch, or no
+ * header at all — gets `frame-ancestors 'self'` without asking the API, so requests that cannot
+ * be framed never amplify into API calls. Browsers without the header can't embed the checkout.
  */
 export function needsFrameLookup(secFetchDest: string | null): boolean {
-  return secFetchDest === null || secFetchDest === 'iframe' || secFetchDest === 'frame';
+  return secFetchDest === 'iframe' || secFetchDest === 'frame';
 }
 
 export type FrameOriginsLookup = (sessionId: string) => Promise<string[] | null>;

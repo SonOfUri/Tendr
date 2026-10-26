@@ -1,7 +1,7 @@
-import { SessionStatusValues } from '@tendr/contracts';
+import { isTerminalSession, SessionStatusValues } from '@tendr/contracts';
 import { describe, expect, it } from 'vitest';
 import type { SessionPayment, SessionRefund, SessionView } from './api';
-import { screenFor } from './status';
+import { POLL_MS, screenFor, SLOW_POLL_MS } from './status';
 
 const NOW = new Date('2026-10-26T12:00:00Z');
 const LATER = '2026-10-26T12:20:00Z';
@@ -76,10 +76,11 @@ describe('screenFor', () => {
     expect(s.notice).toBeNull();
   });
 
-  it('awaiting payment past expires_at: expired and terminal', () => {
+  it('awaiting payment past expires_at: expired, still polling (slowly) for a late deposit', () => {
     expect(screenFor(view({ expires_at: EARLIER }), NOW)).toMatchObject({
       kind: 'expired',
-      terminal: true,
+      terminal: false,
+      pollMs: SLOW_POLL_MS,
       bridgeStatus: 'expired',
     });
   });
@@ -124,20 +125,60 @@ describe('screenFor', () => {
     ).toMatchObject({ kind: 'complete', terminal: true, bridgeStatus: 'settled' });
   });
 
-  it('refunded, expired and held are terminal', () => {
+  it('only SETTLED and REFUNDED are terminal (the contracts state machine)', () => {
+    for (const status of SessionStatusValues) {
+      const s = screenFor(view({ status, payments: [payment('converting')] }), NOW);
+      expect(s.terminal, status).toBe(isTerminalSession(status));
+    }
     expect(
       screenFor(view({ status: 'REFUNDED', payments: [payment('refunded')] }), NOW),
     ).toMatchObject({ kind: 'refunded', terminal: true, bridgeStatus: 'refunded' });
+  });
+
+  it('expired and held keep polling, slowly', () => {
     expect(screenFor(view({ status: 'EXPIRED' }), NOW)).toMatchObject({
       kind: 'expired',
-      terminal: true,
+      terminal: false,
+      pollMs: SLOW_POLL_MS,
       bridgeStatus: 'expired',
     });
     expect(screenFor(view({ status: 'HELD', payments: [payment('held')] }), NOW)).toMatchObject({
       kind: 'held',
-      terminal: true,
+      terminal: false,
+      pollMs: SLOW_POLL_MS,
       bridgeStatus: 'held',
     });
+    expect(screenFor(view(), NOW).pollMs).toBe(POLL_MS);
+  });
+
+  it('expired → a late deposit lands: the late screen, asking for an email when needed', () => {
+    const expired = screenFor(view({ expires_at: EARLIER }), NOW);
+    expect(expired.kind).toBe('expired');
+    const late = screenFor(
+      view({
+        status: 'LATE_DEPOSIT',
+        expires_at: EARLIER,
+        payments: [payment('late')],
+        refunds: [refund({ needs_address: true })],
+        needs_email: true,
+      }),
+      NOW,
+    );
+    expect(late).toMatchObject({ kind: 'late', action: 'email', terminal: false, pollMs: POLL_MS });
+  });
+
+  it('held → refunded: polling stops once the refund completes', () => {
+    const held = screenFor(view({ status: 'HELD', payments: [payment('held')] }), NOW);
+    expect(held).toMatchObject({ kind: 'held', terminal: false });
+    const refunded = screenFor(
+      view({
+        status: 'REFUNDED',
+        payments: [payment('refunded')],
+        refunds: [refund({ state: 'sent' })],
+      }),
+      NOW,
+    );
+    expect(refunded).toMatchObject({ kind: 'refunded', terminal: true });
   });
 
   it('a payment refunding inside a processing session shows refunded (not yet terminal)', () => {

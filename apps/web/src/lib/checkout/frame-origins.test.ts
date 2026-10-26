@@ -83,10 +83,10 @@ describe('which /pay requests need the lookup', () => {
     expect(checkoutSessionIdOf('/dashboard')).toBeNull();
   });
 
-  it('skips the lookup for top-level loads and data fetches (they cannot be framed)', () => {
+  it("looks up only for iframe/frame loads; anything else (header missing too) gets 'self' (C29)", () => {
     expect(needsFrameLookup('iframe')).toBe(true);
     expect(needsFrameLookup('frame')).toBe(true);
-    expect(needsFrameLookup(null)).toBe(true); // header not sent: look it up
+    expect(needsFrameLookup(null)).toBe(false); // header not sent: no lookup, 'self' only
     expect(needsFrameLookup('document')).toBe(false);
     expect(needsFrameLookup('empty')).toBe(false);
   });

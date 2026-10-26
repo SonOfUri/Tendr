@@ -164,20 +164,15 @@ const SESSION_ID = /^ses_[0-9A-HJKMNP-TV-Z]{26}$/;
 /**
  * The origins allowed to frame session `sessionId`'s checkout page (the web middleware builds CSP
  * `frame-ancestors` from it). Public: returns the merchant's checkout domains and nothing else.
- * Empty, never an error, for an unknown or malformed id and for an expired session (status
- * `EXPIRED`, or still awaiting a deposit past `expires_at`), so the answer neither confirms that a
- * session exists nor keeps a dead checkout frameable. A session past its expiry that has a payment
- * to show (processing, late, held, settled, refunded) keeps its origins.
+ * Empty, never an error, for an unknown or malformed id, so the answer never confirms more than a
+ * framed page load would. Any existing session keeps its origins, expired ones included (C28): an
+ * expired checkout still shows a late deposit, a hold or a refund.
  */
 export async function publicFrameOrigins(sessionId: string): Promise<{ origins: string[] }> {
   if (!SESSION_ID.test(sessionId)) return { origins: [] };
   const s = await prisma.session.findUnique({
     where: { id: sessionId },
-    select: { status: true, expiresAt: true, merchant: { select: { checkoutDomains: true } } },
+    select: { merchant: { select: { checkoutDomains: true } } },
   });
-  if (!s) return { origins: [] };
-  const expired =
-    s.status === 'EXPIRED' ||
-    (s.status === 'PENDING_DEPOSIT' && s.expiresAt.getTime() <= Date.now());
-  return { origins: expired ? [] : [...s.merchant.checkoutDomains] };
+  return { origins: s ? [...s.merchant.checkoutDomains] : [] };
 }

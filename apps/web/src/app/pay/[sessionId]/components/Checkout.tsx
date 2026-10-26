@@ -49,7 +49,8 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   const [connection, setConnection] = useState<'ok' | 'reconnecting'>('ok');
   const [tokens, setTokens] = useState<Token[] | null>(null);
   const [tokensFailed, setTokensFailed] = useState(false);
-  const [framed, setFramed] = useState(false);
+  // Framed by a registered store page: the × control can tell it to close.
+  const [canClose, setCanClose] = useState(false);
   const pollerRef = useRef<Poller | null>(null);
   const bridgeRef = useRef<EmbedBridge | null>(null);
   const now = useNow();
@@ -58,7 +59,6 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     const s = takeClientSecret(sessionId, window);
     setSecret(s);
     if (!s) setFatal('incomplete');
-    setFramed(window.parent !== window);
   }, [sessionId]);
 
   const client = useMemo(
@@ -73,13 +73,12 @@ export function Checkout({ sessionId }: { sessionId: string }) {
         try {
           const v = await client.session();
           setView(v);
-          const { terminal } = screenFor(v, new Date());
-          // Nothing more to wait for: a reload no longer needs the secret (C27).
+          const { terminal, pollMs } = screenFor(v, new Date());
+          // SETTLED or REFUNDED (C28): nothing more to wait for, a reload no longer needs it.
           if (terminal) clearClientSecret(sessionId, window);
-          return { terminal };
+          return { terminal, intervalMs: pollMs };
         } catch (err) {
           if (err instanceof CheckoutApiError && [401, 403, 404].includes(err.status)) {
-            clearClientSecret(sessionId, window);
             setFatal('invalid');
             return { terminal: true };
           }
@@ -121,6 +120,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
       checkoutDomains: Array.isArray(view.checkout_domains) ? view.checkout_domains : [],
     });
     bridgeRef.current = bridge;
+    setCanClose(bridge.targetOrigin !== null);
     bridge.ready(screenFor(view, new Date()).bridgeStatus);
   }, [view, sessionId]);
   const bridgeStatus = screen?.bridgeStatus ?? null;
@@ -171,7 +171,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
         settlementSymbol={settlementSymbol}
         now={now}
         showTimer={screen.kind === 'pay'}
-        framed={framed}
+        canClose={canClose}
         onClose={() => bridgeRef.current?.close()}
       />
       {connection === 'reconnecting' ? <Reconnecting /> : null}

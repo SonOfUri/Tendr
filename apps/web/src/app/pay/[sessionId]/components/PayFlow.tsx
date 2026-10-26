@@ -13,6 +13,13 @@ import { WalletConnect } from './WalletConnect';
 
 type Reason = 'choose' | 'auto' | 'refund' | 'retry';
 
+/** "Leftovers under $1 aren't returned.", the threshold formatted through formatUsd. */
+export function leftoversNotice(thresholdUsd: number): string {
+  const usd = Number.isFinite(thresholdUsd) ? formatUsd(String(thresholdUsd)) : null;
+  if (!usd) return "Small leftovers aren't returned.";
+  return `Leftovers under ${usd.replace(/\.00$/, '')} aren't returned.`;
+}
+
 /**
  * Steps 1-3: choose a token, see the exact amount with a countdown to the price's deadline (a new
  * price is fetched automatically when it runs out), then pay with a wallet or send by hand.
@@ -209,9 +216,7 @@ export function PayFlow({
             onSave={(address) => void requote(token, address, 'refund')}
           />
           {quote.small_overpay_notice ? (
-            <p className="muted small">
-              Leftovers under ${quote.small_overpay_usd} aren&apos;t returned.
-            </p>
+            <p className="muted small">{leftoversNotice(quote.small_overpay_usd)}</p>
           ) : null}
           {!view.livemode ? <TestModePanel client={client} kind="pay" onDone={onRefresh} /> : null}
         </>

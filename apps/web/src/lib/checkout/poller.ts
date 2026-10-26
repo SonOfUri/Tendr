@@ -1,6 +1,7 @@
-// Status polling for the checkout page: every 2 s, only while the page is visible; paused while
-// hidden and resumed at once when shown; stopped when a tick reports a terminal state. After
-// repeated failures (network, rate limit) it backs off to 10 s and reports 'reconnecting'.
+// Status polling for the checkout page: every 2 s (or the interval a tick asks for, e.g. 15 s on
+// an expired or held checkout), only while the page is visible; paused while hidden and resumed
+// at once when shown; stopped for good when a tick reports a terminal state. After repeated
+// failures (network, rate limit) it backs off to 10 s and reports 'reconnecting'.
 
 export interface PollerDocument {
   visibilityState: DocumentVisibilityState | string;
@@ -11,13 +12,16 @@ export interface PollerDocument {
 export interface Poller {
   start(): void;
   stop(): void;
-  /** Runs a tick now (e.g. after the shopper acted), keeping the schedule. */
+  /** Runs a tick now (e.g. after the shopper acted). Does nothing once stopped. */
   poke(): void;
 }
 
 export function createPoller(opts: {
-  /** One poll. Throws on a transient failure; `terminal: true` stops polling. */
-  tick: () => Promise<{ terminal: boolean }>;
+  /**
+   * One poll. Throws on a transient failure; `terminal: true` stops polling; `intervalMs`
+   * overrides the delay before the next poll.
+   */
+  tick: () => Promise<{ terminal: boolean; intervalMs?: number }>;
   doc: PollerDocument;
   onConnection: (state: 'ok' | 'reconnecting') => void;
   intervalMs?: number;
@@ -49,17 +53,17 @@ export function createPoller(opts: {
     if (!running || !visible() || inFlight) return;
     inFlight = true;
     try {
-      const { terminal } = await opts.tick();
+      const { terminal, intervalMs } = await opts.tick();
       failures = 0;
       if (reconnecting) {
         reconnecting = false;
         opts.onConnection('ok');
       }
       if (terminal) {
-        running = false;
+        stop();
         return;
       }
-      schedule(interval);
+      schedule(intervalMs ?? interval);
     } catch {
       failures++;
       if (failures >= threshold && !reconnecting) {
@@ -78,6 +82,12 @@ export function createPoller(opts: {
     else clear();
   };
 
+  function stop() {
+    running = false;
+    clear();
+    opts.doc.removeEventListener('visibilitychange', onVisibility);
+  }
+
   return {
     start() {
       if (running) return;
@@ -85,17 +95,9 @@ export function createPoller(opts: {
       opts.doc.addEventListener('visibilitychange', onVisibility);
       schedule(0);
     },
-    stop() {
-      running = false;
-      clear();
-      opts.doc.removeEventListener('visibilitychange', onVisibility);
-    },
+    stop,
     poke() {
-      if (!running) {
-        running = true;
-        opts.doc.addEventListener('visibilitychange', onVisibility);
-      }
-      schedule(0);
+      if (running) schedule(0);
     },
   };
 }

@@ -106,8 +106,8 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
 
   // Ruling C3 (Task 11): the origins allowed to frame this session's checkout, for the web
   // middleware's CSP `frame-ancestors`. Public; only the origin list, and an empty list (not a
-  // 404) for unknown or expired sessions. Limited per session id, not per IP (C26): the web
-  // middleware calls it from one server IP.
+  // 404) for unknown or malformed ids; expired sessions keep their origins (C28). Limited per
+  // session id, not per IP (C26): the web middleware calls it from one server IP.
   app.get<{ Params: { sessionId: string } }>(
     `${CHECKOUT_PUBLIC_PREFIX}:sessionId/frame-origins`,
     {

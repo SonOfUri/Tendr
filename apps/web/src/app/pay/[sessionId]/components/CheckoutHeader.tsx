@@ -4,20 +4,24 @@ import type { SessionView } from '@/lib/checkout/api';
 import { formatOrderAmount, safeHttpUrl } from '@/lib/checkout/format';
 import { Countdown } from './Countdown';
 
-/** The store's name and logo, the order total, the time left, and a close control when framed. */
+/**
+ * The store's name and logo, the order total, the time left, and a close control when the page
+ * is framed by a registered store page (the bridge has somewhere to send `tendr:close`).
+ */
 export function CheckoutHeader({
   view,
   settlementSymbol,
   now,
   showTimer,
-  framed,
+  canClose,
   onClose,
 }: {
   view: SessionView;
   settlementSymbol: string | null;
   now: number;
   showTimer: boolean;
-  framed: boolean;
+  /** Framed, and the embed bridge has a target origin. */
+  canClose: boolean;
   onClose: () => void;
 }) {
   const logo = view.merchant.logo_url?.startsWith('https://')
@@ -34,7 +38,7 @@ export function CheckoutHeader({
           ) : null}
           <span className="pay-store-name">{view.merchant.name}</span>
         </div>
-        {framed ? (
+        {canClose ? (
           <button type="button" className="pay-close" onClick={onClose} aria-label="Close checkout">
             ×
           </button>

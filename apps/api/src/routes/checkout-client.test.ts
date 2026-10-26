@@ -500,7 +500,7 @@ describe('shopper checkout routes', () => {
       expect(res.body).not.toContain(accountId);
     });
 
-    it('is an empty list (never 404) for unknown, malformed and expired sessions', async () => {
+    it('is an empty list (never 404) only for unknown and malformed ids', async () => {
       await prisma.merchant.update({
         where: { id: merchant.id },
         data: { checkoutDomains: ['https://shop.example'] },
@@ -510,27 +510,25 @@ describe('shopper checkout routes', () => {
         expect(res.statusCode, res.body).toBe(200);
         expect(res.json()).toEqual({ origins: [] });
       }
-      const s = await newSession();
-      await prisma.session.update({
-        where: { id: s.id },
-        data: { expiresAt: new Date(Date.now() - 1000) },
-      });
-      expect((await frameOrigins(s.id)).json()).toEqual({ origins: [] });
-      await prisma.session.update({ where: { id: s.id }, data: { status: 'EXPIRED' } });
-      expect((await frameOrigins(s.id)).json()).toEqual({ origins: [] });
     });
 
-    it('keeps the origins for a session past its expiry that has a payment to show', async () => {
+    it('keeps the origins for any existing session, expired or not (C28)', async () => {
       await prisma.merchant.update({
         where: { id: merchant.id },
         data: { checkoutDomains: ['https://shop.example'] },
       });
       const s = await newSession();
+      const origins = { origins: ['https://shop.example'] };
+      // Past expires_at, still awaiting a deposit: a late deposit can still land and show.
       await prisma.session.update({
         where: { id: s.id },
-        data: { expiresAt: new Date(Date.now() - 1000), status: 'PROCESSING' },
+        data: { expiresAt: new Date(Date.now() - 1000) },
       });
-      expect((await frameOrigins(s.id)).json()).toEqual({ origins: ['https://shop.example'] });
+      expect((await frameOrigins(s.id)).json()).toEqual(origins);
+      for (const status of ['EXPIRED', 'LATE_DEPOSIT', 'HELD', 'PROCESSING', 'REFUNDED'] as const) {
+        await prisma.session.update({ where: { id: s.id }, data: { status } });
+        expect((await frameOrigins(s.id)).json(), status).toEqual(origins);
+      }
     });
 
     it('is rate-limited per session id, not per IP (C26)', async () => {
