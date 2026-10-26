@@ -340,6 +340,8 @@ export async function shopperSessionView(ctx: ShopperCtx) {
       overpaid_amount: toJsonDecimal(p.overpaidAmount),
       refunded_amount: toJsonDecimal(p.refundedAmount),
       kept_small_overpayment: p.keptSmallOverpayment,
+      /** Which returns were worth under $1 and stay with the store (reasons only, C41). */
+      kept_small_reasons: p.keptSmallReasons,
       origin_tx_hash: p.originTxHash,
       created_at: p.createdAt.toISOString(),
     })),

@@ -31,11 +31,13 @@ import {
   draftReturn,
   ENDED_REVIEW,
   heldAmount,
+  isOpenReturn,
   keepSmall,
   legalAckRequired,
   lockRefund,
   netOfReturnFee,
   oneclickChainOf,
+  OPEN_RETURN_STATUSES,
   queueExcessReturn,
   queueHeldReturn,
   returnChainsOf,
@@ -107,13 +109,14 @@ function itemView(p: PaymentWith) {
     legal_ack_at: iso(p.legalAckAt),
     legal_ack_by_user_id: p.legalAckByUserId,
     screening_unresolved_at: iso(p.screeningUnresolvedAt),
+    kept_small_reasons: p.keptSmallReasons,
     refunds: p.refunds.map(refundView),
   };
 }
 
-const OPEN_REFUND = ['pending', 'submitted', 'failed'] as const;
-const openRefund = (r: Refund) =>
-  (OPEN_REFUND as readonly string[]).includes(r.status) && r.reviewReason !== REVIEW.keptSmall;
+const OPEN_REFUND = OPEN_RETURN_STATUSES;
+/** The same rule `keepSmall` uses (refunds.ts `isOpenReturn`, C41). */
+const openRefund = (r: Refund) => isOpenReturn(r);
 
 /**
  * The review queue of one store and mode:
@@ -338,12 +341,16 @@ export async function refundFromReview(
     where: { paymentId: p.id, ...tenantOf(ctx) },
     orderBy: { createdAt: 'asc' },
   });
+  // The order amount's (sanctions) return is queued on first use. Without a refund_id that is the
+  // return asked for, even when another (the excess) is already waiting; with a refund_id naming
+  // another return, that one is drafted whether or not the order amount was kept small (C41).
+  let queuedNow: Refund | null = null;
   if (p.status === 'HELD' && !refunds.some((r) => r.reason === 'sanctions')) {
-    const queued = await queueHeldReturn(ctx, p.id);
-    if (!queued) return { refund: null, kept_small_overpayment: true };
-    refunds = [...refunds, queued];
+    queuedNow = await queueHeldReturn(ctx, p.id);
+    if (!queuedNow && !input.refund_id) return { refund: null, kept_small_overpayment: true };
+    if (queuedNow) refunds = [...refunds, queuedNow];
   }
-  let r = pickRefund(refunds, input.refund_id);
+  let r = queuedNow && !input.refund_id ? queuedNow : pickRefund(refunds, input.refund_id);
   if (r.status === 'confirmed') throw conflict('This return was already sent');
   const sanctioned = held || r.reason === 'sanctions' || r.reviewReason === REVIEW.sanctions;
   if (sanctioned && !p.legalAckAt) throw legalAckRequired();

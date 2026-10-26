@@ -575,6 +575,30 @@ describe('return to sender', () => {
     expect(cur.keptSmallReasons).toEqual(['late']);
   });
 
+  it('C41: the shopper view says which reasons were kept and what each return is for (no addresses)', async () => {
+    onReturnNeeded(null);
+    const s = await newSession();
+    const q1 = await quote(s.client_secret, { origin_asset: ETH });
+    const q2 = await quote(s.client_secret, { origin_asset: 'nep141:wrap.testnet' });
+    await sim.simulate(q2.deposit_address, 'exact');
+    await poll(q2.deposit_address);
+    await sim.simulate(q1.deposit_address, 'overpay');
+    await poll(q1.deposit_address);
+    const p = await paymentOf(q1.id);
+    const excess = (await sim.status(q1.deposit_address)).swapDetails.refundedAmount!;
+    await queueReturn(ctx(), p, { reason: 'late', assetId: USDC, amount: '100000' });
+    await queueReturn(ctx(), p, { reason: 'overpaid', assetId: ETH, amount: excess });
+    const res = await call('GET', 'session', s.client_secret);
+    expect(res.statusCode).toBe(200);
+    const v = res.json();
+    const pay = v.payments.find((x: { id: string }) => x.id === p.id);
+    expect(pay.kept_small_reasons).toEqual(['late']);
+    expect(v.refunds).toEqual([
+      expect.objectContaining({ payment_id: p.id, reason: 'overpaid', state: 'processing' }),
+    ]);
+    expect(res.body).not.toContain(p.senderAddress!);
+  });
+
   it('C40: the sweeper still queues the excess after the late return was kept small', async () => {
     onReturnNeeded(null);
     const { p } = await lateOverpaid();
@@ -602,6 +626,25 @@ describe('return to sender', () => {
     expect(r).toMatchObject({ reason: 'late', assetId: USDC });
     cur = await paymentOf(p.quoteId);
     expect(cur.status).toBe('REFUNDING');
+  });
+
+  it('C41: a blocked late return is still open: keeping the excess never completes the payment', async () => {
+    onReturnNeeded(null);
+    const { p } = await lateOverpaid();
+    // The sender screens as sanctioned when the late return is drafted: failed, in review.
+    setRefundDeps({ screen: async () => ({ decision: 'block' }) });
+    const late = await queueReturn(ctx(), p, {
+      reason: 'late',
+      assetId: USDC,
+      amount: '25000000',
+    });
+    expect(late).toMatchObject({ reason: 'late', status: 'failed', reviewReason: 'sanctions' });
+    // The excess is small and kept, but the blocked late return is still open.
+    await queueReturn(ctx(), p, { reason: 'overpaid', assetId: ETH, amount: '1000' });
+    const cur = await paymentOf(p.quoteId);
+    expect(cur.keptSmallReasons).toEqual(['overpaid']);
+    expect(cur.status).toBe('REFUNDING');
+    expect(await refundedTransitions(p.id)).toEqual([]);
   });
 
   it('C40: both returns small → both kept, the payment REFUNDED once', async () => {

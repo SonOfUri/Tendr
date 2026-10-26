@@ -363,8 +363,24 @@ export async function keepSmall(ctx: ScopeContext, paymentId: string, reason: Re
   });
 }
 
+/** Refund statuses of a return that still needs something (C41): not sent, or in review. */
+export const OPEN_RETURN_STATUSES = ['pending', 'submitted', 'failed'] as const;
+
 /**
- * Whether a return of `p` other than `reason` is still open: a refund row not yet sent or failed,
+ * Whether a return is still open: pending, submitted, or failed into the review queue (a blocked
+ * destination, a cancelled proposal, …) — anything but sent or kept small. The review queue and
+ * `keepSmall` share this rule (C41).
+ */
+export function isOpenReturn(r: { status: string; reviewReason: string | null }): boolean {
+  return (
+    (OPEN_RETURN_STATUSES as readonly string[]).includes(r.status) &&
+    r.reviewReason !== REVIEW.keptSmall
+  );
+}
+
+/**
+ * Whether a return of `p` other than `reason` is still open (`isOpenReturn`: a row not sent and
+ * not kept small, review items included),
  * or a return a late deposit swapped into the account is due (its `late` return, and the `overpaid`
  * excess of M-2) that is neither queued nor kept yet — its hook may run after this one, or only in
  * the sweeper.
@@ -377,9 +393,9 @@ async function otherReturnOpen(
 ): Promise<boolean> {
   const rows = await tx.refund.findMany({
     where: { paymentId: p.id, ...tenantOf(ctx), reason: { not: reason } },
-    select: { reason: true, status: true },
+    select: { reason: true, status: true, reviewReason: true },
   });
-  if (rows.some((r) => r.status === 'pending' || r.status === 'submitted')) return true;
+  if (rows.some((r) => isOpenReturn(r))) return true;
   if (!p.isLate || p.oneclickStatus !== 'SUCCESS') return false;
   const due: ReturnReason[] = [];
   if (p.amountOut?.gt(0)) due.push('late');
@@ -940,7 +956,16 @@ export async function shopperRefunds(ctx: ShopperCtx) {
     amount: r.amount.toFixed(0),
     needs_address: r.needsAddress,
     chains: r.needsAddress ? returnChainsOf(r.assetId).map(oneclickChainOf) : undefined,
-    state: r.status === 'confirmed' ? 'sent' : r.status === 'failed' ? 'review' : 'processing',
+    /** What it is for (never an address). */
+    reason: r.reason,
+    state:
+      r.status === 'confirmed'
+        ? 'sent'
+        : r.reviewReason === REVIEW.keptSmall
+          ? 'kept'
+          : r.status === 'failed'
+            ? 'review'
+            : 'processing',
   }));
 }
 

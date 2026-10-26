@@ -390,6 +390,60 @@ describe('review queue', () => {
     expect(await prisma.accountProposal.count()).toBe(2);
   });
 
+  it('C41: a held payment with an excess: each return drafts on its own (refund_id), the first without one', async () => {
+    const { p } = await paid('overpay', SANCTIONED);
+    const over = await prisma.refund.findFirstOrThrow({
+      where: { paymentId: p.id, reason: 'overpaid' },
+    });
+    expect((await ack(p.id)).statusCode).toBe(200);
+    // No refund_id while the order amount's return is not queued yet: it is queued and drafted
+    // (never "Say which refund" because the excess row already exists).
+    let res = await refund(p.id, { destination: NEAR_DEST, chain: 'near' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().refund).toMatchObject({ reason: 'sanctions' });
+    // The queue still offers the excess, with its own state.
+    const queue = (await dash('GET', '/v1/review', owner)).json();
+    const item = queue.held.find((x: { payment_id: string }) => x.payment_id === p.id);
+    expect(
+      item.refunds.map((r: { reason: string; proposal_id: string | null }) => [
+        r.reason,
+        r.proposal_id !== null,
+      ]),
+    ).toEqual([
+      ['overpaid', false],
+      ['sanctions', true],
+    ]);
+    res = await refund(p.id, { refund_id: over.id, destination: NEAR_DEST, chain: 'near' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().refund).toMatchObject({ reason: 'overpaid', asset: ETH });
+    expect(await prisma.accountProposal.count()).toBe(2);
+  });
+
+  it('C41: a held order amount kept small never strands a large excess', async () => {
+    const { p } = await paid('overpay', SANCTIONED);
+    // Only $0.50 verifiably reached the account for the order: under $1 net, kept.
+    await prisma.settlementClaim.updateMany({
+      where: { paymentId: p.id },
+      data: { amount: '500000' },
+    });
+    // A $100 excess (0.04 ETH at $2500) is waiting in review.
+    const over = await prisma.refund.findFirstOrThrow({
+      where: { paymentId: p.id, reason: 'overpaid' },
+    });
+    await prisma.refund.update({
+      where: { id: over.id },
+      data: { amount: '40000000000000000', returnFee: '200000000000000' },
+    });
+    expect((await ack(p.id)).statusCode).toBe(200);
+    let res = await refund(p.id, { destination: NEAR_DEST, chain: 'near' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ refund: null, kept_small_overpayment: true });
+    res = await refund(p.id, { refund_id: over.id, destination: NEAR_DEST, chain: 'near' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().refund).toMatchObject({ reason: 'overpaid', destination: NEAR_DEST });
+    expect(res.json().refund.proposal_id).not.toBeNull();
+  });
+
   it('re-drafting waits until the old proposal is verified ended ON CHAIN', async () => {
     const { p } = await paid('overpay');
     const [r] = await prisma.refund.findMany({ where: { paymentId: p.id } });
