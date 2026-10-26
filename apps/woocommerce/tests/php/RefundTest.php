@@ -137,7 +137,7 @@ class RefundTest extends Tendr_Test_Case {
 	/**
 	 * A tendr order paid by PAYMENT_ID (49.00 USD: 2 × 24.50), as Task 10 leaves it.
 	 *
-	 * @param array $opts livemode (bool, how it was paid), stock (bool).
+	 * @param array $opts livemode (bool, how it was paid), stock (bool), downloadable (bool).
 	 */
 	private function paid_order( array $opts = array() ): WC_Order {
 		$product = new WC_Product_Simple();
@@ -146,9 +146,19 @@ class RefundTest extends Tendr_Test_Case {
 			$product->set_manage_stock( true );
 			$product->set_stock_quantity( 8 );
 		}
+		if ( ! empty( $opts['downloadable'] ) ) {
+			wc_get_container()->get( \Automattic\WooCommerce\Internal\ProductDownloads\ApprovedDirectories\Register::class )->set_mode( 'disabled' );
+			$download = new WC_Product_Download();
+			$download->set_id( 'tendr-ebook' );
+			$download->set_name( 'Ebook' );
+			$download->set_file( 'https://example.org/ebook.pdf' );
+			$product->set_virtual( true );
+			$product->set_downloadable( true );
+			$product->set_downloads( array( $download ) );
+		}
 		$product->save();
 
-		$order = wc_create_order();
+		$order = wc_create_order( array( 'customer_id' => self::factory()->user->create( array( 'role' => 'customer' ) ) ) );
 		$order->set_currency( 'USD' );
 		$order->set_billing_email( 'ada@example.com' );
 		$order->set_payment_method( 'tendr' );
@@ -251,24 +261,42 @@ class RefundTest extends Tendr_Test_Case {
 	}
 
 	/**
-	 * The WooCommerce refund id that the last refund request used (from its external_ref).
+	 * Request a refund via tendr: WooCommerce must save nothing and show the plugin's message.
+	 *
+	 * @param WC_Order $order  Order.
+	 * @param string   $amount Amount.
+	 * @param array    $extra  More wc_create_refund() args.
+	 * @return string The external_ref tendr was given.
 	 */
-	private function last_wc_refund_id(): int {
+	private function request_refund( WC_Order $order, string $amount, array $extra = array() ): string {
+		$posts  = count( $this->refund_posts );
+		$result = self::refund( $order, $amount, $extra );
+		$this->assertWPError( $result );
+		$this->assertStringContainsString( 'WooCommerce will record it once it is sent', $result->get_error_message() );
+		$this->assertCount( $posts + 1, $this->refund_posts );
+		$this->assertSame( array(), self::fresh( $order )->get_refunds(), 'WooCommerce saved no refund' );
+		return $this->last_ref();
+	}
+
+	/**
+	 * The external_ref of the last refund request.
+	 */
+	private function last_ref(): string {
 		$body = end( $this->refund_posts );
-		$this->assertMatchesRegularExpression( '/^wc_refund_\d+$/', (string) $body['external_ref'] );
-		return (int) substr( (string) $body['external_ref'], strlen( 'wc_refund_' ) );
+		$this->assertMatchesRegularExpression( '/^wc_refund_\d+_\d+$/', (string) $body['external_ref'] );
+		return (string) $body['external_ref'];
 	}
 
 	/**
 	 * A refund.* event for a requested refund.
 	 *
-	 * @param string   $type         Event type.
-	 * @param WC_Order $order        Order.
-	 * @param string   $tendr_id     Tendr refund id.
-	 * @param int      $wc_refund_id The WooCommerce refund id (external_ref).
-	 * @param array    $over         Top-level overrides.
+	 * @param string   $type     Event type.
+	 * @param WC_Order $order    Order.
+	 * @param string   $tendr_id Tendr refund id.
+	 * @param string   $ext      The refund's external_ref ('' for none).
+	 * @param array    $over     Top-level overrides.
 	 */
-	private static function refund_event( string $type, WC_Order $order, string $tendr_id, int $wc_refund_id, array $over = array() ): array {
+	private static function refund_event( string $type, WC_Order $order, string $tendr_id, string $ext, array $over = array() ): array {
 		++self::$seq;
 		return array_merge(
 			array(
@@ -281,7 +309,7 @@ class RefundTest extends Tendr_Test_Case {
 					'payment_id'          => self::PAYMENT_ID,
 					'session_id'          => self::SESSION_ID,
 					'external_ref'        => Tendr_Gateway::external_ref( $order->get_id() ),
-					'refund_external_ref' => 'wc_refund_' . $wc_refund_id,
+					'refund_external_ref' => $ext,
 					'asset'               => 'nep141:usdc.near',
 					'amount'              => '10050000',
 					'reason'              => 'merchant',
@@ -356,23 +384,24 @@ class RefundTest extends Tendr_Test_Case {
 
 		$result = self::refund( $order, '10.00' );
 
-		$this->assertNotWPError( $result );
-		$this->assertCount( 1, $this->refund_posts );
-		$wc_refund_id = $this->last_wc_refund_id();
-		$this->assertGreaterThan( 0, $wc_refund_id );
+		$this->assertWPError( $result, 'WooCommerce is stopped before it saves anything' );
+		$this->assertSame( 'Refund of $10.00 sent to your Tendr signers for approval. WooCommerce will record it once it is sent.', $result->get_error_message() );
+		$ext = 'wc_refund_' . $order->get_id() . '_1';
 		$this->assertSame(
 			array(
-				'payment'      => self::PAYMENT_ID,
-				'amount'       => '10',
-				'currency'     => 'USD',
-				'reason'       => 'Damaged',
-				'external_ref' => 'wc_refund_' . $wc_refund_id,
+				array(
+					'payment'      => self::PAYMENT_ID,
+					'amount'       => '10',
+					'currency'     => 'USD',
+					'reason'       => 'Damaged',
+					'external_ref' => $ext,
+				),
 			),
-			$this->refund_posts[0]
+			$this->refund_posts
 		);
 		$request = end( $this->requests );
 		$this->assertSame( 'Bearer ' . $this->issued['test']['secret_key'], $request['args']['headers']['Authorization'] );
-		$this->assertSame( 'wc_refund_' . $wc_refund_id, $request['args']['headers']['Idempotency-Key'] );
+		$this->assertSame( $ext, $request['args']['headers']['Idempotency-Key'] );
 
 		$order = self::fresh( $order );
 		$this->assertSame( 'processing', $order->get_status() );
@@ -383,17 +412,22 @@ class RefundTest extends Tendr_Test_Case {
 		$this->assertStringContainsString( '/dashboard/approvals', self::notes( $order )[0] );
 
 		$pending = Tendr_Refunds::requests( $order );
-		$this->assertSame( 'ref_1', $pending[ $wc_refund_id ]['refund_id'] );
-		$this->assertSame( 'pending', $pending[ $wc_refund_id ]['state'] );
-		$this->assertSame( '10.00', $pending[ $wc_refund_id ]['amount'] );
+		$this->assertSame( 'ref_1', $pending[ $ext ]['refund_id'] );
+		$this->assertSame( 'pending', $pending[ $ext ]['state'] );
+		$this->assertSame( '10.00', $pending[ $ext ]['amount'] );
 		$this->assertFalse( self::refund_mail_sent() );
+		$this->assertSame( 0, did_action( 'woocommerce_refund_created' ), 'no refund hook announces a refund that did not happen' );
+		$this->assertSame( 0, did_action( 'woocommerce_order_partially_refunded' ) );
+
+		// The next request numbers on.
+		$this->request_refund( $order, '5.00' );
+		$this->assertSame( 'wc_refund_' . $order->get_id() . '_2', $this->last_ref() );
 	}
 
 	public function test_full_refund_is_not_refunded_and_sends_no_email_until_sent(): void {
 		$order = $this->paid_order();
 
-		$this->assertNotWPError( self::refund( $order, '49.00' ) );
-		$wc_refund_id = $this->last_wc_refund_id();
+		$ext = $this->request_refund( $order, '49.00' );
 
 		$order = self::fresh( $order );
 		$this->assertSame( 'processing', $order->get_status(), 'never Refunded before refund.sent' );
@@ -402,7 +436,7 @@ class RefundTest extends Tendr_Test_Case {
 
 		// The money leaves: now it is Refunded, and the customer is told.
 		$this->session( $order, array( 'ref_1' => 'confirmed' ) );
-		$this->assertSame( 200, $this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $wc_refund_id ) )->get_status() );
+		$this->assertSame( 200, $this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $ext ) )->get_status() );
 
 		$order = self::fresh( $order );
 		$this->assertSame( 'refunded', $order->get_status() );
@@ -412,11 +446,10 @@ class RefundTest extends Tendr_Test_Case {
 
 	public function test_refund_sent_records_a_partial_refund_with_correct_totals(): void {
 		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
-		$wc_refund_id = $this->last_wc_refund_id();
+		$ext   = $this->request_refund( $order, '10.00' );
 
 		$this->session( $order, array( 'ref_1' => 'confirmed' ) );
-		$this->assertSame( 200, $this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $wc_refund_id ) )->get_status() );
+		$this->assertSame( 200, $this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $ext ) )->get_status() );
 
 		$order = self::fresh( $order );
 		$this->assertSame( 'processing', $order->get_status() );
@@ -424,55 +457,52 @@ class RefundTest extends Tendr_Test_Case {
 		$refunds = $order->get_refunds();
 		$this->assertCount( 1, $refunds );
 		$this->assertSame( 'ref_1', $refunds[0]->get_meta( '_tendr_refund_id' ) );
+		$this->assertSame( $ext, $refunds[0]->get_meta( '_tendr_refund_ref' ) );
 		$this->assertSame( 'sent', $refunds[0]->get_meta( '_tendr_refund_state' ) );
 		$this->assertSame( 'Damaged', $refunds[0]->get_reason() );
-		$this->assertSame( 'sent', Tendr_Refunds::requests( $order )[ $wc_refund_id ]['state'] );
+		$this->assertSame( 'sent', Tendr_Refunds::requests( $order )[ $ext ]['state'] );
 		$this->assertStringContainsString( 'sent', self::notes( $order )[0] );
 		$this->assertStringContainsString( '[Test]', self::notes( $order )[0] );
 
 		// A replayed refund.sent (new event id) records nothing more.
-		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $wc_refund_id ) );
+		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $ext ) );
 		$this->assertEquals( 10, self::fresh( $order )->get_total_refunded() );
 		$this->assertCount( 1, self::fresh( $order )->get_refunds() );
 	}
 
 	public function test_refund_cancelled_removes_the_pending_refund_and_leaves_totals_unchanged(): void {
 		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
-		$wc_refund_id = $this->last_wc_refund_id();
+		$ext   = $this->request_refund( $order, '10.00' );
 
 		$this->session( $order, array( 'ref_1' => 'pending' ) );
-		$this->assertSame( 200, $this->deliver( self::refund_event( 'refund.cancelled', $order, 'ref_1', $wc_refund_id ) )->get_status() );
+		$this->assertSame( 200, $this->deliver( self::refund_event( 'refund.cancelled', $order, 'ref_1', $ext ) )->get_status() );
 
 		$order = self::fresh( $order );
 		$this->assertSame( 'processing', $order->get_status() );
 		$this->assertEquals( 0, $order->get_total_refunded() );
 		$this->assertSame( array(), $order->get_refunds() );
-		$this->assertSame( 'cancelled', Tendr_Refunds::requests( $order )[ $wc_refund_id ]['state'] );
+		$this->assertSame( 'cancelled', Tendr_Refunds::requests( $order )[ $ext ]['state'] );
 		$this->assertSame( '0', Tendr_Refunds::pending_total( $order ) );
 		$this->assertStringContainsString( 'not approved', self::notes( $order )[0] );
 	}
 
 	public function test_refund_failed_leaves_totals_unchanged(): void {
 		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
-		$wc_refund_id = $this->last_wc_refund_id();
+		$ext   = $this->request_refund( $order, '10.00' );
 
 		$this->session( $order, array( 'ref_1' => 'failed' ) );
-		$this->deliver( self::refund_event( 'refund.failed', $order, 'ref_1', $wc_refund_id ) );
+		$this->deliver( self::refund_event( 'refund.failed', $order, 'ref_1', $ext ) );
 
 		$order = self::fresh( $order );
 		$this->assertEquals( 0, $order->get_total_refunded() );
-		$this->assertSame( 'failed', Tendr_Refunds::requests( $order )[ $wc_refund_id ]['state'] );
+		$this->assertSame( 'failed', Tendr_Refunds::requests( $order )[ $ext ]['state'] );
 		$this->assertStringContainsString( 'could not be sent', self::notes( $order )[0] );
 	}
 
 	public function test_two_partial_refunds_then_one_cancelled_totals_reflect_only_sent(): void {
-		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
-		$first = $this->last_wc_refund_id();
-		self::refund( $order, '15.00' );
-		$second = $this->last_wc_refund_id();
+		$order  = $this->paid_order();
+		$first  = $this->request_refund( $order, '10.00' );
+		$second = $this->request_refund( $order, '15.00' );
 		$this->assertNotSame( $first, $second );
 		$this->assertSame( '25', Tendr_Refunds::pending_total( self::fresh( $order ) ) );
 		$this->assertEquals( 0, self::fresh( $order )->get_total_refunded() );
@@ -500,69 +530,64 @@ class RefundTest extends Tendr_Test_Case {
 
 	public function test_a_late_cancelled_after_sent_does_not_undo_the_refund(): void {
 		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
-		$wc_refund_id = $this->last_wc_refund_id();
+		$ext   = $this->request_refund( $order, '10.00' );
 		$this->session( $order, array( 'ref_1' => 'confirmed' ) );
-		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $wc_refund_id ) );
+		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $ext ) );
 
 		foreach ( array( 'refund.cancelled', 'refund.failed' ) as $type ) {
-			$this->assertSame( 200, $this->deliver( self::refund_event( $type, $order, 'ref_1', $wc_refund_id ) )->get_status() );
+			$this->assertSame( 200, $this->deliver( self::refund_event( $type, $order, 'ref_1', $ext ) )->get_status() );
 		}
 
 		$order = self::fresh( $order );
 		$this->assertEquals( 10, $order->get_total_refunded() );
 		$this->assertCount( 1, $order->get_refunds() );
-		$this->assertSame( 'sent', Tendr_Refunds::requests( $order )[ $wc_refund_id ]['state'] );
+		$this->assertSame( 'sent', Tendr_Refunds::requests( $order )[ $ext ]['state'] );
 	}
 
 	public function test_cancelled_whose_reread_shows_it_sent_changes_nothing(): void {
 		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
-		$wc_refund_id = $this->last_wc_refund_id();
+		$ext   = $this->request_refund( $order, '10.00' );
 		$this->session( $order, array( 'ref_1' => 'confirmed' ) );
 
-		$this->deliver( self::refund_event( 'refund.cancelled', $order, 'ref_1', $wc_refund_id ) );
+		$this->deliver( self::refund_event( 'refund.cancelled', $order, 'ref_1', $ext ) );
 
-		$this->assertSame( 'pending', Tendr_Refunds::requests( self::fresh( $order ) )[ $wc_refund_id ]['state'] );
+		$this->assertSame( 'pending', Tendr_Refunds::requests( self::fresh( $order ) )[ $ext ]['state'] );
 	}
 
 	public function test_sent_after_cancelled_is_still_applied(): void {
 		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
-		$wc_refund_id = $this->last_wc_refund_id();
+		$ext   = $this->request_refund( $order, '10.00' );
 		$this->session( $order, array( 'ref_1' => 'pending' ) );
-		$this->deliver( self::refund_event( 'refund.cancelled', $order, 'ref_1', $wc_refund_id ) );
+		$this->deliver( self::refund_event( 'refund.cancelled', $order, 'ref_1', $ext ) );
 		$this->assertEquals( 0, self::fresh( $order )->get_total_refunded() );
 
 		// The proposal was revived and executed after all: the money left.
 		$this->session( $order, array( 'ref_1' => 'confirmed' ) );
-		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $wc_refund_id ) );
+		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $ext ) );
 
 		$order = self::fresh( $order );
 		$this->assertEquals( 10, $order->get_total_refunded() );
-		$this->assertSame( 'sent', Tendr_Refunds::requests( $order )[ $wc_refund_id ]['state'] );
+		$this->assertSame( 'sent', Tendr_Refunds::requests( $order )[ $ext ]['state'] );
 	}
 
-	// ---------------------------------------------------------------- re-read authority and retries.
+	// ---------------------------------------------------------------- re-read authority, retries, idempotency.
 
 	public function test_sent_whose_reread_is_not_confirmed_changes_nothing(): void {
 		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
-		$wc_refund_id = $this->last_wc_refund_id();
+		$ext   = $this->request_refund( $order, '10.00' );
 		$this->session( $order, array( 'ref_1' => 'pending' ) );
 
-		$this->assertSame( 200, $this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $wc_refund_id ) )->get_status() );
+		$this->assertSame( 200, $this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $ext ) )->get_status() );
 
 		$this->assertEquals( 0, self::fresh( $order )->get_total_refunded() );
-		$this->assertSame( 'pending', Tendr_Refunds::requests( self::fresh( $order ) )[ $wc_refund_id ]['state'] );
+		$this->assertSame( 'pending', Tendr_Refunds::requests( self::fresh( $order ) )[ $ext ]['state'] );
 	}
 
 	public function test_a_transient_reread_failure_is_retried_and_not_recorded_as_seen(): void {
 		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
-		$wc_refund_id = $this->last_wc_refund_id();
+		$ext   = $this->request_refund( $order, '10.00' );
 		$this->session( $order, array( 'ref_1' => 'confirmed' ) );
-		$event = self::refund_event( 'refund.sent', $order, 'ref_1', $wc_refund_id );
+		$event = self::refund_event( 'refund.sent', $order, 'ref_1', $ext );
 
 		$this->get_reply = array( 503, self::api_error( 'INTERNAL_ERROR', 'Try again' ) );
 		$this->assertSame( 503, $this->deliver( $event )->get_status() );
@@ -574,45 +599,11 @@ class RefundTest extends Tendr_Test_Case {
 		$this->assertEquals( 10, self::fresh( $order )->get_total_refunded() );
 	}
 
-	public function test_apply_refund_event_returns_an_error_when_the_refund_cannot_be_recorded(): void {
-		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
-		$wc_refund_id = $this->last_wc_refund_id();
-		$view         = $this->session( $order, array( 'ref_1' => 'confirmed' ) );
-		add_filter(
-			'woocommerce_create_refund',
-			static function () {
-				throw new Exception( 'Database is away' );
-			}
-		);
-
-		$result = Tendr_Order_Sync::apply_refund_event( self::fresh( $order ), self::refund_event( 'refund.sent', $order, 'ref_1', $wc_refund_id ), $view );
-
-		$this->assertWPError( $result );
-		$this->assertSame( 'pending', Tendr_Refunds::requests( self::fresh( $order ) )[ $wc_refund_id ]['state'] );
-	}
-
-	public function test_an_event_whose_tendr_refund_id_does_not_match_changes_nothing(): void {
-		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
-		$wc_refund_id = $this->last_wc_refund_id();
-		$this->session( $order, array( 'ref_other' => 'confirmed' ) );
-
-		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_other', $wc_refund_id ) );
-
-		$this->assertEquals( 0, self::fresh( $order )->get_total_refunded() );
-		$this->assertSame( 'pending', Tendr_Refunds::requests( self::fresh( $order ) )[ $wc_refund_id ]['state'] );
-	}
-
-	// ---------------------------------------------------------------- stock.
-
-	public function test_restock_waits_until_the_refund_is_sent(): void {
+	public function test_a_failed_record_answers_503_and_the_retry_restocks_once(): void {
 		$order = $this->paid_order( array( 'stock' => true ) );
 		$items = $order->get_items();
 		$item  = reset( $items );
-		$this->assertSame( 6, wc_get_product( $item->get_product_id() )->get_stock_quantity(), '8 in stock, 2 sold' );
-
-		self::refund(
+		$ext   = $this->request_refund(
 			$order,
 			'24.50',
 			array(
@@ -625,28 +616,170 @@ class RefundTest extends Tendr_Test_Case {
 				),
 			)
 		);
-		$wc_refund_id = $this->last_wc_refund_id();
+		$this->session( $order, array( 'ref_1' => 'confirmed' ) );
+		$event = self::refund_event( 'refund.sent', $order, 'ref_1', $ext );
+
+		// WooCommerce fails after saving the refund row (a listener throws): it deletes the row.
+		$boom = static function () {
+			throw new Exception( 'Database is away' );
+		};
+		add_action( 'woocommerce_order_partially_refunded', $boom );
+		$this->assertSame( 503, $this->deliver( $event )->get_status() );
+		remove_action( 'woocommerce_order_partially_refunded', $boom );
+		$this->assertEquals( 0, self::fresh( $order )->get_total_refunded() );
+		$this->assertSame( 6, wc_get_product( $item->get_product_id() )->get_stock_quantity() );
+
+		$this->assertSame( 200, $this->deliver( $event )->get_status() );
+		$this->assertEquals( 24.5, self::fresh( $order )->get_total_refunded() );
+		$this->assertSame( 7, wc_get_product( $item->get_product_id() )->get_stock_quantity(), 'restocked exactly once' );
+
+		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $ext ) );
+		$this->assertSame( 7, wc_get_product( $item->get_product_id() )->get_stock_quantity() );
+	}
+
+	public function test_a_refund_already_recorded_is_adopted_not_recorded_twice(): void {
+		$order = $this->paid_order();
+		$ext   = $this->request_refund( $order, '10.00' );
+		// A previous attempt saved the row, then the request died before the state was saved.
+		$refund = wc_create_refund(
+			array(
+				'order_id' => $order->get_id(),
+				'amount'   => '10.00',
+			)
+		);
+		$refund->update_meta_data( '_tendr_refund_ref', $ext );
+		$refund->save();
+		$this->session( $order, array( 'ref_1' => 'confirmed' ) );
+
+		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $ext ) );
+
+		$order = self::fresh( $order );
+		$this->assertEquals( 10, $order->get_total_refunded() );
+		$this->assertCount( 1, $order->get_refunds() );
+		$this->assertSame( $refund->get_id(), Tendr_Refunds::requests( $order )[ $ext ]['wc_refund_id'] );
+	}
+
+	public function test_an_event_whose_tendr_refund_id_does_not_match_changes_nothing(): void {
+		$order = $this->paid_order();
+		$ext   = $this->request_refund( $order, '10.00' );
+		$this->session( $order, array( 'ref_other' => 'confirmed' ) );
+
+		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_other', $ext ) );
+
+		$this->assertEquals( 0, self::fresh( $order )->get_total_refunded() );
+		$this->assertSame( 'pending', Tendr_Refunds::requests( self::fresh( $order ) )[ $ext ]['state'] );
+	}
+
+	public function test_a_refund_sent_from_the_dashboard_is_noted_not_recorded(): void {
+		$order = $this->paid_order();
+		$this->session( $order, array( 'ref_dash' => 'confirmed' ) );
+
+		$event = self::refund_event( 'refund.sent', $order, 'ref_dash', '' );
+		unset( $event['data']['refund_external_ref'] );
+		$this->assertSame( 200, $this->deliver( $event )->get_status() );
+
+		$order = self::fresh( $order );
+		$this->assertEquals( 0, $order->get_total_refunded(), 'no automatic WooCommerce refund' );
+		$note = self::notes( $order )[0];
+		$this->assertStringContainsString( 'not requested from WooCommerce', $note );
+		$this->assertStringContainsString( '10050000', $note );
+		$this->assertStringContainsString( 'nep141:usdc.near', $note );
+		$this->assertStringContainsString( 'testnet.nearblocks.io/txns/RefTx123', $note );
+		$this->assertStringContainsString( 'Refund manually', $note );
+
+		// Once per refund.
+		$count = count( self::notes( $order ) );
+		$again = self::refund_event( 'refund.sent', $order, 'ref_dash', '' );
+		unset( $again['data']['refund_external_ref'] );
+		$this->deliver( $again );
+		$this->assertCount( $count, self::notes( self::fresh( $order ) ) );
+	}
+
+	// ---------------------------------------------------------------- side effects.
+
+	public function test_restock_waits_until_the_refund_is_sent(): void {
+		$order = $this->paid_order( array( 'stock' => true ) );
+		$items = $order->get_items();
+		$item  = reset( $items );
+		$this->assertSame( 6, wc_get_product( $item->get_product_id() )->get_stock_quantity(), '8 in stock, 2 sold' );
+
+		$ext = $this->request_refund(
+			$order,
+			'24.50',
+			array(
+				'restock_items' => true,
+				'line_items'    => array(
+					$item->get_id() => array(
+						'qty'          => 1,
+						'refund_total' => '24.50',
+					),
+				),
+			)
+		);
 		$this->assertSame( 6, wc_get_product( $item->get_product_id() )->get_stock_quantity(), 'nothing is restocked while the refund awaits approval' );
 
 		$this->session( $order, array( 'ref_1' => 'confirmed' ) );
-		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $wc_refund_id ) );
+		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $ext ) );
 
 		$this->assertSame( 7, wc_get_product( $item->get_product_id() )->get_stock_quantity() );
 		$this->assertSame( -1, self::fresh( $order )->get_qty_refunded_for_item( $item->get_id() ) );
+	}
+
+	public function test_download_permissions_are_untouched_until_the_refund_is_sent(): void {
+		$order = $this->paid_order( array( 'downloadable' => true ) );
+		$this->assertCount( 1, wc_get_customer_download_permissions( $order->get_customer_id() ) );
+		$items = $order->get_items();
+		$item  = reset( $items );
+		$args  = array(
+			'line_items' => array(
+				$item->get_id() => array(
+					'qty'          => 2,
+					'refund_total' => '49.00',
+				),
+			),
+		);
+
+		$ext = $this->request_refund( $order, '49.00', $args );
+		$this->assertCount( 1, wc_get_customer_download_permissions( $order->get_customer_id() ), 'a requested refund revokes nothing' );
+
+		// tendr cancels it: the customer keeps the download.
+		$this->session( $order, array( 'ref_1' => 'pending' ) );
+		$this->deliver( self::refund_event( 'refund.cancelled', $order, 'ref_1', $ext ) );
+		$this->assertCount( 1, wc_get_customer_download_permissions( $order->get_customer_id() ) );
+
+		// Asked again and sent: now WooCommerce revokes it, as for any refund.
+		$ext = $this->request_refund( self::fresh( $order ), '49.00', $args );
+		$this->session( $order, array( 'ref_2' => 'confirmed' ) );
+		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_2', $ext ) );
+		$this->assertCount( 0, wc_get_customer_download_permissions( $order->get_customer_id() ) );
 	}
 
 	// ---------------------------------------------------------------- limits and errors.
 
 	public function test_pending_refunds_count_against_what_can_still_be_refunded(): void {
 		$order = $this->paid_order();
-		$this->assertNotWPError( self::refund( $order, '30.00' ) );
+		$this->request_refund( $order, '30.00' );
 
 		$second = self::refund( $order, '30.00' );
 
 		$this->assertWPError( $second );
-		$this->assertStringContainsString( 'awaiting approval', $second->get_error_message() );
+		$this->assertStringContainsString( 'already awaiting approval', $second->get_error_message() );
 		$this->assertCount( 1, $this->refund_posts, 'no second request reaches tendr' );
 		$this->assertEquals( 0, self::fresh( $order )->get_total_refunded() );
+	}
+
+	public function test_a_manual_refund_cannot_eat_into_pending_tendr_refunds(): void {
+		$order = $this->paid_order();
+		$this->request_refund( $order, '30.00' );
+
+		$manual = self::refund( $order, '20.00', array( 'refund_payment' => false ) );
+
+		$this->assertWPError( $manual );
+		$this->assertStringContainsString( 'a manual refund can be at most $19.00', $manual->get_error_message() );
+		$this->assertEquals( 0, self::fresh( $order )->get_total_refunded() );
+
+		$this->assertNotWPError( self::refund( $order, '19.00', array( 'refund_payment' => false ) ) );
+		$this->assertEquals( 19, self::fresh( $order )->get_total_refunded() );
 	}
 
 	public function test_an_api_refusal_is_shown_and_nothing_is_recorded(): void {
@@ -662,23 +795,28 @@ class RefundTest extends Tendr_Test_Case {
 		$this->assertSame( array(), $order->get_refunds() );
 	}
 
-	public function test_an_unconfirmed_request_is_adopted_when_its_events_arrive(): void {
+	public function test_an_unconfirmed_request_is_kept_counted_and_adopted_when_its_events_arrive(): void {
 		$order                = $this->paid_order();
 		$this->refund_replies = array( array( 502, null ) );
 
 		$result = self::refund( $order, '10.00' );
 
 		$this->assertWPError( $result );
-		$wc_refund_id = $this->last_wc_refund_id();
-		$this->assertSame( 'unconfirmed', Tendr_Refunds::requests( self::fresh( $order ) )[ $wc_refund_id ]['state'] );
+		$this->assertStringContainsString( 'did not confirm', $result->get_error_message() );
+		$ext = $this->last_ref();
+		$this->assertSame( 'unconfirmed', Tendr_Refunds::requests( self::fresh( $order ) )[ $ext ]['state'] );
 		$this->assertStringContainsString( 'Check the tendr dashboard', self::notes( self::fresh( $order ) )[0] );
+		$this->assertSame( '10', Tendr_Refunds::pending_total( self::fresh( $order ) ), 'counted against what is left' );
+		ob_start();
+		Tendr_Refunds::render_pending( self::fresh( $order ) );
+		$this->assertStringContainsString( 'not confirmed by tendr', (string) ob_get_clean() );
 
 		// tendr did create it after all.
 		$this->session( $order, array( 'ref_9' => 'confirmed' ) );
-		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_9', $wc_refund_id ) );
+		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_9', $ext ) );
 
 		$this->assertEquals( 10, self::fresh( $order )->get_total_refunded() );
-		$this->assertSame( 'ref_9', Tendr_Refunds::requests( self::fresh( $order ) )[ $wc_refund_id ]['refund_id'] );
+		$this->assertSame( 'ref_9', Tendr_Refunds::requests( self::fresh( $order ) )[ $ext ]['refund_id'] );
 	}
 
 	public function test_a_refund_needing_review_says_so(): void {
@@ -697,15 +835,76 @@ class RefundTest extends Tendr_Test_Case {
 			),
 		);
 
-		$this->assertNotWPError( self::refund( $order, '10.00' ) );
+		$ext = $this->request_refund( $order, '10.00' );
 
 		$order = self::fresh( $order );
 		$note  = self::notes( $order )[0];
 		$this->assertStringContainsString( 'manual review in tendr', $note );
 		$this->assertStringContainsString( 'settlement', $note );
 		$this->assertStringContainsString( '/dashboard/review', $note );
-		$this->assertSame( 'review', Tendr_Refunds::requests( $order )[ $this->last_wc_refund_id() ]['state'] );
+		$this->assertSame( 'review', Tendr_Refunds::requests( $order )[ $ext ]['state'] );
 		$this->assertEquals( 0, $order->get_total_refunded() );
+	}
+
+	// ---------------------------------------------------------------- REST.
+
+	/**
+	 * Storage engines.
+	 */
+	public function storages(): array {
+		return array(
+			'posts' => array( false ),
+			'hpos'  => array( true ),
+		);
+	}
+
+	/**
+	 * Rows of order meta pointing at no order (orphans).
+	 */
+	private static function orphan_meta(): int {
+		global $wpdb;
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery
+		$posts = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->postmeta} pm LEFT JOIN {$wpdb->posts} p ON p.ID = pm.post_id WHERE p.ID IS NULL" );
+		$hpos  = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->prefix}wc_orders_meta m LEFT JOIN {$wpdb->prefix}wc_orders o ON o.id = m.order_id WHERE o.id IS NULL" );
+		// phpcs:enable
+		return $posts + $hpos;
+	}
+
+	/**
+	 * The REST refund route returns WooCommerce's error with the plugin's message: no fatal, no
+	 * refund row, no orphan meta.
+	 *
+	 * @dataProvider storages
+	 *
+	 * @param bool $hpos Use HPOS storage.
+	 */
+	public function test_a_rest_refund_returns_the_message_and_saves_nothing( bool $hpos ): void {
+		add_filter( 'pre_option_woocommerce_custom_orders_table_enabled', static fn() => $hpos ? 'yes' : 'no' );
+		$order = $this->paid_order();
+		$this->assertSame( $hpos, \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled() );
+		$this->assertSame(
+			$hpos ? 'Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStore' : 'WC_Order_Data_Store_CPT',
+			$order->get_data_store()->get_current_class_name()
+		);
+		$orphans = self::orphan_meta();
+
+		$request = new WP_REST_Request( 'POST', '/wc/v3/orders/' . $order->get_id() . '/refunds' );
+		$request->set_body_params(
+			array(
+				'amount' => '10.00',
+				'reason' => 'Damaged',
+			)
+		);
+		$response = rest_get_server()->dispatch( $request );
+
+		$this->assertTrue( $response->is_error() );
+		$this->assertStringContainsString( 'sent to your Tendr signers for approval', $response->as_error()->get_error_message() );
+		$this->assertCount( 1, $this->refund_posts );
+		$order = self::fresh( $order );
+		$this->assertSame( array(), $order->get_refunds() );
+		$this->assertEquals( 0, $order->get_total_refunded() );
+		$this->assertSame( 'pending', Tendr_Refunds::requests( $order )[ $this->last_ref() ]['state'] );
+		$this->assertSame( $orphans, self::orphan_meta(), 'no orphan meta' );
 	}
 
 	// ---------------------------------------------------------------- R6: who, and which key.
@@ -714,7 +913,7 @@ class RefundTest extends Tendr_Test_Case {
 		$order = $this->paid_order();
 		update_option( Tendr_Connect::MODE, 'live' );
 
-		$this->assertNotWPError( self::refund( $order, '10.00' ) );
+		$this->request_refund( $order, '10.00' );
 
 		$request = end( $this->requests );
 		$this->assertSame( 'Bearer ' . $this->issued['test']['secret_key'], $request['args']['headers']['Authorization'] );
@@ -723,7 +922,7 @@ class RefundTest extends Tendr_Test_Case {
 	public function test_a_live_paid_order_is_refunded_with_the_live_key_in_test_mode(): void {
 		$order = $this->paid_order( array( 'livemode' => true ) );
 
-		$this->assertNotWPError( self::refund( $order, '10.00' ) );
+		$this->request_refund( $order, '10.00' );
 
 		$request = end( $this->requests );
 		$this->assertSame( 'Bearer ' . $this->issued['live']['secret_key'], $request['args']['headers']['Authorization'] );
@@ -752,9 +951,17 @@ class RefundTest extends Tendr_Test_Case {
 		$this->assertSame( array(), $this->refund_posts );
 	}
 
+	public function test_process_refund_reached_directly_never_creates_a_proposal(): void {
+		$order = $this->paid_order();
+
+		$this->assertWPError( ( new Tendr_Gateway() )->process_refund( $order->get_id(), 10, 'x' ) );
+		$this->assertWPError( wc_refund_payment( $order, '10.00' ) );
+		$this->assertSame( array(), $this->refund_posts );
+	}
+
 	public function test_pending_refunds_are_shown_on_the_order_screen(): void {
 		$order = $this->paid_order();
-		self::refund( $order, '10.00' );
+		$this->request_refund( $order, '10.00' );
 
 		ob_start();
 		Tendr_Refunds::render_pending( self::fresh( $order ) );

@@ -16,6 +16,15 @@ final class Tendr_Settings {
 
 	const FLASH_PREFIX = 'tendr_notice_';
 
+	/** Seconds the settings page keeps the API's status and settings (refreshed on save/switch). */
+	const CACHE_TTL = 60;
+
+	/** Seconds a failed read is kept, so a slow API is not asked on every page view. */
+	const ERROR_TTL = 15;
+
+	/** Seconds the settings page waits for the API when its cache is empty. */
+	const API_WAIT = 3;
+
 	/**
 	 * Register the admin script.
 	 */
@@ -54,13 +63,13 @@ final class Tendr_Settings {
 			return $result;
 		}
 
-		$status = Tendr_Api_Client::request( 'GET', '/v1/connect/status', array(), 'live' );
-		if ( is_wp_error( $status ) ) {
-			$result['error'] = __( 'Could not check with tendr whether your store is ready to go live, so this site stays in test mode.', 'tendr' ) . ' ' . $status->get_error_message();
+		$status = self::connect_status( true );
+		if ( null !== $status['error'] ) {
+			$result['error'] = __( 'Could not check with tendr whether your store is ready to go live, so this site stays in test mode.', 'tendr' ) . ' ' . $status['error'];
 		} else {
-			$result['ready']    = true === ( $status['ready'] ?? null );
-			$result['blocking'] = self::items( $status['blocking'] ?? array() );
-			$result['nudges']   = self::items( $status['nudges'] ?? array() );
+			$result['ready']    = $status['ready'];
+			$result['blocking'] = $status['blocking'];
+			$result['nudges']   = $status['nudges'];
 			if ( $result['ready'] && array() === $result['blocking'] ) {
 				update_option( Tendr_Connect::MODE, 'live' );
 				$result['switched'] = true;
@@ -150,10 +159,56 @@ final class Tendr_Settings {
 			$html .= '<div class="notice notice-error inline"><p>' . esc_html__( 'This site stays in test mode until your store is ready to go live:', 'tendr' ) . '</p>'
 				. self::item_list( (array) ( $result['blocking'] ?? array() ) ) . '</div>';
 		}
-		if ( ! empty( $result['nudges'] ) ) {
-			$html .= '<div class="notice notice-warning inline">' . self::item_list( (array) $result['nudges'] ) . '</div>';
-		}
 		return $html;
+	}
+
+	/**
+	 * The nudges (e.g. a single passkey), shown on every page view from the cached status.
+	 */
+	private static function nudges_html(): string {
+		$status = self::connect_status();
+		return array() === $status['nudges'] ? '' : '<div class="notice notice-warning inline">' . self::item_list( $status['nudges'] ) . '</div>';
+	}
+
+	/**
+	 * `GET /v1/connect/status` with the LIVE key, cached for CACHE_TTL so the settings page never
+	 * waits on it; refreshed by a mode switch.
+	 *
+	 * @param bool $refresh Ask the API now.
+	 * @return array{ready: bool, blocking: array, nudges: array, error: ?string}
+	 */
+	public static function connect_status( bool $refresh = false ): array {
+		$key    = self::cache_key( 'status' );
+		$cached = $refresh ? false : get_transient( $key );
+		if ( is_array( $cached ) ) {
+			return $cached;
+		}
+		$status = Tendr_Api_Client::request( 'GET', '/v1/connect/status', array(), 'live', array(), self::API_WAIT );
+		$result = is_wp_error( $status )
+			? array(
+				'ready'    => false,
+				'blocking' => array(),
+				'nudges'   => array(),
+				'error'    => $status->get_error_message(),
+			)
+			: array(
+				'ready'    => true === ( $status['ready'] ?? null ),
+				'blocking' => self::items( $status['blocking'] ?? array() ),
+				'nudges'   => self::items( $status['nudges'] ?? array() ),
+				'error'    => null,
+			);
+		set_transient( $key, $result, null === $result['error'] ? self::CACHE_TTL : self::ERROR_TTL );
+		return $result;
+	}
+
+	/**
+	 * A per-connection cache key.
+	 *
+	 * @param string $what 'status' | 'settings'.
+	 */
+	private static function cache_key( string $what ): string {
+		$connection = Tendr_Connect::connection();
+		return 'tendr_' . $what . '_' . substr( md5( (string) ( $connection['id'] ?? '' ) ), 0, 12 );
 	}
 
 	/**
@@ -176,13 +231,27 @@ final class Tendr_Settings {
 	// ------------------------------------------------------------------ store settings.
 
 	/**
-	 * The store's settings as tendr has them (`GET /v1/settings/checkout`), or an error.
+	 * The store's settings as tendr has them (`GET /v1/settings/checkout`), or an error. Cached
+	 * for CACHE_TTL (failures for ERROR_TTL) so the page never waits long; a save refreshes it.
+	 *
+	 * @param bool $refresh Ask the API now.
 	 *
 	 * @return array{default_fee_payer: string, default_gas_payer: string, notification_email: ?string, notification_email_pending: ?string}|WP_Error
 	 */
-	public static function store_settings() {
-		$view = Tendr_Api_Client::request( 'GET', '/v1/settings/checkout', array(), Tendr_Connect::mode(), array(), 5 );
-		return is_wp_error( $view ) ? $view : self::settings_view( $view );
+	public static function store_settings( bool $refresh = false ) {
+		$key    = self::cache_key( 'settings' );
+		$cached = $refresh ? false : get_transient( $key );
+		if ( is_array( $cached ) ) {
+			return isset( $cached['error'] ) ? new WP_Error( 'tendr_settings_unavailable', (string) $cached['error'] ) : $cached;
+		}
+		$view = Tendr_Api_Client::request( 'GET', '/v1/settings/checkout', array(), Tendr_Connect::mode(), array(), self::API_WAIT );
+		if ( is_wp_error( $view ) ) {
+			set_transient( $key, array( 'error' => $view->get_error_message() ), self::ERROR_TTL );
+			return $view;
+		}
+		$settings = self::settings_view( $view );
+		set_transient( $key, $settings, self::CACHE_TTL );
+		return $settings;
 	}
 
 	/**
@@ -213,7 +282,7 @@ final class Tendr_Settings {
 			$patch['notification_email'] = '' === $email ? null : $email;
 		}
 
-		$current = self::store_settings();
+		$current = self::store_settings( true );
 		if ( is_wp_error( $current ) ) {
 			return $current;
 		}
@@ -226,7 +295,12 @@ final class Tendr_Settings {
 			return $current;
 		}
 		$saved = Tendr_Api_Client::request( 'PATCH', '/v1/settings/checkout', $patch, Tendr_Connect::mode() );
-		return is_wp_error( $saved ) ? $saved : self::settings_view( $saved );
+		if ( is_wp_error( $saved ) ) {
+			return $saved;
+		}
+		$settings = self::settings_view( $saved );
+		set_transient( self::cache_key( 'settings' ), $settings, self::CACHE_TTL );
+		return $settings;
 	}
 
 	/**
@@ -429,7 +503,7 @@ final class Tendr_Settings {
 
 		// Every control posts WooCommerce's settings form to its own admin-post action
 		// (formaction), each with its own nonce: this page is inside WooCommerce's <form>.
-		$html  = self::take_go_live();
+		$html  = self::take_go_live() . self::nudges_html();
 		$html .= '<p>' . esc_html__( 'Connected to', 'tendr' ) . ' <strong>' . esc_html( (string) $connection['store_name'] ) . '</strong></p>';
 		$html .= '<table class="form-table" role="presentation"><tbody>';
 		if ( '' !== (string) ( $connection['test_account'] ?? '' ) ) {

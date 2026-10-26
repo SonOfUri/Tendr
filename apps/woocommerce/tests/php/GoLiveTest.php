@@ -50,6 +50,7 @@ class GoLiveTest extends Tendr_Test_Case {
 			'notification_email_pending' => null,
 			'payment_emails_enabled'     => true,
 		);
+		$this->status( false );
 		$this->mock_http( fn( $url, $args ) => $this->api( $url, $args ) );
 		$this->login_admin();
 	}
@@ -161,6 +162,28 @@ class GoLiveTest extends Tendr_Test_Case {
 		$this->assertStringContainsString( 'Live mode', $html );
 		$this->assertStringContainsString( 'lock you out', $html, 'nudges are shown even when ready' );
 		$this->assertStringNotContainsString( 'Add a payout method', $html );
+	}
+
+	public function test_nudges_persist_and_the_page_reads_the_api_once_per_minute(): void {
+		$this->status( false, array(), array( self::nudge() ) );
+		$calls = fn( string $path ) => count( array_filter( $this->requests, static fn( $r ) => str_ends_with( (string) wp_parse_url( $r['url'], PHP_URL_PATH ), $path ) ) );
+
+		$first  = Tendr_Settings::render();
+		$second = Tendr_Settings::render();
+
+		$this->assertStringContainsString( 'lock you out', $first, 'nudges show without any switch attempt' );
+		$this->assertStringContainsString( 'lock you out', $second, 'and keep showing' );
+		$this->assertSame( 1, $calls( '/v1/connect/status' ), 'status is cached' );
+		$this->assertSame( 1, $calls( '/v1/settings/checkout' ), 'settings are cached' );
+		$request = $this->requests[0];
+		$this->assertSame( 3, $request['args']['timeout'], 'a cold cache waits at most 3 s' );
+
+		// A switch attempt and a save refresh them.
+		Tendr_Settings::set_mode( 'live' );
+		$this->assertSame( 2, $calls( '/v1/connect/status' ) );
+		Tendr_Settings::save_settings( array( 'default_fee_payer' => 'shopper' ) );
+		$this->assertMatchesRegularExpression( '/<option value="shopper" selected/', Tendr_Settings::render() );
+		$this->assertSame( 2, $calls( '/v1/connect/status' ) );
 	}
 
 	public function test_go_live_stays_in_test_mode_when_status_cannot_be_read(): void {

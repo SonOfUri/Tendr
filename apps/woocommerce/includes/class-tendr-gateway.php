@@ -143,17 +143,17 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	}
 
 	/**
-	 * Ask tendr to refund (spec §7). Nothing is refunded yet: the request waits for the store's
-	 * signers in tendr, and the WooCommerce refund is recorded once tendr sends it
-	 * (see Tendr_Refunds).
+	 * Never the way in: a refund "via tendr" is requested before WooCommerce saves it
+	 * (Tendr_Refunds::before_save()), which stops WooCommerce before it calls this. Reaching it
+	 * means some other path (a direct wc_refund_payment()); it must not create a second proposal.
 	 *
 	 * @param int        $order_id Order id.
 	 * @param float|null $amount   Amount.
 	 * @param string     $reason   Reason.
-	 * @return bool|WP_Error
+	 * @return WP_Error
 	 */
 	public function process_refund( $order_id, $amount = null, $reason = '' ) {
-		return Tendr_Refunds::request( $order_id, $amount, (string) $reason );
+		return new WP_Error( 'tendr_refund_path', __( 'Refund tendr orders from the order screen: Refund, then "Refund via tendr".', 'tendr' ) );
 	}
 
 	// ------------------------------------------------------------------ sessions.

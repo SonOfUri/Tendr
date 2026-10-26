@@ -24,21 +24,42 @@ abstract class Tendr_Test_Case extends WP_UnitTestCase {
 		parent::set_up();
 		$this->requests = array();
 		$this->set_permalink_structure( '/%postname%/' );
-		// No test ever reaches the network: a request no mock answered fails like a transport error.
+		$this->unmocked = array();
+		// No test ever reaches the network. A request no mock answered is blocked and fails the test
+		// in tear_down(), so it can never satisfy an error-path assertion by accident.
 		add_filter(
 			'pre_http_request',
-			static fn( $pre ) => false === $pre ? new WP_Error( 'http_request_failed', 'Unmocked HTTP request in a test.' ) : $pre,
-			PHP_INT_MAX
+			function ( $pre, $args, $url ) {
+				if ( false !== $pre ) {
+					return $pre;
+				}
+				$this->unmocked[] = $url;
+				return new WP_Error( 'http_request_failed', 'Unmocked HTTP request in a test.' );
+			},
+			PHP_INT_MAX,
+			3
 		);
 	}
 
 	/**
-	 * Tear down: no user, no HTTP mock.
+	 * URLs requested without a mock.
+	 *
+	 * @var string[]
+	 */
+	protected array $unmocked = array();
+
+	/**
+	 * Tear down: no user, no HTTP mock; fail on any unmocked request.
 	 */
 	public function tear_down(): void {
 		remove_all_filters( 'pre_http_request' );
 		wp_set_current_user( 0 );
+		$unmocked       = $this->unmocked;
+		$this->unmocked = array();
 		parent::tear_down();
+		if ( array() !== $unmocked ) {
+			$this->fail( 'Unmocked HTTP request(s): ' . implode( ', ', $unmocked ) );
+		}
 	}
 
 	/**

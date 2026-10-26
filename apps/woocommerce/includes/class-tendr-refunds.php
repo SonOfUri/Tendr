@@ -6,25 +6,30 @@
  * proposal in tendr (`POST /v1/refunds`). The money leaves only once the store's signers approve
  * it, and tendr then sends `refund.sent`.
  *
- * Pending representation: the WooCommerce refund is recorded only on `refund.sent`. While the
- * request waits, it lives in order meta (`_tendr_refunds`) with an order note and a box on the
- * order screen. WooCommerce has no "pending" refund: any refund it stores counts in the order's
- * totals at once, and creating one that covers the whole order marks the order Refunded and emails
- * the customer. So `process_refund()` answers WooCommerce with success (the admin sees no error),
- * and the refund row WooCommerce created for the request is withdrawn before the request ends:
- * the status change, the customer email and the restock are held back for it. On `refund.sent`
- * the refund is created again with the same amount, reason, line items and restock choice; on
- * `refund.cancelled` / `refund.failed` there is nothing to undo. The order's totals therefore
- * always equal what actually left the store's account.
+ * The request is made before WooCommerce finishes the refund. `wc_create_refund()` fires
+ * `woocommerce_create_refund` before its final save (it has only stored a draft row while
+ * totalling it); for a tendr order refunded "via tendr" the plugin asks tendr there, records the
+ * request on the order, and throws. WooCommerce then deletes the draft and returns an error whose
+ * message is the plugin's ("Refund of $10.00 sent to your Tendr signers for approval…"): no
+ * refund hooks, no download revocation, no restock, no status change, no email. The admin sees that message (the order screen's alert, or the REST
+ * error), and the order gets a note.
  *
- * Order meta `_tendr_refunds`: WooCommerce refund id (the `external_ref` `wc_refund_<id>`) =>
+ * WooCommerce has no "pending" refund (a stored refund counts in the totals at once), so the
+ * request waits in order meta `_tendr_refunds` and a box on the order screen. On `refund.sent` the
+ * WooCommerce refund is created, exactly once, with the stored amount, reason, line items and
+ * restock choice; `refund.cancelled` / `refund.failed` leave nothing to undo. The order's totals
+ * therefore always equal what actually left the store's account.
+ *
+ * Order meta `_tendr_refunds`: external_ref `wc_refund_<order id>_<n>` (n from the order counter
+ * `_tendr_refund_seq`, taken under the order lock) =>
  * - `refund_id`    tendr refund id (`ref_…`; '' while unconfirmed);
  * - `state`        'pending' (awaiting signers) | 'review' (a person must act in tendr first) |
  *                  'unconfirmed' (tendr's answer was lost) | 'sent' | 'cancelled' | 'failed';
  * - `amount`       in the order currency, as WooCommerce formatted it;
- * - `reason`, `line_items`, `restock`, `payment_id`, `mode`, `requested_at`;
+ * - `reason`, `line_items`, `restock`, `restocked`, `payment_id`, `mode`, `requested_at`;
  * - `wc_refund_id` the WooCommerce refund recorded on `refund.sent`.
- * The recorded WooCommerce refund carries `_tendr_refund_id` and `_tendr_refund_state` = 'sent'.
+ * The recorded WooCommerce refund carries `_tendr_refund_id`, `_tendr_refund_ref` and
+ * `_tendr_refund_state` = 'sent'.
  *
  * @package Tendr
  */
@@ -37,166 +42,191 @@ defined( 'ABSPATH' ) || exit;
 final class Tendr_Refunds {
 
 	const META              = '_tendr_refunds';
+	const SEQ_META          = '_tendr_refund_seq';
+	const UNTRACKED_META    = '_tendr_untracked_refunds';
 	const REFUND_META_ID    = '_tendr_refund_id';
+	const REFUND_META_REF   = '_tendr_refund_ref';
 	const REFUND_META_STATE = '_tendr_refund_state';
 
-	/** States whose amount is still on its way out (counted against what can be refunded). */
-	const OPEN_STATES = array( 'pending', 'review' );
+	/** States whose amount may still leave (counted against what can be refunded). */
+	const OPEN_STATES = array( 'pending', 'review', 'unconfirmed' );
 
 	/** API errors that may hide a refund tendr did create (its answer was lost). */
 	const AMBIGUOUS_CODES = array( 'tendr_unreachable', 'tendr_bad_response', 'IDEMPOTENCY_IN_PROGRESS' );
 
 	/**
-	 * The refund WooCommerce is creating with "refund via tendr", and its arguments.
+	 * The request being recorded on refund.sent (its refund must not be intercepted).
 	 *
-	 * @var array{refund: WC_Order_Refund, args: array}|null
+	 * @var array{ext: string, refund_id: string}|null
 	 */
-	private static ?array $creating = null;
-
-	/**
-	 * WooCommerce refunds sent to tendr in this request and withdrawn from WooCommerce: id => order id.
-	 *
-	 * @var array<int, int>
-	 */
-	private static array $withheld = array();
-
-	/**
-	 * Orders whose refund row was withdrawn in this request (for emails sent at shutdown).
-	 *
-	 * @var array<int, true>
-	 */
-	private static array $withdrawn_orders = array();
+	private static ?array $recording = null;
 
 	/**
 	 * Hooks.
 	 */
 	public static function register(): void {
-		add_action( 'woocommerce_create_refund', array( self::class, 'capture' ), 10, 2 );
-		add_filter( 'woocommerce_can_restock_refunded_items', array( self::class, 'filter_can_restock' ), 10, 2 );
-		add_filter( 'woocommerce_order_is_partially_refunded', array( self::class, 'filter_is_partially_refunded' ), 10, 3 );
-		add_filter( 'woocommerce_order_fully_refunded_status', array( self::class, 'filter_fully_refunded_status' ), 10, 3 );
-		add_filter( 'woocommerce_email_enabled_customer_refunded_order', array( self::class, 'filter_refund_email' ), 10, 3 );
-		add_filter( 'woocommerce_email_enabled_customer_partially_refunded_order', array( self::class, 'filter_refund_email' ), 10, 3 );
-		add_action( 'woocommerce_order_refunded', array( self::class, 'withdraw' ), PHP_INT_MAX, 2 );
+		add_action( 'woocommerce_create_refund', array( self::class, 'before_save' ), 10, 2 );
 		add_action( 'woocommerce_admin_order_data_after_order_details', array( self::class, 'render_pending' ) );
 	}
 
 	// ------------------------------------------------------------------ requesting.
 
 	/**
-	 * `woocommerce_create_refund`: remember the refund WooCommerce is about to ask tendr for.
+	 * `woocommerce_create_refund` (before the refund is saved), for tendr orders:
+	 * - the plugin's own refund.sent record: tag it, let it through;
+	 * - "refund via tendr": ask tendr, then throw so WooCommerce saves nothing;
+	 * - a manual refund: refuse it when it would leave less than the refunds waiting in tendr.
 	 *
-	 * @param WC_Order_Refund $refund Refund (saved right after this action).
+	 * @param WC_Order_Refund $refund Refund, not yet saved.
 	 * @param array           $args   wc_create_refund() arguments.
+	 * @throws Exception To stop WooCommerce saving the refund (its message is shown to the admin).
 	 */
-	public static function capture( $refund, $args ): void {
-		if ( ! $refund instanceof WC_Order_Refund || ! is_array( $args ) || empty( $args['refund_payment'] ) ) {
+	public static function before_save( $refund, $args ): void {
+		if ( ! $refund instanceof WC_Order_Refund || ! is_array( $args ) ) {
 			return;
 		}
 		$order = wc_get_order( $refund->get_parent_id() );
-		if ( $order instanceof WC_Order && Tendr_Gateway::ID === $order->get_payment_method() ) {
-			self::$creating = array(
-				'refund' => $refund,
-				'args'   => $args,
+		if ( ! $order instanceof WC_Order || Tendr_Gateway::ID !== $order->get_payment_method() ) {
+			return;
+		}
+		if ( null !== self::$recording ) {
+			$refund->update_meta_data( self::REFUND_META_ID, self::$recording['refund_id'] );
+			$refund->update_meta_data( self::REFUND_META_REF, self::$recording['ext'] );
+			$refund->update_meta_data( self::REFUND_META_STATE, 'sent' );
+			return;
+		}
+		if ( empty( $args['refund_payment'] ) ) {
+			self::guard_manual( $order, (float) ( $args['amount'] ?? 0 ), $refund->get_id() );
+			return;
+		}
+		$result = self::request( $order->get_id(), $args, $refund->get_id() );
+		throw new Exception( is_wp_error( $result ) ? $result->get_error_message() : $result ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- plain text: WooCommerce shows it in an alert / REST error.
+	}
+
+	/**
+	 * Refuse a manual refund that would leave less to refund than what waits in tendr.
+	 *
+	 * @param WC_Order $order  Order.
+	 * @param float    $amount Manual refund amount.
+	 * @param int      $draft  The refund being created (WooCommerce has already stored it as a draft).
+	 * @throws Exception When it would.
+	 */
+	private static function guard_manual( WC_Order $order, float $amount, int $draft ): void {
+		$open = (float) self::pending_total( $order );
+		if ( $open <= 0 ) {
+			return;
+		}
+		$remaining = self::remaining( $order, $draft );
+		if ( round( $amount + $open - $remaining, wc_get_price_decimals() ) > 0 ) {
+			throw new Exception(
+				esc_html(
+					sprintf(
+						/* translators: 1: amount awaiting approval, 2: most that can be refunded manually. */
+						__( 'Refunds of %1$s for this order are awaiting approval in tendr, so a manual refund can be at most %2$s now.', 'tendr' ),
+						self::money( $order, (string) $open ),
+						self::money( $order, (string) max( 0, $remaining - $open ) )
+					)
+				)
 			);
 		}
 	}
 
 	/**
-	 * Ask tendr for a refund (Tendr_Gateway::process_refund()).
+	 * Ask tendr for a refund. Called before WooCommerce saves anything.
 	 *
-	 * @param int        $order_id Order id.
-	 * @param float|null $amount   Amount in the order currency.
-	 * @param string     $reason   Reason.
-	 * @return true|WP_Error True once tendr has the request (it is pending, not done).
+	 * @param int   $order_id Order id.
+	 * @param array $args     wc_create_refund() arguments (amount, reason, line_items, restock_items).
+	 * @param int   $draft    The refund WooCommerce is creating (stored as a draft until it fails).
+	 * @return string|WP_Error The message for the admin once tendr has the request, or why not.
 	 */
-	public static function request( $order_id, $amount, $reason ) {
+	public static function request( int $order_id, array $args, int $draft = 0 ) {
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {
 			return new WP_Error( 'tendr_refund_forbidden', __( 'You are not allowed to refund orders.', 'tendr' ) );
 		}
 		$order = wc_get_order( $order_id );
-		if ( ! $order instanceof WC_Order || ! self::payment_id( $order ) ) {
+		if ( ! $order instanceof WC_Order || '' === self::payment_id( $order ) ) {
 			return new WP_Error( 'tendr_refund_unavailable', __( 'This order was not paid through tendr, so tendr cannot refund it.', 'tendr' ) );
 		}
-		$refund = self::$creating['refund'] ?? null;
-		if ( ! $refund instanceof WC_Order_Refund || $refund->get_parent_id() !== $order->get_id() || $refund->get_id() <= 0 ) {
-			return new WP_Error( 'tendr_refund_context', __( 'Refund this order from its order screen.', 'tendr' ) );
-		}
-		$args      = self::$creating['args'];
-		$wc_id     = $refund->get_id();
-		$plain     = self::plain( wc_format_decimal( (string) $amount, wc_get_price_decimals() ) );
-		$formatted = wc_format_decimal( (string) $amount, wc_get_price_decimals() );
-		if ( '0' === $plain || '' === $plain || ! preg_match( '/^\d+(\.\d+)?$/', $plain ) ) {
+		$formatted = wc_format_decimal( (string) ( $args['amount'] ?? '' ), wc_get_price_decimals() );
+		$plain     = self::plain( (string) $formatted );
+		if ( '0' === $plain || ! preg_match( '/^\d+(\.\d+)?$/', $plain ) ) {
 			return new WP_Error( 'tendr_refund_amount', __( 'Enter an amount to refund.', 'tendr' ) );
 		}
 
-		if ( ! Tendr_Order_Sync::lock_order( $order->get_id() ) ) {
+		if ( ! Tendr_Order_Sync::lock_order( $order_id ) ) {
 			return new WP_Error( 'tendr_refund_busy', __( 'This order is being updated by tendr right now. Try the refund again in a moment.', 'tendr' ) );
 		}
 		try {
-			$order    = wc_get_order( $order->get_id() );
+			$order = wc_get_order( $order_id );
+			if ( ! $order instanceof WC_Order ) {
+				return new WP_Error( 'tendr_refund_unavailable', __( 'This order no longer exists.', 'tendr' ) );
+			}
 			$requests = self::requests( $order );
 
-			// WooCommerce does not count the refunds waiting in tendr; together they may not exceed
-			// what is left (its own total already counts this new refund).
+			// WooCommerce does not count the refunds waiting in tendr: together with this one they
+			// may not exceed what is left.
 			$open      = (float) self::pending_total( $order );
-			$remaining = self::remaining( $order );
-			if ( round( $open - $remaining, wc_get_price_decimals() ) > 0 ) {
+			$remaining = self::remaining( $order, $draft );
+			if ( round( $open + (float) $formatted - $remaining, wc_get_price_decimals() ) > 0 ) {
 				return new WP_Error(
 					'tendr_refund_exceeds_pending',
 					sprintf(
 						/* translators: 1: amount awaiting approval, 2: amount that can still be refunded. */
 						__( 'Refunds of %1$s for this order are already awaiting approval in tendr, so at most %2$s more can be refunded now.', 'tendr' ),
 						self::money( $order, (string) $open ),
-						self::money( $order, (string) max( 0, $remaining + (float) $formatted - $open ) )
+						self::money( $order, (string) max( 0, $remaining - $open ) )
 					)
 				);
 			}
 
+			$seq = absint( $order->get_meta( self::SEQ_META ) ) + 1;
+			$order->update_meta_data( self::SEQ_META, (string) $seq );
+			$order->save_meta_data();
+
 			$mode         = self::order_mode( $order );
-			$external_ref = 'wc_refund_' . $wc_id;
+			$external_ref = 'wc_refund_' . $order_id . '_' . $seq;
+			$reason       = trim( wp_strip_all_tags( (string) ( $args['reason'] ?? '' ) ) );
 			$body         = array(
-				'payment'      => self::payment_id( $order ),
-				'amount'       => $plain,
-				'currency'     => $order->get_currency(),
-				'reason'       => '',
-				'external_ref' => $external_ref,
+				'payment'  => self::payment_id( $order ),
+				'amount'   => $plain,
+				'currency' => $order->get_currency(),
 			);
-			$reason       = trim( wp_strip_all_tags( (string) $reason ) );
 			if ( '' !== $reason ) {
 				$body['reason'] = mb_substr( $reason, 0, 500 );
-			} else {
-				unset( $body['reason'] );
 			}
+			$body['external_ref'] = $external_ref;
 
 			$record = array(
 				'refund_id'    => '',
 				'state'        => 'unconfirmed',
-				'amount'       => $formatted,
+				'amount'       => (string) $formatted,
 				'reason'       => $reason,
 				'line_items'   => isset( $args['line_items'] ) && is_array( $args['line_items'] ) ? $args['line_items'] : array(),
 				'restock'      => ! empty( $args['restock_items'] ),
+				'restocked'    => false,
 				'payment_id'   => $body['payment'],
 				'mode'         => $mode,
 				'requested_at' => time(),
 				'wc_refund_id' => 0,
 			);
 			$prefix = 'test' === $mode ? __( '[Test]', 'tendr' ) . ' ' : '';
+			$money  = self::money( $order, (string) $formatted );
 
-			$result = Tendr_Api_Client::request( 'POST', '/v1/refunds', $body, $mode, array( 'Idempotency-Key' => $external_ref ) );
-			if ( is_wp_error( $result ) ) {
-				if ( ! self::is_ambiguous( $result ) ) {
-					return new WP_Error( 'tendr_refund_refused', self::refusal_message( $result ) );
-				}
+			$result   = Tendr_Api_Client::request( 'POST', '/v1/refunds', $body, $mode, array( 'Idempotency-Key' => $external_ref ) );
+			$tendr_id = ! is_wp_error( $result ) && isset( $result['id'] ) && is_string( $result['id'] ) && preg_match( '/^ref_[A-Za-z0-9]{1,64}$/', $result['id'] ) ? $result['id'] : '';
+			if ( is_wp_error( $result ) && ! self::is_ambiguous( $result ) ) {
+				return new WP_Error( 'tendr_refund_refused', self::refusal_message( $result ) );
+			}
+			if ( '' === $tendr_id ) {
 				// tendr may have the request: keep it, so its events are matched when they come.
-				$requests[ $wc_id ] = $record;
+				$requests[ $external_ref ] = $record;
 				self::save_requests( $order, $requests );
 				$order->add_order_note(
 					$prefix . esc_html(
 						sprintf(
 							/* translators: 1: amount, 2: refund reference. */
 							__( 'tendr could not confirm the refund request of %1$s (%2$s). Check the tendr dashboard before refunding again: if tendr received it, this order is updated when the refund is sent.', 'tendr' ),
-							self::money( $order, $formatted ),
+							$money,
 							$external_ref
 						)
 					)
@@ -205,21 +235,14 @@ final class Tendr_Refunds {
 					'tendr_refund_unconfirmed',
 					__( 'tendr did not confirm the refund request, so nothing is recorded here yet. Check the tendr dashboard before refunding again.', 'tendr' )
 				);
-			}//end if
-
-			$tendr_id = isset( $result['id'] ) && is_string( $result['id'] ) && preg_match( '/^ref_[A-Za-z0-9]{1,64}$/', $result['id'] ) ? $result['id'] : '';
-			if ( '' === $tendr_id ) {
-				$requests[ $wc_id ] = $record;
-				self::save_requests( $order, $requests );
-				return new WP_Error( 'tendr_refund_unconfirmed', __( 'tendr sent a response this plugin could not read. Check the tendr dashboard before refunding again.', 'tendr' ) );
 			}
-			$review              = 'review' === ( $result['status'] ?? null );
-			$record['refund_id'] = $tendr_id;
-			$record['state']     = $review ? 'review' : 'pending';
-			$requests[ $wc_id ]  = $record;
+
+			$review                    = 'review' === ( $result['status'] ?? null );
+			$record['refund_id']       = $tendr_id;
+			$record['state']           = $review ? 'review' : 'pending';
+			$requests[ $external_ref ] = $record;
 			self::save_requests( $order, $requests );
 
-			$money = self::money( $order, $formatted );
 			if ( $review ) {
 				$note = esc_html(
 					sprintf(
@@ -240,94 +263,14 @@ final class Tendr_Refunds {
 			}
 			$order->add_order_note( $prefix . $note );
 
-			// Withdraw WooCommerce's refund row at the end of wc_create_refund(): it is recorded again
-			// on refund.sent.
-			self::$withheld[ $wc_id ] = $order->get_id();
-			return true;
+			return $review
+				/* translators: %s: amount. */
+				? sprintf( __( 'Refund of %s sent to tendr. It needs a manual review in tendr before your signers can approve it. WooCommerce will record it once it is sent.', 'tendr' ), $money )
+				/* translators: %s: amount. */
+				: sprintf( __( 'Refund of %s sent to your Tendr signers for approval. WooCommerce will record it once it is sent.', 'tendr' ), $money );
 		} finally {
-			Tendr_Order_Sync::unlock_order( $order->get_id() );
+			Tendr_Order_Sync::unlock_order( $order_id );
 		}//end try
-	}
-
-	/**
-	 * `woocommerce_order_refunded` (last): delete the refund row of a request now waiting in tendr.
-	 *
-	 * @param int $order_id  Order id.
-	 * @param int $refund_id Refund id.
-	 */
-	public static function withdraw( $order_id, $refund_id ): void {
-		self::$creating = null;
-		$refund_id      = (int) $refund_id;
-		if ( ! isset( self::$withheld[ $refund_id ] ) ) {
-			return;
-		}
-		unset( self::$withheld[ $refund_id ] );
-		self::$withdrawn_orders[ (int) $order_id ] = true;
-		$refund                                    = wc_get_order( $refund_id );
-		if ( $refund instanceof WC_Order_Refund ) {
-			$refund->delete( true );
-		}
-		// Totals WooCommerce cached while the row existed (total refunded, the refund list).
-		WC_Cache_Helper::invalidate_cache_group( 'orders' );
-	}
-
-	/**
-	 * `woocommerce_can_restock_refunded_items`: no restock while the refund waits in tendr (it
-	 * happens on refund.sent, if it was asked for).
-	 *
-	 * @param bool     $can   Whether to restock.
-	 * @param WC_Order $order Order.
-	 */
-	public static function filter_can_restock( $can, $order ) {
-		if ( $order instanceof WC_Order && in_array( $order->get_id(), self::$withheld, true ) ) {
-			return false;
-		}
-		return $can;
-	}
-
-	/**
-	 * `woocommerce_order_is_partially_refunded`: a withheld refund never takes the "fully refunded"
-	 * branch (no Refunded status).
-	 *
-	 * @param bool $partial   Partially refunded.
-	 * @param int  $order_id  Order id.
-	 * @param int  $refund_id Refund id.
-	 */
-	public static function filter_is_partially_refunded( $partial, $order_id, $refund_id ) {
-		return isset( self::$withheld[ (int) $refund_id ] ) ? true : $partial;
-	}
-
-	/**
-	 * `woocommerce_order_fully_refunded_status`: never Refunded for a withheld refund.
-	 *
-	 * @param string|false $status    Status.
-	 * @param int          $order_id  Order id.
-	 * @param int          $refund_id Refund id.
-	 */
-	public static function filter_fully_refunded_status( $status, $order_id, $refund_id ) {
-		return isset( self::$withheld[ (int) $refund_id ] ) ? false : $status;
-	}
-
-	/**
-	 * The customer "refunded" emails: never for a refund that only waits in tendr.
-	 *
-	 * @param bool     $enabled Enabled.
-	 * @param mixed    $subject The order.
-	 * @param WC_Email $email   Email.
-	 */
-	public static function filter_refund_email( $enabled, $subject, $email = null ) {
-		if ( ! $enabled ) {
-			return $enabled;
-		}
-		$refund = is_object( $email ) && isset( $email->refund ) ? $email->refund : null;
-		if ( $refund instanceof WC_Order_Refund ) {
-			return isset( self::$withheld[ $refund->get_id() ] ) ? false : $enabled;
-		}
-		// Sent late (deferred emails): the withdrawn refund no longer exists.
-		if ( $subject instanceof WC_Order && isset( self::$withdrawn_orders[ $subject->get_id() ] ) ) {
-			return false;
-		}
-		return $enabled;
 	}
 
 	// ------------------------------------------------------------------ events.
@@ -349,23 +292,25 @@ final class Tendr_Refunds {
 			// The last store refund of the payment was sent: refund.sent already recorded it.
 			return 'noop';
 		}
-		$ext = isset( $data['refund_external_ref'] ) && is_string( $data['refund_external_ref'] ) ? $data['refund_external_ref'] : '';
-		if ( ! preg_match( '/^wc_refund_([1-9][0-9]{0,19})$/', $ext, $m ) ) {
-			return 'noop';
-		}
-		$key      = (int) $m[1];
-		$requests = self::requests( $order );
-		$req      = $requests[ $key ] ?? null;
+		$ext      = isset( $data['refund_external_ref'] ) && is_string( $data['refund_external_ref'] ) ? $data['refund_external_ref'] : '';
 		$tendr_id = isset( $data['refund_id'] ) && is_string( $data['refund_id'] ) ? $data['refund_id'] : '';
 		$pay_id   = isset( $data['payment_id'] ) && is_string( $data['payment_id'] ) ? $data['payment_id'] : '';
-		if ( null === $req || '' === $tendr_id || $pay_id !== $req['payment_id'] ) {
-			return 'noop';
-		}
-		if ( '' !== $req['refund_id'] && $req['refund_id'] !== $tendr_id ) {
+		$requests = self::requests( $order );
+		$req      = $requests[ $ext ] ?? null;
+		$ours     = 1 === preg_match( '/^wc_refund_([1-9][0-9]{0,19})_([1-9][0-9]{0,9})$/', $ext, $m ) && (int) $m[1] === $order->get_id();
+
+		if ( '' === $tendr_id ) {
 			return 'noop';
 		}
 		$row = self::refund_in_view( $view, $pay_id, $tendr_id );
 		if ( null === $row ) {
+			return 'noop';
+		}
+		if ( ! $ours || null === $req ) {
+			// Not requested from this order screen (e.g. started on the tendr dashboard).
+			return 'refund.sent' === $type ? self::note_untracked_sent( $order, $event, $row, $tendr_id, $pay_id ) : 'noop';
+		}
+		if ( $pay_id !== $req['payment_id'] || ( '' !== $req['refund_id'] && $req['refund_id'] !== $tendr_id ) ) {
 			return 'noop';
 		}
 		$adopted = '' === $req['refund_id'];
@@ -379,17 +324,17 @@ final class Tendr_Refunds {
 		switch ( $type ) {
 			case 'refund.sent':
 				if ( 'sent' === $req['state'] ) {
-					return 'noop';
+					return self::finish( $order, $requests, $ext, $req, $adopted );
 				}
 				if ( ! $sent ) {
-					return self::finish( $order, $requests, $key, $req, $adopted );
+					return self::finish( $order, $requests, $ext, $req, $adopted );
 				}
-				return self::record_sent( $order, $event, $requests, $key, $req, $row );
+				return self::record_sent( $order, $event, $requests, $ext, $req, $row );
 
 			case 'refund.cancelled':
 			case 'refund.failed':
 				if ( 'sent' === $req['state'] || $sent || in_array( $req['state'], array( 'cancelled', 'failed' ), true ) ) {
-					return self::finish( $order, $requests, $key, $req, $adopted );
+					return self::finish( $order, $requests, $ext, $req, $adopted );
 				}
 				$req['state'] = 'refund.cancelled' === $type ? 'cancelled' : 'failed';
 				$money        = self::money( $order, $req['amount'] );
@@ -398,17 +343,17 @@ final class Tendr_Refunds {
 					? sprintf( __( 'The refund of %s was not approved in tendr (it was rejected or expired). Nothing was refunded and the order totals are unchanged.', 'tendr' ), $money )
 					/* translators: %s: amount. */
 					: sprintf( __( 'The refund of %s could not be sent by tendr. Nothing was refunded and the order totals are unchanged; refund again to retry.', 'tendr' ), $money );
-				$requests[ $key ] = $req;
+				$requests[ $ext ] = $req;
 				self::save_requests( $order, $requests );
 				Tendr_Order_Sync::note( $order, $event, esc_html( $text ) );
 				return 'applied';
 
 			case 'refund.pending':
 				if ( 'review' !== $req['state'] ) {
-					return self::finish( $order, $requests, $key, $req, $adopted );
+					return self::finish( $order, $requests, $ext, $req, $adopted );
 				}
 				$req['state']     = 'pending';
-				$requests[ $key ] = $req;
+				$requests[ $ext ] = $req;
 				self::save_requests( $order, $requests );
 				Tendr_Order_Sync::note(
 					$order,
@@ -420,10 +365,10 @@ final class Tendr_Refunds {
 
 			case 'refund.needs_address':
 				if ( 'pending' !== $req['state'] ) {
-					return self::finish( $order, $requests, $key, $req, $adopted );
+					return self::finish( $order, $requests, $ext, $req, $adopted );
 				}
 				$req['state']     = 'review';
-				$requests[ $key ] = $req;
+				$requests[ $ext ] = $req;
 				self::save_requests( $order, $requests );
 				Tendr_Order_Sync::note(
 					$order,
@@ -434,7 +379,7 @@ final class Tendr_Refunds {
 				return 'applied';
 
 			default:
-				return self::finish( $order, $requests, $key, $req, $adopted );
+				return self::finish( $order, $requests, $ext, $req, $adopted );
 		}//end switch
 	}
 
@@ -443,83 +388,175 @@ final class Tendr_Refunds {
 	 *
 	 * @param WC_Order $order    Order.
 	 * @param array    $requests All requests.
-	 * @param int      $key      This request's WooCommerce refund id.
+	 * @param string   $ext      This request's external_ref.
 	 * @param array    $req      This request.
 	 * @param bool     $adopted  Whether it was just adopted.
 	 */
-	private static function finish( WC_Order $order, array $requests, int $key, array $req, bool $adopted ): string {
+	private static function finish( WC_Order $order, array $requests, string $ext, array $req, bool $adopted ): string {
 		if ( $adopted ) {
-			$requests[ $key ] = $req;
+			$requests[ $ext ] = $req;
 			self::save_requests( $order, $requests );
 		}
 		return 'noop';
 	}
 
 	/**
-	 * Record the WooCommerce refund for a sent tendr refund.
+	 * Record the WooCommerce refund for a sent tendr refund, exactly once: a retry or replay finds
+	 * the refund already recorded (tagged with its external_ref) and never restocks twice.
 	 *
 	 * @param WC_Order $order    Order.
 	 * @param array    $event    Event.
 	 * @param array    $requests All requests.
-	 * @param int      $key      This request's WooCommerce refund id.
+	 * @param string   $ext      This request's external_ref.
 	 * @param array    $req      This request.
 	 * @param array    $row      The refund in the session view.
 	 * @return string|WP_Error
 	 */
-	private static function record_sent( WC_Order $order, array $event, array $requests, int $key, array $req, array $row ) {
-		$money     = self::money( $order, $req['amount'] );
-		$remaining = self::remaining( $order );
-		if ( round( (float) $req['amount'] - $remaining, wc_get_price_decimals() ) > 0 ) {
-			// The money left, but WooCommerce has less left to refund (e.g. a manual refund meanwhile).
-			$req['state']     = 'sent';
-			$requests[ $key ] = $req;
-			self::save_requests( $order, $requests );
-			Tendr_Order_Sync::note(
-				$order,
-				$event,
-				/* translators: %s: amount. */
-				esc_html( sprintf( __( 'tendr sent the refund of %s, but WooCommerce could not record it because the order has less left to refund. Record it by hand so the totals match.', 'tendr' ), $money ) )
-			);
-			return 'applied';
-		}
+	private static function record_sent( WC_Order $order, array $event, array $requests, string $ext, array $req, array $row ) {
+		$money  = self::money( $order, $req['amount'] );
+		$refund = self::recorded_refund( $order, $ext );
 
-		$refund = wc_create_refund(
-			array(
-				'order_id'       => $order->get_id(),
-				'amount'         => $req['amount'],
-				'reason'         => '' !== $req['reason'] ? $req['reason'] : null,
-				'line_items'     => $req['line_items'],
-				'refund_payment' => false,
-				'restock_items'  => ! empty( $req['restock'] ),
-			)
-		);
-		if ( is_wp_error( $refund ) ) {
-			return new WP_Error( 'tendr_refund_record_failed', $refund->get_error_message() );
-		}
-		$refund->update_meta_data( self::REFUND_META_ID, $req['refund_id'] );
-		$refund->update_meta_data( self::REFUND_META_STATE, 'sent' );
-		$refund->save();
+		if ( null === $refund ) {
+			if ( round( (float) $req['amount'] - self::remaining( $order ), wc_get_price_decimals() ) > 0 ) {
+				// The money left, but WooCommerce has less left to refund (e.g. a manual refund meanwhile).
+				$req['state']     = 'sent';
+				$requests[ $ext ] = $req;
+				self::save_requests( $order, $requests );
+				Tendr_Order_Sync::note(
+					$order,
+					$event,
+					/* translators: %s: amount. */
+					esc_html( sprintf( __( 'tendr sent the refund of %s, but WooCommerce could not record it because the order has less left to refund. Record it by hand so the totals match.', 'tendr' ), $money ) )
+				);
+				return 'applied';
+			}
+			self::$recording = array(
+				'ext'       => $ext,
+				'refund_id' => (string) $req['refund_id'],
+			);
+			try {
+				// Restock is done below, once, not by WooCommerce: a failure after its restock would
+				// restock again on the retry.
+				$refund = wc_create_refund(
+					array(
+						'order_id'       => $order->get_id(),
+						'amount'         => $req['amount'],
+						'reason'         => '' !== $req['reason'] ? $req['reason'] : null,
+						'line_items'     => $req['line_items'],
+						'refund_payment' => false,
+						'restock_items'  => false,
+					)
+				);
+			} finally {
+				self::$recording = null;
+			}
+			if ( is_wp_error( $refund ) ) {
+				// WooCommerce deleted its row; drop totals it may have cached while the row existed.
+				WC_Cache_Helper::invalidate_cache_group( 'orders' );
+				return new WP_Error( 'tendr_refund_record_failed', $refund->get_error_message() );
+			}
+		}//end if
 
 		$order               = wc_get_order( $order->get_id() );
+		$requests            = self::requests( $order );
 		$req['state']        = 'sent';
 		$req['wc_refund_id'] = $refund->get_id();
-		$requests[ $key ]    = $req;
+		$restock             = ! empty( $req['restock'] ) && empty( $req['restocked'] ) && array() !== $req['line_items'];
+		if ( $restock ) {
+			// Marked before restocking: a crash in between misses a restock rather than doing two.
+			$req['restocked'] = true;
+		}
+		$requests[ $ext ] = $req;
 		self::save_requests( $order, $requests );
+		if ( $restock ) {
+			wc_restock_refunded_items( $order, $req['line_items'] );
+		}
 
 		/* translators: %s: amount. */
 		$text  = esc_html( sprintf( __( 'Refund of %s sent by tendr.', 'tendr' ), $money ) );
-		$chain = isset( $row['destination_chain'] ) && is_string( $row['destination_chain'] ) ? $row['destination_chain'] : '';
-		$hash  = isset( $row['refund_tx_hash'] ) && is_string( $row['refund_tx_hash'] ) ? $row['refund_tx_hash'] : '';
-		if ( '' !== $hash ) {
-			$url   = Tendr_Order_Sync::explorer_url( $chain, $hash, ! empty( $event['livemode'] ) );
-			$text .= ' ' . esc_html__( 'Transaction:', 'tendr' ) . ' ' . ( null !== $url
-				? '<a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $url ) . '</a>'
-				: esc_html( $hash ) );
-		}
+		$text .= self::transaction_text( $row, $event );
 		/* translators: %s: tendr refund id. */
 		$text .= ' ' . esc_html( sprintf( __( 'tendr refund %s.', 'tendr' ), $req['refund_id'] ) );
 		Tendr_Order_Sync::note( $order, $event, $text );
 		return 'applied';
+	}
+
+	/**
+	 * A refund tendr sent for this order's payment that was not requested from WooCommerce (e.g.
+	 * from the tendr dashboard): a note asking the merchant to record it. No WooCommerce refund is
+	 * created, since its amount in the store currency is not known.
+	 *
+	 * @param WC_Order $order     Order.
+	 * @param array    $event     Event.
+	 * @param array    $row       The refund in the session view.
+	 * @param string   $tendr_id  tendr refund id.
+	 * @param string   $payment   Payment id.
+	 * @return string
+	 */
+	private static function note_untracked_sent( WC_Order $order, array $event, array $row, string $tendr_id, string $payment ): string {
+		if (
+			'confirmed' !== ( $row['status'] ?? null )
+			|| 'merchant' !== ( $row['reason'] ?? null )
+			|| '' === self::payment_id( $order )
+			|| self::payment_id( $order ) !== $payment
+		) {
+			return 'noop';
+		}
+		$noted = $order->get_meta( self::UNTRACKED_META );
+		$noted = is_array( $noted ) ? $noted : array();
+		if ( in_array( $tendr_id, $noted, true ) ) {
+			return 'noop';
+		}
+		$noted[] = $tendr_id;
+		$order->update_meta_data( self::UNTRACKED_META, array_slice( $noted, -50 ) );
+		$order->save_meta_data();
+
+		$amount = isset( $row['amount'] ) && is_scalar( $row['amount'] ) ? (string) $row['amount'] : '';
+		$asset  = isset( $row['asset_id'] ) && is_string( $row['asset_id'] ) ? $row['asset_id'] : '';
+		$text   = esc_html__( 'tendr sent a refund for this order that was not requested from WooCommerce (for example, from the tendr dashboard).', 'tendr' );
+		if ( '' !== $amount ) {
+			/* translators: 1: amount in token base units, 2: token (asset id). */
+			$text .= ' ' . esc_html( sprintf( __( 'Amount: %1$s (token base units) of %2$s.', 'tendr' ), $amount, $asset ) );
+		}
+		$text .= self::transaction_text( $row, $event );
+		/* translators: %s: tendr refund id. */
+		$text .= ' ' . esc_html( sprintf( __( 'tendr refund %s.', 'tendr' ), $tendr_id ) );
+		$text .= ' ' . esc_html__( 'WooCommerce has not recorded it: add the refund to this order by hand (Refund, then "Refund manually") so the totals match.', 'tendr' );
+		Tendr_Order_Sync::note( $order, $event, $text );
+		return 'applied';
+	}
+
+	/**
+	 * " Transaction: <explorer link>." for a sent refund, or ''.
+	 *
+	 * @param array $row   The refund in the session view.
+	 * @param array $event Event.
+	 */
+	private static function transaction_text( array $row, array $event ): string {
+		$chain = isset( $row['destination_chain'] ) && is_string( $row['destination_chain'] ) ? $row['destination_chain'] : '';
+		$hash  = isset( $row['refund_tx_hash'] ) && is_string( $row['refund_tx_hash'] ) ? $row['refund_tx_hash'] : '';
+		if ( '' === $hash ) {
+			return '';
+		}
+		$url = Tendr_Order_Sync::explorer_url( $chain, $hash, ! empty( $event['livemode'] ) );
+		return ' ' . esc_html__( 'Transaction:', 'tendr' ) . ' ' . ( null !== $url
+			? '<a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $url ) . '</a>'
+			: esc_html( $hash ) );
+	}
+
+	/**
+	 * The WooCommerce refund already recorded for an external_ref, or null.
+	 *
+	 * @param WC_Order $order Order.
+	 * @param string   $ext   external_ref.
+	 */
+	private static function recorded_refund( WC_Order $order, string $ext ): ?WC_Order_Refund {
+		foreach ( $order->get_refunds() as $refund ) {
+			if ( $refund instanceof WC_Order_Refund && $refund->get_meta( self::REFUND_META_REF ) === $ext ) {
+				return $refund;
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -546,10 +583,10 @@ final class Tendr_Refunds {
 	// ------------------------------------------------------------------ state.
 
 	/**
-	 * The order's tendr refund requests, by WooCommerce refund id.
+	 * The order's tendr refund requests, by external_ref.
 	 *
 	 * @param WC_Order $order Order.
-	 * @return array<int, array>
+	 * @return array<string, array>
 	 */
 	public static function requests( WC_Order $order ): array {
 		$raw = $order->get_meta( self::META );
@@ -557,9 +594,9 @@ final class Tendr_Refunds {
 			return array();
 		}
 		$out = array();
-		foreach ( $raw as $id => $req ) {
-			if ( is_array( $req ) && (int) $id > 0 ) {
-				$out[ (int) $id ] = array_merge(
+		foreach ( $raw as $ext => $req ) {
+			if ( is_array( $req ) && is_string( $ext ) && str_starts_with( $ext, 'wc_refund_' ) ) {
+				$out[ $ext ] = array_merge(
 					array(
 						'refund_id'    => '',
 						'state'        => 'unconfirmed',
@@ -567,6 +604,7 @@ final class Tendr_Refunds {
 						'reason'       => '',
 						'line_items'   => array(),
 						'restock'      => false,
+						'restocked'    => false,
 						'payment_id'   => '',
 						'mode'         => 'test',
 						'requested_at' => 0,
@@ -583,7 +621,7 @@ final class Tendr_Refunds {
 	 * Save the requests.
 	 *
 	 * @param WC_Order $order    Order.
-	 * @param array    $requests By WooCommerce refund id.
+	 * @param array    $requests By external_ref.
 	 */
 	private static function save_requests( WC_Order $order, array $requests ): void {
 		$order->update_meta_data( self::META, $requests );
@@ -591,7 +629,8 @@ final class Tendr_Refunds {
 	}
 
 	/**
-	 * What waits in tendr (pending or in review), in the order currency, e.g. "25" or "0".
+	 * What may still leave through tendr (pending, in review, or unconfirmed), in the order
+	 * currency, e.g. "25" or "0".
 	 *
 	 * @param WC_Order $order Order.
 	 */
@@ -602,7 +641,7 @@ final class Tendr_Refunds {
 				$sum += (float) $req['amount'];
 			}
 		}
-		return self::plain( wc_format_decimal( $sum, wc_get_price_decimals() ) );
+		return self::plain( (string) wc_format_decimal( $sum, wc_get_price_decimals() ) );
 	}
 
 	/**
@@ -616,12 +655,20 @@ final class Tendr_Refunds {
 		}
 		$lines = array();
 		foreach ( self::requests( $order ) as $req ) {
-			if ( in_array( $req['state'], self::OPEN_STATES, true ) ) {
-				$lines[] = 'review' === $req['state']
+			$money = self::money( $order, $req['amount'] );
+			switch ( $req['state'] ) {
+				case 'pending':
 					/* translators: %s: amount. */
-					? sprintf( __( '%s: waiting for review in tendr', 'tendr' ), self::money( $order, $req['amount'] ) )
+					$lines[] = sprintf( __( '%s: awaiting approval in tendr', 'tendr' ), $money );
+					break;
+				case 'review':
 					/* translators: %s: amount. */
-					: sprintf( __( '%s: awaiting approval in tendr', 'tendr' ), self::money( $order, $req['amount'] ) );
+					$lines[] = sprintf( __( '%s: waiting for review in tendr', 'tendr' ), $money );
+					break;
+				case 'unconfirmed':
+					/* translators: %s: amount. */
+					$lines[] = sprintf( __( '%s: not confirmed by tendr; check the tendr dashboard', 'tendr' ), $money );
+					break;
 			}
 		}
 		if ( array() === $lines ) {
@@ -661,13 +708,28 @@ final class Tendr_Refunds {
 	}
 
 	/**
-	 * What WooCommerce can still refund, read from the store, not from the order's cache: a refund
-	 * row WooCommerce deletes after a failed request must not linger in a cached total.
+	 * What WooCommerce can still refund, read from the store (not the order's cache), leaving out
+	 * the refund being created: wc_create_refund() stores it as a draft before its hooks run, and
+	 * deletes it when the hook stops it.
 	 *
 	 * @param WC_Order $order Order.
+	 * @param int      $draft Refund id to leave out (0 for none).
 	 */
-	private static function remaining( WC_Order $order ): float {
-		$refunded = (float) $order->get_data_store()->get_total_refunded( $order );
+	private static function remaining( WC_Order $order, int $draft = 0 ): float {
+		$refunds  = wc_get_orders(
+			array(
+				'type'    => 'shop_order_refund',
+				'parent'  => $order->get_id(),
+				'limit'   => -1,
+				'exclude' => $draft > 0 ? array( $draft ) : array(),
+			)
+		);
+		$refunded = 0.0;
+		foreach ( $refunds as $refund ) {
+			if ( $refund instanceof WC_Order_Refund ) {
+				$refunded += (float) $refund->get_amount();
+			}
+		}
 		return (float) wc_format_decimal( (float) $order->get_total() - $refunded, wc_get_price_decimals() );
 	}
 

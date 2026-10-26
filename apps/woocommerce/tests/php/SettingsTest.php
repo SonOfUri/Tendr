@@ -10,6 +10,12 @@
  */
 class SettingsTest extends Tendr_Test_Case {
 
+	public function set_up(): void {
+		parent::set_up();
+		// The connected page reads the store's status and settings; here tendr is down.
+		$this->mock_http( fn() => self::response( 503, null ) );
+	}
+
 	public function test_not_connected_shows_the_connect_button(): void {
 		$this->login_admin();
 		$html = Tendr_Settings::render();
