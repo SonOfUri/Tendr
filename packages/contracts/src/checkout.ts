@@ -13,6 +13,8 @@ export const WebhookEventTypeValues = [
   'refund.pending',
   'refund.sent',
   'refund.needs_address',
+  'refund.cancelled',
+  'refund.failed',
 ] as const;
 export type WebhookEventType = (typeof WebhookEventTypeValues)[number];
 export const WebhookEventTypeSchema = z.enum(WebhookEventTypeValues);

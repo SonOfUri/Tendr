@@ -95,6 +95,8 @@ const DATA_KEYS = [
   'notice',
   'asset',
   'amount',
+  'currency',
+  'status',
   'return_fee',
   'destination',
   'destination_chain',
@@ -402,21 +404,75 @@ const subscribed = (e: Pick<WebhookEndpoint, 'events'>, type: string) =>
 /** The delivery idempotency key: one row per (endpoint, event). */
 export const deliveryKey = (endpointId: string, eventId: string) => `whd_${endpointId}_${eventId}`;
 
+const SESSION_CONNECTION = { connectionId: true } as const;
+
+/**
+ * The connection whose key created the event's session, resolved from the event's subject (its
+ * aggregate), never from its payload: a session; a payment → its session; a refund → its payment
+ * → its session. Null when the session was made with a dashboard key, or the subject is none of
+ * these — such an event goes only to endpoints bound to no connection.
+ */
+export async function eventConnectionId(
+  event: Pick<Event, 'aggregateType' | 'aggregateId'>,
+  ctx: ScopeContext,
+): Promise<string | null> {
+  const id = event.aggregateId;
+  switch (event.aggregateType) {
+    case 'session': {
+      const s = await prisma.session.findFirst({
+        where: { id, ...ctx },
+        select: SESSION_CONNECTION,
+      });
+      return s?.connectionId ?? null;
+    }
+    case 'payment': {
+      const p = await prisma.payment.findFirst({
+        where: { id, ...ctx },
+        select: { session: { select: SESSION_CONNECTION } },
+      });
+      return p?.session.connectionId ?? null;
+    }
+    case 'refund': {
+      const r = await prisma.refund.findFirst({
+        where: { id, ...ctx },
+        select: { payment: { select: { session: { select: SESSION_CONNECTION } } } },
+      });
+      return r?.payment.session.connectionId ?? null;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Whether an endpoint may receive an event of connection `eventConnection` (spec §2.6): an
+ * endpoint Connect made for one site receives only that connection's events; a hand-made endpoint
+ * (no connection) receives every event of its store and mode.
+ */
+const forConnection = (
+  e: Pick<WebhookEndpoint, 'connectionId'>,
+  eventConnection: string | null,
+): boolean => e.connectionId === null || e.connectionId === eventConnection;
+
 /**
  * The outbox handler: creates one delivery per active endpoint of the event's merchant AND mode
- * that subscribes to its type, and queues the first send. Idempotent on (endpoint, event).
- * Returns how many deliveries the event has.
+ * that subscribes to its type and may see its connection (`forConnection`), and queues the first
+ * send. Idempotent on (endpoint, event). Returns how many deliveries the event has.
  */
 export async function fanOutEvent(event: Event, now = new Date()): Promise<number> {
   if (!isDeliverableEventType(event.type)) return 0; // C23: internal events never leave
   if (!event.merchantId || event.livemode === null) return 0;
   const ctx = { merchantId: event.merchantId, livemode: event.livemode };
-  const endpoints = (
+  let endpoints = (
     await prisma.webhookEndpoint.findMany({
       where: { ...ctx, active: true },
-      select: { id: true, events: true },
+      select: { id: true, events: true, connectionId: true },
     })
   ).filter((e) => subscribed(e, event.type));
+  if (endpoints.some((e) => e.connectionId !== null)) {
+    const connection = await eventConnectionId(event, ctx);
+    endpoints = endpoints.filter((e) => forConnection(e, connection));
+  }
   if (endpoints.length === 0) return 0;
   const sessionId = await sessionOf(ctx, event.payload);
   await prisma.webhookDelivery.createMany({
@@ -581,6 +637,16 @@ async function send(d: WebhookDelivery, now: Date): Promise<SendOutcome> {
   }
   if (event.livemode !== endpoint.livemode || endpoint.livemode !== d.livemode) {
     return fail('mode mismatch', true);
+  }
+  // A connection's endpoint only ever gets that connection's events. The fan-out already filters;
+  // checked again so a stray row or a resend can never cross sites. (A re-connect deactivates the
+  // old connection's endpoints, which the `active` check above refuses.) A ping is for the endpoint.
+  if (
+    endpoint.connectionId !== null &&
+    event.type !== PING_EVENT &&
+    !forConnection(endpoint, await eventConnectionId(event, tenant))
+  ) {
+    return fail('connection mismatch', true);
   }
   const strict = strictHostPolicy(endpoint.livemode);
   let secrets: string[];

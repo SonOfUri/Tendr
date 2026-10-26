@@ -812,7 +812,8 @@ model WebhookEndpoint {
   events                  String[]
   active                  Boolean   @default(true)
   /// Set on an endpoint created by Connect for one site; it receives only that connection's
-  /// events (delivery filtering lands with the connect routes). Null: a hand-made endpoint.
+  /// events: those whose session was created with its keys (webhooks.ts `fanOutEvent`). Null: a
+  /// hand-made endpoint, which receives every event of its store and mode.
   connectionId            String?   @map("connection_id")
   createdAt               DateTime  @default(now()) @map("created_at")
   updatedAt               DateTime  @updatedAt @map("updated_at")

@@ -27,6 +27,8 @@ describe('checkout contracts', () => {
       'refund.pending',
       'refund.sent',
       'refund.needs_address',
+      'refund.cancelled',
+      'refund.failed',
     ]);
     expect(WebhookEventTypeSchema.safeParse('payment.settled').success).toBe(false);
   });

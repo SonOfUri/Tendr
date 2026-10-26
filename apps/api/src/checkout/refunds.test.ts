@@ -29,6 +29,13 @@ import {
   sweepReturns,
 } from './refunds.js';
 import { onScreeningAllowed } from './screening.js';
+import {
+  attemptDelivery,
+  createEndpoint,
+  fanOutEvent,
+  setWebhookTransport,
+  type WebhookRequest,
+} from './webhooks.js';
 import { resetTokenCache } from './tokens.js';
 import { onReturnNeeded, pollDeposit, registerWatcherHooks, setWatcherDeps } from './watcher.js';
 import { Prisma } from '@prisma/client';
@@ -149,6 +156,7 @@ describe('return to sender', () => {
     vi.restoreAllMocks();
     setWatcherDeps(null);
     setRefundDeps(null);
+    setWebhookTransport(null);
     setExchangeAddresses(null);
     onReturnNeeded(null);
     onScreeningAllowed(null);
@@ -930,6 +938,157 @@ describe('return to sender', () => {
       proposalId: pb,
       reviewReason: null,
     });
+  });
+
+  /** Fans `type`'s events out to a hand-made endpoint and returns each delivered `data`. */
+  async function delivered(type: string): Promise<Record<string, unknown>[]> {
+    const sent: WebhookRequest[] = [];
+    setWebhookTransport(async (req) => {
+      sent.push(req);
+      return { status: 200 };
+    });
+    if ((await prisma.webhookEndpoint.count()) === 0) {
+      await createEndpoint(ctx(), { url: 'https://shop.example/hooks' });
+    }
+    for (const ev of await eventsOf(type)) {
+      await fanOutEvent(ev);
+      for (const d of await prisma.webhookDelivery.findMany({ where: { eventId: ev.id } })) {
+        await attemptDelivery(d.id);
+      }
+    }
+    return sent.map((r) => (JSON.parse(r.body) as { data: Record<string, unknown> }).data);
+  }
+
+  async function outcomeData(r: { id: string; paymentId: string }, status: string) {
+    const p = await prisma.payment.findUniqueOrThrow({ where: { id: r.paymentId } });
+    const s = await prisma.session.findUniqueOrThrow({ where: { id: p.sessionId } });
+    const row = await prisma.refund.findUniqueOrThrow({ where: { id: r.id } });
+    return {
+      refund_id: r.id,
+      payment_id: r.paymentId,
+      session_id: p.sessionId,
+      external_ref: s.externalRef,
+      amount: row.amount.toFixed(0),
+      currency: row.assetId,
+      reason: 'overpaid',
+      status,
+    };
+  }
+
+  it('refund proposal rejected → refund.cancelled delivered', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    // The signers reject it on chain (the contract's cancel).
+    await onRefundProposalCancelled(
+      await proposalEvent('account.proposal.cancelled', r!.proposalId!),
+    );
+    expect(await eventsOf('refund.needs_review')).toHaveLength(1); // unchanged internal behaviour
+    expect(await delivered('refund.cancelled')).toEqual([await outcomeData(r!, 'cancelled')]);
+    expect(await eventsOf('refund.failed')).toEqual([]);
+
+    // A draft the signers drop in the dashboard (never relayed): the sweeper detaches it.
+    const two = await overpaid();
+    const [r2] = await refundsOf(two.p.id);
+    await prisma.accountProposal.update({
+      where: { id: r2!.proposalId! },
+      data: { status: 'cancelled' },
+    });
+    await sweepReturns();
+    const cancelled = await eventsOf('refund.cancelled');
+    expect(cancelled).toHaveLength(2);
+    expect(cancelled[1]!.payload).toMatchObject({ refund_id: r2!.id, status: 'cancelled' });
+  });
+
+  it('refund proposal expired → refund.cancelled delivered', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    await onRefundProposalFailed(
+      await proposalEvent('account.proposal.failed', r!.proposalId!, { reason: 'expired' }),
+    );
+    expect(await delivered('refund.cancelled')).toEqual([await outcomeData(r!, 'expired')]);
+    expect(await eventsOf('refund.failed')).toEqual([]);
+  });
+
+  it('refund proposal execution failed → refund.failed delivered', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    await onRefundProposalFailed(
+      await proposalEvent('account.proposal.failed', r!.proposalId!, {
+        reason: 'ft_withdraw failed',
+      }),
+    );
+    expect(await prisma.refund.findUniqueOrThrow({ where: { id: r!.id } })).toMatchObject({
+      proposalId: null,
+      reviewReason: 'transfer_failed',
+    });
+    expect(await delivered('refund.failed')).toEqual([await outcomeData(r!, 'failed')]);
+    expect(await eventsOf('refund.cancelled')).toEqual([]);
+  });
+
+  it('an executed refund proposal emits refund.sent and never a cancel or a failure', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    await onRefundProposalExecuted(
+      await proposalEvent('account.proposal.executed', r!.proposalId!),
+    );
+    expect(await eventsOf('refund.sent')).toHaveLength(1);
+    expect(await eventsOf('refund.cancelled')).toEqual([]);
+    expect(await eventsOf('refund.failed')).toEqual([]);
+  });
+
+  it('a DB-only cancel with a live chain proposal emits nothing until the chain ends it', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    const proposalId = r!.proposalId!;
+    // Cancelled in Postgres through a stale claim: the relay may have landed.
+    await prisma.accountProposal.update({
+      where: { id: proposalId },
+      data: { status: 'cancelled', relayClaimedAt: new Date(Date.now() - 10 * 60_000) },
+    });
+    fake.scriptView(accountNear, 'get_proposal', () => chainView('pending'));
+    await sweepReturns();
+    // The view cannot be read: still nothing.
+    fake.scriptView(accountNear, 'get_proposal', () => {
+      throw new Error('rpc down');
+    });
+    await sweepReturns();
+    expect(await eventsOf('refund.cancelled')).toEqual([]);
+    expect(await eventsOf('refund.failed')).toEqual([]);
+
+    // The signers then reject it on chain: now it is terminal, and the event goes out once.
+    await onRefundProposalCancelled(await proposalEvent('account.proposal.cancelled', proposalId));
+    expect(await eventsOf('refund.cancelled')).toHaveLength(1);
+  });
+
+  it('a replayed internal event emits once', async () => {
+    const { p } = await overpaid();
+    const [r] = await refundsOf(p.id);
+    const proposalId = r!.proposalId!;
+    const ev = await proposalEvent('account.proposal.cancelled', proposalId);
+    await onRefundProposalCancelled(ev);
+    await onRefundProposalCancelled(ev); // the outbox redelivers the same event
+    await onRefundProposalCancelled(await proposalEvent('account.proposal.cancelled', proposalId));
+    await sweepReturns();
+    expect(await eventsOf('refund.cancelled')).toHaveLength(1);
+
+    // The same proposal comes back (a relay landed after a local-only cancel), then ends again:
+    // the refund is detached for review again, but refund.cancelled is never sent twice for it.
+    const two = await overpaid();
+    const [r2] = await refundsOf(two.p.id);
+    const p2 = r2!.proposalId!;
+    await prisma.accountProposal.update({ where: { id: p2 }, data: { status: 'cancelled' } });
+    await sweepReturns();
+    await tenantTransaction(ctx(), (tx, c) => markOnChain(tx, c, p2));
+    expect((await refundsOf(two.p.id))[0]!.proposalId).toBe(p2);
+    await onRefundProposalFailed(
+      await proposalEvent('account.proposal.failed', p2, { reason: 'expired' }),
+    );
+    expect((await refundsOf(two.p.id))[0]!.proposalId).toBeNull();
+    const forTwo = (await eventsOf('refund.cancelled')).filter(
+      (e) => (e.payload as { refund_id: string }).refund_id === r2!.id,
+    );
+    expect(forTwo).toHaveLength(1);
+    expect(await eventsOf('refund.failed')).toEqual([]);
   });
 
   it('an executed refund proposal that matches no waiting refund confirms nothing and flags review', async () => {

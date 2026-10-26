@@ -4,14 +4,17 @@ import type { AddressInfo } from 'node:net';
 import type { Event, Merchant } from '@prisma/client';
 import { WEBHOOK_RETRY_WINDOW_MS, WebhookEventTypeValues } from '@tendr/contracts';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { revokeConnection } from '../connect/connections.js';
 import { verifyRequestSignature } from '../gateway/signing.js';
 import { clearEventHandlers, handledEventTypes, handlerNamesFor } from '../jobs/handlers.js';
+import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { createMerchant, createRow, resetDb } from '../test/helpers.js';
 import {
   attemptDelivery,
   createEndpoint,
   deleteEndpoint,
+  deliveryKey,
   FANOUT_HANDLER,
   fanOutEvent,
   isPrivateAddress,
@@ -20,6 +23,7 @@ import {
   retryDelayMs,
   ROTATION_OVERLAP_MS,
   rotateEndpointSecret,
+  sendTestEvent,
   strictHostPolicy,
   setWebhookQueue,
   setWebhookResolver,
@@ -596,6 +600,208 @@ describe('webhook delivery', () => {
     const { id } = await prisma.webhookDelivery.findFirstOrThrow();
     const results = await Promise.all([attemptDelivery(id), attemptDelivery(id)]);
     expect(results.filter(Boolean)).toHaveLength(1);
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe('connection-scoped delivery', () => {
+  let merchant: Merchant;
+  let sent: WebhookRequest[];
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  const ctx = () => ({ merchantId: merchant.id, livemode: false });
+
+  beforeEach(async () => {
+    await resetDb();
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    merchant = await createMerchant();
+    sent = [];
+    setWebhookResolver(async () => [{ address: '93.184.216.34', family: 4 }]);
+    setWebhookTransport(async (req) => {
+      sent.push(req);
+      return { status: 200 };
+    });
+  });
+  afterEach(() => {
+    setWebhookTransport(null);
+    setWebhookResolver(null);
+    clearEventHandlers();
+    logSpy.mockRestore();
+  });
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  /** Two connected sites (A, B), each with its own endpoint, plus a hand-made (unbound) one. */
+  async function sites() {
+    const a = await createRow('Connection', merchant.id, false, {
+      siteUrl: 'https://a.example',
+      siteOrigin: 'https://a.example',
+    });
+    const b = await createRow('Connection', merchant.id, false, {
+      siteUrl: 'https://b.example',
+      siteOrigin: 'https://b.example',
+    });
+    const bound = async (url: string, connectionId: string | null) => {
+      const { endpoint } = await createEndpoint(ctx(), { url });
+      await prisma.webhookEndpoint.update({ where: { id: endpoint.id }, data: { connectionId } });
+      return endpoint;
+    };
+    const epA = await bound('https://a.example/wp-json/tendr/v1/webhook', a.id as string);
+    const epB = await bound('https://b.example/wp-json/tendr/v1/webhook', b.id as string);
+    const unbound = await bound('https://hand.example/hooks', null);
+    return {
+      a: a.id as string,
+      b: b.id as string,
+      epA: epA.id as string,
+      epB: epB.id as string,
+      unbound: unbound.id as string,
+    };
+  }
+
+  /** A payment (and its session) created with `connectionId`'s keys (null: a dashboard key). */
+  async function paymentOn(connectionId: string | null) {
+    const p = await createRow('Payment', merchant.id, false);
+    await prisma.session.update({
+      where: { id: p.sessionId as string },
+      data: { connectionId },
+    });
+    return { paymentId: p.id as string, sessionId: p.sessionId as string };
+  }
+
+  async function event(
+    type: string,
+    aggregateType: string,
+    aggregateId: string,
+    payload: Record<string, unknown>,
+  ): Promise<Event> {
+    return (await createRow('Event', merchant.id, false, {
+      type,
+      aggregateType,
+      aggregateId,
+      payload,
+    })) as unknown as Event;
+  }
+
+  const recipients = async (eventId: string) =>
+    (await prisma.webhookDelivery.findMany({ where: { eventId } })).map((d) => d.endpointId).sort();
+
+  it("event for connection A's session is delivered to A's endpoint, not B's, and to an unbound endpoint", async () => {
+    const s = await sites();
+    const { paymentId, sessionId } = await paymentOn(s.a);
+    const payload = { payment_id: paymentId, session_id: sessionId };
+
+    const onSession = await event('checkout.session.expired', 'session', sessionId, payload);
+    expect(await fanOutEvent(onSession)).toBe(2);
+    expect(await recipients(onSession.id)).toEqual([s.epA, s.unbound].sort());
+
+    const onPayment = await event('payment.succeeded', 'payment', paymentId, payload);
+    expect(await fanOutEvent(onPayment)).toBe(2);
+    expect(await recipients(onPayment.id)).toEqual([s.epA, s.unbound].sort());
+
+    for (const d of await prisma.webhookDelivery.findMany()) await attemptDelivery(d.id);
+    expect(sent).toHaveLength(4);
+    expect(sent.some((r) => r.url.startsWith('https://b.'))).toBe(false);
+  });
+
+  it("an event for a refund on connection A's payment reaches A's endpoint only", async () => {
+    const s = await sites();
+    const { paymentId, sessionId } = await paymentOn(s.a);
+    const refund = await createRow('Refund', merchant.id, false, { paymentId });
+    const ev = await event('refund.sent', 'refund', refund.id as string, {
+      refund_id: refund.id,
+      payment_id: paymentId,
+      session_id: sessionId,
+    });
+    await fanOutEvent(ev);
+    const to = await recipients(ev.id);
+    expect(to).toContain(s.epA);
+    expect(to).not.toContain(s.epB);
+  });
+
+  it("the event's connection comes from its subject, never from its payload", async () => {
+    const s = await sites();
+    const onA = await paymentOn(s.a);
+    const onB = await paymentOn(s.b);
+    // B's payment, with a payload naming A's session: it goes to B's site.
+    const ev = await event('payment.succeeded', 'payment', onB.paymentId, {
+      payment_id: onB.paymentId,
+      session_id: onA.sessionId,
+    });
+    await fanOutEvent(ev);
+    expect(await recipients(ev.id)).toEqual([s.epB, s.unbound].sort());
+  });
+
+  it('a session made with a dashboard key, or an event with no session subject, goes only to unbound endpoints', async () => {
+    const s = await sites();
+    const dashboard = await paymentOn(null);
+    const ev = await event('payment.succeeded', 'payment', dashboard.paymentId, {
+      payment_id: dashboard.paymentId,
+      session_id: dashboard.sessionId,
+    });
+    await fanOutEvent(ev);
+    expect(await recipients(ev.id)).toEqual([s.unbound]);
+
+    const onA = await paymentOn(s.a);
+    const subjectless = await event('payment.succeeded', 'merchant', merchant.id, {
+      session_id: onA.sessionId,
+    });
+    await fanOutEvent(subjectless);
+    expect(await recipients(subjectless.id)).toEqual([s.unbound]);
+  });
+
+  it('internal ops events still never delivered', async () => {
+    const s = await sites();
+    const { paymentId, sessionId } = await paymentOn(s.a);
+    const refund = await createRow('Refund', merchant.id, false, { paymentId });
+    for (const [type, aggregateType, id] of [
+      ['refund.needs_review', 'refund', refund.id as string],
+      ['account.proposal.cancelled', 'account_proposal', newId('prop')],
+      ['account.proposal.failed', 'account_proposal', newId('prop')],
+      ['payment.status_changed', 'payment', paymentId],
+      ['session.status_changed', 'session', sessionId],
+    ] as const) {
+      const ev = await event(type, aggregateType, id, { session_id: sessionId });
+      expect(await fanOutEvent(ev), type).toBe(0);
+    }
+    expect(await prisma.webhookDelivery.count()).toBe(0);
+  });
+
+  it('the connection filter holds at send time: a revoked endpoint, or a mismatched row, is never sent', async () => {
+    const s = await sites();
+    const { paymentId, sessionId } = await paymentOn(s.a);
+    const ev = await event('payment.succeeded', 'payment', paymentId, {
+      payment_id: paymentId,
+      session_id: sessionId,
+    });
+    await fanOutEvent(ev);
+    // A re-connect revokes A's old connection (and deactivates its endpoints) before the send.
+    await prisma.$transaction((tx) => revokeConnection(tx, s.a, 'site'));
+    const toA = await prisma.webhookDelivery.findFirstOrThrow({ where: { endpointId: s.epA } });
+    expect((await attemptDelivery(toA.id))?.status).toBe('failed');
+    expect(sent.some((r) => r.url.startsWith('https://a.'))).toBe(false);
+
+    // A delivery row that names B's endpoint for A's event (the fan-out never makes one): refused.
+    const wrong = await prisma.webhookDelivery.create({
+      data: {
+        id: newId('whd'),
+        ...ctx(),
+        endpointId: s.epB,
+        eventId: ev.id,
+        eventType: ev.type,
+        idempotencyKey: deliveryKey(s.epB, ev.id),
+        nextRetryAt: new Date(),
+      },
+    });
+    expect(await attemptDelivery(wrong.id)).toMatchObject({
+      status: 'failed',
+      error: 'connection mismatch',
+    });
+    expect(sent.some((x) => x.url.startsWith('https://b.'))).toBe(false);
+  });
+
+  it("a test send (ping) to a connection's endpoint still goes out", async () => {
+    const s = await sites();
+    expect((await sendTestEvent(ctx(), s.epA)).status).toBe('delivered');
     expect(sent).toHaveLength(1);
   });
 });

@@ -24,6 +24,9 @@
 //   refund address) are only recorded (status confirmed, no proposal): 1Click already sent them.
 // - `account.proposal.executed` on a refund proposal → refund `confirmed`, `refund.sent`, and the
 //   payment (and a late / held session) completes as REFUNDED.
+// - A refund proposal that ends without executing (rejected, expired, failed on chain) sends the
+//   return back to review (`refund.needs_review`, internal) and records the public
+//   `refund.cancelled` / `refund.failed` once per (refund, proposal) — see `recordRefundOutcome`.
 import {
   Prisma,
   type AccountProposal,
@@ -1140,6 +1143,71 @@ async function detachedRefundFor(ctx: ScopeContext, proposalId: string): Promise
 /** Internal event (not a webhook type): a return went to the merchant's review queue. */
 export const REFUND_NEEDS_REVIEW = 'refund.needs_review';
 
+/** Public webhook: the refund's proposal was rejected (cancelled) by the signers, or expired. */
+export const REFUND_CANCELLED = 'refund.cancelled';
+/** Public webhook: the refund's proposal failed when it executed on chain. */
+export const REFUND_FAILED = 'refund.failed';
+
+/** How a refund proposal ended without executing (review reason → public event and `status`). */
+const OUTCOME_OF: Readonly<Record<string, { type: string; status: string }>> = {
+  [REVIEW.proposalCancelled]: { type: REFUND_CANCELLED, status: 'cancelled' },
+  [REVIEW.proposalExpired]: { type: REFUND_CANCELLED, status: 'expired' },
+  [REVIEW.transferFailed]: { type: REFUND_FAILED, status: 'failed' },
+};
+
+/**
+ * Records the public `refund.cancelled` / `refund.failed` for refund `r` whose proposal ended
+ * without executing, inside `detachProposal`'s transaction (refund row locked). Every caller of
+ * `detachProposal` has established that the proposal is terminal on chain (a contract event, the
+ * sweeper's `endedOnChain`, or the review queue's `verifiedEndedOnChain`), so a draft cancelled
+ * only in Postgres while still live on chain never reaches here. At most one outcome event per
+ * (refund, proposal): a replayed event, or the same proposal revived and ending again, records
+ * nothing more. `proposal_id` stays in the stored payload (the dedupe key) and is never delivered.
+ */
+async function recordRefundOutcome(
+  tx: Tx,
+  ctx: ScopeContext,
+  r: Refund,
+  sessionId: string,
+  proposalId: string,
+  reviewReason: string,
+): Promise<void> {
+  const outcome = OUTCOME_OF[reviewReason];
+  if (!outcome) return;
+  const seen = await tx.event.findFirst({
+    where: {
+      ...tenantOf(ctx),
+      aggregateType: 'refund',
+      aggregateId: r.id,
+      type: { in: [REFUND_CANCELLED, REFUND_FAILED] },
+      payload: { path: ['proposal_id'], equals: proposalId },
+    },
+    select: { id: true },
+  });
+  if (seen) return;
+  const s = await tx.session.findFirstOrThrow({
+    where: { id: sessionId, ...tenantOf(ctx) },
+    select: { externalRef: true },
+  });
+  await recordEvent(tx, ctx, {
+    aggregateType: 'refund',
+    aggregateId: r.id,
+    type: outcome.type,
+    payload: {
+      refund_id: r.id,
+      payment_id: r.paymentId,
+      session_id: sessionId,
+      // The order's reference, as on every other session event (`refund.sent` included).
+      external_ref: s.externalRef,
+      amount: r.amount,
+      currency: r.assetId,
+      reason: r.reason,
+      status: outcome.status,
+      proposal_id: proposalId,
+    },
+  });
+}
+
 /**
  * The refund's proposal will never execute (cancelled, expired or its transfer failed): the
  * proposal link is cleared and the return goes to the review queue (`review_reason`), from which
@@ -1183,6 +1251,7 @@ export async function detachProposal(
           review_reason: reviewReason,
         },
       });
+      await recordRefundOutcome(tx, ctx, r, p.sessionId, proposalId, reviewReason);
       return true;
     });
     if (did) {
