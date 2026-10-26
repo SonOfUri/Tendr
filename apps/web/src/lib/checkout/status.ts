@@ -107,7 +107,9 @@ function kindOf(v: SessionView, latest: SessionPayment | null, now: Date): Scree
     case 'SETTLED':
       return 'complete';
     case 'REFUNDED':
-      return 'refunded';
+      // A late deposit's session goes LATE_DEPOSIT → REFUNDED as soon as its return starts: the
+      // shopper is still told it arrived too late (the late screen covers "returned" too).
+      return latest?.state === 'late' ? 'late' : 'refunded';
     case 'EXPIRED':
       return 'expired';
     case 'LATE_DEPOSIT':

@@ -187,6 +187,18 @@ describe('screenFor', () => {
     ).toMatchObject({ kind: 'refunded', terminal: false });
   });
 
+  it('late: still the late screen once the session is REFUNDED (the return is under way or done)', () => {
+    const late = screenFor(
+      view({ status: 'REFUNDED', expires_at: EARLIER, payments: [payment('late')] }),
+      NOW,
+    );
+    expect(late).toMatchObject({ kind: 'late', terminal: true });
+    // A refund of a payment that was not late keeps the refunded screen.
+    expect(screenFor(view({ status: 'REFUNDED', payments: [payment('refunded')] }), NOW).kind).toBe(
+      'refunded',
+    );
+  });
+
   it('late: arrived after expiry, being returned', () => {
     expect(
       screenFor(view({ status: 'LATE_DEPOSIT', payments: [payment('late')] }), NOW),
