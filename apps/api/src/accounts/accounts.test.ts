@@ -156,12 +156,12 @@ describe('merchant accounts', () => {
     });
 
     it('an unknown outcome that did land is treated as success', async () => {
-      const { merchant } = await owner();
+      const { merchant, user, cred } = await owner();
       const accountId = 'acme-coffee.tendr.testnet';
       test.throwNext('provision', new Error('timeout'));
       test.scriptAccessKeys(accountId, []);
       test.scriptView(accountId, 'get_config', () => ({
-        signers: [],
+        signers: [{ id: user.id, keys: [cred.publicKey] }],
         threshold: 1,
         signer_epoch: '0',
         origins: ['http://localhost:3000'],
@@ -214,6 +214,57 @@ describe('merchant accounts', () => {
       test.scriptAccessKeys(accountId, ['ed25519:abc']);
       const row = await provisionTestAccount(merchant.id);
       expect(row.status).toBe('failed');
+    });
+  });
+
+  describe('C-1: reserved labels and foreign accounts', () => {
+    it("an existing account whose signers are not this store's is never adopted", async () => {
+      const { merchant } = await owner();
+      const accountId = 'acme-coffee.tendr.testnet';
+      // Another Tendr-made account under this label (e.g. Tendr's own fee account): zero keys,
+      // this mode's intents contract and RP ID, but signed by Tendr operators, not this store.
+      const stranger = await createUser();
+      const strangerCred = await createCredential(stranger.id);
+      await test.provisionAccount({
+        merchantId: 'mer_tendr',
+        livemode: false,
+        accountId,
+        initialBalanceYocto: 1n,
+        init: {
+          signers: [{ id: stranger.id, keys: [strangerCred.publicKey as { p256: string }] }],
+          threshold: 1,
+          recovery_key: null,
+          rp_id: 'localhost',
+          origins: ['http://localhost:3000'],
+          intents_contract: 'intents-mock.tendr.testnet',
+          poa_suffix: null,
+          testnet_admin: 'tendr.testnet',
+        },
+      });
+      test.failNextProvision(`account ${accountId} already exists`);
+      const row = await provisionTestAccount(merchant.id);
+      expect(row.status).toBe('failed');
+      expect(await prisma.accountKey.count({ where: { merchantId: merchant.id } })).toBe(0);
+      expect(
+        await prisma.event.count({
+          where: { type: 'merchant_account.activated', merchantId: merchant.id },
+        }),
+      ).toBe(0);
+    });
+
+    it('a store whose slug predates the reserved list cannot go live under that label', async () => {
+      const { merchant, user } = await owner();
+      // A store created before "fees" was reserved.
+      await prisma.merchant.update({ where: { id: merchant.id }, data: { slug: 'fees' } });
+      // Every write that names the live account label is refused.
+      await expect(
+        registerRecoveryKey({ merchantId: merchant.id, userId: user.id }, ed25519Key()),
+      ).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/reserved/) });
+      await addMember(merchant.id, true);
+      await expect(
+        goLive({ merchantId: merchant.id, userId: user.id }, { threshold: 2 }),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(await accountRow(merchant.id, true)).toBeNull();
     });
   });
 

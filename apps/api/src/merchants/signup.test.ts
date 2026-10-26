@@ -1,7 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import { createCredential, createMerchant, createUser, resetDb } from '../test/helpers.js';
-import { RESERVED_SLUGS, createStore, slugBase } from './signup.js';
+import { loadEnv } from '../env.js';
+import { envReservedLabels, isReservedLabel } from './reserved-labels.js';
+import { createStore, slugBase } from './signup.js';
 
 /** A NEAR sub-account label: lower-case alphanumerics separated by single `-`/`_`. */
 const NEAR_LABEL = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
@@ -59,14 +61,15 @@ describe('signup', () => {
       'solver',
       'gas',
     ]) {
-      expect(RESERVED_SLUGS.has(reserved), reserved).toBe(true);
+      expect(isReservedLabel(reserved), reserved).toBe(true);
       const s = slugBase(reserved);
       expect(s, reserved).toBe(`${reserved}-store`);
       expect(s).toMatch(NEAR_LABEL);
     }
     expect(slugBase('Intents Mock')).toBe('intents-mock-store');
     expect(slugBase('TENDR')).toBe('tendr-store');
-    expect(slugBase('Tendr Coffee')).toBe('tendr-coffee');
+    // `tendr*` is a reserved prefix: nothing under Tendr's parents may read as Tendr.
+    expect(slugBase('Tendr Coffee')).toBe('tendr-coffee-store');
 
     const user = await createUser();
     await createCredential(user.id);
@@ -76,6 +79,113 @@ describe('signup', () => {
       where: { merchantId: merchant.id },
     });
     expect(account.nearAccountId).toBe('funding-near-store.tendr.testnet');
+  });
+
+  it('C-1: a store named "Fees" never takes Tendr\'s fee account, in either mode', async () => {
+    for (const name of ['Fees', 'fees', 'FEE', 'Treasury', 'Support', 'Root', 'System', 'Mail']) {
+      expect(slugBase(name), name).toMatch(/-store$/);
+    }
+    const user = await createUser();
+    await createCredential(user.id);
+    const { merchant } = await createStore(user.id, 'Fees');
+    expect(merchant.slug).toBe('fees-store');
+    const account = await prisma.merchantAccount.findFirstOrThrow({
+      where: { merchantId: merchant.id },
+    });
+    expect(account.nearAccountId).toBe('fees-store.tendr.testnet');
+    expect(account.nearAccountId).not.toBe(loadEnv().FEE_ACCOUNT_TEST);
+  });
+
+  it('C-1: the static list, the prefix rules and env-derived labels are all reserved', () => {
+    for (const label of [
+      'fees',
+      'fee',
+      'revenue',
+      'treasury',
+      'ops',
+      'operator',
+      'operators',
+      'support',
+      'help',
+      'billing',
+      'refund',
+      'refunds',
+      'security',
+      'status',
+      'docs',
+      'mail',
+      'email',
+      'webhooks',
+      'hooks',
+      'relay',
+      'sponsor',
+      'paymaster',
+      'settlement',
+      'settlements',
+      'escrow',
+      'vault',
+      'root',
+      'system',
+      'internal',
+      'staging',
+      'sandbox',
+      'dev',
+      'near',
+      'testnet',
+      'tendrpay',
+      'merchant',
+      'merchants',
+      'wallet',
+      'wallets',
+      'oneclick',
+      '1click',
+      'swap',
+      'bridge',
+      'relayer-near',
+      'relayer-evm',
+      'solver-hot',
+      'usdc',
+      // prefix rules
+      'gas-tron',
+      'gas-evm',
+      'gas-sol',
+      'fee-usdc',
+      'fees-live',
+      'intents2',
+      'intents-x',
+      'tendr-ops',
+      'tendrx',
+    ]) {
+      expect(isReservedLabel(label), label).toBe(true);
+    }
+    for (const label of ['acme', 'coffee', 'feesh', 'gasket', 'fees-store', 'tendr-store-2']) {
+      expect(isReservedLabel(label), label).toBe(false);
+    }
+    // A renamed fee account is reserved from env, whatever its label.
+    const e = loadEnv({
+      ...process.env,
+      FEE_ACCOUNT_LIVE: 'collect.tendr.near',
+      FEE_ACCOUNT_TEST: 'sub.take.tendr.testnet',
+      INTENTS_CONTRACT_TEST: 'verifier-x.tendr.testnet',
+    });
+    try {
+      expect([...envReservedLabels(e)].sort()).toEqual(['collect', 'take', 'verifier-x']);
+      expect(isReservedLabel('collect', e)).toBe(true);
+      expect(isReservedLabel('take', e)).toBe(true);
+      expect(isReservedLabel('verifier-x', e)).toBe(true);
+      expect(slugBase('Collect')).toBe('collect-store');
+    } finally {
+      loadEnv();
+    }
+  });
+
+  it('C-1: no existing store slug is reserved (one-off check over the merchants table)', async () => {
+    // The check itself: run against every merchants.slug. Here it runs on the test DB's stores.
+    const user = await createUser();
+    await createCredential(user.id);
+    await createStore(user.id, 'Acme');
+    const slugs = await prisma.merchant.findMany({ select: { slug: true } });
+    expect(slugs.filter((m) => isReservedLabel(m.slug))).toEqual([]);
   });
 
   it('slug_collision_gets_suffix', async () => {

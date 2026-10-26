@@ -34,6 +34,7 @@ import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { getRedis } from '../lib/redis.js';
+import { isReservedLabel } from '../merchants/reserved-labels.js';
 import {
   nearClient,
   type InitConfigJson,
@@ -60,9 +61,16 @@ const invalid = (message: string, details?: unknown) =>
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
-/** `<slug>.<parent>` for the mode: `<slug>.tendr.near` / `<slug>.tendr.testnet`. */
+/**
+ * `<slug>.<parent>` for the mode: `<slug>.tendr.near` / `<slug>.tendr.testnet`. Refuses a reserved
+ * label (Tendr's fee account, relayers, system names; see merchants/reserved-labels.ts) in both
+ * modes, so no store can be given one of Tendr's accounts even if its slug predates the list.
+ */
 export function nearAccountIdFor(slug: string, livemode: boolean): string {
   const e = env();
+  if (isReservedLabel(slug, e)) {
+    throw conflict('This store name maps to a reserved account name; contact support to rename it');
+  }
   return `${slug}.${livemode ? e.NEAR_PARENT_ACCOUNT_LIVE : e.NEAR_PARENT_ACCOUNT_TEST}`;
 }
 
@@ -223,14 +231,18 @@ export interface ConfigView {
 }
 
 /**
- * Whether `account` exists on chain as a correctly initialised merchant account: zero access
- * keys, and `get_config` answers for this mode's intents contract and RP ID. Only the mode's
- * parent can create `<slug>.<parent>`, and our parent only ever creates it with that batch, so
- * this identifies our own earlier attempt. Returns its config, or null.
+ * Whether `account` exists on chain as a correctly initialised merchant account of THIS store:
+ * zero access keys, `get_config` answers for this mode's intents contract and RP ID, and at least
+ * one of its on-chain signers is a current signer of this store. Only the mode's parent can create
+ * `<slug>.<parent>`, and our parent only ever creates it with that batch, so this identifies our
+ * own earlier attempt. The signer check keeps another Tendr-made account under the same label
+ * (e.g. Tendr's own fee account, C-1) from ever being adopted as the store's. Returns its config,
+ * or null.
  */
 async function onChainConfig(
   client: NearClient,
   account: MerchantAccount,
+  storeSignerIds: readonly string[],
 ): Promise<ConfigView | null> {
   try {
     const keys = await client.accessKeys(account.nearAccountId);
@@ -243,6 +255,8 @@ async function onChainConfig(
     ) {
       return null;
     }
+    const ours = new Set(storeSignerIds);
+    if (!config.signers.some((s) => ours.has(s.id))) return null;
     return config;
   } catch {
     return null;
@@ -360,7 +374,8 @@ export async function provisionMerchantAccount(
   // An earlier attempt (timed out, or crashed) may have created the account already: look on
   // chain before spending again. This also keeps a retry from being refused by a funding cap that
   // the earlier attempt's still-held reservation fills. For a fresh row this is one cheap read.
-  const existing = await onChainConfig(client, account);
+  const storeSignerIds = built.signers.map((s) => s.id);
+  const existing = await onChainConfig(client, account, storeSignerIds);
   if (existing) return activateFromChain(attempt, existing);
 
   let result: TxResult;
@@ -377,7 +392,7 @@ export async function provisionMerchantAccount(
     // Nothing reached the chain for these; anything else may have landed.
     const definitelyNotSent = err instanceof NotBroadcastError || err instanceof AppError;
     if (!definitelyNotSent) {
-      const config = await onChainConfig(client, account);
+      const config = await onChainConfig(client, account, storeSignerIds);
       if (config) return activateFromChain(attempt, config);
     }
     await markFailed(attempt, String(err));
@@ -393,7 +408,7 @@ export async function provisionMerchantAccount(
     });
   }
   if (isAlreadyExists(result)) {
-    const config = await onChainConfig(client, account);
+    const config = await onChainConfig(client, account, storeSignerIds);
     if (config) return activateFromChain(attempt, config);
   }
   return markFailed(attempt, result.failure ?? 'provisioning failed on chain', result.txHash);
