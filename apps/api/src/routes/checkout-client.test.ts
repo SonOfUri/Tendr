@@ -470,6 +470,82 @@ describe('shopper checkout routes', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it('the session view lists the checkout domains (for the embed bridge)', async () => {
+    await prisma.merchant.update({
+      where: { id: merchant.id },
+      data: { checkoutDomains: ['https://shop.example'] },
+    });
+    const s = await newSession();
+    const res = await call('GET', 'session', s.client_secret);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().checkout_domains).toEqual(['https://shop.example']);
+  });
+
+  describe('public frame origins', () => {
+    const frameOrigins = (id: string) =>
+      app.inject({ method: 'GET', url: `/v1/checkout/public/${id}/frame-origins` });
+
+    it('returns only the merchant checkout domains, without auth', async () => {
+      await prisma.merchant.update({
+        where: { id: merchant.id },
+        data: { checkoutDomains: ['https://shop.example', 'https://www.shop.example'] },
+      });
+      const s = await newSession();
+      const res = await frameOrigins(s.id);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toEqual({ origins: ['https://shop.example', 'https://www.shop.example'] });
+      // Nothing else about the session or the store.
+      expect(res.body).not.toContain(merchant.id);
+      expect(res.body).not.toContain('Bean Shop');
+      expect(res.body).not.toContain(accountId);
+    });
+
+    it('is an empty list (never 404) for unknown, malformed and expired sessions', async () => {
+      await prisma.merchant.update({
+        where: { id: merchant.id },
+        data: { checkoutDomains: ['https://shop.example'] },
+      });
+      for (const id of ['ses_01J00000000000000000000000', 'nope', 'ses_%27%20OR%201%3D1']) {
+        const res = await frameOrigins(id);
+        expect(res.statusCode, res.body).toBe(200);
+        expect(res.json()).toEqual({ origins: [] });
+      }
+      const s = await newSession();
+      await prisma.session.update({
+        where: { id: s.id },
+        data: { expiresAt: new Date(Date.now() - 1000) },
+      });
+      expect((await frameOrigins(s.id)).json()).toEqual({ origins: [] });
+      await prisma.session.update({ where: { id: s.id }, data: { status: 'EXPIRED' } });
+      expect((await frameOrigins(s.id)).json()).toEqual({ origins: [] });
+    });
+
+    it('keeps the origins for a session past its expiry that has a payment to show', async () => {
+      await prisma.merchant.update({
+        where: { id: merchant.id },
+        data: { checkoutDomains: ['https://shop.example'] },
+      });
+      const s = await newSession();
+      await prisma.session.update({
+        where: { id: s.id },
+        data: { expiresAt: new Date(Date.now() - 1000), status: 'PROCESSING' },
+      });
+      expect((await frameOrigins(s.id)).json()).toEqual({ origins: ['https://shop.example'] });
+    });
+
+    it('is rate-limited per IP like the other public routes (429 RATE_LIMITED)', async () => {
+      await app.close();
+      app = await buildApp({ rateLimitOverrides: { public: 2 } });
+      await app.ready();
+      const s = await newSession();
+      expect((await frameOrigins(s.id)).statusCode).toBe(200);
+      expect((await frameOrigins(s.id)).statusCode).toBe(200);
+      const limited = await frameOrigins(s.id);
+      expect(limited.statusCode, limited.body).toBe(429);
+      expect(limited.json().error.code).toBe('RATE_LIMITED');
+    });
+  });
+
   it('refuses API keys on the shopper routes', async () => {
     const res = await call('GET', 'session', testKey);
     expect(res.statusCode).toBe(403);

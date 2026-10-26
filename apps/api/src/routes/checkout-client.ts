@@ -22,11 +22,14 @@ import {
   RefundAddressInputSchema,
   RefundAddressTokenInputSchema,
 } from '../checkout/refunds.js';
+import { publicFrameOrigins } from '../checkout/checkout-settings.js';
 import { requirePrincipal } from '../gateway/principal.js';
 import { notFound, unauthorized } from '../lib/errors.js';
 
 /** Path prefix of the shopper routes (app.ts scopes the checkout-origin CORS rule to it). */
 export const CHECKOUT_CLIENT_PREFIX = '/v1/checkout/client/';
+/** Unauthenticated checkout routes (the web middleware's frame-origins lookup). */
+export const CHECKOUT_PUBLIC_PREFIX = '/v1/checkout/public/';
 /** The emailed return-address link's route (token-authenticated; same checkout-origin CORS). */
 export const CHECKOUT_REFUND_ADDRESS_PATH = '/v1/checkout/refund-address';
 
@@ -98,6 +101,18 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
     const input = RefundAddressTokenInputSchema.parse(req.body);
     return provideRefundAddressByToken(input);
   });
+
+  // Ruling C3 (Task 11): the origins allowed to frame this session's checkout, for the web
+  // middleware's CSP `frame-ancestors`. Public and per-IP limited; only the origin list, and an
+  // empty list (not a 404) for unknown or expired sessions.
+  app.get<{ Params: { sessionId: string } }>(
+    `${CHECKOUT_PUBLIC_PREFIX}:sessionId/frame-origins`,
+    { config: { auth: 'public' } },
+    async (req, reply) => {
+      reply.header('cache-control', 'no-store');
+      return publicFrameOrigins(req.params.sessionId);
+    },
+  );
 
   app.post(`${CHECKOUT_CLIENT_PREFIX}simulate`, shopper, async (req) => {
     const ctx = ctxOf(req);

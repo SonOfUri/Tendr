@@ -200,9 +200,9 @@ function shopperState(p: {
   }
 }
 
-async function merchantDisplay(ctx: ShopperCtx, s: SessionRow) {
+async function storeInfo(ctx: ShopperCtx, s: SessionRow) {
   const [merchant, theme] = await Promise.all([
-    ctx.db.merchant.findFirstOrThrow({ select: { name: true } }),
+    ctx.db.merchant.findFirstOrThrow({ select: { name: true, checkoutDomains: true } }),
     ctx.db.checkoutTheme.findFirst({
       where: s.themeId
         ? { id: s.themeId, status: 'published' }
@@ -210,7 +210,10 @@ async function merchantDisplay(ctx: ShopperCtx, s: SessionRow) {
       select: { displayName: true, logoUrl: true },
     }),
   ]);
-  return { name: theme?.displayName ?? merchant.name, logo_url: theme?.logoUrl ?? null };
+  return {
+    display: { name: theme?.displayName ?? merchant.name, logo_url: theme?.logoUrl ?? null },
+    checkoutDomains: [...merchant.checkoutDomains],
+  };
 }
 
 /** Base units → a decimal string ("0.005"). */
@@ -273,8 +276,8 @@ export async function shopperSessionView(ctx: ShopperCtx) {
   // The page is open: the watcher polls this session's addresses every 5 s for a minute.
   await markSessionViewed(s.id);
   const feePayer = feePayerFromDb(s.feePayer);
-  const [merchant, quote, payments, emailNeeded, refunds] = await Promise.all([
-    merchantDisplay(ctx, s),
+  const [store, quote, payments, emailNeeded, refunds] = await Promise.all([
+    storeInfo(ctx, s),
     currentQuote(ctx),
     ctx.db.payment.findMany({ where: { sessionId: s.id }, orderBy: { createdAt: 'asc' } }),
     needsEmail(ctx, s),
@@ -283,7 +286,9 @@ export async function shopperSessionView(ctx: ShopperCtx) {
   return {
     id: s.id,
     livemode: s.livemode,
-    merchant,
+    merchant: store.display,
+    /** Origins allowed to frame the page: the embed bridge posts only to one of these. */
+    checkout_domains: store.checkoutDomains,
     amount: s.amount.toFixed(),
     amount_currency: s.amountCurrency,
     settlement_asset: s.destAsset,
