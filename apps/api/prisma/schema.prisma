@@ -1135,6 +1135,7 @@ model WebhookDelivery {
   statusCode     Int?      @map("status_code")
   nextRetryAt    DateTime? @map("next_retry_at")
   /// pending (retrying) | delivered | failed (gave up after the retry window; resend still allowed)
+  /// | superseded (a site re-connect found the new endpoint already had this event; never sent)
   status         String    @default("pending")
   firstAttemptAt DateTime? @map("first_attempt_at")
   lastAttemptAt  DateTime? @map("last_attempt_at")

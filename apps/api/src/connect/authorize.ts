@@ -20,6 +20,7 @@ import {
 } from '@tendr/contracts';
 import { goLiveStatus, signerPasskeyCount } from '../accounts/accounts.js';
 import { readinessFor, type CheckoutCtx } from '../checkout/sessions.js';
+import { repointUndeliveredDeliveries } from '../checkout/webhooks.js';
 import { env } from '../env.js';
 import { sha256 } from '../lib/crypto.js';
 import { AppError, notFound } from '../lib/errors.js';
@@ -280,6 +281,8 @@ async function replacePreviousConnections(
     await revokeConnection(tx, peer.id, 'site');
     // Ruling W8: the old connection's sessions now deliver to this connection's endpoints.
     await tx.connection.update({ where: { id: peer.id }, data: { replacedById: connectionId } });
+    // Ruling W9: its undelivered webhooks go to this connection's endpoints, each event once.
+    await repointUndeliveredDeliveries(tx, peer.id, connectionId);
     await dropHeldCredentials(tx, peer.id); // an older approval never redeemed
     if (peer.addedDomain && !ownedDomain) {
       ownedDomain = peer.addedDomain;

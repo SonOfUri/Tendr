@@ -162,7 +162,7 @@ export interface WebhookDelivery {
   event_id: string;
   event_type: string;
   session_id: string | null;
-  status: 'pending' | 'delivered' | 'failed';
+  status: 'pending' | 'delivered' | 'failed' | 'superseded';
   attempts: number;
   status_code: number | null;
   last_error: string | null;

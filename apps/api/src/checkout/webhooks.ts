@@ -19,7 +19,7 @@ import { request as httpRequest, type RequestOptions } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { randomBytes } from 'node:crypto';
-import type { Event, WebhookDelivery, WebhookEndpoint } from '@prisma/client';
+import type { Event, Prisma, WebhookDelivery, WebhookEndpoint } from '@prisma/client';
 import {
   WEBHOOK_RETRY_WINDOW_MS,
   WebhookEventTypeValues,
@@ -53,7 +53,13 @@ export const SEND_LEASE_MS = 30_000;
 export const WEBHOOK_SECRET_PURPOSE = 'webhook_signing';
 const MAX_ERROR_LEN = 500;
 const MAX_URL_LEN = 2048;
-const DELIVERY_STATUS = { pending: 'pending', delivered: 'delivered', failed: 'failed' } as const;
+const DELIVERY_STATUS = {
+  pending: 'pending',
+  delivered: 'delivered',
+  failed: 'failed',
+  /** W9: a re-connect found the new endpoint already had this event; never sent. */
+  superseded: 'superseded',
+} as const;
 export type DeliveryStatus = (typeof DELIVERY_STATUS)[keyof typeof DELIVERY_STATUS];
 
 // ─── what is delivered ──────────────────────────────────────────────────────
@@ -562,6 +568,94 @@ export function registerWebhookHandlers(): void {
   }
 }
 
+// ─── re-connect (ruling W9) ─────────────────────────────────────────────────
+
+/** Whether a send of `d` is in flight now (its claim lease on `next_retry_at` has not lapsed). */
+function isInFlight(
+  d: Pick<WebhookDelivery, 'status' | 'lastAttemptAt' | 'nextRetryAt'>,
+  now: Date,
+): boolean {
+  return (
+    d.status === DELIVERY_STATUS.pending &&
+    d.lastAttemptAt !== null &&
+    d.lastAttemptAt.getTime() > now.getTime() - SEND_LEASE_MS &&
+    d.nextRetryAt !== null &&
+    d.nextRetryAt.getTime() === d.lastAttemptAt.getTime() + SEND_LEASE_MS
+  );
+}
+
+/**
+ * A site re-connect (W9), in the redeem transaction: every undelivered (`pending`) delivery of the
+ * replaced connection's endpoints moves to the new connection's active endpoint of the same mode —
+ * same row, event and payload; a fresh schedule (due now, a new 3-day window; the next send signs
+ * with the new endpoint's secret, read at send time). One row per (endpoint, event) stays the
+ * rule: when the new endpoint already has a row for the event, the old row is marked `superseded`
+ * and never sent. A row whose send is in flight keeps its lease (no second send can start before
+ * the first records its outcome) but still moves, so a failed attempt retries to the new site.
+ * A mode with no active new endpoint leaves its rows where they are (they fail: endpoint deleted).
+ * Returns how many rows moved and how many were superseded.
+ */
+export async function repointUndeliveredDeliveries(
+  tx: Prisma.TransactionClient,
+  fromConnectionId: string,
+  toConnectionId: string,
+  now = new Date(),
+): Promise<{ moved: number; superseded: number }> {
+  const out = { moved: 0, superseded: 0 };
+  const [from, to] = await Promise.all([
+    tx.webhookEndpoint.findMany({
+      where: { connectionId: fromConnectionId },
+      select: { id: true, livemode: true },
+    }),
+    tx.webhookEndpoint.findMany({
+      where: { connectionId: toConnectionId, active: true },
+      select: { id: true, livemode: true },
+    }),
+  ]);
+  for (const target of to) {
+    const sources = from.filter((e) => e.livemode === target.livemode).map((e) => e.id);
+    if (sources.length === 0) continue;
+    const rows = await tx.webhookDelivery.findMany({
+      where: { endpointId: { in: sources }, status: DELIVERY_STATUS.pending },
+    });
+    for (const d of rows) {
+      const key = deliveryKey(target.id, d.eventId);
+      const taken = await tx.webhookDelivery.findUnique({
+        where: { idempotencyKey: key },
+        select: { id: true },
+      });
+      if (taken) {
+        await tx.webhookDelivery.updateMany({
+          where: { id: d.id, status: DELIVERY_STATUS.pending },
+          data: {
+            status: DELIVERY_STATUS.superseded,
+            nextRetryAt: null,
+            lastError: 'superseded: the site re-connected and its new endpoint has this event',
+          },
+        });
+        out.superseded++;
+        continue;
+      }
+      const schedule = isInFlight(d, now)
+        ? {}
+        : {
+            attempt: 0,
+            nextRetryAt: now,
+            firstAttemptAt: null,
+            lastAttemptAt: null,
+            statusCode: null,
+            lastError: null,
+          };
+      await tx.webhookDelivery.updateMany({
+        where: { id: d.id, status: DELIVERY_STATUS.pending },
+        data: { endpointId: target.id, idempotencyKey: key, ...schedule },
+      });
+      out.moved++;
+    }
+  }
+  return out;
+}
+
 // ─── sending ────────────────────────────────────────────────────────────────
 
 export interface AttemptResult {
@@ -598,13 +692,9 @@ export async function attemptDelivery(
   const now = opts.now ?? new Date();
   const before = await prisma.webhookDelivery.findUnique({ where: { id: deliveryId } });
   if (!before) return null;
-  const inFlight =
-    before.status === DELIVERY_STATUS.pending &&
-    before.lastAttemptAt !== null &&
-    before.lastAttemptAt.getTime() > now.getTime() - SEND_LEASE_MS &&
-    before.nextRetryAt !== null &&
-    before.nextRetryAt.getTime() === before.lastAttemptAt.getTime() + SEND_LEASE_MS;
-  if (inFlight) return null;
+  // A superseded row (W9: its event went to the re-connected site's endpoint) is never sent.
+  if (before.status === DELIVERY_STATUS.superseded) return null;
+  if (isInFlight(before, now)) return null;
   const due =
     before.status === DELIVERY_STATUS.pending &&
     (before.nextRetryAt === null || before.nextRetryAt <= now);

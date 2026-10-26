@@ -4,9 +4,18 @@ import { ConnectTokenResponseSchema, type MerchantUserRole } from '@tendr/contra
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
-import { fanOutEvent, setWebhookResolver } from '../checkout/webhooks.js';
+import {
+  attemptDelivery,
+  deliveryKey,
+  fanOutEvent,
+  setWebhookResolver,
+  setWebhookTransport,
+  sweepDueDeliveries,
+  type WebhookRequest,
+} from '../checkout/webhooks.js';
 import { sweepConnections } from '../connect/authorize.js';
 import { flushLastUsed } from '../gateway/auth.js';
+import { verifyRequestSignature } from '../gateway/signing.js';
 import { prisma } from '../lib/prisma.js';
 import { dashHeaders, loginAs, type Login } from '../test/dashboard.js';
 import {
@@ -46,6 +55,7 @@ describe('connect routes', () => {
     await flushLastUsed();
     await app.close();
     setWebhookResolver(null);
+    setWebhookTransport(null);
     logSpy.mockRestore();
     vi.useRealTimers();
   });
@@ -693,6 +703,102 @@ describe('connect routes', () => {
       where: { connectionId: second.connection_id, livemode: false },
     });
     expect(await recipients(ev.id)).toEqual([newTest!.id]);
+  });
+
+  it('W9: an event pending for the old endpoint at re-connect is delivered to the new endpoint exactly once', async () => {
+    const sent: WebhookRequest[] = [];
+    let up = false; // the old site is down until it re-connects
+    setWebhookTransport(async (req) => {
+      sent.push(req);
+      return { status: up ? 200 : 503 };
+    });
+    const first = await connect();
+    const [oldTest] = await prisma.webhookEndpoint.findMany({
+      where: { connectionId: first.connection_id, livemode: false },
+    });
+    const paymentId = await paymentOn(first.connection_id);
+    const ev = await succeededFor(paymentId);
+    await fanOutEvent(ev);
+    const row = await prisma.webhookDelivery.findFirstOrThrow({ where: { eventId: ev.id } });
+    expect((await attemptDelivery(row.id))?.status).toBe('pending'); // failed once, retrying
+
+    up = true;
+    sent.length = 0;
+    const second = await connect();
+    const [newTest] = await prisma.webhookEndpoint.findMany({
+      where: { connectionId: second.connection_id, livemode: false },
+    });
+    const moved = await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: row.id } });
+    expect(moved).toMatchObject({
+      endpointId: newTest!.id,
+      eventId: ev.id,
+      idempotencyKey: deliveryKey(newTest!.id, ev.id),
+      status: 'pending',
+      attempt: 0,
+      firstAttemptAt: null,
+    });
+    expect(moved.nextRetryAt!.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(await prisma.webhookDelivery.count({ where: { endpointId: oldTest!.id } })).toBe(0);
+
+    // Due now: the sweep queues it; sending it (and any replay) reaches the new endpoint once.
+    expect(await sweepDueDeliveries()).toBeGreaterThanOrEqual(1);
+    for (const d of await prisma.webhookDelivery.findMany({ where: { status: 'pending' } })) {
+      await attemptDelivery(d.id);
+    }
+    await attemptDelivery(row.id);
+    await fanOutEvent(ev); // a replayed outbox fan-out adds nothing
+    const forEv = sent.filter((r) => r.headers['tendr-event-id'] === ev.id);
+    expect(forEv).toHaveLength(1);
+    expect(forEv[0]!.url).toBe(newTest!.url);
+    const header = forEv[0]!.headers['tendr-signature']!;
+    const t = Number(/t=(\d+)/.exec(header)![1]);
+    expect(
+      verifyRequestSignature(header, Buffer.from(forEv[0]!.body), second.test.webhook_secret, t),
+    ).toBe('ok');
+    expect(JSON.parse(forEv[0]!.body)).toMatchObject({ id: ev.id, type: 'payment.succeeded' });
+    expect(await prisma.webhookDelivery.count({ where: { eventId: ev.id } })).toBe(1);
+  });
+
+  it('W9: an old row whose event the new endpoint already has is marked superseded, never sent twice', async () => {
+    const sent: WebhookRequest[] = [];
+    setWebhookTransport(async (req) => {
+      sent.push(req);
+      return { status: 200 };
+    });
+    const first = await connect();
+    const paymentId = await paymentOn(first.connection_id);
+    const ev = await succeededFor(paymentId);
+    await fanOutEvent(ev);
+    const old = await prisma.webhookDelivery.findFirstOrThrow({ where: { eventId: ev.id } });
+    // Approve the re-connect, then (before it is redeemed) give its endpoint a row for the event.
+    const { code, verifier } = await approve();
+    const pendingConn = await prisma.connection.findFirstOrThrow({
+      where: { redeemedAt: null, revokedAt: null },
+    });
+    const [newTest] = await prisma.webhookEndpoint.findMany({
+      where: { connectionId: pendingConn.id, livemode: false },
+    });
+    await prisma.webhookDelivery.create({
+      data: {
+        id: `whd_pre_${ev.id}`,
+        merchantId: merchant.id,
+        livemode: false,
+        endpointId: newTest!.id,
+        eventId: ev.id,
+        eventType: ev.type,
+        idempotencyKey: deliveryKey(newTest!.id, ev.id),
+        nextRetryAt: new Date(),
+      },
+    });
+    expect((await token({ code, code_verifier: verifier, site_url: SITE })).statusCode).toBe(200);
+    expect(await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: old.id } })).toMatchObject(
+      { endpointId: old.endpointId, status: 'superseded', nextRetryAt: null },
+    );
+    expect(await attemptDelivery(old.id)).toBeNull(); // not due, never sent
+    for (const d of await prisma.webhookDelivery.findMany({ where: { status: 'pending' } })) {
+      await attemptDelivery(d.id);
+    }
+    expect(sent.filter((r) => r.headers['tendr-event-id'] === ev.id)).toHaveLength(1);
   });
 
   it('W8: two re-connects in a row (A→B→C) deliver to C', async () => {
