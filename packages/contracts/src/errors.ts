@@ -48,6 +48,8 @@ export const ErrorCodes = [
   'PROPOSAL_STILL_LIVE',
   /** The amount that reached the merchant account cannot be verified yet (a held return). */
   'AMOUNT_UNKNOWN',
+  /** Connecting a site would add its origin past the store's checkout-domain limit (20). */
+  'DOMAIN_LIMIT',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

@@ -5,3 +5,4 @@ export * from './refunds.js';
 export * from './auth.js';
 export * from './accounts.js';
 export * from './checkout.js';
+export * from './connect.js';

@@ -49,7 +49,7 @@ export const SEND_TIMEOUT_MS = 10_000;
 export const RETRY_BASE_MS = 60_000;
 /** While a send is in flight its `next_retry_at` is pushed this far out (the claim lease). */
 export const SEND_LEASE_MS = 30_000;
-const SECRET_PURPOSE = 'webhook_signing';
+export const WEBHOOK_SECRET_PURPOSE = 'webhook_signing';
 const MAX_ERROR_LEN = 500;
 const MAX_URL_LEN = 2048;
 const DELIVERY_STATUS = { pending: 'pending', delivered: 'delivered', failed: 'failed' } as const;
@@ -652,7 +652,8 @@ const view = (e: WebhookEndpoint): EndpointView => ({
   created_at: e.createdAt.toISOString(),
 });
 
-const newSecret = () => `whsec_${randomBytes(32).toString('hex')}`;
+/** A new endpoint signing secret (`whsec_` + 64 hex); stored only through `putSecret`. */
+export const newWebhookSecret = () => `whsec_${randomBytes(32).toString('hex')}`;
 
 /** Creates an endpoint; the signing secret is returned here and on rotate only. */
 export async function createEndpoint(
@@ -660,8 +661,8 @@ export async function createEndpoint(
   input: { url: string; events?: WebhookEventType[] },
 ): Promise<{ endpoint: EndpointView; secret: string }> {
   const url = await validateEndpointUrl(input.url, ctx.livemode);
-  const secret = newSecret();
-  const secretRef = await putSecret(secret, SECRET_PURPOSE);
+  const secret = newWebhookSecret();
+  const secretRef = await putSecret(secret, WEBHOOK_SECRET_PURPOSE);
   const events = input.events && input.events.length > 0 ? [...new Set(input.events)] : ['*'];
   const row = await scopedDb(ctx).webhookEndpoint.create({
     data: { id: newId('whe'), ...ctx, url, secretRef, events },
@@ -704,8 +705,8 @@ export async function rotateEndpointSecret(
   now = new Date(),
 ): Promise<{ endpoint: EndpointView; secret: string; previous_secret_expires_at: string }> {
   const e = await activeEndpoint(ctx, id);
-  const secret = newSecret();
-  const secretRef = await putSecret(secret, SECRET_PURPOSE);
+  const secret = newWebhookSecret();
+  const secretRef = await putSecret(secret, WEBHOOK_SECRET_PURPOSE);
   const previousSecretExpiresAt = new Date(now.getTime() + ROTATION_OVERLAP_MS);
   await scopedDb(ctx).webhookEndpoint.updateMany({
     where: { id },

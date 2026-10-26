@@ -435,6 +435,18 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         ...o,
       },
     }),
+  Connection: async (merchantId, _l, o) =>
+    prisma.connection.create({
+      data: {
+        id: newId('con'),
+        merchantId,
+        platform: 'woocommerce',
+        siteUrl: 'https://shop.example.com',
+        siteOrigin: 'https://shop.example.com',
+        connectedByUserId: (await createUser()).id,
+        ...o,
+      },
+    }),
   MerchantAccount: (merchantId, livemode, o) =>
     prisma.merchantAccount.create({
       data: {

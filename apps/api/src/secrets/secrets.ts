@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { getKeyVault } from '../keyvault/index.js';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
@@ -8,13 +9,18 @@ const cache = new Map<string, { value: string; expiresAt: number }>();
 /**
  * Envelope-encrypts `plaintext` and stores it in `secrets`. The secret id is the AES-GCM
  * aad, so a ciphertext cannot be moved to another row. Returns the id (the `secret_ref`).
- * Server-side only: a secret_ref must never be taken from client input.
+ * Server-side only: a secret_ref must never be taken from client input. Pass the caller's
+ * transaction as `db` when the secret must commit or roll back with the row referencing it.
  */
-export async function putSecret(plaintext: string, purpose: string): Promise<string> {
+export async function putSecret(
+  plaintext: string,
+  purpose: string,
+  db: Pick<Prisma.TransactionClient, 'secret'> = prisma,
+): Promise<string> {
   const id = newId('sec');
   const ciphertext = await getKeyVault().encrypt(Buffer.from(plaintext, 'utf8'), id);
   const { kek } = JSON.parse(ciphertext) as { kek: string };
-  await prisma.secret.create({ data: { id, purpose, ciphertext, kek } });
+  await db.secret.create({ data: { id, purpose, ciphertext, kek } });
   return id;
 }
 

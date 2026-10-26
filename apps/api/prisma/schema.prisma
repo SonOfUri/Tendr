@@ -49,6 +49,13 @@ enum ApiKeyKind {
   @@map("api_key_kind")
 }
 
+/// The platform a connection (a site linked through Connect) runs on.
+enum ConnectionPlatform {
+  woocommerce
+
+  @@map("connection_platform")
+}
+
 enum AccountKeyKind {
   passkey
   fn_call
@@ -358,6 +365,7 @@ model User {
   accountKeys       AccountKey[]
   proposals         AccountProposal[]
   approvals         AccountApproval[]
+  connections       Connection[]
 
   @@map("users")
 }
@@ -492,6 +500,7 @@ model Merchant {
   accountApprovals  AccountApproval[]
   recoveryRequests  RecoveryRequest[]
   accountLimits     AccountLimit[]
+  connections       Connection[]
 
   @@map("merchants")
 }
@@ -545,15 +554,20 @@ model ApiKey {
   scopes           String[]
   signingSecretRef String?    @map("signing_secret_ref")
   signingRequired  Boolean    @default(false) @map("signing_required")
+  /// Set on a connection key (ruling W1: a `secret_key` / publishable key issued by Connect for
+  /// one site). Null for keys the store created by hand.
+  connectionId     String?    @map("connection_id")
   lastUsedAt       DateTime?  @map("last_used_at")
   revokedAt        DateTime?  @map("revoked_at")
   createdAt        DateTime   @default(now()) @map("created_at")
   updatedAt        DateTime   @updatedAt @map("updated_at")
 
-  merchant      Merchant @relation(fields: [merchantId], references: [id])
-  signingSecret Secret?  @relation(fields: [signingSecretRef], references: [id], onDelete: Restrict)
+  merchant      Merchant    @relation(fields: [merchantId], references: [id])
+  signingSecret Secret?     @relation(fields: [signingSecretRef], references: [id], onDelete: Restrict)
+  connection    Connection? @relation(fields: [connectionId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([merchantId])
+  @@index([connectionId])
   @@map("api_keys")
 }
 
@@ -797,15 +811,20 @@ model WebhookEndpoint {
   previousSecretExpiresAt DateTime? @map("previous_secret_expires_at")
   events                  String[]
   active                  Boolean   @default(true)
+  /// Set on an endpoint created by Connect for one site; it receives only that connection's
+  /// events (delivery filtering lands with the connect routes). Null: a hand-made endpoint.
+  connectionId            String?   @map("connection_id")
   createdAt               DateTime  @default(now()) @map("created_at")
   updatedAt               DateTime  @updatedAt @map("updated_at")
 
   merchant   Merchant          @relation(fields: [merchantId], references: [id])
   secret     Secret            @relation(fields: [secretRef], references: [id])
+  connection Connection?       @relation(fields: [connectionId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
   deliveries WebhookDelivery[]
 
   @@unique([id, merchantId, livemode])
   @@index([merchantId])
+  @@index([connectionId])
   @@map("webhook_endpoints")
 }
 
@@ -897,10 +916,14 @@ model Session {
   /// Lower-cased (CHECK in migration checkout_core); refund contact and receipts only.
   customerEmail    String?               @map("customer_email")
   expiredReason    SessionExpiredReason? @map("expired_reason")
+  /// The connection whose key created the session (from `api_keys.connection_id`); null for
+  /// sessions created with a hand-made key, a payment link or the dashboard.
+  connectionId     String?               @map("connection_id")
   createdAt        DateTime              @default(now()) @map("created_at")
   updatedAt        DateTime              @updatedAt @map("updated_at")
 
   merchant          Merchant          @relation(fields: [merchantId], references: [id])
+  connection        Connection?       @relation(fields: [connectionId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
   theme             CheckoutTheme?    @relation(fields: [themeId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
   paymentLink       PaymentLink?      @relation(fields: [paymentLinkId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   quotes            Quote[]
@@ -1344,6 +1367,58 @@ model IdempotencyKey {
 }
 
 /// KMS-envelope-encrypted secret (spec §5). `ciphertext` is the envelope JSON.
+// ─── Connect (sites linked to a store, e.g. WooCommerce) ────────────────────
+
+/// A site connected to a store through Connect (prefix `con`). Shared by both modes: it owns one
+/// secret key, one publishable key and one webhook endpoint per mode. `site_origin` is the
+/// site's origin; `added_domain` is set only when connecting added that origin to the store's
+/// `checkout_domains` (so removing the connection may take it away again; a hand-added domain is
+/// never removed).
+model Connection {
+  id                String             @id
+  merchantId        String             @map("merchant_id")
+  platform          ConnectionPlatform
+  siteUrl           String             @map("site_url")
+  siteOrigin        String             @map("site_origin")
+  connectedByUserId String             @map("connected_by_user_id")
+  addedDomain       String?            @map("added_domain")
+  lastUsedAt        DateTime?          @map("last_used_at")
+  revokedAt         DateTime?          @map("revoked_at")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+
+  merchant         Merchant          @relation(fields: [merchantId], references: [id])
+  connectedBy      User              @relation(fields: [connectedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  apiKeys          ApiKey[]
+  webhookEndpoints WebhookEndpoint[]
+  sessions         Session[]
+  authCodes        ConnectAuthCode[]
+
+  @@unique([id, merchantId])
+  @@index([merchantId])
+  @@index([connectedByUserId])
+  @@map("connections")
+}
+
+/// A single-use Connect authorization code (prefix `cac`): valid 60 s, bound to its connection,
+/// the plugin's `return_url` and the PKCE S256 `code_challenge`. Only the sha256 of the raw code
+/// is stored. Infrastructure: never reachable through a scoped client.
+model ConnectAuthCode {
+  id            String    @id
+  codeHash      String    @unique @map("code_hash")
+  connectionId  String    @map("connection_id")
+  returnUrl     String    @map("return_url")
+  codeChallenge String    @map("code_challenge")
+  expiresAt     DateTime  @map("expires_at")
+  usedAt        DateTime? @map("used_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  connection Connection @relation(fields: [connectionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([connectionId])
+  @@map("connect_auth_codes")
+}
+
 model Secret {
   id         String   @id
   purpose    String

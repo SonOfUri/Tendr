@@ -39,7 +39,9 @@ export type IdPrefix =
   | 'appr'
   | 'rec'
   | 'alim' // account_limits (mirror of the contract's per-asset limits)
-  | 'ntc'; // event_notices (signer notice emails sent per event)
+  | 'ntc' // event_notices (signer notice emails sent per event)
+  | 'con' // connections (sites linked through Connect)
+  | 'cac'; // connect_auth_codes
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${ulid()}`;

@@ -33,6 +33,7 @@ export const SHARED_MODELS = [
   'FeePlan',
   'CheckoutTheme',
   'ThemeAsset',
+  'Connection',
 ] as const;
 
 /**
@@ -47,7 +48,14 @@ export const READ_ONLY_PER_MODE_MODELS = ['Event'] as const;
  * Infrastructure models. Never reachable through the scoped or read-only clients; only
  * infra code (event dispatch, idempotency, secrets) touches them, via the unscoped client.
  */
-export const INFRA_MODELS = ['EventOutbox', 'Secret', 'IdempotencyKey', 'EventNotice'] as const;
+export const INFRA_MODELS = [
+  'EventOutbox',
+  'Secret',
+  'IdempotencyKey',
+  'EventNotice',
+  // Connect authorization codes: only the connect flow touches them, by code hash.
+  'ConnectAuthCode',
+] as const;
 
 /**
  * People and their credentials: global, not owned by any merchant (a person can belong to several
