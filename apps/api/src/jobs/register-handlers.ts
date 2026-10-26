@@ -13,6 +13,7 @@ import { registerRefundHooks } from '../checkout/refunds.js';
 import { registerWatcherHooks } from '../checkout/watcher.js';
 import { registerWebhookHandlers } from '../checkout/webhooks.js';
 import { registerAccountHandlers } from './account-notices.js';
+import { registerPaymentNotices } from './payment-notices.js';
 import { registerReviewNotices } from './review-notices.js';
 import { registerEventHandler } from './handlers.js';
 
@@ -48,3 +49,7 @@ registerWebhookHandlers();
 // Review-queue signer emails (Ruling C23): payment.held, payment.screening_unresolved and
 // refund.needs_review — internal ops events mailed to signers once per event, never webhooks.
 registerReviewNotices();
+
+// Store emails (WooCommerce plugin spec §8): "You got paid" on payment.succeeded and "Refund sent"
+// on refund.sent, to the store's verified notification email (or its owners), once per event.
+registerPaymentNotices();

@@ -12,6 +12,8 @@
 //                                     the web middleware calls it from one server IP
 //   frame_origins_global 20000 / all  ceiling across every session id on that route
 //   connect_token    10 / IP          `POST /v1/connect/token` (public), instead of `public`
+//   notification_email_verify 10 / IP `POST /v1/settings/notification-email/verify` (public),
+//                                     instead of `public`
 //
 // Counters are keyed by ids (principalRef) and IPs, never by raw credentials. Fails open:
 // if Redis is unreachable the request is let through and a warning is logged.
@@ -40,7 +42,9 @@ export type RateLimitKind =
   /** The public frame-origins route, across all session ids. */
   | 'frame_origins_global'
   /** The Connect code exchange, per IP. */
-  | 'connect_token';
+  | 'connect_token'
+  /** The notification-email verify link, per IP. */
+  | 'notification_email_verify';
 
 export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   ip_global: 3000,
@@ -54,6 +58,7 @@ export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   frame_origins: 60,
   frame_origins_global: 20_000,
   connect_token: 10,
+  notification_email_verify: 10,
 };
 
 declare module 'fastify' {
@@ -100,6 +105,7 @@ export async function createRateLimiters(
   sessionQuote: Hook;
   frameOrigins: Hook;
   connectToken: Hook;
+  notificationEmailVerify: Hook;
 }> {
   await app.register(rateLimit, {
     global: false,
@@ -129,6 +135,7 @@ export async function createRateLimiters(
     frame_origins: make('frame_origins'),
     frame_origins_global: make('frame_origins_global'),
     connect_token: make('connect_token'),
+    notification_email_verify: make('notification_email_verify'),
   };
 
   async function enforce(
@@ -176,6 +183,10 @@ export async function createRateLimiters(
     /** Route-level hook for `POST /v1/connect/token`: `connect_token` per IP. */
     connectToken: async (req, reply) => {
       await enforce(req, reply, 'connect_token', `ct:${req.ip}`);
+    },
+    /** Route-level hook for the notification-email verify link: per IP. */
+    notificationEmailVerify: async (req, reply) => {
+      await enforce(req, reply, 'notification_email_verify', `nev:${req.ip}`);
     },
     ip: async (req, reply) => {
       if (!isV1(req.routeOptions.url)) return;

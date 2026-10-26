@@ -397,6 +397,28 @@ passkey:
 - Test and live mode share the same domains.
 - The checkout sends its `postMessage` events only to the registered origin that framed it.
 
+### Store notices and settings from a connected site
+
+`GET/PATCH /v1/settings/checkout` also returns `notification_email`, `notification_email_pending`
+and `payment_emails_enabled`.
+
+- A connected site's key (one issued by Connect) may read the settings and change only
+  `default_fee_payer`, `default_gas_payer` and `notification_email`. Any other field is
+  `403 FIELD_NOT_ALLOWED`; a key you made by hand is `403`. Payer changes apply store-wide, to every
+  connected site. Every change is in the audit log with who made it (`actor`: a user or a
+  connection).
+- A new `notification_email` takes effect only after the link mailed to it is used. Until then it
+  is `notification_email_pending`, and nothing else is sent there. The link
+  (`/settings/notification-email/verify?t=…` on the web app) works once and lasts 24 hours; a new
+  request replaces it. The web page calls `POST /v1/settings/notification-email/verify` with
+  `{ "token": "…" }` (public, 10 / minute / IP; any bad link is `400 INVALID_LINK`). The previous
+  address, or the owners when there was none, is then told. `null` sends notices to the owners'
+  emails again (the default).
+- "You got paid" (`payment_received`) goes on every `payment.succeeded`, while
+  `payment_emails_enabled` (dashboard only; default on). "Refund sent" (`refund_sent`) goes on
+  every `refund.sent`. Both go to the notification email, else the owners, once per event and
+  recipient; test-mode subjects start with `[Test]`.
+
 ### Webhooks
 
 Add endpoints in the dashboard (Webhooks) or with `POST /v1/webhooks/endpoints`, for example

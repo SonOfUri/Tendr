@@ -462,18 +462,30 @@ model WebauthnChallenge {
 // ─── Merchant domain ────────────────────────────────────────────────────────
 
 model Merchant {
-  id              String             @id
-  name            String
-  slug            String             @unique
-  kind            MerchantKind       @default(merchant)
-  aupAcceptedAt   DateTime?          @map("aup_accepted_at")
-  status          MerchantStatus     @default(active)
+  id                              String             @id
+  name                            String
+  slug                            String             @unique
+  kind                            MerchantKind       @default(merchant)
+  aupAcceptedAt                   DateTime?          @map("aup_accepted_at")
+  status                          MerchantStatus     @default(active)
   /// Origins allowed to frame the checkout (CSP `frame-ancestors`); shared by both modes.
-  checkoutDomains String[]           @default([]) @map("checkout_domains")
-  defaultFeePayer FeePayer           @default(merchant) @map("default_fee_payer")
-  defaultGasPayer ResolvedGasSponsor @default(buyer) @map("default_gas_payer")
-  createdAt       DateTime           @default(now()) @map("created_at")
-  updatedAt       DateTime           @updatedAt @map("updated_at")
+  checkoutDomains                 String[]           @default([]) @map("checkout_domains")
+  defaultFeePayer                 FeePayer           @default(merchant) @map("default_fee_payer")
+  defaultGasPayer                 ResolvedGasSponsor @default(buyer) @map("default_gas_payer")
+  /// The verified address for the store's payment and refund notices; null → the owners' emails.
+  notificationEmail               String?            @map("notification_email")
+  /// An address waiting for its verify link (only ever mailed that link). Set together with the
+  /// token hash, its expiry and the request (who asked, in which mode): all four or none.
+  notificationEmailPending        String?            @map("notification_email_pending")
+  /// sha256 (hex) of the single-use verify token; a new request replaces it.
+  notificationEmailTokenHash      String?            @unique @map("notification_email_token_hash")
+  notificationEmailTokenExpiresAt DateTime?          @map("notification_email_token_expires_at")
+  /// `{ by: 'user', userId } | { by: 'connection', connectionId }` plus `livemode`.
+  notificationEmailRequest        Json?              @map("notification_email_request")
+  /// The "You got paid" email; refund notices are always sent.
+  paymentEmailsEnabled            Boolean            @default(true) @map("payment_emails_enabled")
+  createdAt                       DateTime           @default(now()) @map("created_at")
+  updatedAt                       DateTime           @updatedAt @map("updated_at")
 
   users             MerchantUser[]
   apiKeys           ApiKey[]
@@ -1482,7 +1494,8 @@ model EventNotice {
   template  String
   createdAt DateTime @default(now()) @map("created_at")
 
-  @@unique([eventId, recipient])
+  /// One mail per (event, template, recipient): two notices of one event never block each other.
+  @@unique([eventId, template, recipient])
   @@map("event_notices")
 }
 

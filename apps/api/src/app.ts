@@ -239,7 +239,9 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(paymentRoutes);
   await app.register(reviewRoutes);
   await app.register(refundRoutes);
-  await app.register(merchantSettingsRoutes);
+  await app.register(merchantSettingsRoutes, {
+    verifyRateLimit: limiters.notificationEmailVerify,
+  });
   await app.register(connectRoutes, { tokenRateLimit: limiters.connectToken });
   opts.extraRoutes?.(app);
 

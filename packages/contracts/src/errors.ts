@@ -72,6 +72,16 @@ export const ErrorCodes = [
    * expire) on the dashboard, and `refund.cancelled` follows.
    */
   'REFUND_HAS_PROPOSAL',
+  /**
+   * `PATCH /v1/settings/checkout` with a connection key: the body names a setting a connection may
+   * not change (only `default_fee_payer`, `default_gas_payer` and `notification_email`).
+   */
+  'FIELD_NOT_ALLOWED',
+  /**
+   * `POST /v1/settings/notification-email/verify`: the link is unknown, already used, expired or
+   * replaced by a newer request. One code for every cause.
+   */
+  'INVALID_LINK',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

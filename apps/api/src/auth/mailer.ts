@@ -26,10 +26,24 @@ export const MailTemplateValues = [
   'payment_held',
   'payment_screening_unresolved',
   'refund_needs_review',
+  // Store notices (WooCommerce plugin spec §3, §8): to the store's verified notification email,
+  // or its owners. These carry their rendered `subject` and plain `text`.
+  'notification_email_verify',
+  'notification_email_changed',
+  'payment_received',
+  'refund_sent',
 ] as const;
 export type MailTemplate = (typeof MailTemplateValues)[number];
 
-export type MailMessage = { to: string; template: MailTemplate; data: Record<string, string> };
+export type MailMessage = {
+  to: string;
+  template: MailTemplate;
+  data: Record<string, string>;
+  /** The rendered subject, for templates whose copy the API writes (plain text, no HTML). */
+  subject?: string;
+  /** The rendered plain-text body, alongside `subject`. */
+  text?: string;
+};
 
 export interface Mailer {
   send(msg: MailMessage): Promise<void>;

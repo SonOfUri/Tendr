@@ -1,6 +1,7 @@
 // A merchant's checkout settings (dashboard, checkout Task 10): the checkout domains — origins
-// allowed to frame the checkout (CSP `frame-ancestors`), shared by test and live — and the default
-// fee and gas payers. Merchant-level, not per mode.
+// allowed to frame the checkout (CSP `frame-ancestors`), shared by test and live — the default
+// fee and gas payers, the store's notification email and the "You got paid" switch. Merchant-level,
+// not per mode. A connected site's key changes only the payers and the notification email.
 //
 // A checkout domain is an ORIGIN: scheme + host + optional port, no path, query, fragment,
 // credentials or wildcard. `https://` only in production; outside production `http://localhost`
@@ -15,7 +16,9 @@ import {
   gasPayerToDb,
   MAX_CHECKOUT_DOMAINS,
 } from '@tendr/contracts';
+import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { EmailSchema } from '../auth/magic-link.js';
 import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
@@ -23,6 +26,12 @@ import { recordEvent } from '../events/record.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { LOCAL_DEV_HOSTS } from '../lib/local-hosts.js';
 import { prisma } from '../lib/prisma.js';
+import {
+  NO_PENDING,
+  pendingNotificationEmail,
+  sendNotificationEmailChanged,
+  type SettingsActor,
+} from '../merchants/notification-email.js';
 
 /** Internal audit event (never a webhook). */
 export const CHECKOUT_SETTINGS_UPDATED = 'merchant.checkout_settings.updated';
@@ -93,22 +102,60 @@ export const CheckoutSettingsPatchSchema = z
     checkout_domains: z.array(z.string().max(300)).max(200).optional(),
     default_fee_payer: FeePayerSchema.optional(),
     default_gas_payer: GasPayerSchema.optional(),
+    /** A new address only takes effect through its verify link; null → the owners' emails. */
+    notification_email: EmailSchema.nullable().optional(),
+    payment_emails_enabled: z.boolean().optional(),
   })
   .strict();
+export type CheckoutSettingsPatch = z.infer<typeof CheckoutSettingsPatchSchema>;
 
-type Settings = {
-  checkoutDomains: string[];
-  defaultFeePayer: Parameters<typeof feePayerFromDb>[0];
-  defaultGasPayer: Parameters<typeof gasPayerFromDb>[0];
-};
+/** The settings a connected site's key may change (spec §3); anything else is FIELD_NOT_ALLOWED. */
+export const CONNECTION_SETTINGS_FIELDS: readonly string[] = [
+  'default_fee_payer',
+  'default_gas_payer',
+  'notification_email',
+];
+
+/**
+ * Refuses (403 FIELD_NOT_ALLOWED) a connection-key body naming any setting outside
+ * CONNECTION_SETTINGS_FIELDS. Checked on the raw body, before validation, so a refused field is
+ * always 403 whatever its value; unknown keys still fail validation (400).
+ */
+export function assertConnectionFields(body: unknown): void {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return;
+  const known = Object.keys(CheckoutSettingsPatchSchema.shape);
+  const refused = Object.keys(body).filter(
+    (k) => known.includes(k) && !CONNECTION_SETTINGS_FIELDS.includes(k),
+  );
+  if (refused.length > 0) {
+    throw new AppError(
+      'FIELD_NOT_ALLOWED',
+      `A connected site can change only ${CONNECTION_SETTINGS_FIELDS.join(', ')}`,
+      403,
+      { fields: refused },
+    );
+  }
+}
+
+const SELECT = {
+  name: true,
+  checkoutDomains: true,
+  defaultFeePayer: true,
+  defaultGasPayer: true,
+  notificationEmail: true,
+  notificationEmailPending: true,
+  paymentEmailsEnabled: true,
+} as const;
+type Settings = Prisma.MerchantGetPayload<{ select: typeof SELECT }>;
 
 const view = (m: Settings) => ({
   checkout_domains: m.checkoutDomains,
   default_fee_payer: feePayerFromDb(m.defaultFeePayer),
   default_gas_payer: gasPayerFromDb(m.defaultGasPayer),
+  notification_email: m.notificationEmail,
+  notification_email_pending: m.notificationEmailPending,
+  payment_emails_enabled: m.paymentEmailsEnabled,
 });
-
-const SELECT = { checkoutDomains: true, defaultFeePayer: true, defaultGasPayer: true } as const;
 
 export async function getCheckoutSettings(ctx: ScopeContext) {
   const m = await prisma.merchant.findUnique({ where: { id: ctx.merchantId }, select: SELECT });
@@ -118,12 +165,14 @@ export async function getCheckoutSettings(ctx: ScopeContext) {
 
 /**
  * Updates the given fields (merchant-wide) and records an internal audit event in the caller's
- * mode with the before and after values.
+ * mode with who made the change and the before and after values. A `notification_email` change
+ * only starts a pending one (a verify link to the new address); null (back to the owners) or the
+ * current address applies at once and drops any pending change, and clearing an address tells it.
  */
 export async function updateCheckoutSettings(
   ctx: ScopeContext,
-  actorUserId: string,
-  input: z.infer<typeof CheckoutSettingsPatchSchema>,
+  actor: SettingsActor,
+  input: CheckoutSettingsPatch,
 ) {
   const production = env().NODE_ENV === 'production';
   const domains =
@@ -134,6 +183,24 @@ export async function updateCheckoutSettings(
     await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${ctx.merchantId} FOR UPDATE`;
     const before = await tx.merchant.findUnique({ where: { id: ctx.merchantId }, select: SELECT });
     if (!before) throw notFound('Store not found');
+
+    let email: Prisma.MerchantUpdateInput = {};
+    let mail: (() => Promise<void>) | null = null;
+    if (input.notification_email === null) {
+      email = { notificationEmail: null, ...NO_PENDING };
+      const old = before.notificationEmail;
+      if (old) mail = () => sendNotificationEmailChanged([old], before.name, null);
+    } else if (input.notification_email === before.notificationEmail) {
+      email = NO_PENDING;
+    } else if (input.notification_email !== undefined) {
+      const pending = pendingNotificationEmail(input.notification_email, before.name, {
+        ...actor,
+        livemode: ctx.livemode,
+      });
+      email = pending.data;
+      mail = pending.send;
+    }
+
     const after = await tx.merchant.update({
       where: { id: ctx.merchantId },
       data: {
@@ -144,6 +211,10 @@ export async function updateCheckoutSettings(
         ...(input.default_gas_payer
           ? { defaultGasPayer: gasPayerToDb(input.default_gas_payer) }
           : {}),
+        ...(input.payment_emails_enabled !== undefined
+          ? { paymentEmailsEnabled: input.payment_emails_enabled }
+          : {}),
+        ...email,
       },
       select: SELECT,
     });
@@ -151,8 +222,16 @@ export async function updateCheckoutSettings(
       aggregateType: 'merchant',
       aggregateId: ctx.merchantId,
       type: CHECKOUT_SETTINGS_UPDATED,
-      payload: { user_id: actorUserId, before: view(before), after: view(after) },
+      payload: {
+        actor,
+        ...(actor.by === 'user' ? { user_id: actor.userId } : {}),
+        before: view(before),
+        after: view(after),
+      },
     });
+    // Last, inside the transaction: a failed send rolls the change back, so a pending address
+    // always had its link sent.
+    if (mail) await mail();
     return view(after);
   });
 }
