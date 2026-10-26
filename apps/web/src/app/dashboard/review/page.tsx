@@ -1,0 +1,363 @@
+'use client';
+
+import Link from 'next/link';
+import { useState } from 'react';
+import { HOLD_NOTICE, LEGAL_ACK_PHRASE } from '@tendr/contracts';
+import { Alert, Button, Spinner } from '@tendr/ui';
+import { useDashboard } from '@/components/dashboard/DashboardShell';
+import { Status, useAction, useLoad } from '@/components/dashboard/common';
+import { CHAINS, chainLabel, formatAmount } from '@/lib/assets';
+import { api } from '@/lib/api';
+import {
+  refundStateWords,
+  type Refund,
+  type ReturnItem,
+  type ReviewItem,
+  type ReviewQueue,
+} from '@/lib/payments';
+import { withStepUp } from '@/lib/webauthn';
+
+// The review queue. There is deliberately no "release" action for held funds: a hold is a notice
+// (Tendr cannot freeze money in your account), and the only way funds leave is a refund proposal
+// that signers approve — for held funds only after an owner's typed legal acknowledgement, and
+// never back to the sanctioned sender.
+export default function ReviewPage() {
+  const { store, context } = useDashboard();
+  const key = context ? `${context.merchantId}:${context.livemode}` : null;
+  const queue = useLoad(() => api<ReviewQueue>('/v1/review'), key);
+  if (!store || !context) return null;
+  if (!queue.data) {
+    return queue.error ? (
+      <Alert tone="danger">{queue.error}</Alert>
+    ) : (
+      <Spinner label="Loading the review queue" />
+    );
+  }
+  const q = queue.data;
+  const reload = () => void queue.reload();
+  const empty =
+    q.held.length + q.screening_unresolved.length + q.returns.length + q.needs_address.length === 0;
+
+  return (
+    <div className="stack">
+      <div>
+        <h1>Review</h1>
+        <p className="muted">
+          Payments and returns that need a decision from your team in{' '}
+          {context.livemode ? 'live' : 'test'} mode.
+        </p>
+      </div>
+      {empty && <p className="muted">Nothing needs review.</p>}
+
+      {q.held.length > 0 && (
+        <section className="stack" aria-labelledby="held">
+          <h2 id="held">Held payments</h2>
+          {q.held.map((item) => (
+            <HeldCard
+              key={item.payment_id}
+              item={item}
+              isOwner={store.role === 'owner'}
+              livemode={context.livemode}
+              onChanged={reload}
+            />
+          ))}
+        </section>
+      )}
+
+      {q.screening_unresolved.length > 0 && (
+        <section className="card" aria-labelledby="screening">
+          <h2 id="screening">Screening couldn&apos;t complete</h2>
+          <p className="muted small">
+            We could not check these senders against sanctions lists for 6 hours, so these payments
+            are not marked paid. This is not a hold; we keep retrying. Contact support if it stays
+            here.
+          </p>
+          <ul className="list">
+            {q.screening_unresolved.map((item) => (
+              <li key={item.payment_id}>
+                <span className="grow">
+                  <Link href={`/dashboard/payments/${item.payment_id}`}>
+                    {formatAmount(item.source_asset, item.amount_received, context.livemode)}
+                  </Link>
+                  <span className="muted small address"> from {item.sender_address ?? '—'}</span>
+                </span>
+                <Status status={item.status} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {q.returns.length > 0 && (
+        <section className="card" aria-labelledby="returns">
+          <h2 id="returns">Return to sender</h2>
+          <ul className="list">
+            {q.returns.map((r) => (
+              <ReturnRow key={r.id} r={r} livemode={context.livemode} onChanged={reload} />
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {q.needs_address.length > 0 && (
+        <section className="card" aria-labelledby="needs-address">
+          <h2 id="needs-address">Waiting for an address</h2>
+          <p className="muted small">
+            These came from an exchange, so they cannot go back to the sending address. The shopper
+            was asked where to send them; you can also give an address they sent you.
+          </p>
+          <ul className="list">
+            {q.needs_address.map((r) => (
+              <ReturnRow key={r.id} r={r} livemode={context.livemode} onChanged={reload} />
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function RefundLine({ r, livemode }: { r: Refund; livemode: boolean }) {
+  return (
+    <>
+      {formatAmount(r.asset, r.amount, livemode)} · {r.reason} ·{' '}
+      <span className="muted small">{refundStateWords(r)}</span>
+      {r.proposal_id && (
+        <>
+          {' '}
+          <Link href={`/dashboard/approvals/${r.proposal_id}`} className="small">
+            View the proposal
+          </Link>
+        </>
+      )}
+    </>
+  );
+}
+
+function HeldCard({
+  item,
+  isOwner,
+  livemode,
+  onChanged,
+}: {
+  item: ReviewItem;
+  isOwner: boolean;
+  livemode: boolean;
+  onChanged: () => void;
+}) {
+  const [phrase, setPhrase] = useState('');
+  const ack = useAction();
+  const sent = item.refunds.some((r) => r.proposal_id || r.status === 'confirmed');
+
+  async function acknowledge(e: React.FormEvent) {
+    e.preventDefault();
+    const ok = await ack.run(() =>
+      withStepUp(() =>
+        api(`/v1/review/${encodeURIComponent(item.payment_id)}/acknowledge-legal`, {
+          method: 'POST',
+          json: { phrase },
+        }),
+      ),
+    );
+    if (ok !== undefined) onChanged();
+  }
+
+  return (
+    <div className="card" data-testid={`held-${item.payment_id}`}>
+      <Alert tone="danger">{HOLD_NOTICE}</Alert>
+      <p>
+        <Link href={`/dashboard/payments/${item.payment_id}`}>
+          {formatAmount(item.source_asset, item.amount_received, livemode)}
+        </Link>{' '}
+        <Status status={item.status} />
+        <br />
+        <span className="muted small address">
+          Sender: {item.sender_addresses.join(', ') || item.sender_address || '—'}
+          {item.sender_chain ? ` (${chainLabel(item.sender_chain)})` : ''}
+        </span>
+      </p>
+      {item.refunds.length > 0 && (
+        <ul className="list">
+          {item.refunds.map((r) => (
+            <li key={r.id}>
+              <span className="grow">
+                <RefundLine r={r} livemode={livemode} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {!item.legal_ack_at ? (
+        isOwner ? (
+          <form onSubmit={acknowledge} className="form">
+            <p className="small">
+              To return these funds (never to the sanctioned sender), an owner must confirm legal
+              clearance. Type exactly: <strong>{LEGAL_ACK_PHRASE}</strong>
+            </p>
+            <label className="field">
+              <span>Acknowledgement</span>
+              <input
+                name="legal-ack"
+                value={phrase}
+                onChange={(e) => setPhrase(e.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            {ack.error && <Alert tone="danger">{ack.error}</Alert>}
+            <Button type="submit" disabled={ack.busy || phrase !== LEGAL_ACK_PHRASE}>
+              {ack.busy ? 'Confirming…' : 'Confirm legal clearance'}
+            </Button>
+          </form>
+        ) : (
+          <p className="muted small">
+            An owner must confirm legal clearance before these funds can be returned.
+          </p>
+        )
+      ) : (
+        <>
+          <p className="muted small">
+            Legal clearance confirmed {new Date(item.legal_ack_at).toLocaleString()}.
+          </p>
+          {!sent && (
+            <DestinationForm
+              paymentId={item.payment_id}
+              required
+              label="Draft the refund"
+              onDone={onChanged}
+            />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ReturnRow({
+  r,
+  livemode,
+  onChanged,
+}: {
+  r: ReturnItem;
+  livemode: boolean;
+  onChanged: () => void;
+}) {
+  const redo = useAction();
+  const [give, setGive] = useState(false);
+  const canRedraft = !r.proposal_id && !!r.review_reason && !!r.destination;
+
+  async function redraft() {
+    const ok = await redo.run(() =>
+      withStepUp(() =>
+        api(`/v1/review/${encodeURIComponent(r.payment_id)}/refund`, {
+          method: 'POST',
+          json: { refund_id: r.id },
+        }),
+      ),
+    );
+    if (ok !== undefined) onChanged();
+  }
+
+  return (
+    <li>
+      <span className="grow">
+        <Link href={`/dashboard/payments/${r.payment_id}`}>{r.external_ref ?? r.payment_id}</Link> ·{' '}
+        <RefundLine r={r} livemode={livemode} />
+        <br />
+        <span className="muted small address">
+          {r.destination
+            ? `To ${chainLabel(r.destination_chain ?? '')}: ${r.destination}`
+            : 'No destination yet'}
+        </span>
+        {redo.error && <Alert tone="danger">{redo.error}</Alert>}
+        {give && (
+          <DestinationForm
+            paymentId={r.payment_id}
+            refundId={r.id}
+            label="Use this address"
+            onDone={onChanged}
+          />
+        )}
+      </span>
+      {canRedraft && (
+        <Button variant="secondary" onClick={() => void redraft()} disabled={redo.busy}>
+          {redo.busy ? 'Drafting…' : 'Draft again'}
+        </Button>
+      )}
+      {!r.proposal_id && !give && (
+        <button type="button" className="link-button small" onClick={() => setGive(true)}>
+          Send to another address
+        </button>
+      )}
+    </li>
+  );
+}
+
+function DestinationForm({
+  paymentId,
+  refundId,
+  required,
+  label,
+  onDone,
+}: {
+  paymentId: string;
+  refundId?: string;
+  required?: boolean;
+  label: string;
+  onDone: () => void;
+}) {
+  const [address, setAddress] = useState('');
+  const [chain, setChain] = useState('near');
+  const { busy, error, run } = useAction();
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const ok = await run(() =>
+      withStepUp(() =>
+        api(`/v1/review/${encodeURIComponent(paymentId)}/refund`, {
+          method: 'POST',
+          json: { ...(refundId ? { refund_id: refundId } : {}), destination: address, chain },
+        }),
+      ),
+    );
+    if (ok !== undefined) onDone();
+  }
+
+  return (
+    <form onSubmit={submit} className="form">
+      {required && (
+        <p className="muted small">
+          Give the address the funds should go to. It is checked against sanctions lists, and your
+          signers approve the refund before anything moves. The return fee is deducted; under $1 is
+          not returned.
+        </p>
+      )}
+      <div className="row">
+        <label className="field">
+          <span>Network</span>
+          <select name="refund-chain" value={chain} onChange={(e) => setChain(e.target.value)}>
+            {CHAINS.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field grow">
+          <span>Address</span>
+          <input
+            name="refund-address"
+            required
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            autoComplete="off"
+          />
+        </label>
+      </div>
+      {error && <Alert tone="danger">{error}</Alert>}
+      <Button type="submit" disabled={busy || !address}>
+        {busy ? 'Drafting…' : label}
+      </Button>
+    </form>
+  );
+}

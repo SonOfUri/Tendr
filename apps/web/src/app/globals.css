@@ -538,6 +538,24 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* Label / value pairs (payment detail). */
+.kv {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: 0.4rem 1rem;
+  margin: 0;
+}
+
+.kv dt {
+  color: var(--tendr-muted);
+}
+
+.kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .address {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow-wrap: anywhere;

@@ -210,9 +210,13 @@ function DashboardHeader() {
 
 const NAV: { href: string; label: string }[] = [
   { href: '/dashboard', label: 'Account' },
+  { href: '/dashboard/payments', label: 'Payments' },
+  { href: '/dashboard/review', label: 'Review' },
   { href: '/dashboard/approvals', label: 'Approvals' },
   { href: '/dashboard/withdraw', label: 'Withdraw' },
   { href: '/dashboard/addresses', label: 'Saved addresses' },
+  { href: '/dashboard/webhooks', label: 'Webhooks' },
+  { href: '/dashboard/settings/checkout', label: 'Checkout settings' },
   { href: '/dashboard/team', label: 'Team' },
   { href: '/dashboard/security', label: 'Security' },
   { href: '/dashboard/recovery', label: 'Recovery' },
