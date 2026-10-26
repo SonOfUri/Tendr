@@ -116,8 +116,16 @@ const FEE_LABELS: Readonly<Record<string, string>> = {
   other: 'Other fee',
 };
 
-const dashboardPaymentUrl = (paymentId: string) =>
-  new URL(`/dashboard/payments/${encodeURIComponent(paymentId)}`, env().WEB_URL).toString();
+/**
+ * The payment's dashboard page, naming its store and mode (`?store=&mode=`) so the dashboard opens
+ * them; it switches only for a member of that store.
+ */
+export function dashboardPaymentUrl(paymentId: string, merchantId: string, livemode: boolean) {
+  const url = new URL(`/dashboard/payments/${encodeURIComponent(paymentId)}`, env().WEB_URL);
+  url.searchParams.set('store', merchantId);
+  url.searchParams.set('mode', livemode ? 'live' : 'test');
+  return url.toString();
+}
 
 /** One line (no CR/LF or control characters from store-supplied names and refs). */
 const subjectFor = (livemode: boolean, subject: string) =>
@@ -198,7 +206,7 @@ export async function onPaymentReceivedNotice(
 
   const tx = p.transactions.settlement ?? p.transactions.origin;
   const txUrl = tx ? explorerTxUrl(tx.chain, tx.hash, e.livemode) : '';
-  const dashboardUrl = dashboardPaymentUrl(p.id);
+  const dashboardUrl = dashboardPaymentUrl(p.id, e.merchantId, e.livemode);
   const order = orderLabel(p.external_ref);
 
   const subject = subjectFor(e.livemode, `You got paid ${received} for ${order}`);
@@ -282,7 +290,7 @@ export async function onRefundSentNotice(e: Event, deps: NoticeDeps = DEFAULT_DE
   // `refundTxHash` is always the NEAR transaction that executed the refund proposal
   // (checkout/refunds.ts), whatever chain the customer's address is on: link it on NEAR.
   const txUrl = r.refundTxHash ? explorerTxUrl('near', r.refundTxHash, e.livemode) : '';
-  const dashboardUrl = dashboardPaymentUrl(payment.id);
+  const dashboardUrl = dashboardPaymentUrl(payment.id, e.merchantId, e.livemode);
   const reason = REFUND_REASONS[r.reason] ?? 'return to the customer';
   const to = r.destinationChain
     ? `to your customer's ${chainName(r.destinationChain)} address`

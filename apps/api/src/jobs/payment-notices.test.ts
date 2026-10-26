@@ -158,7 +158,12 @@ describe('merchant payment and refund emails', () => {
       order_total: '49.00 USD',
       paid_with: '0.02 ETH on Ethereum',
     });
-    expect(m.data.dashboard_url).toMatch(new RegExp(`/dashboard/payments/${p.id}$`));
+    // The link carries the store and mode, so the dashboard opens the right one.
+    const dash = new URL(String(m.data.dashboard_url));
+    expect(dash.pathname).toBe(`/dashboard/payments/${p.id}`);
+    expect(dash.searchParams.get('store')).toBe(merchant.id);
+    expect(dash.searchParams.get('mode')).toBe('test');
+    expect(m.text).toContain(String(m.data.dashboard_url));
     expect(m.data.tx_url).toBe('https://testnet.nearblocks.io/txns/SettleTxHash111');
     expect(m.text).toContain('Tendr fee');
     expect(m.text).toContain('1Click fee and spread');
@@ -272,6 +277,10 @@ describe('merchant payment and refund emails', () => {
     await onRefundSentNotice(await event('refund.sent', r.id, { refund_id: r.id }, true), deps);
     const m = mailer.sent.find((x) => x.template === 'refund_sent')!;
     expect(m.data.tx_url).toBe('https://nearblocks.io/txns/NearProposalTx333');
+    const dash = new URL(String(m.data.dashboard_url));
+    expect(dash.pathname).toBe(`/dashboard/payments/${p.id}`);
+    expect(dash.searchParams.get('store')).toBe(merchant.id);
+    expect(dash.searchParams.get('mode')).toBe('live');
     expect(m.text).not.toContain('etherscan');
     expect(m.text).toContain("sent 5 USDC to your customer's Ethereum address");
   });
