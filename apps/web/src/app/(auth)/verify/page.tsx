@@ -5,10 +5,11 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { Alert, Button } from '@tendr/ui';
 import { api, errorMessage } from '@/lib/api';
+import { loadConnectParams, takeConnectWaiting } from '@/lib/connect';
 import { takePendingInvite } from '@/lib/navigation';
 import { registerPasskey, type SessionStart } from '@/lib/webauthn';
 
-type Step = 'confirm' | 'passkey' | 'done';
+type Step = 'confirm' | 'passkey' | 'done' | 'connect-elsewhere';
 
 function Verify() {
   const router = useRouter();
@@ -25,6 +26,18 @@ function Verify() {
   }, [params]);
 
   function finish() {
+    // Signing up from the Connect popup: in this same tab, back to /connect (its parameters are
+    // in this tab's sessionStorage); in a tab the email link opened, back to the popup window,
+    // which notices the new session by itself.
+    if (loadConnectParams()) {
+      setStep('done');
+      router.replace('/connect');
+      return;
+    }
+    if (takeConnectWaiting()) {
+      setStep('connect-elsewhere');
+      return;
+    }
     setStep('done');
     // A new person lands on store naming (the dashboard sends anyone with no store there), or
     // back on the invite they came from.
@@ -71,6 +84,18 @@ function Verify() {
         <h1>This link is incomplete</h1>
         <p className="muted">
           Open the link from your email again, or <Link href="/signup">ask for a new one</Link>.
+        </p>
+      </div>
+    );
+  }
+
+  if (step === 'connect-elsewhere') {
+    return (
+      <div className="card">
+        <h1>You’re signed in</h1>
+        <p>
+          Go back to the tendr window you opened from your site to finish connecting it. You can
+          close this tab.
         </p>
       </div>
     );

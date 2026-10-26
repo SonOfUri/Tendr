@@ -18,6 +18,7 @@ import {
   type StoreContext,
   type StoreSummary,
 } from '@/lib/api';
+import { linkedStore, withoutStoreLink } from '@/lib/store-link';
 import { registerPasskey } from '@/lib/webauthn';
 
 interface Dashboard {
@@ -52,6 +53,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
   const [context, setContext] = useState<StoreContext | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The page a `?store=&mode=` link pointed at a store the person is not a member of.
+  const [notFoundAt, setNotFoundAt] = useState<string | null>(null);
 
   // Any request that finds the session missing or over (401 UNAUTHENTICATED), on any
   // dashboard page, sends the person to sign in and back here afterwards.
@@ -67,7 +70,14 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(async () => {
     try {
       const m = await api<Me>('/v1/me', { store: false });
-      const ctx = pickContext(m);
+      // A link from an email names its store and mode: switch to them only for a member.
+      const { pathname: path, search } = window.location;
+      const link = linkedStore(search, m.stores);
+      const ctx = link.kind === 'switch' ? link.ctx : pickContext(m);
+      if (link.kind !== 'none') {
+        setNotFoundAt(link.kind === 'not-found' ? path : null);
+        window.history.replaceState(window.history.state, '', withoutStoreLink(path, search));
+      }
       setStoreContext(ctx);
       setContext(ctx);
       setMe(m);
@@ -129,7 +139,13 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     <DashboardContext.Provider value={value}>
       <DashboardHeader />
       <section className="dash">
-        {value.me.passkeys.length === 0 ? <PasskeyGate onDone={refresh} /> : children}
+        {value.me.passkeys.length === 0 ? (
+          <PasskeyGate onDone={refresh} />
+        ) : notFoundAt === pathname ? (
+          <LinkNotFound />
+        ) : (
+          children
+        )}
       </section>
     </DashboardContext.Provider>
   );
@@ -217,6 +233,8 @@ const NAV: { href: string; label: string }[] = [
   { href: '/dashboard/addresses', label: 'Saved addresses' },
   { href: '/dashboard/webhooks', label: 'Webhooks' },
   { href: '/dashboard/settings/checkout', label: 'Checkout settings' },
+  { href: '/dashboard/settings/connected-sites', label: 'Connected sites' },
+  { href: '/dashboard/settings/payout', label: 'Payout' },
   { href: '/dashboard/team', label: 'Team' },
   { href: '/dashboard/security', label: 'Security' },
   { href: '/dashboard/recovery', label: 'Recovery' },
@@ -276,6 +294,22 @@ function RecoveryBanner() {
       {countdown(recovery.executesAt)}. If nobody on your team started it,{' '}
       <Link href="/dashboard/recovery">cancel it now</Link>.
     </p>
+  );
+}
+
+/** A link to a store the person is not a member of (never says whether that store exists). */
+function LinkNotFound() {
+  return (
+    <div className="card">
+      <h1>Page not found</h1>
+      <p className="muted">
+        This link is for a store you are not a member of, or it is no longer valid. If you have more
+        than one tendr account, sign in with the one that belongs to the store.
+      </p>
+      <p>
+        <Link href="/dashboard">Go to your account</Link>
+      </p>
+    </div>
   );
 }
 

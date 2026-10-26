@@ -956,3 +956,44 @@ code {
   outline: 2px solid var(--tendr-cyan);
   outline-offset: 2px;
 }
+
+/* ─── Connect popup ─────────────────────────────────────────────────────── */
+
+.connect-origin {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--tendr-cyan);
+  border-radius: var(--tendr-radius);
+  background: rgba(8, 13, 27, 0.6);
+}
+
+.connect-origin strong {
+  font-size: 1.15rem;
+  overflow-wrap: anywhere;
+}
+
+.choices {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.choices label {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--tendr-border);
+  border-radius: var(--tendr-radius);
+  cursor: pointer;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}

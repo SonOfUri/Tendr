@@ -198,6 +198,12 @@ export interface CheckoutSettings {
   checkout_domains: string[];
   default_fee_payer: 'merchant' | 'shopper';
   default_gas_payer: 'merchant' | 'shopper';
+  /** The verified address for payment and refund notices; null means the store's owners. */
+  notification_email: string | null;
+  /** A new address waiting for its verify link. */
+  notification_email_pending: string | null;
+  /** The "You got paid" email. */
+  payment_emails_enabled: boolean;
 }
 
 export interface WebhookEndpoint {

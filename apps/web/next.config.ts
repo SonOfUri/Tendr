@@ -38,6 +38,8 @@ const nextConfig: NextConfig = {
       '/invite/:path*',
       '/recover',
       '/recover/:path*',
+      '/connect',
+      '/settings/:path*',
     ].map((source) => ({
       source,
       headers: [

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { checkoutContentSecurityPolicy, contentSecurityPolicy } from './csp';
+import {
+  checkoutContentSecurityPolicy,
+  connectContentSecurityPolicy,
+  contentSecurityPolicy,
+} from './csp';
 import { WALLET_CONNECT_HOSTS, WALLET_FRAME_HOSTS } from './checkout/wallet-hosts';
 
 const directives = (csp: string) =>
@@ -155,5 +159,23 @@ describe('checkoutContentSecurityPolicy (/pay/*)', () => {
     const d = directives(checkoutContentSecurityPolicy({ ...base, frameAncestors: [] }));
     expect(d['img-src']).toEqual(["'self'", 'data:', 'blob:', 'https:']);
     expect(d['script-src']).not.toContain("'unsafe-eval'");
+  });
+});
+
+describe('connectContentSecurityPolicy (/connect)', () => {
+  it('is the signing-page policy with no frames either way and forms only to itself', () => {
+    const d = directives(
+      connectContentSecurityPolicy({
+        nonce: 'n0nce',
+        apiBaseUrl: 'https://api.usetendr.tech/v1',
+        dev: false,
+      }),
+    );
+    expect(d['frame-ancestors']).toEqual(["'none'"]);
+    expect(d['frame-src']).toEqual(["'none'"]);
+    expect(d['form-action']).toEqual(["'self'"]);
+    expect(d['script-src']).toEqual(["'self'", "'nonce-n0nce'"]);
+    expect(d['connect-src']).toEqual(["'self'", 'https://api.usetendr.tech']);
+    expect(d['object-src']).toEqual(["'none'"]);
   });
 });

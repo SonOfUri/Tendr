@@ -1,5 +1,7 @@
 // Strict CSP (with a per-request script nonce) on every dashboard page and the sign-in pages,
 // where passkeys are created and used, and the checkout policy on the shopper pages (`/pay/*`).
+// The Connect popup (`/connect`) gets its own policy (no frames at all; lib/csp.ts), and it and the
+// notification-email verify page are never cached.
 // See lib/csp.ts. X-Frame-Options for the dashboard is in next.config.ts (never set for /pay).
 //
 // The checkout may be framed only by the merchant's checkout domains: for a request that could be
@@ -12,7 +14,11 @@ import {
   needsFrameLookup,
 } from './lib/checkout/frame-origins';
 import { WALLET_CONNECT_HOSTS, WALLET_FRAME_HOSTS } from './lib/checkout/wallet-hosts';
-import { checkoutContentSecurityPolicy, contentSecurityPolicy } from './lib/csp';
+import {
+  checkoutContentSecurityPolicy,
+  connectContentSecurityPolicy,
+  contentSecurityPolicy,
+} from './lib/csp';
 
 const publicApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
 
@@ -36,15 +42,21 @@ async function checkoutPolicy(request: NextRequest, nonce: string, dev: boolean)
   });
 }
 
+/** Pages whose responses carry one-time parameters (connect state, a verify token): never cached. */
+const NO_STORE_PATHS = ['/connect', '/settings/notification-email/verify'];
+
 export async function middleware(request: NextRequest) {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   const nonce = btoa(String.fromCharCode(...bytes));
   const dev = process.env.NODE_ENV === 'development';
-  const checkout = request.nextUrl.pathname.startsWith('/pay/');
+  const { pathname } = request.nextUrl;
+  const checkout = pathname.startsWith('/pay/');
   const csp = checkout
     ? await checkoutPolicy(request, nonce, dev)
-    : contentSecurityPolicy({ nonce, apiBaseUrl: publicApiBaseUrl, dev });
+    : pathname === '/connect'
+      ? connectContentSecurityPolicy({ nonce, apiBaseUrl: publicApiBaseUrl, dev })
+      : contentSecurityPolicy({ nonce, apiBaseUrl: publicApiBaseUrl, dev });
 
   // Next reads the nonce from the request's CSP header and applies it to its own scripts.
   const requestHeaders = new Headers(request.headers);
@@ -52,8 +64,9 @@ export async function middleware(request: NextRequest) {
   requestHeaders.set('Content-Security-Policy', csp);
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set('Content-Security-Policy', csp);
-  if (checkout) {
-    // The policy depends on the session and on whether the request can be framed: never cache it.
+  if (checkout || NO_STORE_PATHS.includes(pathname)) {
+    // The checkout policy depends on the session and on whether the request can be framed; the
+    // others carry one-time parameters. Never cache them.
     response.headers.set('Cache-Control', 'no-store');
   }
   return response;
@@ -70,5 +83,7 @@ export const config = {
     '/recover',
     '/recover/:path*',
     '/pay/:path*',
+    '/connect',
+    '/settings/notification-email/verify',
   ],
 };

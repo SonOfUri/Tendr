@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { middleware } from './middleware';
+import { config, middleware } from './middleware';
 
 const SESSION = 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0';
 
@@ -55,5 +55,44 @@ describe('middleware /pay/* frame-ancestors (C29)', () => {
   it('keeps the dashboard policy unframeable', async () => {
     const res = await middleware(new NextRequest('http://localhost:3000/dashboard'));
     expect(ancestors(res)).toBe("'none'");
+  });
+});
+
+describe('middleware /connect', () => {
+  const directive = (res: Response, name: string) =>
+    new RegExp(`(?:^|; )${name} ([^;]*)`).exec(
+      res.headers.get('content-security-policy') ?? '',
+    )?.[1];
+
+  it('serves its own unframeable nonce policy that posts forms only to itself', async () => {
+    const fetchFn = fetchStub();
+    const res = await middleware(
+      new NextRequest('http://localhost:3000/connect?site_url=https%3A%2F%2Fshop.example&state=x', {
+        headers: { 'sec-fetch-dest': 'iframe' },
+      }),
+    );
+    expect(directive(res, 'frame-ancestors')).toBe("'none'");
+    expect(directive(res, 'frame-src')).toBe("'none'");
+    expect(directive(res, 'form-action')).toBe("'self'");
+    expect(directive(res, 'script-src')).toMatch(/^'self' 'nonce-[A-Za-z0-9+/=]+'$/);
+    expect(directive(res, 'default-src')).toBe("'self'");
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    // Nothing from the query reaches the policy, and no frame lookup is made.
+    expect(res.headers.get('content-security-policy')).not.toContain('shop.example');
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('runs on /connect and the verify page', () => {
+    expect(config.matcher).toEqual(
+      expect.arrayContaining(['/connect', '/settings/notification-email/verify']),
+    );
+  });
+
+  it('gives the notification-email verify page the strict, uncached policy', async () => {
+    const res = await middleware(
+      new NextRequest('http://localhost:3000/settings/notification-email/verify?t=abc'),
+    );
+    expect(ancestors(res)).toBe("'none'");
+    expect(res.headers.get('cache-control')).toBe('no-store');
   });
 });

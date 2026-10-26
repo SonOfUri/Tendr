@@ -44,6 +44,20 @@ export function contentSecurityPolicy(opts: {
 }
 
 /**
+ * The policy for the Connect popup (`/connect`, WooCommerce plugin spec §2): the signing-page
+ * policy (nonce scripts only, never framed, forms post only to itself) plus `frame-src 'none'`,
+ * since the page frames nothing. CSP cannot limit `window.location`, so the page itself only ever
+ * navigates to the plugin's return URL, after checking the origin (lib/connect.ts).
+ */
+export function connectContentSecurityPolicy(opts: {
+  nonce: string;
+  apiBaseUrl: string;
+  dev: boolean;
+}): string {
+  return `${contentSecurityPolicy(opts)}; frame-src 'none'`;
+}
+
+/**
  * A plain origin (scheme, host, optional port), as the API stores checkout domains. Anything else
  * (paths, wildcards, quotes, spaces, `;`, line breaks) is dropped before it reaches a CSP header.
  */

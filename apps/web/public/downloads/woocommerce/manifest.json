@@ -1,0 +1,8 @@
+{
+  "version": "0.0.0",
+  "file": null,
+  "sha256": null,
+  "requires": "6.4",
+  "tested": "6.8",
+  "requires_php": "8.0"
+}
