@@ -497,30 +497,44 @@ Before it pays anything, it:
 
 - checks the Chainalysis key: a known sanctioned address is identified, and a clean one is not;
 - prints a raw dry quote, parsed by the API's own 1Click client;
-- prints the plan with every cost, and refuses a plan over 5 USD;
+- checks that your account is registered on the destination token, which cleanup needs to
+  withdraw the delivered USDC. If it is not, registering it (at most 0.0125 NEAR) goes into the
+  plan and is paid after you confirm. If it would cost more, the script refuses and prints the
+  `storage_deposit` call to make yourself;
+- prints the plan with every cost (in integer micro-USD), and refuses a plan over 5 USD;
 - asks you to type `spend`.
 
-Then it pays three times:
+Then it pays four times:
 
 1. **Overpay.** An `EXACT_OUTPUT` payment, overpaid by 25%.
-   - The recipient must be credited exactly `amount_out`, found the way the watcher finds it: in
-     the settlement transaction's receipts.
+   - The recipient must be credited exactly `amount_out`, no more and no less, found the way the
+     watcher finds it: in the settlement transaction's receipts.
    - The excess must reach `refundTo`.
    - It prints the settlement receipts and events, and which account routes `tx_status` to them.
-   - The `appFees` share must reach the fee account.
+   - The `appFees` share must reach the fee account. This is a balance delta on the fee account,
+     so run the script only before live fees flow to it (or pass your own `--fee-account`).
    - It prints the raw 1Click status, the origin transaction and the sender.
-2. **Underpay and top up.** It sends half a payment, then the rest to the same address before the
+2. **Extra deposit after settlement.** A tenth of the payment, sent to the overpay's deposit
+   address after it settled. INFO only, since the spec defines no required outcome. It prints
+   `depositedAmount` before and after, whether the new origin hash is listed, and whether the
+   extra was refunded or swapped to the recipient. The watcher's late and seen-hash handling must
+   match what it prints.
+3. **Underpay and top up.** It sends half a payment, then the rest to the same address before the
    deadline.
-   - A PASS means 1Click accumulates top-ups, so `CHECKOUT_TOPUP_ENABLED=true` is safe in live.
-     Top-ups stay off in live until then.
+   - PASS only when 1Click reported `INCOMPLETE_DEPOSIT` before the top-up, and the accumulated
+     deposit then settled. Then `CHECKOUT_TOPUP_ENABLED=true` is safe in live. Top-ups stay off
+     in live until then.
+   - INCONCLUSIVE when the underpay was never reported (both halves may have counted as one
+     deposit). The top-up is still sent; keep `CHECKOUT_TOPUP_ENABLED` unset.
+   - FAIL when 1Click refunded instead of accumulating.
    - It prints `depositedAmount` against the origin transaction hashes 1Click lists.
-3. **Late deposit.** It sends a deposit after the quote's deadline, and prints whether 1Click
+4. **Late deposit.** It sends a deposit after the quote's deadline, and prints whether 1Click
    refunded or swapped it.
 
 It stops at the first FAIL. A first FAIL may be a wrong guess about the 1Click wire format, so read
-the printed response. `--phase cleanup` withdraws your intents balances of both assets back to
-your account. What is spent for good: gas, storage deposits, the fee share, 1Click's fee and the
-spread.
+the printed response. `--phase cleanup` asks you to type `withdraw`, then withdraws your intents
+balances of both assets back to your account. What is spent for good: gas, storage deposits, the
+fee share, 1Click's fee and the spread.
 
 **Manual checklist (not scripted):**
 
@@ -535,12 +549,20 @@ spread.
 ### Known limitations
 
 - **Wallet coverage.** Wallets can pay:
-  - native assets of the listed EVM chains, Solana, Bitcoin and Tron;
-  - EVM tokens on those chains;
+  - native coins listed as `nep141:<chain>.omft.near` for the EVM chains `eth`, `base`, `arb`,
+    `op`, `pol`, `bsc`, `avax`, `gnosis` and `bera`, and for Solana, Bitcoin and Tron;
+  - PoA-bridged ERC-20 tokens on those chains (`nep141:<chain>-0x….omft.near`);
   - Solana USDC and USDT, and Tron USDT;
-  - NEAR tokens.
+  - NEAR tokens (`nep141:`, not bridged).
 
-  Every other token and chain 1Click supports is paid by manual send (deposit address and QR).
+  These are paid by manual send only (deposit address and QR):
+  - HOT-bridged `nep245:` tokens, which include USDT and USDC on BSC and Polygon. So BSC or Polygon
+    USDT cannot be paid from a wallet;
+  - SPL and TRC-20 tokens other than the verified USDC/USDT above;
+  - every other chain 1Click supports;
+  - Bitcoin wallets that only sign PSBTs (the shopper is told to send manually);
+  - redirect-based NEAR wallets (only the popup wallets Meteor and Intear are offered).
+
   Without `NEXT_PUBLIC_REOWN_PROJECT_ID`, EVM, Solana and Bitcoin are manual-send only too.
 
 - **`@coinbase/cdp-sdk` is pinned to 1.52.0** (root `overrides`). Version 1.53 and later

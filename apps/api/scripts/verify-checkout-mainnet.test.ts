@@ -7,12 +7,20 @@ import { UsageError } from './lib/near-script.js';
 import {
   CONFIRM_FLAG,
   CONFIRM_WORD,
+  DEST_STORAGE_MAX_YOCTO,
+  MAX_SPEND_MICRO_USD,
   MAX_SPEND_USD,
   SpendTracker,
+  WITHDRAW_WORD,
   assertPlanWithinCap,
   buildSpendPlan,
   cleanupCommand,
   confirmSpend,
+  confirmWithdraw,
+  extraAmount,
+  formatMicroUsd,
+  scaleMicro,
+  toMicroUsd,
   parseVerifyArgs,
   splitUnderpay,
   overpayAmount,
@@ -145,31 +153,51 @@ describe('checkout:verify:mainnet argument parsing', () => {
   });
 });
 
-describe('spend cap', () => {
+describe('spend cap (integer micro-USD)', () => {
   it('is 5 USD and refuses a plan above it or without a price', () => {
     expect(MAX_SPEND_USD).toBe(5);
-    expect(assertPlanWithinCap(4.99)).toBeCloseTo(4.99);
-    expect(assertPlanWithinCap(5)).toBe(5);
-    expect(() => assertPlanWithinCap(5.01)).toThrow(/above the 5 USD cap/);
-    expect(() => assertPlanWithinCap(Number.NaN)).toThrow(/cannot be priced/);
-    expect(() => assertPlanWithinCap(-1)).toThrow(/cannot be priced/);
+    expect(MAX_SPEND_MICRO_USD).toBe(5_000_000n);
+    expect(assertPlanWithinCap(4_999_999n)).toBe(4_999_999n);
+    expect(assertPlanWithinCap(5_000_000n)).toBe(5_000_000n);
+    expect(() => assertPlanWithinCap(5_000_001n)).toThrow(/5\.000001 USD, above the 5 USD cap/);
+    expect(() => assertPlanWithinCap(null)).toThrow(/cannot be priced/);
+    expect(() => assertPlanWithinCap(-1n)).toThrow(/cannot be priced/);
   });
 
-  it('prices every payment and the NEAR costs, and refuses an oversized amount', () => {
+  it('parses USD strings exactly, rounding up past a micro-dollar', () => {
+    expect(toMicroUsd('1.01')).toBe(1_010_000n);
+    expect(toMicroUsd('3')).toBe(3_000_000n);
+    expect(toMicroUsd('0.0000001')).toBe(1n);
+    expect(toMicroUsd('1.2345678')).toBe(1_234_568n);
+    for (const bad of ['0', '0.0', '-1', '1e3', 'abc', '', undefined, 1.5]) {
+      expect(toMicroUsd(bad)).toBeNull();
+    }
+    expect(formatMicroUsd(1_262_500n)).toBe('1.2625');
+    expect(formatMicroUsd(3_000_000n)).toBe('3');
+    expect(scaleMicro(1_010_000n, 125n, 100n)).toBe(1_262_500n);
+    expect(scaleMicro(1n, 1n, 3n)).toBe(1n);
+    expect(scaleMicro(null, 1n, 1n)).toBeNull();
+  });
+
+  it('prices every payment, the extra deposit and the NEAR costs exactly', () => {
     const plan = buildSpendPlan({
       amountInUsd: '1.01',
       amountIn: '1010000',
       originAsset: 'nep141:usdt.tether-token.near',
       nearUsd: '3',
     });
-    expect(plan.text).toMatch(/overpay.*1\.2625 USD/);
+    expect(plan.text).toMatch(/\(1\) overpay: 1262500 units.*1\.2625 USD/);
+    expect(plan.text).toMatch(/\(b\) extra deposit.*101000 units, 0\.101 USD/);
     expect(plan.text).toMatch(/underpay \+ top-up.*1\.01 USD/);
     expect(plan.text).toMatch(/late deposit.*1\.01 USD/);
-    expect(plan.text).toMatch(/NEAR storage and gas/);
-    expect(plan.totalUsd).toBeGreaterThan(3.28);
-    expect(plan.totalUsd).toBeLessThan(5);
-    expect(plan.originUnits).toBe(1262500n + 1010000n + 1010000n);
-    expect(() => assertPlanWithinCap(plan.totalUsd)).not.toThrow();
+    expect(plan.text).toMatch(/NEAR storage and gas in all: up to 0\.0537 NEAR \(0\.16125 USD\)/);
+    expect(plan.text).not.toMatch(/destination token/);
+    // (1262500 + 101000 + 1010000 + 1010000) × 1.05 = 3552675, + 0.05375 NEAR × 3 USD = 161250.
+    expect(plan.fixedMicroUsd).toBe(161_250n);
+    expect(plan.totalMicroUsd).toBe(3_713_925n);
+    expect(plan.extraUnits).toBe(101_000n);
+    expect(plan.originUnits).toBe(1_262_500n + 1_010_000n + 1_010_000n + 101_000n);
+    expect(assertPlanWithinCap(plan.totalMicroUsd)).toBe(3_713_925n);
 
     const big = buildSpendPlan({
       amountInUsd: '2.02',
@@ -177,7 +205,29 @@ describe('spend cap', () => {
       originAsset: 'nep141:usdt.tether-token.near',
       nearUsd: '3',
     });
-    expect(() => assertPlanWithinCap(big.totalUsd)).toThrow(/above the 5 USD cap/);
+    expect(() => assertPlanWithinCap(big.totalMicroUsd)).toThrow(/above the 5 USD cap/);
+  });
+
+  it('adds the funder registration on the destination token, capped', () => {
+    const plan = buildSpendPlan({
+      amountInUsd: '1.01',
+      amountIn: '1010000',
+      originAsset: 'x',
+      nearUsd: '3',
+      destStorageYocto: DEST_STORAGE_MAX_YOCTO,
+    });
+    expect(plan.text).toMatch(/registration on the destination token.*0\.0125 NEAR: LOST/);
+    expect(plan.nearYocto).toBe(66_250_000_000_000_000_000_000n);
+    expect(plan.totalMicroUsd).toBe(3_552_675n + 198_750n);
+    expect(() =>
+      buildSpendPlan({
+        amountInUsd: '1.01',
+        amountIn: '1010000',
+        originAsset: 'x',
+        nearUsd: '3',
+        destStorageYocto: DEST_STORAGE_MAX_YOCTO + 1n,
+      }),
+    ).toThrow(/registering on the destination token costs/);
   });
 
   it('refuses a plan whose price inputs are missing', () => {
@@ -190,33 +240,57 @@ describe('spend cap', () => {
   });
 
   it('the running tracker refuses any send that would pass the cap', () => {
-    const t = new SpendTracker(0.2);
-    t.commit(1.3, 'overpay');
-    t.commit(1.1, 'top-up');
-    expect(t.totalUsd).toBeCloseTo(2.6);
-    expect(() => t.commit(2.5, 'late')).toThrow(/refusing to send late/);
-    expect(t.totalUsd).toBeCloseTo(2.6);
-    expect(() => t.commit(Number.NaN, 'x')).toThrow(/cannot be priced/);
+    const t = new SpendTracker(200_000n);
+    t.commit(1_300_000n, 'overpay');
+    t.commit(1_100_000n, 'top-up');
+    expect(t.totalMicroUsd).toBe(2_600_000n);
+    expect(() => t.commit(2_400_001n, 'late')).toThrow(/refusing to send late.*5\.000001 USD/);
+    expect(t.totalMicroUsd).toBe(2_600_000n);
+    t.commit(2_400_000n, 'exactly to the cap');
+    expect(t.totalMicroUsd).toBe(5_000_000n);
+    expect(() => t.commit(1n, 'one more micro-dollar')).toThrow(/above the 5 USD cap/);
+    expect(() => t.commit(null, 'x')).toThrow(/cannot be priced/);
   });
 });
 
-describe('confirmation prompt', () => {
-  it('goes ahead only on the exact word', async () => {
+describe('confirmation prompts', () => {
+  it('a run goes ahead only on the exact word', async () => {
     for (const [answer, ok] of [
       [CONFIRM_WORD, true],
       [`  ${CONFIRM_WORD}\n`, true],
       ['yes', false],
       ['y', false],
       ['', false],
+      [WITHDRAW_WORD, false],
       [CONFIRM_WORD.toUpperCase(), false],
     ] as const) {
       const asked: string[] = [];
-      const go = await confirmSpend(3.4, async (q) => {
+      const go = await confirmSpend(3_400_001n, async (q) => {
         asked.push(q);
         return answer;
       });
       expect(go).toBe(ok);
-      expect(asked[0]).toContain('3.40 USD');
+      expect(asked[0]).toContain('Spend up to 3.41 USD');
+    }
+  });
+
+  it('cleanup has its own wording and word', async () => {
+    for (const [answer, ok] of [
+      [WITHDRAW_WORD, true],
+      [` ${WITHDRAW_WORD} `, true],
+      [CONFIRM_WORD, false],
+      ['yes', false],
+      ['', false],
+    ] as const) {
+      const asked: string[] = [];
+      const go = await confirmWithdraw('me.near', async (q) => {
+        asked.push(q);
+        return answer;
+      });
+      expect(go).toBe(ok);
+      expect(asked[0]).toBe(
+        'Withdraw your remaining balance to me.near? Type "withdraw" to go ahead: ',
+      );
     }
   });
 });
@@ -225,6 +299,9 @@ describe('helpers', () => {
   it('splits an underpay and sizes an overpay', () => {
     expect(splitUnderpay(1_000_001n)).toEqual({ first: 500_000n, rest: 500_001n });
     expect(overpayAmount(1_000_000n)).toBe(1_250_000n);
+    expect(overpayAmount(1n)).toBe(2n);
+    expect(extraAmount(1_010_000n)).toBe(101_000n);
+    expect(extraAmount(5n)).toBe(1n);
   });
 
   it('summarises credits for the exact-output check', () => {
