@@ -21,12 +21,11 @@ import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
 import { AppError, notFound } from '../lib/errors.js';
+import { LOCAL_DEV_HOSTS } from '../lib/local-hosts.js';
 import { prisma } from '../lib/prisma.js';
 
 /** Internal audit event (never a webhook). */
 export const CHECKOUT_SETTINGS_UPDATED = 'merchant.checkout_settings.updated';
-
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 const invalid = (message: string, details?: unknown) =>
   new AppError('VALIDATION_ERROR', message, 400, details);
@@ -58,7 +57,7 @@ export function normalizeCheckoutDomain(
     return { error: 'use an origin only, without a path, query or fragment' };
   }
   if (u.protocol === 'https:') return { origin: u.origin };
-  if (u.protocol === 'http:' && !production && LOCAL_HOSTS.has(u.hostname)) {
+  if (u.protocol === 'http:' && !production && LOCAL_DEV_HOSTS.has(u.hostname)) {
     return { origin: u.origin };
   }
   return {

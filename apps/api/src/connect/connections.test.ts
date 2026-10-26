@@ -246,14 +246,75 @@ describe('connections', () => {
     expect(b.connection.addedDomain).toBeNull();
 
     // B is still live on the origin A added: the domain stays.
-    await revoke(a.connection.id);
+    await revoke(a.connection.id, 'dashboard');
     expect(await domainsOf(m.id)).toEqual(['https://hand.example.com', 'https://shop.example.com']);
 
     // A connection that added its domain and is alone on it takes it away.
     const c = await connect(m.id, u.id, 'https://other.example.com');
     expect(c.connection.addedDomain).toBe('https://other.example.com');
-    await revoke(c.connection.id);
+    await revoke(c.connection.id, 'dashboard');
     expect(await domainsOf(m.id)).toEqual(['https://hand.example.com', 'https://shop.example.com']);
+  });
+
+  it("revokeConnection by:'site' keeps addedDomain", async () => {
+    const { connection } = await connect(m.id, u.id, 'https://shop.example.com');
+    await revoke(connection.id, 'site');
+    expect(await domainsOf(m.id)).toEqual(['https://shop.example.com']);
+    const row = await prisma.connection.findUniqueOrThrow({ where: { id: connection.id } });
+    expect(row.revokedAt).not.toBeNull();
+    expect(row.addedDomain).toBe('https://shop.example.com');
+  });
+
+  it('a dashboard removal after a site revoke removes the domain when no peer uses it', async () => {
+    const { connection, issued } = await connect(m.id, u.id, 'https://shop.example.com');
+    await revoke(connection.id, 'site');
+    const revokedAt = (await prisma.connection.findUniqueOrThrow({ where: { id: connection.id } }))
+      .revokedAt;
+
+    await revoke(connection.id, 'dashboard');
+    expect(await domainsOf(m.id)).toEqual([]);
+    const row = await prisma.connection.findUniqueOrThrow({ where: { id: connection.id } });
+    expect(row.revokedAt).toEqual(revokedAt);
+    expect(row.addedDomain).toBeNull();
+    expect(
+      await prisma.apiKey.findUniqueOrThrow({ where: { keyHash: sha256(issued.test.secretKey) } }),
+    ).toMatchObject({ revokedAt: revokedAt });
+
+    // Running the removal again changes nothing.
+    await prisma.merchant.update({
+      where: { id: m.id },
+      data: { checkoutDomains: ['https://shop.example.com'] }, // re-added by hand meanwhile
+    });
+    await revoke(connection.id, 'dashboard');
+    expect(await domainsOf(m.id)).toEqual(['https://shop.example.com']);
+  });
+
+  it('a dashboard removal after a site revoke keeps the domain when a live peer shares the origin', async () => {
+    const a = await connect(m.id, u.id, 'https://shop.example.com');
+    await connect(m.id, u.id, 'https://shop.example.com/b');
+    await revoke(a.connection.id, 'site');
+    await revoke(a.connection.id, 'dashboard');
+    expect(await domainsOf(m.id)).toEqual(['https://shop.example.com']);
+  });
+
+  it('a dashboard removal hands addedDomain over to a live peer on the same origin', async () => {
+    const a = await connect(m.id, u.id, 'https://shop.example.com');
+    const b = await connect(m.id, u.id, 'https://shop.example.com/b');
+    // A revoked peer on the origin is not an owner candidate.
+    const c = await connect(m.id, u.id, 'https://shop.example.com/c');
+    await revoke(c.connection.id, 'dashboard');
+
+    await revoke(a.connection.id, 'dashboard');
+    const owner = async (id: string) =>
+      (await prisma.connection.findUniqueOrThrow({ where: { id } })).addedDomain;
+    expect(await owner(a.connection.id)).toBeNull();
+    expect(await owner(b.connection.id)).toBe('https://shop.example.com');
+    expect(await owner(c.connection.id)).toBeNull();
+    expect(await domainsOf(m.id)).toEqual(['https://shop.example.com']);
+
+    // The new owner, removed while alone on the origin, takes the domain away.
+    await revoke(b.connection.id, 'dashboard');
+    expect(await domainsOf(m.id)).toEqual([]);
   });
 
   it("siteOriginOf('https://shop.example.com/store/') → { origin:'https://shop.example.com', path:'/store' }", () => {

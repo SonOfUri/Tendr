@@ -938,6 +938,7 @@ model Session {
   // an expired, late or held order may get a new session.
   @@unique([id, merchantId, livemode])
   @@index([status, expiresAt])
+  @@index([connectionId])
   @@map("sessions")
 }
 

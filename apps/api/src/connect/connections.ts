@@ -7,8 +7,10 @@
 // signing secrets only through the KeyVault (`putSecret`).
 //
 // Connecting adds the site's origin to the store's `checkout_domains` when missing and records
-// that it did (`added_domain`). Revoking takes the domain away again only when this connection
-// added it and no other live connection is on that origin; a hand-added domain is never removed.
+// that it did (`added_domain`). A dashboard removal takes the domain away again only when this
+// connection added it and no other live connection is on that origin (otherwise ownership passes
+// to that connection); a Disconnect from the site never touches it, and a hand-added domain is
+// never removed.
 import type { Connection, Prisma } from '@prisma/client';
 import {
   CONNECT_WEBHOOK_PATH,
@@ -28,6 +30,7 @@ import { assertTransaction, recordEvent } from '../events/record.js';
 import { generateApiKey } from '../lib/crypto.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
+import { LOCAL_DEV_HOSTS } from '../lib/local-hosts.js';
 import { putSecret } from '../secrets/secrets.js';
 
 export { CONNECTION_KEY_SCOPES };
@@ -127,8 +130,6 @@ export interface CreateConnectionInput {
 /** Publishable keys carry no scope: no route needs one yet (least privilege). */
 const PUBLISHABLE_KEY_SCOPES: Scope[] = [];
 
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-
 /**
  * The endpoint URL as each mode accepts it, and whether the live endpoint can be active. Checked
  * before anything is written (the live check resolves DNS). A local development site
@@ -139,7 +140,7 @@ async function endpointUrls(site: { origin: string; path: string }) {
   const raw = connectionWebhookUrl(site);
   const test = await validateEndpointUrl(raw, false);
   const host = new URL(raw).hostname;
-  if (!strictHostPolicy(false) && LOCAL_HOSTS.has(host)) {
+  if (!strictHostPolicy(false) && LOCAL_DEV_HOSTS.has(host)) {
     return { test, live: test, liveActive: false };
   }
   return { test, live: await validateEndpointUrl(raw, true), liveActive: true };
@@ -243,10 +244,18 @@ export async function createConnection(
 
 /**
  * Revokes a connection: sets `revoked_at`, revokes its keys (they fail auth with 401 at once) and
- * deactivates its webhook endpoints (the rows stay for their delivery history). Removes the
- * checkout domain only when this connection added it and no other live connection of the store
- * is on that origin. Idempotent: an already revoked connection is left as it is. Must run in the
- * caller's transaction; the caller has checked that the connection belongs to its store.
+ * deactivates its webhook endpoints (the rows stay for their delivery history).
+ *
+ * The checkout domain is touched only by a dashboard removal (ruling W4; spec §2.7: a Disconnect
+ * from the site "does not remove the domain"). When this connection added the domain:
+ * - another live connection of the store on that origin → ownership (`added_domain`) passes to
+ *   it, so the domain keeps an owner;
+ * - none → the domain is removed from `checkout_domains`.
+ * Either way this connection's `added_domain` is cleared, so the rule runs once. A dashboard
+ * removal of a connection the site already disconnected still applies it.
+ *
+ * Idempotent. Must run in the caller's transaction; the caller has checked that the connection
+ * belongs to its store.
  */
 export async function revokeConnection(
   tx: Tx,
@@ -264,48 +273,62 @@ export async function revokeConnection(
     SELECT checkout_domains FROM merchants WHERE id = ${found.merchantId} FOR UPDATE`;
   await tx.$queryRaw`SELECT id FROM connections WHERE id = ${connectionId} FOR UPDATE`;
   const connection = await tx.connection.findUniqueOrThrow({ where: { id: connectionId } });
-  if (connection.revokedAt) return;
+  const merchantId = connection.merchantId;
 
-  const now = new Date();
-  await tx.connection.update({ where: { id: connectionId }, data: { revokedAt: now } });
-  await tx.apiKey.updateMany({
-    where: { merchantId: connection.merchantId, connectionId, revokedAt: null },
-    data: { revokedAt: now },
-  });
-  await tx.webhookEndpoint.updateMany({
-    where: { merchantId: connection.merchantId, connectionId, active: true },
-    data: { active: false },
-  });
+  const revoking = connection.revokedAt === null;
+  if (revoking) {
+    const now = new Date();
+    await tx.connection.update({ where: { id: connectionId }, data: { revokedAt: now } });
+    await tx.apiKey.updateMany({
+      where: { merchantId, connectionId, revokedAt: null },
+      data: { revokedAt: now },
+    });
+    await tx.webhookEndpoint.updateMany({
+      where: { merchantId, connectionId, active: true },
+      data: { active: false },
+    });
+  }
 
   let removedDomain: string | null = null;
-  if (connection.addedDomain) {
-    const others = await tx.connection.count({
-      where: {
-        merchantId: connection.merchantId,
-        siteOrigin: connection.addedDomain,
-        revokedAt: null,
-        id: { not: connectionId },
-      },
+  let domainOwner: string | null = null;
+  const domain = connection.addedDomain;
+  if (by === 'dashboard' && domain) {
+    const peer = await tx.connection.findFirst({
+      where: { merchantId, siteOrigin: domain, revokedAt: null, id: { not: connectionId } },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
     });
-    const domains = locked[0]?.checkout_domains ?? [];
-    if (others === 0 && domains.includes(connection.addedDomain)) {
-      removedDomain = connection.addedDomain;
-      await tx.merchant.update({
-        where: { id: connection.merchantId },
-        data: { checkoutDomains: domains.filter((d) => d !== removedDomain) },
-      });
+    await tx.connection.update({ where: { id: connectionId }, data: { addedDomain: null } });
+    if (peer) {
+      domainOwner = peer.id;
+      await tx.connection.update({ where: { id: peer.id }, data: { addedDomain: domain } });
+    } else {
+      const domains = locked[0]?.checkout_domains ?? [];
+      if (domains.includes(domain)) {
+        removedDomain = domain;
+        await tx.merchant.update({
+          where: { id: merchantId },
+          data: { checkoutDomains: domains.filter((d) => d !== domain) },
+        });
+      }
     }
   }
 
+  if (!revoking && removedDomain === null && domainOwner === null) return; // nothing changed
   for (const livemode of [false, true]) {
     await recordEvent(
       tx,
-      { merchantId: connection.merchantId, livemode },
+      { merchantId, livemode },
       {
         aggregateType: 'connection',
         aggregateId: connectionId,
         type: CONNECTION_REVOKED,
-        payload: { connection_id: connectionId, by, removed_domain: removedDomain },
+        payload: {
+          connection_id: connectionId,
+          by,
+          removed_domain: removedDomain,
+          domain_owner: domainOwner,
+        },
       },
     );
   }

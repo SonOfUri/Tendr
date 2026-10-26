@@ -31,6 +31,7 @@ import { tenantTransaction } from '../db/tenant-transaction.js';
 import { computeSignature } from '../gateway/signing.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
+import { LOCAL_DEV_HOSTS } from '../lib/local-hosts.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { registerEventHandler, handlerNamesFor } from '../jobs/handlers.js';
@@ -237,8 +238,6 @@ export function setWebhookResolver(fn: Resolver | null): void {
   resolver = fn ?? systemResolver;
 }
 
-const LOCAL_TEST_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-
 /**
  * Whether endpoints of this mode get the full SSRF policy (https only, public addresses only).
  * Always in live mode; in test mode too when running in production — test mode is relaxed (http
@@ -269,7 +268,7 @@ export async function validateEndpointUrl(raw: string, livemode: boolean): Promi
   const strict = strictHostPolicy(livemode);
   if (url.protocol === 'http:') {
     if (strict) throw invalidUrl('Webhook endpoints must use https://');
-    if (!LOCAL_TEST_HOSTS.has(url.hostname)) {
+    if (!LOCAL_DEV_HOSTS.has(url.hostname)) {
       throw invalidUrl('http:// is allowed only for localhost in test mode; use https://');
     }
   } else if (url.protocol !== 'https:') {
