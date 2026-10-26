@@ -837,6 +837,210 @@ class WebhookTest extends Tendr_Test_Case {
 		$this->assertStringContainsString( 'Another crypto payment', implode( "\n", self::notes( $order ) ) );
 	}
 
+	// ---------------------------------------------------------------- fix round 1.
+
+	public function test_succeeded_on_a_manually_cancelled_order_adds_a_note_only(): void {
+		$order = $this->order();
+		$order->update_status( 'cancelled' );
+		$this->session( $order, 'SETTLED', array( array() ) );
+
+		$this->assertSame( 200, $this->deliver( self::event( 'payment.succeeded', $order ) )->get_status() );
+
+		$order = self::fresh( $order );
+		$this->assertSame( 'cancelled', $order->get_status() );
+		$this->assertSame( '', $order->get_transaction_id() );
+		$notes = implode( "\n", self::notes( $order ) );
+		$this->assertStringContainsString( 'Payment received for a cancelled order', $notes );
+		$this->assertStringContainsString( 'https://testnet.nearblocks.io/txns/' . self::TX_HASH, $notes );
+		$this->assertStringContainsString( '$49.00', $notes );
+	}
+
+	public function test_an_older_session_settling_after_the_expiry_cancel_does_not_reopen_the_order(): void {
+		$order      = $this->order( array( 'stock' => true ) );
+		$product_id = current( $order->get_items() )->get_product_id();
+		$this->session( $order, 'EXPIRED', array() );
+		$this->deliver( self::event( 'checkout.session.expired', $order ) );
+		$this->assertSame( 'cancelled', self::fresh( $order )->get_status() );
+		$this->assertSame( 10, wc_get_product( $product_id )->get_stock_quantity() );
+
+		$this->session( $order, 'SETTLED', array( array() ), array( 'id' => self::OLD_SESSION_ID ) );
+		$this->deliver( self::event( 'payment.succeeded', $order, array( 'session_id' => self::OLD_SESSION_ID ) ) );
+
+		$order = self::fresh( $order );
+		$this->assertSame( 'cancelled', $order->get_status() );
+		$this->assertSame( 10, wc_get_product( $product_id )->get_stock_quantity(), 'stock is not taken again' );
+		$this->assertStringContainsString( 'Payment received for a cancelled order', implode( "\n", self::notes( $order ) ) );
+	}
+
+	public function test_the_re_read_uses_a_short_timeout_and_the_order_lock_wait_is_short(): void {
+		$order = $this->order();
+		$this->session( $order, 'SETTLED', array( array() ) );
+		$this->deliver( self::event( 'payment.succeeded', $order ) );
+
+		$get = array_values( array_filter( $this->requests, static fn( $r ) => 'GET' === $r['args']['method'] ) );
+		$this->assertLessThanOrEqual( 5, $get[0]['args']['timeout'] );
+		$this->assertLessThanOrEqual( 3, Tendr_Order_Sync::LOCK_WAIT );
+		$this->assertLessThan( 10, Tendr_Order_Sync::LOCK_WAIT + Tendr_Order_Sync::REREAD_TIMEOUT, 'fits the sender\'s 10 s timeout' );
+	}
+
+	public function test_a_locked_order_returns_503_promptly_and_the_retry_applies(): void {
+		global $wpdb;
+		$order = $this->order();
+		$this->session( $order, 'SETTLED', array( array() ) );
+		$event = self::event( 'payment.succeeded', $order );
+
+		// Another request (a second database connection) holds the order's lock.
+		$other = mysqli_init(); // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_init -- a second connection to hold the lock, as another request would.
+		$host  = explode( ':', DB_HOST );
+		$other->real_connect( $host[0], DB_USER, DB_PASSWORD, DB_NAME, isset( $host[1] ) ? (int) $host[1] : 3306 );
+		$name = 'tendr_order_' . $wpdb->prefix . $order->get_id();
+		$other->query( "SELECT GET_LOCK('" . $other->real_escape_string( $name ) . "', 0)" );
+
+		$start    = microtime( true );
+		$response = $this->deliver( $event );
+		$elapsed  = microtime( true ) - $start;
+		$other->query( "SELECT RELEASE_LOCK('" . $other->real_escape_string( $name ) . "')" );
+		$other->close();
+
+		$this->assertSame( 503, $response->get_status() );
+		$this->assertLessThan( 5, $elapsed );
+		$this->assertSame( 'pending', self::fresh( $order )->get_status() );
+		$this->assertSame( 200, $this->deliver( $event )->get_status() );
+		$this->assertSame( 'processing', self::fresh( $order )->get_status() );
+	}
+
+	public function test_underpaid_on_an_older_session_leaves_the_status_to_the_current_session(): void {
+		$order = $this->order( array( 'session' => self::SESSION_ID ) );
+		$this->session(
+			$order,
+			'REFUNDED',
+			array(
+				array(
+					'status'     => 'REFUNDED',
+					'settled_at' => null,
+				),
+			),
+			array( 'id' => self::OLD_SESSION_ID )
+		);
+
+		$this->deliver(
+			self::event(
+				'payment.refunded',
+				$order,
+				array(
+					'reason'     => 'underpaid',
+					'session_id' => self::OLD_SESSION_ID,
+				)
+			)
+		);
+
+		$order = self::fresh( $order );
+		$this->assertSame( 'pending', $order->get_status() );
+		$this->assertStringContainsString( 'Underpaid', implode( "\n", self::notes( $order ) ) );
+	}
+
+	public function test_a_failed_request_never_releases_a_claim_another_request_took_over(): void {
+		global $wpdb;
+		$order = $this->order();
+		$this->session( $order, 'SETTLED', array( array() ) );
+		$event = self::event( 'payment.succeeded', $order );
+		$table = Tendr_Webhooks::table();
+		// While this request re-reads, its claim expires and another delivery takes it over.
+		$this->get_reply = array( 503, null );
+		add_filter(
+			'pre_http_request',
+			static function ( $pre ) use ( $wpdb, $table, $event ) {
+				$wpdb->update( $table, array( 'received_at' => gmdate( 'Y-m-d H:i:s', time() + 5 ) ), array( 'event_id' => $event['id'] ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+				return $pre;
+			},
+			5
+		);
+
+		$this->assertSame( 503, $this->deliver( $event )->get_status() );
+
+		$state = $wpdb->get_var( $wpdb->prepare( "SELECT state FROM {$table} WHERE event_id = %s", $event['id'] ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$this->assertSame( '0', (string) $state, 'the other request\'s claim is kept' );
+	}
+
+	public function test_a_test_mode_payment_is_flagged_on_the_order_screen(): void {
+		$order = $this->order();
+		$this->session( $order, 'SETTLED', array( array() ) );
+		$this->deliver( self::event( 'payment.succeeded', $order ) );
+		$order = self::fresh( $order );
+		$this->assertSame( 'no', $order->get_meta( Tendr_Order_Sync::META_PAID_LIVEMODE ) );
+
+		ob_start();
+		do_action( 'woocommerce_admin_order_data_after_order_details', $order );
+		$html = (string) ob_get_clean();
+		$this->assertStringContainsString( 'Paid with a tendr TEST payment', $html );
+		$this->assertStringContainsString( 'no real money was received. Do not ship.', $html );
+		$this->assertStringContainsString( 'notice', $html );
+	}
+
+	public function test_a_live_payment_shows_no_test_notice(): void {
+		$order = $this->order( array( 'mode' => 'live' ) );
+		$this->session( $order, 'SETTLED', array( array() ), array( 'livemode' => true ) );
+		$this->deliver( self::event( 'payment.succeeded', $order, array(), array( 'livemode' => true ) ) );
+		$order = self::fresh( $order );
+		$this->assertSame( 'processing', $order->get_status() );
+		$this->assertSame( 'yes', $order->get_meta( Tendr_Order_Sync::META_PAID_LIVEMODE ) );
+
+		ob_start();
+		do_action( 'woocommerce_admin_order_data_after_order_details', $order );
+		$this->assertStringNotContainsString( 'TEST payment', (string) ob_get_clean() );
+	}
+
+	public function test_a_held_payment_returned_tells_the_merchant_to_cancel(): void {
+		$order = $this->order();
+		$this->session(
+			$order,
+			'HELD',
+			array(
+				array(
+					'status'      => 'HELD',
+					'held_reason' => 'sanctions',
+					'settled_at'  => null,
+				),
+			)
+		);
+		$this->deliver( self::event( 'payment.held', $order ) );
+
+		$this->session(
+			$order,
+			'REFUNDED',
+			array(
+				array(
+					'status'      => 'REFUNDED',
+					'held_reason' => 'sanctions',
+					'settled_at'  => null,
+				),
+			)
+		);
+		$this->deliver( self::event( 'payment.refunded', $order, array( 'reason' => 'sanctions' ) ) );
+
+		$order = self::fresh( $order );
+		$this->assertSame( 'on-hold', $order->get_status() );
+		$notes = implode( "\n", self::notes( $order ) );
+		$this->assertStringContainsString( 'The held payment was returned', $notes );
+		$this->assertStringContainsString( 'cancel this order if it will not be paid', $notes );
+	}
+
+	public function test_succeeded_again_on_a_refunded_order_is_silent(): void {
+		$order = $this->order();
+		$this->session( $order, 'SETTLED', array( array() ) );
+		$this->deliver( self::event( 'payment.succeeded', $order ) );
+		$order = self::fresh( $order );
+		$order->update_status( 'refunded' );
+		$count = count( self::notes( $order ) );
+
+		$this->session( $order, 'SETTLED', array( array( 'status' => 'REFUNDED' ) ) );
+		$this->assertSame( 200, $this->deliver( self::event( 'payment.succeeded', $order ) )->get_status() );
+
+		$order = self::fresh( $order );
+		$this->assertSame( 'refunded', $order->get_status() );
+		$this->assertCount( $count, self::notes( $order ) );
+	}
+
 	// ---------------------------------------------------------------- Task 11 hand-off.
 
 	public function test_refund_events_go_to_the_refund_handler_and_are_acknowledged(): void {

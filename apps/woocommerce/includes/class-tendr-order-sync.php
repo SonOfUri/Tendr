@@ -59,8 +59,39 @@ final class Tendr_Order_Sync {
 	/** Payment statuses of a payment that settled (and maybe was refunded by the store since). */
 	const SETTLED_PAYMENT_STATUSES = array( 'SETTLED', 'PARTIALLY_REFUNDED', 'REFUNDED' );
 
-	/** Seconds to wait for another delivery working on the same order. */
-	const LOCK_WAIT = 10;
+	/**
+	 * Seconds to wait for another delivery working on the same order. With the re-read timeout it
+	 * stays under the sender's 10 s timeout; on a timeout the receiver answers 503 at once.
+	 */
+	const LOCK_WAIT = 3;
+
+	/** Seconds the session re-read may take inside a webhook request. */
+	const REREAD_TIMEOUT = 5;
+
+	/** 'yes' | 'no': whether the payment that marked the order paid was a live one. */
+	const META_PAID_LIVEMODE = '_tendr_paid_livemode';
+
+	/**
+	 * Hooks: the test-payment warning on the order edit screen (classic and HPOS).
+	 */
+	public static function register(): void {
+		add_action( 'woocommerce_admin_order_data_after_order_details', array( self::class, 'render_test_payment_notice' ) );
+	}
+
+	/**
+	 * `woocommerce_admin_order_data_after_order_details`: a visible warning on orders a test-mode
+	 * tendr payment marked paid.
+	 *
+	 * @param WC_Order|mixed $order Order being edited.
+	 */
+	public static function render_test_payment_notice( $order ): void {
+		if ( ! $order instanceof WC_Order || 'no' !== $order->get_meta( self::META_PAID_LIVEMODE ) ) {
+			return;
+		}
+		echo '<div class="notice notice-warning inline tendr-test-payment" style="clear:both;margin:12px 0 0;"><p><strong>'
+			. esc_html__( 'Paid with a tendr TEST payment: no real money was received. Do not ship.', 'tendr' )
+			. '</strong></p></div>';
+	}
 
 	/**
 	 * Whether this plugin acts on an event type.
@@ -116,7 +147,7 @@ final class Tendr_Order_Sync {
 			return 'noop';
 		}
 		$mode = $event['livemode'] ? 'live' : 'test';
-		$view = Tendr_Api_Client::request( 'GET', '/v1/checkout/sessions/' . rawurlencode( $session_id ), array(), $mode );
+		$view = Tendr_Api_Client::request( 'GET', '/v1/checkout/sessions/' . rawurlencode( $session_id ), array(), $mode, array(), self::REREAD_TIMEOUT );
 		if ( is_wp_error( $view ) ) {
 			if ( 404 === self::status_of( $view ) && 'NOT_FOUND' === $view->get_error_code() ) {
 				self::log( $event, 'session_not_found' );
@@ -212,10 +243,12 @@ final class Tendr_Order_Sync {
 			return 'applied';
 		}
 
+		if ( ( self::is_paid( $order ) || $order->has_status( 'refunded' ) ) && $order->get_transaction_id() === $payment_id ) {
+			// This payment already paid the order (a resend, or since refunded): nothing to say.
+			return 'noop';
+		}
+
 		if ( self::is_paid( $order ) ) {
-			if ( $order->get_transaction_id() === $payment_id ) {
-				return 'noop';
-			}
 			self::note(
 				$order,
 				$event,
@@ -224,21 +257,31 @@ final class Tendr_Order_Sync {
 			return 'applied';
 		}
 
+		$fx_line = self::fx_line( $view );
+		$fx_text = null === $fx_line ? '' : ' ' . $fx_line;
+
+		// A cancelled order never moves back on its own: the merchant cancelled it, or its stock
+		// was released when the checkout expired.
+		if ( $order->has_status( 'cancelled' ) ) {
+			self::note(
+				$order,
+				$event,
+				__( 'Payment received for a cancelled order: reopen the order or refund it from tendr.', 'tendr' ) . ' ' . $details . $fx_text . self::overpaid_line( $payment )
+			);
+			return 'applied';
+		}
+
 		// WooCommerce's own filter, read with the same default payment_complete() uses.
 		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- WooCommerce core hook.
 		$valid = (array) apply_filters( 'woocommerce_valid_order_statuses_for_payment_complete', array( 'on-hold', 'pending', 'failed', 'cancelled' ), $order );
-		if ( ! $order->has_status( $valid ) ) {
+		if ( ! $order->has_status( array_diff( $valid, array( 'cancelled' ) ) ) ) {
 			self::note( $order, $event, __( 'A crypto payment settled for this order, but its status does not allow marking it paid.', 'tendr' ) . ' ' . $details );
 			return 'applied';
 		}
 
+		$order->update_meta_data( self::META_PAID_LIVEMODE, empty( $event['livemode'] ) ? 'no' : 'yes' );
 		$order->payment_complete( $payment_id );
-		$text = __( 'Crypto payment received.', 'tendr' ) . ' ' . $details;
-		$fx   = self::fx_line( $view );
-		if ( null !== $fx ) {
-			$text .= ' ' . $fx;
-		}
-		$text .= self::overpaid_line( $payment );
+		$text = __( 'Crypto payment received.', 'tendr' ) . ' ' . $details . $fx_text . self::overpaid_line( $payment );
 		self::note( $order, $event, $text );
 		return 'applied';
 	}
@@ -331,7 +374,10 @@ final class Tendr_Order_Sync {
 			$what = 'underpaid' === $reason
 				? __( 'Underpaid: the shopper sent less than the order total, and tendr is returning the deposit to them.', 'tendr' )
 				: __( 'The crypto payment could not be completed, and tendr is returning the deposit to the shopper.', 'tendr' );
-			if ( ! $order->has_status( 'pending' ) ) {
+			// Only the order's current session decides its status; an older session's return is
+			// just news (the current session may still be payable).
+			$current = (string) $order->get_meta( Tendr_Gateway::META_SESSION_ID ) === (string) ( $view['id'] ?? '' );
+			if ( ! $order->has_status( 'pending' ) || ! $current ) {
 				self::note( $order, $event, $what . ' ' . $details );
 				return 'applied';
 			}
@@ -342,6 +388,15 @@ final class Tendr_Order_Sync {
 			$order->update_status(
 				'failed',
 				self::prefix( $event ) . $what . ' ' . __( 'The deposit was returned and the checkout is closed; the shopper can try again from the order.', 'tendr' ) . ' ' . $details
+			);
+			return 'applied';
+		}//end if
+
+		if ( 'on-hold' === $order->get_status() && '' !== (string) $order->get_meta( self::META_HELD ) ) {
+			self::note(
+				$order,
+				$event,
+				__( 'The held payment was returned to the wallet that sent it. This order is still on hold: cancel this order if it will not be paid.', 'tendr' ) . ' ' . $details
 			);
 			return 'applied';
 		}

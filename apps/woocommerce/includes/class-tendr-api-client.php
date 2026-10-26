@@ -26,16 +26,17 @@ final class Tendr_Api_Client {
 	 * @param array  $body    JSON body (query arguments for GET).
 	 * @param string $mode    'test' or 'live': which connection key to use.
 	 * @param array  $headers Extra headers, e.g. `Idempotency-Key`.
+	 * @param int    $timeout Seconds (shorter inside a webhook, whose sender waits 10 s).
 	 * @return array|WP_Error The decoded JSON (an empty array for no content), or an error whose
 	 *                        message is safe to show to the store admin.
 	 */
-	public static function request( string $method, string $path, array $body = array(), string $mode = 'test', array $headers = array() ) {
+	public static function request( string $method, string $path, array $body = array(), string $mode = 'test', array $headers = array(), int $timeout = self::TIMEOUT ) {
 		$credentials = Tendr_Credentials::get( $mode );
 		if ( null === $credentials ) {
 			return new WP_Error( 'tendr_not_connected', __( 'This site is not connected to tendr. Connect it from the tendr payment settings.', 'tendr' ) );
 		}
 		$headers['Authorization'] = 'Bearer ' . $credentials['secret_key'];
-		return self::send( $method, $path, $body, $headers );
+		return self::send( $method, $path, $body, $headers, $timeout );
 	}
 
 	/**
@@ -59,9 +60,10 @@ final class Tendr_Api_Client {
 	 * @param string $path    Path.
 	 * @param array  $body    Body.
 	 * @param array  $headers Headers (may carry Authorization).
+	 * @param int    $timeout Seconds.
 	 * @return array|WP_Error
 	 */
-	private static function send( string $method, string $path, array $body, array $headers ) {
+	private static function send( string $method, string $path, array $body, array $headers, int $timeout = self::TIMEOUT ) {
 		$method = strtoupper( $method );
 		$url    = Tendr_Plugin::api_base() . '/' . ltrim( $path, '/' );
 
@@ -75,7 +77,7 @@ final class Tendr_Api_Client {
 
 		$args = array(
 			'method'      => $method,
-			'timeout'     => self::TIMEOUT,
+			'timeout'     => max( 1, $timeout ),
 			'sslverify'   => true,
 			// Never replay the Authorization header to another location.
 			'redirection' => 0,

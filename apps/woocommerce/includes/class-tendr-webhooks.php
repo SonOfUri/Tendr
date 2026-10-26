@@ -44,6 +44,14 @@ final class Tendr_Webhooks {
 	const STATE_DONE    = 1;
 
 	/**
+	 * The `received_at` each claim of this request wrote, by event id: release() deletes only a
+	 * row that still carries it (a takeover writes a newer one).
+	 *
+	 * @var array<string, string>
+	 */
+	private static array $claims = array();
+
+	/**
 	 * Hook the route and the daily prune.
 	 */
 	public static function register(): void {
@@ -299,16 +307,18 @@ final class Tendr_Webhooks {
 	 */
 	public static function claim( string $event_id ): string {
 		self::ensure_table();
-		$inserted = self::insert_claim( $event_id );
+		$now      = gmdate( 'Y-m-d H:i:s' );
+		$inserted = self::insert_claim( $event_id, $now );
 		if ( null === $inserted ) {
 			// The table went missing (dropped, or an update skipped activation): create it once.
 			self::install();
-			$inserted = self::insert_claim( $event_id );
+			$inserted = self::insert_claim( $event_id, $now );
 		}
 		if ( null === $inserted ) {
 			return 'error';
 		}
 		if ( $inserted ) {
+			self::$claims[ $event_id ] = $now;
 			return 'new';
 		}
 
@@ -326,13 +336,18 @@ final class Tendr_Webhooks {
 		$taken = $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 			$wpdb->prepare(
 				"UPDATE {$table} SET received_at = %s WHERE event_id = %s AND state = %d AND received_at < %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-				gmdate( 'Y-m-d H:i:s' ),
+				$now,
 				$event_id,
 				self::STATE_CLAIMED,
 				gmdate( 'Y-m-d H:i:s', time() - self::CLAIM_TTL )
 			)
 		);
-		return 1 === $taken ? 'new' : 'busy';
+		if ( 1 !== $taken ) {
+			return 'busy';
+		}
+		// The stale claim is at least CLAIM_TTL older, so this stamp is this request's alone.
+		self::$claims[ $event_id ] = $now;
+		return 'new';
 	}
 
 	/**
@@ -340,8 +355,9 @@ final class Tendr_Webhooks {
 	 * null on a database error.
 	 *
 	 * @param string $event_id Event id.
+	 * @param string $now      `received_at` to write.
 	 */
-	private static function insert_claim( string $event_id ): ?bool {
+	private static function insert_claim( string $event_id, string $now ): ?bool {
 		global $wpdb;
 		$table    = self::table();
 		$suppress = $wpdb->suppress_errors();
@@ -349,7 +365,7 @@ final class Tendr_Webhooks {
 			$wpdb->prepare(
 				"INSERT IGNORE INTO {$table} (event_id, received_at, state) VALUES (%s, %s, %d)", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 				$event_id,
-				gmdate( 'Y-m-d H:i:s' ),
+				$now,
 				self::STATE_CLAIMED
 			)
 		);
@@ -367,6 +383,7 @@ final class Tendr_Webhooks {
 	 */
 	private static function finish( string $event_id ): void {
 		global $wpdb;
+		unset( self::$claims[ $event_id ] );
 		$wpdb->update( self::table(), array( 'state' => self::STATE_DONE ), array( 'event_id' => $event_id ), array( '%d' ), array( '%s' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 	}
 
@@ -377,13 +394,20 @@ final class Tendr_Webhooks {
 	 */
 	private static function release( string $event_id ): void {
 		global $wpdb;
+		$stamp = self::$claims[ $event_id ] ?? null;
+		unset( self::$claims[ $event_id ] );
+		if ( null === $stamp ) {
+			return;
+		}
+		// Only this request's claim: a delivery that took it over wrote a newer received_at.
 		$wpdb->delete( // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 			self::table(),
 			array(
-				'event_id' => $event_id,
-				'state'    => self::STATE_CLAIMED,
+				'event_id'    => $event_id,
+				'state'       => self::STATE_CLAIMED,
+				'received_at' => $stamp,
 			),
-			array( '%s', '%d' )
+			array( '%s', '%d', '%s' )
 		);
 	}
 
