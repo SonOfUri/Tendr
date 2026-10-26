@@ -11,11 +11,17 @@ import { TestModePanel } from './TestModePanel';
 import { TokenPicker } from './TokenPicker';
 import {
   autoRequoteDue,
+  chooseQuotes,
   freshQuoteDue,
   showManualSend,
   type PaymentBlock,
 } from '@/lib/wallets/block';
-import { WalletConnect, type WalletQuoteResult, type WalletSendResult } from './WalletConnect';
+import {
+  PaymentSentNotice,
+  WalletConnect,
+  type WalletQuoteResult,
+  type WalletSendResult,
+} from './WalletConnect';
 
 type Reason = 'choose' | 'auto' | 'refund' | 'retry' | 'wallet';
 
@@ -24,6 +30,37 @@ export function leftoversNotice(thresholdUsd: number): string {
   const usd = Number.isFinite(thresholdUsd) ? formatUsd(String(thresholdUsd)) : null;
   if (!usd) return "Small leftovers aren't returned.";
   return `Leftovers under ${usd.replace(/\.00$/, '')} aren't returned.`;
+}
+
+/** The return address of the shopper's latest quote, and the network it is on. */
+export type KnownRefund = { address: string | null; blockchain: string } | null;
+
+/** The return address a new quote for a token on `blockchain` keeps (C35), or null. */
+export function refundToCarry(last: KnownRefund, blockchain: string): string | null {
+  return last && last.blockchain === blockchain ? last.address : null;
+}
+
+/**
+ * The pay step with no quote for the chosen token: while blocked, the payment notice with its
+ * "didn't go through" control (C35), so a blocked tab is never left blank; otherwise the loading
+ * line while a price is fetched.
+ */
+export function QuotePending({
+  blocked,
+  loading,
+  onDidntGoThrough,
+}: {
+  blocked: PaymentBlock;
+  loading: boolean;
+  onDidntGoThrough?: () => void;
+}) {
+  if (blocked) return <PaymentSentNotice blocked={blocked} onDidntGoThrough={onDidntGoThrough} />;
+  if (!loading) return null;
+  return (
+    <p className="muted" role="status">
+      Getting your price…
+    </p>
+  );
 }
 
 /**
@@ -76,6 +113,8 @@ export function PayFlow({
   const autoRequoted = useRef<string | null>(null);
   // The current quote vanished (the watcher reopened the session and superseded it, C34).
   const freshRequested = useRef(false);
+  // The latest quote's return address: a fresh quote and "Try again" keep it (C35).
+  const knownRefund = useRef<KnownRefund>(null);
 
   const quote =
     view.quote && token && view.quote.origin_asset === token.asset_id ? view.quote : null;
@@ -119,15 +158,29 @@ export function PayFlow({
     const current = view.quote;
     const live =
       current && current.origin_asset === t.asset_id && Date.parse(current.deadline) > Date.now();
-    if (!live) void requote(t, null, 'choose');
+    // While blocked, no new price: the pay step shows the notice instead (C35).
+    if (chooseQuotes({ live: Boolean(live), blocked: blocked !== null }))
+      void requote(t, null, 'choose');
   }
 
-  // A reopened session has no current quote: fetch a new price (a fresh deposit address) once.
   useEffect(() => {
-    if (view.quote) freshRequested.current = false;
+    if (!view.quote) return;
+    const chain = tokens.find((t) => t.asset_id === view.quote!.origin_asset)?.blockchain;
+    if (chain) knownRefund.current = { address: view.quote.refund_address, blockchain: chain };
+  }, [view.quote, tokens]);
+
+  /** The return address for a new quote for `t`: the current one's, else the last one known. */
+  const refundFor = (t: Token) =>
+    quote ? quote.refund_address : refundToCarry(knownRefund.current, t.blockchain);
+
+  // No current quote for the chosen token (a reopened session, or a token chosen while blocked):
+  // fetch a new price (a fresh deposit address) once, keeping the shopper's return address.
+  useEffect(() => {
+    if (quote) freshRequested.current = false;
     const due = freshQuoteDue({
-      onPayStep: step === 'pay' && token !== null,
-      hasQuote: view.quote !== null,
+      onPayStep: step === 'pay',
+      tokenAsset: token?.asset_id ?? null,
+      quoteAsset: view.quote?.origin_asset ?? null,
       loading,
       failed: failure !== null,
       blocked: blocked !== null,
@@ -135,8 +188,8 @@ export function PayFlow({
     });
     if (!due || !token) return;
     freshRequested.current = true;
-    void requote(token, null, 'auto');
-  }, [view.quote, step, token, loading, failure, blocked, requote]);
+    void requote(token, refundToCarry(knownRefund.current, token.blockchain), 'auto');
+  }, [quote, view.quote, step, token, loading, failure, blocked, requote]);
 
   // A price that ran out is replaced once, automatically; the shopper only notices if it moved.
   useEffect(() => {
@@ -193,7 +246,7 @@ export function PayFlow({
                 <button
                   type="button"
                   className="pay-button pay-button-secondary"
-                  onClick={() => void requote(token, quote?.refund_address ?? null, 'retry')}
+                  onClick={() => void requote(token, refundFor(token), 'retry')}
                 >
                   Try again
                 </button>
@@ -212,11 +265,7 @@ export function PayFlow({
       ) : null}
 
       {!quote || !amount ? (
-        loading ? (
-          <p className="muted" role="status">
-            Getting your price…
-          </p>
-        ) : null
+        <QuotePending blocked={blocked} loading={loading} onDidntGoThrough={onDidntGoThrough} />
       ) : (
         <>
           {manual ? (

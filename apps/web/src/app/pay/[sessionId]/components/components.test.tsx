@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { SessionView, Token } from '@/lib/checkout/api';
 import { CheckoutHeader } from './CheckoutHeader';
 import { CopyButton } from './CopyButton';
-import { PayFlow, leftoversNotice } from './PayFlow';
+import { PayFlow, QuotePending, leftoversNotice, refundToCarry } from './PayFlow';
 import { CONFIRM_NOT_SENT_COPY } from './WalletConnect';
 import { WalletConnect } from './WalletConnect';
 import { canPay } from './WalletPanel';
@@ -205,5 +205,32 @@ describe('PayFlow while a payment may be on its way (C33)', () => {
 
   it('the confirm copy covers a failed and a never-sent payment', () => {
     expect(CONFIRM_NOT_SENT_COPY).toContain('shows this payment failed or was never sent');
+  });
+});
+
+describe('PayFlow with no current quote (C35)', () => {
+  it('a blocked tab with no quote shows the notice and the "didn\'t go through" control', () => {
+    const html = renderToStaticMarkup(
+      <QuotePending blocked="sent" loading={false} onDidntGoThrough={() => {}} />,
+    );
+    expect(html).toContain('Your payment is on its way');
+    expect(html).toContain('My payment didn&#x27;t go through');
+    expect(html).not.toContain('Getting your price');
+  });
+
+  it('not blocked: the loading line while the price is fetched, else nothing', () => {
+    expect(renderToStaticMarkup(<QuotePending blocked={null} loading />)).toContain(
+      'Getting your price',
+    );
+    expect(renderToStaticMarkup(<QuotePending blocked={null} loading={false} />)).toBe('');
+  });
+
+  it('a fresh quote carries the last return address the shopper had on that network', () => {
+    const last = { address: '0xrefund', blockchain: 'eth' };
+    expect(refundToCarry(last, 'eth')).toBe('0xrefund');
+    // A token on another network can't use it.
+    expect(refundToCarry(last, 'near')).toBeNull();
+    expect(refundToCarry(null, 'eth')).toBeNull();
+    expect(refundToCarry({ address: null, blockchain: 'eth' }, 'eth')).toBeNull();
   });
 });

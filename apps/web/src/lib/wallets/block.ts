@@ -69,12 +69,17 @@ export function showBlockNotice(blocked: PaymentBlock, sending: boolean): boolea
 }
 
 /**
- * The session is taking payments but has no current quote (the watcher reopened it and superseded
- * the old one, C34): fetch a new price once, so the old deposit address is never shown again.
+ * The session is taking payments but has no current quote for the chosen token (the watcher
+ * reopened it and superseded the old one, C34, or a token was chosen while blocked, C35): fetch a
+ * new price once, so the old deposit address is never shown again. Never while blocked: it runs
+ * once the shopper confirms "My payment didn't go through".
  */
 export function freshQuoteDue(opts: {
   onPayStep: boolean;
-  hasQuote: boolean;
+  /** The chosen token's asset id. */
+  tokenAsset: string | null;
+  /** The session's current quote's asset id, if it has one. */
+  quoteAsset: string | null;
   loading: boolean;
   failed: boolean;
   blocked: boolean;
@@ -82,10 +87,16 @@ export function freshQuoteDue(opts: {
 }): boolean {
   return (
     opts.onPayStep &&
-    !opts.hasQuote &&
+    opts.tokenAsset !== null &&
+    opts.quoteAsset !== opts.tokenAsset &&
     !opts.loading &&
     !opts.failed &&
     !opts.blocked &&
     !opts.alreadyTried
   );
+}
+
+/** Choosing a token fetches a price only when there is no live one and nothing blocks it (C35). */
+export function chooseQuotes(opts: { live: boolean; blocked: boolean }): boolean {
+  return !opts.live && !opts.blocked;
 }

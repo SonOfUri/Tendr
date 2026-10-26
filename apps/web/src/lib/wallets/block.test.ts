@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   autoRequoteDue,
+  chooseQuotes,
   freshQuoteDue,
   mustRequoteBeforeSend,
   paymentBlock,
@@ -143,14 +144,15 @@ describe('round 3 (C34)', () => {
   it('after a reopen superseded the quote, a new price is fetched once (never the old address)', () => {
     const base = {
       onPayStep: true,
-      hasQuote: false,
+      tokenAsset: 'nep141:eth',
+      quoteAsset: null as string | null,
       loading: false,
       failed: false,
       blocked: false,
       alreadyTried: false,
     };
     expect(freshQuoteDue(base)).toBe(true);
-    expect(freshQuoteDue({ ...base, hasQuote: true })).toBe(false);
+    expect(freshQuoteDue({ ...base, quoteAsset: 'nep141:eth' })).toBe(false);
     expect(freshQuoteDue({ ...base, alreadyTried: true })).toBe(false);
     expect(freshQuoteDue({ ...base, loading: true })).toBe(false);
     expect(freshQuoteDue({ ...base, failed: true })).toBe(false);
@@ -168,5 +170,51 @@ describe('round 3 (C34)', () => {
         dismissedSubmittedAt: null,
       }),
     ).toBe('sent');
+  });
+});
+
+describe('round 4 (C35): a blocked tab without a quote', () => {
+  const fresh = {
+    onPayStep: true,
+    tokenAsset: 'nep141:usdc',
+    quoteAsset: null as string | null,
+    loading: false,
+    failed: false,
+    blocked: true,
+    alreadyTried: false,
+  };
+
+  it('confirming "didn\'t go through" lets exactly one fresh quote run', () => {
+    // Blocked by another tab's report, and the session was reopened (no current quote).
+    const before = paymentBlock({
+      status: 'PENDING_DEPOSIT',
+      pending: null,
+      depositSubmittedAt: AT,
+      dismissedSubmittedAt: null,
+    });
+    expect(before).toBe('sent');
+    expect(freshQuoteDue({ ...fresh, blocked: before !== null })).toBe(false);
+    // The shopper confirms: that server time is dismissed, the block lifts, one quote is fetched.
+    const after = paymentBlock({
+      status: 'PENDING_DEPOSIT',
+      pending: null,
+      depositSubmittedAt: AT,
+      dismissedSubmittedAt: AT,
+    });
+    expect(after).toBeNull();
+    expect(freshQuoteDue({ ...fresh, blocked: false })).toBe(true);
+    expect(freshQuoteDue({ ...fresh, blocked: false, alreadyTried: true })).toBe(false);
+  });
+
+  it('a token chosen while blocked has no quote of its own: confirming fetches one for it', () => {
+    // The session still holds a quote for another token; the chosen token has none.
+    expect(freshQuoteDue({ ...fresh, blocked: false, quoteAsset: 'nep141:eth' })).toBe(true);
+    expect(freshQuoteDue({ ...fresh, blocked: false, quoteAsset: 'nep141:usdc' })).toBe(false);
+  });
+
+  it('choosing a token never fetches a price while blocked', () => {
+    expect(chooseQuotes({ live: false, blocked: true })).toBe(false);
+    expect(chooseQuotes({ live: false, blocked: false })).toBe(true);
+    expect(chooseQuotes({ live: true, blocked: false })).toBe(false);
   });
 });

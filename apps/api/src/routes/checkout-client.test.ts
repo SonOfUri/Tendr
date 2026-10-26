@@ -511,6 +511,36 @@ describe('shopper checkout routes', () => {
     expect(view.deposit_submitted_at).toBe(later.toISOString());
   });
 
+  it('a report that landed after detection does not trap a reopened session (C35)', async () => {
+    const s = await newSession();
+    const q = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();
+    // The watcher saw the deposit first: a payment row, the session PROCESSING.
+    const payment = await createRow('Payment', merchant.id, false, {
+      sessionId: s.id,
+      quoteId: q.id,
+      status: 'REFUNDING',
+      createdAt: new Date(Date.now() - 60_000),
+    });
+    await prisma.session.update({ where: { id: s.id }, data: { status: 'PROCESSING' } });
+    // The tab's report arrives afterwards (accepted while PROCESSING), so it is later than the row.
+    const res = await call('POST', 'deposit', s.client_secret, {
+      tx_hash: '0xfeed',
+      quote_id: q.id,
+    });
+    expect(res.statusCode).toBe(202);
+    const row = await prisma.quote.findUniqueOrThrow({ where: { id: q.id } });
+    expect(row.depositTxSubmittedAt!.getTime()).toBeGreaterThan(
+      (payment.createdAt as Date).getTime(),
+    );
+    // The watcher reopens the session: the quote is superseded, its deposit already accounted for.
+    await prisma.quote.update({ where: { id: q.id }, data: { supersededAt: new Date() } });
+    await prisma.session.update({ where: { id: s.id }, data: { status: 'PENDING_DEPOSIT' } });
+    const view = (await call('GET', 'session', s.client_secret)).json();
+    expect(view.status).toBe('PENDING_DEPOSIT');
+    expect(view.quote).toBeNull();
+    expect(view.deposit_submitted_at).toBeNull();
+  });
+
   it('refuses a deposit report once the session is closed', async () => {
     const s = await newSession();
     const q = (await call('POST', 'quote', s.client_secret, { origin_asset: ETH })).json();

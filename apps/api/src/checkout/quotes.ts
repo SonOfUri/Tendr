@@ -275,13 +275,16 @@ async function needsEmail(ctx: ShopperCtx, s: SessionRow): Promise<boolean> {
  * (C32-C34): a quote counts when its `depositTxSubmittedAt` is later than its newest payment row's
  * `createdAt`, or it has no payment row. A reported deposit the watcher already recorded stops
  * counting (a reopened session is not stuck behind it); a second report on the same quote after
- * that counts again. Prisma can't compare columns, so this is computed here.
+ * that counts again. A superseded quote with a payment row never counts (C35): it takes no new
+ * reports, and the reopen that superseded it already accounted for its deposit, even when a report
+ * landed after the watcher recorded it. Prisma can't compare columns, so this is computed here.
  */
 async function depositSubmittedAt(ctx: ShopperCtx, sessionId: string): Promise<Date | null> {
   const quotes = await ctx.db.quote.findMany({
     where: { sessionId, depositTxSubmittedAt: { not: null } },
     select: {
       depositTxSubmittedAt: true,
+      supersededAt: true,
       payments: { select: { createdAt: true }, orderBy: { createdAt: 'desc' }, take: 1 },
     },
   });
@@ -289,6 +292,7 @@ async function depositSubmittedAt(ctx: ShopperCtx, sessionId: string): Promise<D
   for (const q of quotes) {
     const at = q.depositTxSubmittedAt!;
     const newest = q.payments[0]?.createdAt;
+    if (newest && q.supersededAt) continue;
     if (newest && at.getTime() <= newest.getTime()) continue;
     if (!latest || at.getTime() > latest.getTime()) latest = at;
   }
