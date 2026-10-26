@@ -3,8 +3,19 @@ import { CONNECTION_KEY_SCOPES, type MerchantUserRole } from '@tendr/contracts';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
+import { setMailer } from '../auth/mailer.js';
 import { normalizeCheckoutDomain, validateCheckoutDomains } from '../checkout/checkout-settings.js';
+import { revokeConnection } from '../connect/connections.js';
+import {
+  onNotificationEmailChanged,
+  onNotificationEmailRequested,
+} from '../jobs/notification-email-notices.js';
 import { prisma } from '../lib/prisma.js';
+import {
+  LINK_SECRET_PURPOSE,
+  NOTIFICATION_EMAIL_REQUESTED,
+  NOTIFICATION_EMAIL_VERIFIED,
+} from '../merchants/notification-email.js';
 import { dashHeaders, loginAs, memoryMailer, type Login } from '../test/dashboard.js';
 import { createApiKey, createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
 
@@ -197,11 +208,13 @@ describe('store settings from a connection key, and the notification email', () 
   let owner: Login;
   let ownerEmail: string;
   let logSpy: ReturnType<typeof vi.spyOn>;
+  let delivered: Set<string>;
 
   beforeEach(async () => {
     await resetDb();
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     memoryMailer().clear();
+    delivered = new Set();
     app = await buildApp();
     await app.ready();
     merchant = await createMerchant({ name: 'Bean Shop' });
@@ -249,8 +262,31 @@ describe('store settings from a connection key, and the notification email', () 
       payload: { token },
     });
   const mails = (template: string) => memoryMailer().sent.filter((m) => m.template === template);
-  /** The raw token of the last verify link sent to `to`. */
-  const linkToken = (to: string) => {
+  /** Runs the notification-email handlers on the events not handled yet, as the worker would. */
+  const deliver = async () => {
+    const events = await prisma.event.findMany({
+      where: {
+        merchantId: merchant.id,
+        type: {
+          in: [
+            NOTIFICATION_EMAIL_REQUESTED,
+            NOTIFICATION_EMAIL_VERIFIED,
+            'merchant.notification_email.cleared',
+          ],
+        },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    for (const e of events) {
+      if (delivered.has(e.id)) continue;
+      if (e.type === NOTIFICATION_EMAIL_REQUESTED) await onNotificationEmailRequested(e);
+      else await onNotificationEmailChanged(e);
+      delivered.add(e.id);
+    }
+  };
+  /** The raw token of the last verify link sent to `to` (after delivering pending events). */
+  const linkToken = async (to: string) => {
+    await deliver();
     const m = [...mails('notification_email_verify')].reverse().find((x) => x.to === to);
     if (!m) throw new Error(`no verify mail to ${to}`);
     const url = new URL(m.data.url!);
@@ -326,24 +362,27 @@ describe('store settings from a connection key, and the notification email', () 
   it('notification_email not effective until verified; old address notified on change', async () => {
     const { raw } = await connectionKey();
     await byKey('PATCH', raw, { notification_email: 'first@shop.example' });
+    await deliver();
     expect(mails('notification_email_verify').map((m) => m.to)).toEqual(['first@shop.example']);
     const link = mails('notification_email_verify')[0]!.data.url!;
     expect(link).toMatch(/\/settings\/notification-email\/verify\?t=[A-Za-z0-9_-]{43}$/);
     // Nothing goes to the unverified address and nothing changed yet.
     expect((await byKey('GET', raw)).json().notification_email).toBeNull();
 
-    const ok = await verify(linkToken('first@shop.example'));
+    const ok = await verify(await linkToken('first@shop.example'));
     expect(ok.statusCode, ok.body).toBe(200);
     expect(ok.json()).toMatchObject({ notification_email: 'first@shop.example' });
     expect((await byKey('GET', raw)).json()).toMatchObject({
       notification_email: 'first@shop.example',
       notification_email_pending: null,
     });
+    await deliver();
     // No previous address: the owners are told.
     expect(mails('notification_email_changed').map((m) => m.to)).toEqual([ownerEmail]);
 
     await byKey('PATCH', raw, { notification_email: 'second@shop.example' });
-    expect((await verify(linkToken('second@shop.example'))).statusCode).toBe(200);
+    expect((await verify(await linkToken('second@shop.example'))).statusCode).toBe(200);
+    await deliver();
     const changed = mails('notification_email_changed');
     expect(changed.map((m) => m.to)).toEqual([ownerEmail, 'first@shop.example']);
     expect(changed[1]!.data.new_email).toBe('second@shop.example');
@@ -363,7 +402,7 @@ describe('store settings from a connection key, and the notification email', () 
       notification_email: null,
       notification_email_pending: 'boss@shop.example',
     });
-    expect((await verify(linkToken('boss@shop.example'))).statusCode).toBe(200);
+    expect((await verify(await linkToken('boss@shop.example'))).statusCode).toBe(200);
     const row = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } });
     expect(row.notificationEmail).toBe('boss@shop.example');
     // Setting it back to null (owners) needs no link.
@@ -374,14 +413,14 @@ describe('store settings from a connection key, and the notification email', () 
   it('expired or reused verify token rejected', async () => {
     const { raw } = await connectionKey();
     await byKey('PATCH', raw, { notification_email: 'a@shop.example' });
-    const token = linkToken('a@shop.example');
+    const token = await linkToken('a@shop.example');
     expect((await verify(token)).statusCode).toBe(200);
     const reused = await verify(token);
     expect(reused.statusCode).toBe(400);
     expect(reused.json().error.code).toBe('INVALID_LINK');
 
     await byKey('PATCH', raw, { notification_email: 'b@shop.example' });
-    const late = linkToken('b@shop.example');
+    const late = await linkToken('b@shop.example');
     await prisma.merchant.update({
       where: { id: merchant.id },
       data: { notificationEmailTokenExpiresAt: new Date(Date.now() - 1000) },
@@ -397,12 +436,154 @@ describe('store settings from a connection key, and the notification email', () 
   it('a new request invalidates the old token', async () => {
     const { raw } = await connectionKey();
     await byKey('PATCH', raw, { notification_email: 'old-link@shop.example' });
-    const first = linkToken('old-link@shop.example');
+    const first = await linkToken('old-link@shop.example');
     await byKey('PATCH', raw, { notification_email: 'new-link@shop.example' });
     expect((await verify(first)).json().error.code).toBe('INVALID_LINK');
-    expect((await verify(linkToken('new-link@shop.example'))).statusCode).toBe(200);
+    expect((await verify(await linkToken('new-link@shop.example'))).statusCode).toBe(200);
     const row = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } });
     expect(row.notificationEmail).toBe('new-link@shop.example');
+    // Every encrypted token is gone once its request ended or its link went out.
+    expect(await prisma.secret.count({ where: { purpose: LINK_SECRET_PURPOSE } })).toBe(0);
+  });
+
+  it('a request notifies the current address at once (or the owners), masked', async () => {
+    const { raw } = await connectionKey();
+    // No current address: the owners are warned.
+    await byKey('PATCH', raw, { notification_email: 'attacker@evil.example' });
+    await deliver();
+    const first = mails('notification_email_change_requested');
+    expect(first.map((m) => m.to)).toEqual([ownerEmail]);
+    expect(first[0]!.text).toContain(
+      'A change of notification email to a***@evil.example was requested from the connected site https://shop.example.com.',
+    );
+    expect(first[0]!.text).toContain("If this wasn't you, disconnect the site or contact support.");
+    expect(first[0]!.text).not.toContain('attacker@');
+
+    // With a verified address, that address is warned — even if the change is verified before
+    // the warning is sent (recipients are pinned when the change is asked for).
+    await prisma.merchant.update({
+      where: { id: merchant.id },
+      data: { notificationEmail: 'current@shop.example' },
+    });
+    await byUser('PATCH', owner, { notification_email: 'next@shop.example' });
+    await deliver();
+    const second = mails('notification_email_change_requested');
+    expect(second.map((m) => m.to)).toEqual([ownerEmail, 'current@shop.example']);
+    expect(second[1]!.text).toContain('requested from the tendr dashboard');
+  });
+
+  it('revoking the connection clears its pending change', async () => {
+    const { raw, connectionId } = await connectionKey();
+    await byKey('PATCH', raw, { notification_email: 'site@shop.example' });
+    const token = await linkToken('site@shop.example');
+    await prisma.$transaction((tx) => revokeConnection(tx, connectionId, 'site'));
+    const row = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } });
+    expect(row).toMatchObject({
+      notificationEmailPending: null,
+      notificationEmailTokenHash: null,
+      notificationEmailLinkSecretRef: null,
+    });
+    expect((await verify(token)).json().error.code).toBe('INVALID_LINK');
+    expect(
+      await prisma.event.count({
+        where: { merchantId: merchant.id, type: 'merchant.notification_email.request_cancelled' },
+      }),
+    ).toBe(1);
+
+    // Undelivered link: revoke before the mail goes out → the link is never sent, token deleted.
+    const other = await connectionKey();
+    await byKey('PATCH', other.raw, { notification_email: 'late@shop.example' });
+    await byUser('PATCH', owner, { notification_email: 'mine@shop.example' });
+    await prisma.$transaction((tx) => revokeConnection(tx, other.connectionId, 'dashboard'));
+    // The dashboard's own request stays pending.
+    expect(
+      (await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } }))
+        .notificationEmailPending,
+    ).toBe('mine@shop.example');
+    await deliver();
+    expect(mails('notification_email_verify').map((m) => m.to)).not.toContain('late@shop.example');
+  });
+
+  it('a mail failure still commits the settings change; the verify mail is sent once after commit', async () => {
+    const { raw } = await connectionKey();
+    const mem = memoryMailer();
+    setMailer({
+      send: async () => {
+        throw new Error('smtp down');
+      },
+    });
+    try {
+      const res = await byKey('PATCH', raw, {
+        default_fee_payer: 'shopper',
+        notification_email: 'later@shop.example',
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      // Nothing was mailed inside the request.
+      expect(mem.sent).toHaveLength(0);
+      const row = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } });
+      expect(row).toMatchObject({
+        defaultFeePayer: 'payer',
+        notificationEmailPending: 'later@shop.example',
+      });
+      await expect(deliver()).rejects.toThrow(/smtp down/);
+    } finally {
+      setMailer(mem);
+    }
+    // The retry sends the link once, however often the job runs.
+    await deliver();
+    const e = await prisma.event.findFirstOrThrow({
+      where: { merchantId: merchant.id, type: NOTIFICATION_EMAIL_REQUESTED },
+    });
+    await onNotificationEmailRequested(e);
+    await onNotificationEmailRequested(e);
+    expect(mails('notification_email_verify').map((m) => m.to)).toEqual(['later@shop.example']);
+    expect(mails('notification_email_change_requested').map((m) => m.to)).toEqual([ownerEmail]);
+    expect((await verify(await linkToken('later@shop.example'))).statusCode).toBe(200);
+  });
+
+  it('never stores the raw token in events or plaintext columns', async () => {
+    const { raw } = await connectionKey();
+    await byKey('PATCH', raw, { notification_email: 'secret@shop.example' });
+    const token = await linkToken('secret@shop.example');
+    await verify(token);
+    await deliver();
+    const events = await prisma.$queryRaw<{ payload: string }[]>`
+      SELECT payload::text AS payload FROM events WHERE merchant_id = ${merchant.id}`;
+    expect(events.length).toBeGreaterThan(0);
+    for (const e of events) expect(e.payload).not.toContain(token);
+    const m = await prisma.$queryRaw<{ row: string }[]>`
+      SELECT row_to_json(merchants)::text AS row FROM merchants WHERE id = ${merchant.id}`;
+    expect(m[0]!.row).not.toContain(token);
+  });
+
+  it('strips line breaks from the store name in subjects', async () => {
+    await prisma.merchant.update({
+      where: { id: merchant.id },
+      data: { name: 'Bean\r\nBcc: x@evil.example' },
+    });
+    await byUser('PATCH', owner, { notification_email: 'boss@shop.example' });
+    await deliver();
+    for (const m of memoryMailer().sent) expect(m.subject).not.toMatch(/[\r\n]/);
+    expect(mails('notification_email_verify')[0]!.subject).toBe(
+      'Confirm the email for Bean Bcc: x@evil.example on tendr',
+    );
+  });
+
+  it('logs handler-level denials as the gateway does', async () => {
+    const lines = () =>
+      logSpy.mock.calls
+        .map((c: unknown[]) => String(c[0]))
+        .filter((l: string) => l.includes('"msg":"request"'));
+    const { raw } = await connectionKey();
+    logSpy.mockClear();
+    await byKey('PATCH', raw, { checkout_domains: [] });
+    const denied = lines();
+    expect(denied).toHaveLength(1);
+    expect(JSON.parse(denied[0]!)).toMatchObject({
+      outcome: 'forbidden',
+      statusCode: 403,
+      principal: 'secret_key',
+    });
   });
 
   it('verify is rate-limited per IP', async () => {

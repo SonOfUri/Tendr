@@ -13,6 +13,7 @@ import { registerRefundHooks } from '../checkout/refunds.js';
 import { registerWatcherHooks } from '../checkout/watcher.js';
 import { registerWebhookHandlers } from '../checkout/webhooks.js';
 import { registerAccountHandlers } from './account-notices.js';
+import { registerNotificationEmailNotices } from './notification-email-notices.js';
 import { registerPaymentNotices } from './payment-notices.js';
 import { registerReviewNotices } from './review-notices.js';
 import { registerEventHandler } from './handlers.js';
@@ -53,3 +54,6 @@ registerReviewNotices();
 // Store emails (WooCommerce plugin spec §8): "You got paid" on payment.succeeded and "Refund sent"
 // on refund.sent, to the store's verified notification email (or its owners), once per event.
 registerPaymentNotices();
+
+// The store's notification email (W16): the verify link and the change warnings, after commit.
+registerNotificationEmailNotices();

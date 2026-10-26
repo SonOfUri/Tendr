@@ -482,41 +482,44 @@ model Merchant {
   notificationEmailTokenExpiresAt DateTime?          @map("notification_email_token_expires_at")
   /// `{ by: 'user', userId } | { by: 'connection', connectionId }` plus `livemode`.
   notificationEmailRequest        Json?              @map("notification_email_request")
+  /// The raw verify token, KeyVault-encrypted (`secrets`), until the link mail is sent; then null.
+  notificationEmailLinkSecretRef  String?            @map("notification_email_link_secret_ref")
   /// The "You got paid" email; refund notices are always sent.
   paymentEmailsEnabled            Boolean            @default(true) @map("payment_emails_enabled")
   createdAt                       DateTime           @default(now()) @map("created_at")
   updatedAt                       DateTime           @updatedAt @map("updated_at")
 
-  users             MerchantUser[]
-  apiKeys           ApiKey[]
-  accountKeys       AccountKey[]
-  settlementConfigs SettlementConfig[]
-  payoutAllowlist   PayoutAllowlistEntry[]
-  webhookEndpoints  WebhookEndpoint[]
-  gasPolicies       GasPolicy[]
-  paymentLinks      PaymentLink[]
-  sessions          Session[]
-  quotes            Quote[]
-  payments          Payment[]
-  refunds           Refund[]
-  webhookDeliveries WebhookDelivery[]
-  hookCalls         HookCall[]
-  gasSponsorships   GasSponsorship[]
-  screeningResults  ScreeningResult[]
-  events            Event[]
-  feePlans          FeePlan[]
-  revenueEntries    RevenueEntry[]
-  settlementClaims  SettlementClaim[]
-  checkoutThemes    CheckoutTheme[]
-  themeAssets       ThemeAsset[]
-  idempotencyKeys   IdempotencyKey[]
-  invites           MerchantInvite[]
-  merchantAccounts  MerchantAccount[]
-  accountProposals  AccountProposal[]
-  accountApprovals  AccountApproval[]
-  recoveryRequests  RecoveryRequest[]
-  accountLimits     AccountLimit[]
-  connections       Connection[]
+  users                       MerchantUser[]
+  apiKeys                     ApiKey[]
+  accountKeys                 AccountKey[]
+  settlementConfigs           SettlementConfig[]
+  payoutAllowlist             PayoutAllowlistEntry[]
+  webhookEndpoints            WebhookEndpoint[]
+  gasPolicies                 GasPolicy[]
+  paymentLinks                PaymentLink[]
+  sessions                    Session[]
+  quotes                      Quote[]
+  payments                    Payment[]
+  refunds                     Refund[]
+  webhookDeliveries           WebhookDelivery[]
+  hookCalls                   HookCall[]
+  gasSponsorships             GasSponsorship[]
+  screeningResults            ScreeningResult[]
+  events                      Event[]
+  feePlans                    FeePlan[]
+  revenueEntries              RevenueEntry[]
+  settlementClaims            SettlementClaim[]
+  checkoutThemes              CheckoutTheme[]
+  themeAssets                 ThemeAsset[]
+  idempotencyKeys             IdempotencyKey[]
+  invites                     MerchantInvite[]
+  merchantAccounts            MerchantAccount[]
+  accountProposals            AccountProposal[]
+  accountApprovals            AccountApproval[]
+  recoveryRequests            RecoveryRequest[]
+  accountLimits               AccountLimit[]
+  connections                 Connection[]
+  notificationEmailLinkSecret Secret?                @relation("NotificationEmailLinkSecret", fields: [notificationEmailLinkSecretRef], references: [id], onDelete: SetNull, onUpdate: Restrict)
 
   @@map("merchants")
 }
@@ -1478,9 +1481,10 @@ model Secret {
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
-  apiKeys          ApiKey[]
-  webhookEndpoints WebhookEndpoint[]
-  connectAuthCodes ConnectAuthCode[]
+  apiKeys           ApiKey[]
+  webhookEndpoints  WebhookEndpoint[]
+  connectAuthCodes  ConnectAuthCode[]
+  notificationLinks Merchant[]        @relation("NotificationEmailLinkSecret")
 
   @@map("secrets")
 }

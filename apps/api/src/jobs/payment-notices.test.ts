@@ -256,6 +256,41 @@ describe('merchant payment and refund emails', () => {
     expect(copy(m)).not.toMatch(BANNED);
   });
 
+  it('refund_sent links the NEAR proposal tx even when the customer is on another chain', async () => {
+    const p = await settledPayment({ livemode: true });
+    const r = await createRow('Refund', merchant.id, true, {
+      paymentId: p.id,
+      reason: 'merchant',
+      assetId: 'nep141:usdc.test',
+      amount: '5000000',
+      externalRef: 'wc-refund-78',
+      status: 'confirmed',
+      refundTxHash: 'NearProposalTx333',
+      destination: '0x1111111111111111111111111111111111111111',
+      destinationChain: 'eth',
+    });
+    await onRefundSentNotice(await event('refund.sent', r.id, { refund_id: r.id }, true), deps);
+    const m = mailer.sent.find((x) => x.template === 'refund_sent')!;
+    expect(m.data.tx_url).toBe('https://nearblocks.io/txns/NearProposalTx333');
+    expect(m.text).not.toContain('etherscan');
+    expect(m.text).toContain("sent 5 USDC to your customer's Ethereum address");
+  });
+
+  it('strips line breaks from store-supplied names and refs in subjects', async () => {
+    await prisma.merchant.update({
+      where: { id: merchant.id },
+      data: { name: 'Bean\nShop', notificationEmail: 'orders@shop.example' },
+    });
+    const p = await settledPayment({ session: { externalRef: 'o-1\r\nBcc: x@evil.example' } });
+    await onPaymentReceivedNotice(await succeeded(p.id), deps);
+    const m = received()[0]!;
+    expect(m.subject).not.toMatch(/[\r\n]/);
+    expect(m.subject).toBe('[Test] You got paid 48.75 USDC for order o-1 Bcc: x@evil.example');
+    expect(m.text!.split('\n')[0]).toBe(
+      'Bean Shop received 48.75 USDC for order o-1 Bcc: x@evil.example.',
+    );
+  });
+
   it('a failed send is retried for that recipient only', async () => {
     const p = await settledPayment();
     const e = await succeeded(p.id);

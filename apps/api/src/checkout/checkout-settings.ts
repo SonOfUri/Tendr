@@ -27,9 +27,10 @@ import { AppError, notFound } from '../lib/errors.js';
 import { LOCAL_DEV_HOSTS } from '../lib/local-hosts.js';
 import { prisma } from '../lib/prisma.js';
 import {
-  NO_PENDING,
-  pendingNotificationEmail,
-  sendNotificationEmailChanged,
+  clearNotificationEmail,
+  endPending,
+  PENDING_SELECT,
+  requestNotificationEmail,
   type SettingsActor,
 } from '../merchants/notification-email.js';
 
@@ -166,8 +167,9 @@ export async function getCheckoutSettings(ctx: ScopeContext) {
 /**
  * Updates the given fields (merchant-wide) and records an internal audit event in the caller's
  * mode with who made the change and the before and after values. A `notification_email` change
- * only starts a pending one (a verify link to the new address); null (back to the owners) or the
- * current address applies at once and drops any pending change, and clearing an address tells it.
+ * only starts a pending one (a verify link to the new address, a warning to the current one);
+ * null (back to the owners) or the current address applies at once and drops any pending change,
+ * and clearing an address tells it. Those mails go out after commit (event handlers).
  */
 export async function updateCheckoutSettings(
   ctx: ScopeContext,
@@ -184,21 +186,21 @@ export async function updateCheckoutSettings(
     const before = await tx.merchant.findUnique({ where: { id: ctx.merchantId }, select: SELECT });
     if (!before) throw notFound('Store not found');
 
-    let email: Prisma.MerchantUpdateInput = {};
-    let mail: (() => Promise<void>) | null = null;
-    if (input.notification_email === null) {
-      email = { notificationEmail: null, ...NO_PENDING };
-      const old = before.notificationEmail;
-      if (old) mail = () => sendNotificationEmailChanged([old], before.name, null);
-    } else if (input.notification_email === before.notificationEmail) {
-      email = NO_PENDING;
-    } else if (input.notification_email !== undefined) {
-      const pending = pendingNotificationEmail(input.notification_email, before.name, {
-        ...actor,
-        livemode: ctx.livemode,
+    // Mail is never sent here (W16.3): the helpers record events whose handlers mail after
+    // commit, so a mail failure never rolls back this change (payer changes included).
+    let email: Prisma.MerchantUncheckedUpdateInput = {};
+    if (input.notification_email !== undefined) {
+      const row = await tx.merchant.findUniqueOrThrow({
+        where: { id: ctx.merchantId },
+        select: PENDING_SELECT,
       });
-      email = pending.data;
-      mail = pending.send;
+      if (input.notification_email === null) {
+        email = await clearNotificationEmail(tx, ctx, row, actor);
+      } else if (input.notification_email === before.notificationEmail) {
+        email = await endPending(tx, row);
+      } else {
+        email = await requestNotificationEmail(tx, ctx, row, input.notification_email, actor);
+      }
     }
 
     const after = await tx.merchant.update({
@@ -229,9 +231,6 @@ export async function updateCheckoutSettings(
         after: view(after),
       },
     });
-    // Last, inside the transaction: a failed send rolls the change back, so a pending address
-    // always had its link sent.
-    if (mail) await mail();
     return view(after);
   });
 }

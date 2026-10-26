@@ -10,6 +10,15 @@ import { getMailer, type MailMessage, type MailTemplate } from '../auth/mailer.j
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 
+/**
+ * A store-controlled string made safe for a mail header or one line of copy: CR, LF and every
+ * other control character become a space (no header injection, no forged lines).
+ */
+export function oneLine(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim();
+}
+
 /** The store's owners with a verified email, oldest membership first. */
 export async function ownerEmails(merchantId: string): Promise<string[]> {
   const rows = await prisma.merchantUser.findMany({
@@ -26,7 +35,11 @@ export type StoreNoticeTarget = {
   paymentEmailsEnabled: boolean;
 };
 
-/** The store's notice recipients and switches; null for an unknown store. */
+/**
+ * The store's notice recipients and switches; null for an unknown store. Read at send time, so a
+ * retried job re-reads the recipients: a mail failed before an address change goes to the address
+ * in effect when it is retried.
+ */
 export async function storeNoticeTarget(merchantId: string): Promise<StoreNoticeTarget | null> {
   const m = await prisma.merchant.findUnique({
     where: { id: merchantId },
@@ -34,7 +47,7 @@ export async function storeNoticeTarget(merchantId: string): Promise<StoreNotice
   });
   if (!m) return null;
   return {
-    name: m.name,
+    name: oneLine(m.name),
     recipients: m.notificationEmail ? [m.notificationEmail] : await ownerEmails(merchantId),
     paymentEmailsEnabled: m.paymentEmailsEnabled,
   };

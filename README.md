@@ -411,9 +411,13 @@ and `payment_emails_enabled`.
   is `notification_email_pending`, and nothing else is sent there. The link
   (`/settings/notification-email/verify?t=…` on the web app) works once and lasts 24 hours; a new
   request replaces it. The web page calls `POST /v1/settings/notification-email/verify` with
-  `{ "token": "…" }` (public, 10 / minute / IP; any bad link is `400 INVALID_LINK`). The previous
-  address, or the owners when there was none, is then told. `null` sends notices to the owners'
-  emails again (the default).
+  `{ "token": "…" }` (public, 10 / minute / IP; any bad link is `400 INVALID_LINK`). The current
+  address (or the owners when there is none) is warned as soon as a change is requested, with the
+  new address masked and where the request came from, and told again when it takes effect.
+  Revoking a connected site cancels a change that site requested. `null` sends notices to the
+  owners' emails again (the default).
+- These mails go out after the change is saved: a mail failure never undoes a settings change,
+  and the mail is retried.
 - "You got paid" (`payment_received`) goes on every `payment.succeeded`, while
   `payment_emails_enabled` (dashboard only; default on). "Refund sent" (`refund_sent`) goes on
   every `refund.sent`. Both go to the notification email, else the owners, once per event and

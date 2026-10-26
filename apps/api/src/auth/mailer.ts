@@ -29,6 +29,7 @@ export const MailTemplateValues = [
   // Store notices (WooCommerce plugin spec §3, §8): to the store's verified notification email,
   // or its owners. These carry their rendered `subject` and plain `text`.
   'notification_email_verify',
+  'notification_email_change_requested',
   'notification_email_changed',
   'payment_received',
   'refund_sent',

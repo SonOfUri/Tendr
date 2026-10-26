@@ -9,7 +9,9 @@
 // Copy is plain merchant language: "network fee", never internal words.
 //
 // Handlers run at least once per event: each send is claimed in `event_notices` per (event,
-// template, recipient), so a replay mails nobody twice.
+// template, recipient), so a replay mails nobody twice. A retry re-reads the recipients
+// (`storeNoticeTarget`) and the switch: a mail that failed before an address change goes to the
+// address in effect at the retry, and none goes out if "You got paid" was turned off meanwhile.
 import { Prisma, type Event } from '@prisma/client';
 import { env } from '../env.js';
 import { scopedDb } from '../db/scoped.js';
@@ -19,7 +21,7 @@ import { getPayment } from '../checkout/payment-views.js';
 import { tokenInfo } from '../checkout/tokens.js';
 import { AppError } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
-import { sendOncePerEvent, storeNoticeTarget } from '../merchants/store-notices.js';
+import { oneLine, sendOncePerEvent, storeNoticeTarget } from '../merchants/store-notices.js';
 import { handlerNamesFor, registerEventHandler } from './handlers.js';
 
 const D = Prisma.Decimal;
@@ -117,11 +119,12 @@ const FEE_LABELS: Readonly<Record<string, string>> = {
 const dashboardPaymentUrl = (paymentId: string) =>
   new URL(`/dashboard/payments/${encodeURIComponent(paymentId)}`, env().WEB_URL).toString();
 
+/** One line (no CR/LF or control characters from store-supplied names and refs). */
 const subjectFor = (livemode: boolean, subject: string) =>
-  livemode ? subject : `[Test] ${subject}`;
+  oneLine(livemode ? subject : `[Test] ${subject}`);
 
 const orderLabel = (externalRef: string | null) =>
-  externalRef ? `order ${externalRef}` : 'an order';
+  externalRef ? `order ${oneLine(externalRef)}` : 'an order';
 
 // ─── payment_received ────────────────────────────────────────────────────────
 
@@ -276,21 +279,24 @@ export async function onRefundSentNotice(e: Event, deps: NoticeDeps = DEFAULT_DE
   const toCustomer = r.reason === 'merchant' ? r.amount.minus(fee) : r.amount;
   const sent = amountText(toCustomer, asset, r.assetId);
   const order = orderLabel(payment.session.externalRef);
-  const txUrl = r.refundTxHash
-    ? explorerTxUrl(r.destinationChain ?? 'near', r.refundTxHash, e.livemode)
-    : '';
+  // `refundTxHash` is always the NEAR transaction that executed the refund proposal
+  // (checkout/refunds.ts), whatever chain the customer's address is on: link it on NEAR.
+  const txUrl = r.refundTxHash ? explorerTxUrl('near', r.refundTxHash, e.livemode) : '';
   const dashboardUrl = dashboardPaymentUrl(payment.id);
   const reason = REFUND_REASONS[r.reason] ?? 'return to the customer';
+  const to = r.destinationChain
+    ? `to your customer's ${chainName(r.destinationChain)} address`
+    : 'to your customer';
 
   const subject = subjectFor(e.livemode, `Refund sent: ${sent} for ${order}`);
   const text = [
-    `${target.name} sent ${sent} back to the customer for ${order} (${reason}).`,
+    `${target.name} sent ${sent} ${to} for ${order} (${reason}).`,
     ...(e.livemode ? [] : ['This is a test refund: no real money moved.']),
-    ...(r.externalRef ? [`Your refund reference: ${r.externalRef}`] : []),
+    ...(r.externalRef ? [`Your refund reference: ${oneLine(r.externalRef)}`] : []),
     ...(fee.gt(0) ? [`Network fee: ${amountText(fee, asset, r.assetId)}`] : []),
     '',
     r.refundTxHash
-      ? `Transaction: ${txUrl || `${r.refundTxHash} on ${chainName(r.destinationChain ?? 'near')}`}`
+      ? `Transaction: ${txUrl || `${r.refundTxHash} on NEAR`}`
       : 'Transaction: not available',
     `See the payment: ${dashboardUrl}`,
   ].join('\n');

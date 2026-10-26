@@ -31,6 +31,7 @@ import { generateApiKey } from '../lib/crypto.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { LOCAL_DEV_HOSTS } from '../lib/local-hosts.js';
+import { cancelPendingForConnection } from '../merchants/notification-email.js';
 import { putSecret } from '../secrets/secrets.js';
 
 export { CONNECTION_KEY_SCOPES };
@@ -288,6 +289,9 @@ export async function revokeConnection(
       where: { merchantId, connectionId, active: true },
       data: { active: false },
     });
+    // W16.2: a notification-email change this site asked for dies with it (every revoke path —
+    // site disconnect, dashboard removal, sweeper, re-connect replacement — comes through here).
+    await cancelPendingForConnection(tx, merchantId, connectionId);
   }
 
   let removedDomain: string | null = null;
