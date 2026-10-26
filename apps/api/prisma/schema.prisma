@@ -994,6 +994,9 @@ model Payment {
   heldReason            HeldReason?   @map("held_reason")
   /// The overpayment was worth less than SMALL_OVERPAY_USD and stays with the merchant.
   keptSmallOverpayment  Boolean       @default(false) @map("kept_small_overpayment")
+  /// The return reasons kept by the merchant because they were worth less than SMALL_OVERPAY_USD
+  /// net of the return fee. Decided per reason: keeping one return never keeps another (C40).
+  keptSmallReasons      String[]      @default([]) @map("kept_small_reasons")
   amountOut             Decimal?      @map("amount_out") @db.Decimal(78, 0)
   amountInUsd           Decimal?      @map("amount_in_usd") @db.Decimal(18, 6)
   settledAt             DateTime?     @map("settled_at")

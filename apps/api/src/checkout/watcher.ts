@@ -256,17 +256,20 @@ type Loaded = { quote: QuoteRow; session: Session; ctx: ScopeContext };
 const DONE_PAYMENT = new Set(['SETTLED', 'REFUNDED', 'HELD']);
 
 /**
- * A HELD payment is still watched while 1Click may yet refund it straight to the shopper's own
- * address (`ORIGIN_CHAIN`): until 1Click swapped (SUCCESS) or refunded it.
+ * A HELD payment is watched until its amounts are known (C40): until 1Click refunded it, or
+ * swapped it (SUCCESS) and the verified transfer is claimed. Held at detection while 1Click is
+ * still PROCESSING, it would otherwise never learn what reached the merchant account (the held
+ * return would stay `amount_unknown`). Watching never settles, credits or un-holds anything: the
+ * HELD branch of `advance` only records 1Click's facts, claims the transfer and queues the excess
+ * (in review). The 24 h window still stops it.
  */
-function watchHeld(q: Pick<Quote, 'refundType'>, p: Pick<Payment, 'status' | 'oneclickStatus'>) {
-  return (
-    p.status === 'HELD' &&
-    q.refundType === 'ORIGIN_CHAIN' &&
-    p.oneclickStatus !== 'SUCCESS' &&
-    p.oneclickStatus !== 'REFUNDED'
-  );
+function watchHeld(p: Pick<Payment, 'status' | 'oneclickStatus'>, claimed: boolean): boolean {
+  if (p.status !== 'HELD' || p.oneclickStatus === 'REFUNDED') return false;
+  return !(p.oneclickStatus === 'SUCCESS' && claimed);
 }
+
+const isClaimed = async (paymentId: string) =>
+  (await prisma.settlementClaim.count({ where: { paymentId } })) > 0;
 
 export interface PollResult {
   depositAddress: string;
@@ -310,7 +313,11 @@ async function pollQuote(q0: QuoteRow): Promise<PollResult> {
   });
   if (q0.watchStoppedAt) return result('none', true);
   const existing = await prisma.payment.findFirst({ where: { quoteId: q0.id } });
-  if (existing && DONE_PAYMENT.has(existing.status) && !watchHeld(q0, existing)) {
+  if (
+    existing &&
+    DONE_PAYMENT.has(existing.status) &&
+    !(existing.status === 'HELD' && watchHeld(existing, await isClaimed(existing.id)))
+  ) {
     await stopWatching(q0.id, now);
     return result('none', true);
   }
@@ -668,9 +675,22 @@ async function advance(
     if (status.status === 'REFUNDED' && q.refundType === 'ORIGIN_CHAIN') {
       await refund(l, payment, 'sanctions', status);
     }
-    // A held SUCCESS: claim the verified transfer (M-3) so the held return is sized from it.
-    if (status.status === 'SUCCESS') await claimHeld(l, payment, status);
-    return { outcome, done: !watchHeld(q, payment) };
+    // A held SUCCESS: claim the verified transfer (M-3) so the held return is sized from it, and
+    // queue the excess 1Click refunded into the account (M-2) — in review, like every return of
+    // a sanctions-held payment (C40).
+    let claimed = false;
+    if (status.status === 'SUCCESS') {
+      claimed = await claimHeld(l, payment, status);
+      const excess = big(status.swapDetails.refundedAmount);
+      if (excess > 0n && q.refundType !== 'ORIGIN_CHAIN') {
+        await returnNeeded(payment.id, {
+          reason: 'overpaid',
+          assetId: q.originAssetId,
+          amount: excess.toString(),
+        });
+      }
+    }
+    return { outcome, done: !watchHeld(payment, claimed) };
   }
   if (DONE_PAYMENT.has(payment.status)) return { outcome, done: true };
   if (payment.status === 'REFUNDING') {
@@ -1225,11 +1245,11 @@ async function senderDecision(
  * `heldAmount` sizes the return from what verifiably reached the account (C21, M-3). An event
  * another payment already claimed is left alone (`verify` reports it blocked).
  */
-async function claimHeld(l: Loaded, payment: Payment, status: StatusResponse): Promise<void> {
+async function claimHeld(l: Loaded, payment: Payment, status: StatusResponse): Promise<boolean> {
   const { ctx } = l;
-  if (await prisma.settlementClaim.findFirst({ where: { paymentId: payment.id } })) return;
+  if (await isClaimed(payment.id)) return true;
   const r = await verify(l, payment, status);
-  if (!r || !('ok' in r)) return;
+  if (!r || !('ok' in r)) return false;
   try {
     await tenantTransaction(ctx, async (tx) => {
       await lockRow(tx, 'payments', payment.id);
@@ -1239,6 +1259,7 @@ async function claimHeld(l: Loaded, payment: Payment, status: StatusResponse): P
   } catch (err) {
     if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) throw err;
   }
+  return isClaimed(payment.id);
 }
 
 /** SUCCESS: verify the transfer, gate on screening, settle. Returns true when done. */
@@ -1345,6 +1366,10 @@ async function settle(
           overpaidAmount: overpaid ? refunded.toString() : null,
           refundedAmount: overpaid ? refunded.toString() : p.refundedAmount,
           keptSmallOverpayment: keptSmall,
+          // Per reason (C40): only the overpaid return is decided here.
+          keptSmallReasons: keptSmall
+            ? [...new Set([...p.keptSmallReasons, 'overpaid'])]
+            : p.keptSmallReasons,
         },
       });
       if (s.status === 'PENDING_DEPOSIT') {

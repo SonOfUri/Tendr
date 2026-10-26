@@ -16,6 +16,7 @@ import { isExchangeAddress, setExchangeAddresses } from './exchanges.js';
 import { resetOneClickProviders, SimulatedOneClick } from './oneclick/index.js';
 import {
   draftReturn,
+  heldAmount,
   netOfReturnFee,
   onRefundProposalCancelled,
   onRefundProposalExecuted,
@@ -543,6 +544,80 @@ describe('return to sender', () => {
     expect((await refundsOf(p.id)).map((r) => r.reason).sort()).toEqual(['late', 'overpaid']);
   });
 
+  /** `payment.status_changed` → REFUNDED events of a payment. */
+  const refundedTransitions = async (paymentId: string) =>
+    (
+      await prisma.event.findMany({
+        where: { aggregateId: paymentId, type: 'payment.status_changed' },
+      })
+    ).filter((e) => (e.payload as { to?: string }).to === 'REFUNDED');
+
+  it('C40: a late return kept small never keeps a large excess (late first, then overpaid)', async () => {
+    onReturnNeeded(null); // the hooks are driven by hand, in this order
+    const { p, excess } = await lateOverpaid();
+    // The late return nets under $1 (0.10 USDC): kept.
+    expect(
+      await queueReturn(ctx(), p, { reason: 'late', assetId: USDC, amount: '100000' }),
+    ).toBeNull();
+    let cur = await paymentOf(p.quoteId);
+    expect(cur.keptSmallReasons).toEqual(['late']);
+    // The excess is still open, so the payment waits.
+    expect(cur.status).toBe('REFUNDING');
+    // The ≈$2.50 excess is queued and drafted.
+    const r = await queueReturn(ctx(), cur, {
+      reason: 'overpaid',
+      assetId: ETH,
+      amount: excess.toString(),
+    });
+    expect(r).toMatchObject({ reason: 'overpaid', assetId: ETH });
+    expect(r!.proposalId).not.toBeNull();
+    cur = await paymentOf(p.quoteId);
+    expect(cur.keptSmallReasons).toEqual(['late']);
+  });
+
+  it('C40: the sweeper still queues the excess after the late return was kept small', async () => {
+    onReturnNeeded(null);
+    const { p } = await lateOverpaid();
+    await queueReturn(ctx(), p, { reason: 'late', assetId: USDC, amount: '100000' });
+    await sweepReturns();
+    const [over] = await refundsOf(p.id);
+    expect(over).toMatchObject({ reason: 'overpaid', assetId: ETH });
+    expect(over!.proposalId).not.toBeNull();
+  });
+
+  it('C40: an excess kept small never keeps the late return (overpaid first, then late)', async () => {
+    onReturnNeeded(null);
+    const { p } = await lateOverpaid();
+    expect(
+      await queueReturn(ctx(), p, { reason: 'overpaid', assetId: ETH, amount: '1000' }),
+    ).toBeNull();
+    let cur = await paymentOf(p.quoteId);
+    expect(cur.keptSmallReasons).toEqual(['overpaid']);
+    expect(cur.status).toBe('REFUNDING');
+    const r = await queueReturn(ctx(), cur, {
+      reason: 'late',
+      assetId: USDC,
+      amount: '25000000',
+    });
+    expect(r).toMatchObject({ reason: 'late', assetId: USDC });
+    cur = await paymentOf(p.quoteId);
+    expect(cur.status).toBe('REFUNDING');
+  });
+
+  it('C40: both returns small → both kept, the payment REFUNDED once', async () => {
+    onReturnNeeded(null);
+    const { p } = await lateOverpaid();
+    await queueReturn(ctx(), p, { reason: 'late', assetId: USDC, amount: '100000' });
+    expect((await paymentOf(p.quoteId)).status).toBe('REFUNDING');
+    await queueReturn(ctx(), p, { reason: 'overpaid', assetId: ETH, amount: '1000' });
+    const cur = await paymentOf(p.quoteId);
+    expect([...cur.keptSmallReasons].sort()).toEqual(['late', 'overpaid']);
+    expect(cur.status).toBe('REFUNDED');
+    await sweepReturns();
+    expect(await refundsOf(p.id)).toEqual([]);
+    expect(await refundedTransitions(p.id)).toHaveLength(1);
+  });
+
   it('M-2: a held overpaid deposit also queues the excess, gated on the legal acknowledgement', async () => {
     const s = await newSession();
     const q = await quote(s.client_secret);
@@ -555,11 +630,15 @@ describe('return to sender', () => {
     const refunds = await refundsOf(p.id);
     expect(refunds.map((r) => r.reason).sort()).toEqual(['overpaid', 'sanctions']);
     const over = refunds.find((r) => r.reason === 'overpaid')!;
-    expect(over).toMatchObject({ assetId: ETH, proposalId: null });
-    expect(over.amount.toFixed()).toBe((excess - ETH_FEE_WEI).toString());
-    await expect(draftReturn(ctx(), over.id)).rejects.toMatchObject({
-      code: 'LEGAL_ACK_REQUIRED',
+    // In review from the start (C40): no destination, never drafted on its own.
+    expect(over).toMatchObject({
+      assetId: ETH,
+      proposalId: null,
+      destination: null,
+      reviewReason: 'sanctions',
     });
+    expect(over.amount.toFixed()).toBe((excess - ETH_FEE_WEI).toString());
+    expect(await draftReturn(ctx(), over.id)).toMatchObject({ proposalId: null });
     await queueHeldReturn(ctx(), p.id);
     expect(await refundsOf(p.id)).toHaveLength(2);
     expect(await prisma.accountProposal.count()).toBe(0);
@@ -894,6 +973,72 @@ describe('return to sender', () => {
     });
     const r = (await queueHeldReturn(ctx(), p.id))!;
     expect(r.amount.toFixed()).toBe((BigInt(claim.amount.toFixed()) - 500_000n).toString());
+  });
+
+  it('C40: a payment held while 1Click is still PROCESSING is watched until SUCCESS, then verified', async () => {
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'overpay', { senderAddress: SANCTIONED });
+    const real = await sim.status(q.deposit_address);
+    // The first poll sees the deposit while the swap is still running: held at detection.
+    const spy = vi.spyOn(sim, 'status').mockResolvedValue({
+      status: 'PROCESSING',
+      swapDetails: {
+        ...real.swapDetails,
+        destinationChainTxHashes: [],
+        amountOut: '0',
+        refundedAmount: '0',
+      },
+    });
+    await poll(q.deposit_address);
+    let p = await paymentOf(q.id);
+    expect(p).toMatchObject({ status: 'HELD', oneclickStatus: 'PROCESSING' });
+    expect(await prisma.settlementClaim.count({ where: { paymentId: p.id } })).toBe(0);
+    // Still watched: the held payment's amounts are not known yet.
+    expect(
+      (await prisma.quote.findUniqueOrThrow({ where: { id: q.id } })).watchStoppedAt,
+    ).toBeNull();
+
+    spy.mockRestore();
+    await poll(q.deposit_address);
+    p = await paymentOf(q.id);
+    // Still held (never settled, never un-held); now SUCCESS, claimed, and polling stops.
+    expect(p).toMatchObject({ status: 'HELD', oneclickStatus: 'SUCCESS' });
+    expect(await eventsOf('payment.succeeded')).toEqual([]);
+    const claim = await prisma.settlementClaim.findFirstOrThrow({ where: { paymentId: p.id } });
+    expect(claim.amount.toFixed()).toBe(real.swapDetails.amountOut);
+    expect(
+      (await prisma.quote.findUniqueOrThrow({ where: { id: q.id } })).watchStoppedAt,
+    ).not.toBeNull();
+    const qRow = await prisma.quote.findUniqueOrThrow({ where: { id: q.id } });
+    expect(await heldAmount(ctx(), p, qRow, USDC)).toEqual({
+      assetId: USDC,
+      amount: BigInt(real.swapDetails.amountOut!),
+    });
+    // The excess is queued (in review), and the sanctions return is sized, not amount_unknown.
+    const over = await prisma.refund.findFirstOrThrow({
+      where: { paymentId: p.id, reason: 'overpaid' },
+    });
+    expect(over).toMatchObject({ assetId: ETH, reviewReason: 'sanctions', proposalId: null });
+    const r = (await queueHeldReturn(ctx(), p.id))!;
+    expect(r.reviewReason).toBeNull();
+    expect(r.amount.toFixed()).toBe((BigInt(claim.amount.toFixed()) - 500_000n).toString());
+    expect(await prisma.accountProposal.count()).toBe(0);
+  });
+
+  it('C40: the sweeper queues a held excess the hook missed — in review, never drafted', async () => {
+    onReturnNeeded(null);
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'overpay', { senderAddress: SANCTIONED });
+    await poll(q.deposit_address);
+    const p = await paymentOf(q.id);
+    expect(p.status).toBe('HELD');
+    expect(await refundsOf(p.id)).toEqual([]);
+    await sweepReturns();
+    const [over] = await refundsOf(p.id);
+    expect(over).toMatchObject({ reason: 'overpaid', reviewReason: 'sanctions', proposalId: null });
+    expect(await prisma.accountProposal.count()).toBe(0);
   });
 
   it('setShopperEmail mails only when it set the email', async () => {

@@ -8,6 +8,7 @@ import { setExchangeAddresses } from '../checkout/exchanges.js';
 import { resetOneClickProviders, SimulatedOneClick } from '../checkout/oneclick/index.js';
 import {
   draftReturn,
+  onRefundProposalExecuted,
   queueHeldReturn,
   registerRefundHooks,
   setRefundDeps,
@@ -23,6 +24,7 @@ import {
 } from '../checkout/watcher.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { recordEvent } from '../events/record.js';
+import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { fakeNearClient, resetNearClients } from '../near/client.js';
 import type { FakeNearClient } from '../near/fake.js';
@@ -316,6 +318,76 @@ describe('review queue', () => {
     res = await refund(p.id, { destination: NEAR_DEST, chain: 'near' }, finance);
     expect(res.statusCode).toBe(409);
     expect(await prisma.accountProposal.count()).toBe(1);
+  });
+
+  it("C40: a held payment's excess goes through review only, even after the sanctions return executed", async () => {
+    const { p } = await paid('overpay', SANCTIONED);
+    expect(p.status).toBe('HELD');
+    const ctx = { merchantId: merchant.id, livemode: false };
+    const sanctions = (await queueHeldReturn(ctx, p.id))!;
+    const over = await prisma.refund.findFirstOrThrow({
+      where: { paymentId: p.id, reason: 'overpaid' },
+    });
+    // Created in review state: no destination, never auto-drafted.
+    expect(over).toMatchObject({ destination: null, reviewReason: 'sanctions', proposalId: null });
+
+    // The sanctions return goes out (ack + merchant destination) and executes.
+    expect((await ack(p.id)).statusCode).toBe(200);
+    let res = await refund(p.id, {
+      refund_id: sanctions.id,
+      destination: NEAR_DEST,
+      chain: 'near',
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const proposalId = res.json().refund.proposal_id as string;
+    await onRefundProposalExecuted(
+      await prisma.event.create({
+        data: {
+          id: newId('evt'),
+          merchantId: merchant.id,
+          livemode: false,
+          aggregateType: 'account_proposal',
+          aggregateId: proposalId,
+          type: 'account.proposal.executed',
+          payload: { proposalId, kind: 'refund', txHash: 'tx-1' },
+        },
+      }),
+    );
+    expect((await prisma.payment.findUniqueOrThrow({ where: { id: p.id } })).status).toBe(
+      'REFUNDED',
+    );
+
+    // The excess is not auto-drafted: not by the sweeper, not by draftReturn — even with the
+    // review reason cleared and the sanctioned sender as its destination.
+    await sweepReturns();
+    expect(await prisma.accountProposal.count()).toBe(1);
+    await prisma.refund.update({
+      where: { id: over.id },
+      data: { reviewReason: null, destination: SANCTIONED, destinationChain: 'eth' },
+    });
+    await expect(draftReturn(ctx, over.id)).rejects.toMatchObject({ code: 'LEGAL_ACK_REQUIRED' });
+    await sweepReturns();
+    expect(await prisma.accountProposal.count()).toBe(1);
+
+    // It is in the review queue, with the held payment.
+    const queue = (await dash('GET', '/v1/review', owner)).json();
+    const item = queue.held.find((x: { payment_id: string }) => x.payment_id === p.id);
+    expect(item.refunds.map((r: { id: string }) => r.id)).toContain(over.id);
+
+    // It drafts only with a merchant destination (never the sanctioned sender).
+    res = await refund(p.id, { refund_id: over.id });
+    expect(res.statusCode).toBe(400);
+    res = await refund(p.id, { refund_id: over.id, destination: SANCTIONED, chain: 'eth' });
+    expect(res.statusCode).toBe(400);
+    res = await refund(p.id, { refund_id: over.id, destination: NEAR_DEST, chain: 'near' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().refund).toMatchObject({
+      reason: 'overpaid',
+      asset: ETH,
+      destination: NEAR_DEST,
+    });
+    expect(res.json().refund.proposal_id).not.toBeNull();
+    expect(await prisma.accountProposal.count()).toBe(2);
   });
 
   it('re-drafting waits until the old proposal is verified ended ON CHAIN', async () => {

@@ -136,8 +136,11 @@ export async function reviewQueue(ctx: ScopeContext) {
     orderBy: { createdAt: 'desc' },
     take: 200,
   });
+  // Still open: a return of it waits, or it is HELD and its sanctions return was not kept small.
   const held = heldRows.filter(
-    (p) => !p.keptSmallOverpayment && (p.status === 'HELD' || p.refunds.some((r) => openRefund(r))),
+    (p) =>
+      p.refunds.some((r) => openRefund(r)) ||
+      (p.status === 'HELD' && !p.keptSmallReasons.includes('sanctions')),
   );
   const heldIds = new Set(held.map((p) => p.id));
   const unresolved = await db.payment.findMany({

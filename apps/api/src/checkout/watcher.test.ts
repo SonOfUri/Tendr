@@ -879,11 +879,15 @@ describe('payment watcher', () => {
     const s = await newSession();
     const q = await quote(s.client_secret);
     await sim.simulate(q.deposit_address, 'underpay', { senderAddress: SANCTIONED });
+    // Held while the deposit is incomplete: still watched until 1Click's outcome is known (C40).
     const [r] = await poll(q.deposit_address);
-    expect(r!.stopped).toBe(true);
+    expect(r!.stopped).toBe(false);
     offset = 13 * 60_000;
-    await poll(q.deposit_address);
-    expect((await paymentOf(q.id)).status).toBe('HELD');
+    const [r2] = await poll(q.deposit_address);
+    expect(r2!.stopped).toBe(true);
+    const held = await paymentOf(q.id);
+    expect(held).toMatchObject({ status: 'HELD', oneclickStatus: 'REFUNDED' });
+    expect(held.refundedAmount?.gt(0)).toBe(true);
     expect((await sessionOf(s.id)).status).toBe('HELD');
     expect(await eventsOf('payment.refunded')).toEqual([]);
     expect(returns).not.toHaveBeenCalled();

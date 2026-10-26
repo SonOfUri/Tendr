@@ -229,7 +229,8 @@ export async function queueReturn(
     where: { paymentId: p.id, reason: info.reason, ...tenantOf(ctx) },
   });
   if (existing) return draftIfReady(ctx, existing.id);
-  if (p.keptSmallOverpayment) return null;
+  // Kept small is per reason (C40): keeping one return never keeps another.
+  if (p.keptSmallReasons.includes(info.reason)) return null;
 
   const amount = BigInt(info.amount);
   if (amount <= 0n) return null;
@@ -262,6 +263,18 @@ export async function queueReturn(
   }
 
   const chain = contractChainOf(senderChain);
+  // A sanctions-held payment's funds (its excess included) never go back by themselves (C40):
+  // the row waits in the review queue for the owner's legal acknowledgement and a merchant-given,
+  // screened destination that is not the sender (`refundFromReview`).
+  if (p.heldReason === 'sanctions') {
+    const { refund } = await insertRefund(ctx, {
+      ...base,
+      amount: net.toString(),
+      returnFee: fee.toString(),
+      reviewReason: REVIEW.sanctions,
+    });
+    return refund;
+  }
   const exchange = isExchangeAddress(senderChain, sender);
   const session = await prisma.session.findFirstOrThrow({
     where: { id: p.sessionId, ...tenantOf(ctx) },
@@ -322,20 +335,25 @@ async function recordDirectRefund(
 }
 
 /**
- * The return is worth less than SMALL_OVERPAY_USD after the return fee: the merchant keeps it
- * (`kept_small_overpayment`), no signer. A payment waiting in REFUNDING for this return is done
- * (REFUNDED), and a late-deposit session waiting on it closes.
+ * The return for `reason` is worth less than SMALL_OVERPAY_USD after the return fee: the merchant
+ * keeps it, no signer. Recorded per reason (`kept_small_reasons`, C40), plus the store-facing
+ * `kept_small_overpayment` flag. A payment waiting in REFUNDING is done (REFUNDED) — and a
+ * late-deposit session waiting on it closes — only once no other return of it is still open.
  */
 export async function keepSmall(ctx: ScopeContext, paymentId: string, reason: ReturnReason) {
   await tenantTransaction(ctx, async (tx) => {
     await lockPayment(tx, ctx, paymentId);
     const p = await tx.payment.findFirstOrThrow({ where: { id: paymentId, ...tenantOf(ctx) } });
-    if (p.keptSmallOverpayment) return;
+    if (p.keptSmallReasons.includes(reason)) return;
+    const kept = [...p.keptSmallReasons, reason];
     await tx.payment.updateMany({
       where: { id: p.id, ...tenantOf(ctx) },
-      data: { keptSmallOverpayment: true },
+      data: { keptSmallOverpayment: true, keptSmallReasons: kept },
     });
-    if (p.status === 'REFUNDING') {
+    if (
+      p.status === 'REFUNDING' &&
+      !(await otherReturnOpen(tx, ctx, { ...p, keptSmallReasons: kept }, reason))
+    ) {
       await transitionPayment(tx, ctx, p.id, 'REFUNDED', {
         reason,
         kept_small_overpayment: true,
@@ -343,6 +361,35 @@ export async function keepSmall(ctx: ScopeContext, paymentId: string, reason: Re
       await closeSession(tx, ctx, p.sessionId, p.id);
     }
   });
+}
+
+/**
+ * Whether a return of `p` other than `reason` is still open: a refund row not yet sent or failed,
+ * or a return a late deposit swapped into the account is due (its `late` return, and the `overpaid`
+ * excess of M-2) that is neither queued nor kept yet — its hook may run after this one, or only in
+ * the sweeper.
+ */
+async function otherReturnOpen(
+  tx: Tx,
+  ctx: ScopeContext,
+  p: Payment,
+  reason: ReturnReason,
+): Promise<boolean> {
+  const rows = await tx.refund.findMany({
+    where: { paymentId: p.id, ...tenantOf(ctx), reason: { not: reason } },
+    select: { reason: true, status: true },
+  });
+  if (rows.some((r) => r.status === 'pending' || r.status === 'submitted')) return true;
+  if (!p.isLate || p.oneclickStatus !== 'SUCCESS') return false;
+  const due: ReturnReason[] = [];
+  if (p.amountOut?.gt(0)) due.push('late');
+  if (p.refundedAmount?.gt(0)) {
+    const q = await tx.quote.findFirstOrThrow({ where: { id: p.quoteId, ...tenantOf(ctx) } });
+    if (q.refundType !== 'ORIGIN_CHAIN') due.push('overpaid');
+  }
+  return due.some(
+    (d) => d !== reason && !p.keptSmallReasons.includes(d) && !rows.some((r) => r.reason === d),
+  );
 }
 
 /** A late / held session waiting on this payment's return is REFUNDED once nothing else is open. */
@@ -423,7 +470,7 @@ export async function draftReturn(
 ): Promise<Refund> {
   const r = await prisma.refund.findFirst({
     where: { id: refundId, ...tenantOf(ctx) },
-    include: { payment: { select: { status: true, sessionId: true } } },
+    include: { payment: { select: { status: true, sessionId: true, heldReason: true } } },
   });
   if (!r) throw notFound('Refund not found');
   const changed = () =>
@@ -434,7 +481,11 @@ export async function draftReturn(
     row.amount.toFixed(0) === e.amount;
   if (opts.expect && !holds(r, opts.expect)) throw changed();
   if (r.proposalId || r.status !== 'pending' || r.needsAddress || r.reviewReason) return r;
-  if ((r.payment.status === 'HELD' || r.reason === 'sanctions') && !r.acknowledgedLegalAt) {
+  // Any return of a sanctions-held payment — whatever its status now, and whatever the reason —
+  // needs the review queue's acknowledgement (C40).
+  const sanctionsHeld =
+    r.payment.status === 'HELD' || r.payment.heldReason === 'sanctions' || r.reason === 'sanctions';
+  if (sanctionsHeld && !r.acknowledgedLegalAt) {
     throw legalAckRequired();
   }
   if (!r.destination || !r.destinationChain) return r;
@@ -1247,12 +1298,15 @@ export async function sweepReturns(): Promise<number> {
     merchantId: p.merchantId,
     livemode: p.livemode,
   });
-  const noRefund = { refunds: { none: {} }, keptSmallOverpayment: false };
+  // Kept small is per reason (C40): each loop skips only payments whose own reason was kept.
+  const notKept = (reason: ReturnReason) => ({ NOT: { keptSmallReasons: { has: reason } } });
 
   // 1Click refunded into the merchant account (underpaid, failed, late, …).
   const refunded = await prisma.payment.findMany({
     where: {
-      ...noRefund,
+      // One reason per such payment (1Click refunded the whole deposit): nothing queued or kept.
+      refunds: { none: {} },
+      keptSmallReasons: { isEmpty: true },
       refundsRecorded: { isEmpty: false },
       refundedAmount: { gt: 0 },
       quote: viaStore,
@@ -1274,7 +1328,13 @@ export async function sweepReturns(): Promise<number> {
 
   // An overpay excess refunded into the merchant account.
   const overpaid = await prisma.payment.findMany({
-    where: { ...noRefund, status: 'SETTLED', overpaidAmount: { gt: 0 }, quote: viaStore },
+    where: {
+      refunds: { none: { reason: 'overpaid' } },
+      ...notKept('overpaid'),
+      status: 'SETTLED',
+      overpaidAmount: { gt: 0 },
+      quote: viaStore,
+    },
     include: { quote: true },
     orderBy: { createdAt: 'asc' },
     take: SWEEP_BATCH,
@@ -1292,7 +1352,8 @@ export async function sweepReturns(): Promise<number> {
   // A late deposit 1Click swapped into the merchant account (its transfer was claimed).
   const late = await prisma.payment.findMany({
     where: {
-      ...noRefund,
+      refunds: { none: { reason: 'late' } },
+      ...notKept('late'),
       status: 'REFUNDING',
       isLate: true,
       amountOut: { gt: 0 },
@@ -1312,14 +1373,17 @@ export async function sweepReturns(): Promise<number> {
     );
   }
 
-  // The excess of a late deposit swapped into the merchant account (M-2): its own return.
+  // The excess of a late or held deposit swapped into the merchant account (M-2): its own return
+  // (a sanctions-held payment's goes to the review queue, never drafted on its own — C40).
   const lateExcess = await prisma.payment.findMany({
     where: {
-      isLate: true,
-      status: { in: ['REFUNDING', 'REFUNDED'] },
+      OR: [
+        { isLate: true, status: { in: ['REFUNDING', 'REFUNDED'] } },
+        { heldReason: 'sanctions', status: { in: ['HELD', 'REFUNDING', 'REFUNDED'] } },
+      ],
       oneclickStatus: 'SUCCESS',
       refundedAmount: { gt: 0 },
-      keptSmallOverpayment: false,
+      ...notKept('overpaid'),
       quote: viaStore,
       settlementClaims: { some: {} },
       refunds: { none: { reason: 'overpaid' } },
@@ -1384,6 +1448,7 @@ export async function sweepReturns(): Promise<number> {
       AND: [
         { OR: [{ acknowledgedLegalAt: { not: null } }, { reason: { not: 'sanctions' } }] },
         { OR: [{ acknowledgedLegalAt: { not: null } }, { payment: { status: { not: 'HELD' } } }] },
+        { OR: [{ acknowledgedLegalAt: { not: null } }, { payment: { heldReason: null } }] },
       ],
     },
     orderBy: { createdAt: 'asc' },
