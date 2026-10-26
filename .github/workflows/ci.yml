@@ -161,6 +161,27 @@ jobs:
           path: apps/web/test-results
           retention-days: 7
 
+  woocommerce:
+    # The WooCommerce plugin (apps/woocommerce): PHPUnit and PHPCS inside wp-env (Docker, which
+    # GitHub's ubuntu runners provide). HTTP is mocked in the tests, so no API is needed.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Start wp-env (tests)
+        run: npm run env:start:tests --workspace=@tendr/woocommerce
+      - name: PHPUnit
+        run: npm run test:php --workspace=@tendr/woocommerce
+      - name: PHPCS
+        run: npm run lint:php --workspace=@tendr/woocommerce
+
   onchain:
     runs-on: ubuntu-latest
     timeout-minutes: 45

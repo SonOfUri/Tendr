@@ -1,0 +1,20 @@
+{
+  "name": "@tendr/woocommerce",
+  "version": "0.1.0",
+  "private": true,
+  "description": "tendr: Pay with crypto, the WooCommerce plugin (PHP). Dev and tests run in wp-env (Docker).",
+  "license": "GPL-2.0-or-later",
+  "scripts": {
+    "env:start": "wp-env start",
+    "env:stop": "wp-env stop",
+    "env:start:tests": "wp-env start --config=.wp-env.tests.json",
+    "env:stop:tests": "wp-env stop --config=.wp-env.tests.json",
+    "composer": "wp-env run cli --config=.wp-env.tests.json --env-cwd=wp-content/plugins/tendr-pay-with-crypto composer",
+    "composer:install": "npm run composer -- install --no-interaction --no-progress --quiet",
+    "test:php": "npm run composer:install && wp-env run cli --config=.wp-env.tests.json --env-cwd=wp-content/plugins/tendr-pay-with-crypto vendor/bin/phpunit",
+    "lint:php": "npm run composer:install && wp-env run cli --config=.wp-env.tests.json --env-cwd=wp-content/plugins/tendr-pay-with-crypto vendor/bin/phpcs"
+  },
+  "devDependencies": {
+    "@wordpress/env": "11.17.0"
+  }
+}

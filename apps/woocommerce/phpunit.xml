@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<phpunit
+	bootstrap="tests/php/bootstrap.php"
+	backupGlobals="false"
+	colors="true"
+	beStrictAboutOutputDuringTests="true"
+	convertDeprecationsToExceptions="true"
+	failOnRisky="true"
+	failOnWarning="true"
+>
+	<testsuites>
+		<testsuite name="tendr">
+			<directory suffix="Test.php">./tests/php</directory>
+		</testsuite>
+	</testsuites>
+</phpunit>

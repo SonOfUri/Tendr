@@ -1,0 +1,25 @@
+{
+  "name": "tendr/tendr-pay-with-crypto",
+  "description": "tendr: Pay with crypto for WooCommerce. Composer is used for dev tooling only; the plugin has no runtime dependencies.",
+  "type": "wordpress-plugin",
+  "license": "GPL-2.0-or-later",
+  "require": {
+    "php": ">=8.0"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^9.6",
+    "yoast/phpunit-polyfills": "^2.0",
+    "wp-coding-standards/wpcs": "^3.1",
+    "phpcompatibility/phpcompatibility-wp": "^2.1",
+    "dealerdirect/phpcodesniffer-composer-installer": "^1.0"
+  },
+  "config": {
+    "allow-plugins": {
+      "dealerdirect/phpcodesniffer-composer-installer": true
+    },
+    "platform": {
+      "php": "8.0.30"
+    },
+    "sort-packages": true
+  }
+}
