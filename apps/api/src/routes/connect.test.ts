@@ -8,7 +8,10 @@ import {
   attemptDelivery,
   deliveryKey,
   fanOutEvent,
+  listDeliveries,
+  resendDelivery,
   setWebhookResolver,
+  setBeforeSendHook,
   setWebhookTransport,
   sweepDueDeliveries,
   type WebhookRequest,
@@ -56,6 +59,7 @@ describe('connect routes', () => {
     await app.close();
     setWebhookResolver(null);
     setWebhookTransport(null);
+    setBeforeSendHook(null);
     logSpy.mockRestore();
     vi.useRealTimers();
   });
@@ -735,8 +739,8 @@ describe('connect routes', () => {
       idempotencyKey: deliveryKey(newTest!.id, ev.id),
       status: 'pending',
       attempt: 0,
-      firstAttemptAt: null,
     });
+    expect(moved.firstAttemptAt!.getTime()).toBeGreaterThan(Date.now() - 60_000);
     expect(moved.nextRetryAt!.getTime()).toBeLessThanOrEqual(Date.now());
     expect(await prisma.webhookDelivery.count({ where: { endpointId: oldTest!.id } })).toBe(0);
 
@@ -799,6 +803,128 @@ describe('connect routes', () => {
       await attemptDelivery(d.id);
     }
     expect(sent.filter((r) => r.headers['tendr-event-id'] === ev.id)).toHaveLength(1);
+  });
+
+  /** A site connected, with one pending delivery of a payment.succeeded on its test endpoint. */
+  async function pendingOnFirstSite() {
+    const first = await connect();
+    const [oldTest] = await prisma.webhookEndpoint.findMany({
+      where: { connectionId: first.connection_id, livemode: false },
+    });
+    const ev = await succeededFor(await paymentOn(first.connection_id));
+    await fanOutEvent(ev);
+    const row = await prisma.webhookDelivery.findFirstOrThrow({ where: { eventId: ev.id } });
+    return { first, oldTest: oldTest!, ev, row };
+  }
+
+  const newTestEndpoint = async (connectionId: string) =>
+    (await prisma.webhookEndpoint.findMany({ where: { connectionId, livemode: false } }))[0]!;
+
+  /** Sends every due pending delivery (the worker's sweep, run to completion). */
+  async function drain() {
+    for (const d of await prisma.webhookDelivery.findMany({ where: { status: 'pending' } })) {
+      await attemptDelivery(d.id);
+    }
+  }
+
+  it('W10: claimed by a worker, re-connect, then the send succeeds: one delivery overall, the row ends delivered', async () => {
+    const { oldTest, ev, row } = await pendingOnFirstSite();
+    const sent: WebhookRequest[] = [];
+    let second: Awaited<ReturnType<typeof connect>> | null = null;
+    setWebhookTransport(async (req) => {
+      sent.push(req);
+      // The POST is on the wire to the old site when the site re-connects.
+      if (!second) second = await connect();
+      return { status: 200 };
+    });
+    const r = await attemptDelivery(row.id);
+    expect(r?.status).toBe('delivered');
+    const newTest = await newTestEndpoint(second!.connection_id);
+    expect(await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject(
+      { endpointId: newTest.id, status: 'delivered', nextRetryAt: null },
+    );
+    await sweepDueDeliveries();
+    await drain();
+    const forEv = sent.filter((x) => x.headers['tendr-event-id'] === ev.id);
+    expect(forEv).toHaveLength(1);
+    expect(forEv[0]!.url).toBe(oldTest.url);
+  });
+
+  it('W10: claimed by a worker, re-connect, then the send is refused before the POST: delivered once, to the new endpoint', async () => {
+    const { ev, row } = await pendingOnFirstSite();
+    const sent: WebhookRequest[] = [];
+    setWebhookTransport(async (req) => {
+      sent.push(req);
+      return { status: 200 };
+    });
+    // The worker has claimed the row; the re-connect lands before its send reads the endpoint.
+    let second: Awaited<ReturnType<typeof connect>> | null = null;
+    setBeforeSendHook(async () => {
+      setBeforeSendHook(null);
+      second = await connect();
+    });
+    const r = await attemptDelivery(row.id);
+    expect(r?.status).toBe('pending');
+    expect(sent).toHaveLength(0); // refused: the old endpoint is inactive
+    const newTest = await newTestEndpoint(second!.connection_id);
+    const moved = await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: row.id } });
+    expect(moved).toMatchObject({ endpointId: newTest.id, status: 'pending', attempt: 0 });
+    expect(moved.nextRetryAt!.getTime()).toBeLessThanOrEqual(Date.now());
+    await drain();
+    await drain();
+    const forEv = sent.filter((x) => x.headers['tendr-event-id'] === ev.id);
+    expect(forEv).toHaveLength(1);
+    expect(forEv[0]!.url).toBe(newTest.url);
+    expect((await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: row.id } })).status).toBe(
+      'delivered',
+    );
+  });
+
+  it('W10: a moved row near its 3-day deadline gets a fresh window', async () => {
+    const { row } = await pendingOnFirstSite();
+    const nearDeadline = new Date(Date.now() - 3 * 24 * 3600_000 + 60_000);
+    await prisma.webhookDelivery.update({
+      where: { id: row.id },
+      data: {
+        attempt: 11,
+        firstAttemptAt: nearDeadline,
+        lastAttemptAt: new Date(Date.now() - 3600_000),
+        nextRetryAt: new Date(Date.now() + 3600_000),
+      },
+    });
+    const before = Date.now();
+    await connect();
+    const moved = await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: row.id } });
+    expect(moved.attempt).toBe(0);
+    expect(moved.firstAttemptAt!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    expect(moved.nextRetryAt!.getTime()).toBeLessThanOrEqual(Date.now());
+    // A failure now (past the old deadline) retries instead of giving up.
+    setWebhookTransport(async () => ({ status: 503 }));
+    const r = await attemptDelivery(row.id, { now: new Date(Date.now() + 2 * 60_000) });
+    expect(r).toMatchObject({ status: 'pending', attempt: 1 });
+  });
+
+  it('W10: a failed (given-up) row moves, stays failed, and can be resent from the dashboard', async () => {
+    const { ev, row } = await pendingOnFirstSite();
+    await prisma.webhookDelivery.update({
+      where: { id: row.id },
+      data: { status: 'failed', nextRetryAt: null, lastError: 'HTTP 503', attempt: 12 },
+    });
+    const second = await connect();
+    const newTest = await newTestEndpoint(second.connection_id);
+    expect(await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject(
+      { endpointId: newTest.id, status: 'failed', idempotencyKey: deliveryKey(newTest.id, ev.id) },
+    );
+    const sent: WebhookRequest[] = [];
+    setWebhookTransport(async (req) => {
+      sent.push(req);
+      return { status: 200 };
+    });
+    const ctx = { merchantId: merchant.id, livemode: false };
+    expect((await listDeliveries(ctx, newTest.id)).map((d) => d.id)).toContain(row.id);
+    expect((await resendDelivery(ctx, row.id)).status).toBe('delivered');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.url).toBe(newTest.url);
   });
 
   it('W8: two re-connects in a row (A→B→C) deliver to C', async () => {

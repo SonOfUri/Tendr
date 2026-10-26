@@ -387,6 +387,16 @@ export function setWebhookTransport(fn: WebhookTransport | null): void {
   transport = fn ?? httpTransport;
 }
 
+let beforeSend: ((deliveryId: string) => Promise<void>) | null = null;
+
+/**
+ * Test hook: runs after a send's claim, before it reads the endpoint (null removes it). Lets a
+ * test land a re-connect between a worker's claim and its POST.
+ */
+export function setBeforeSendHook(fn: ((deliveryId: string) => Promise<void>) | null): void {
+  beforeSend = fn;
+}
+
 // ─── scheduling ─────────────────────────────────────────────────────────────
 
 export interface DeliverJobData {
@@ -568,15 +578,19 @@ export function registerWebhookHandlers(): void {
   }
 }
 
-// ─── re-connect (ruling W9) ─────────────────────────────────────────────────
+// ─── re-connect (rulings W9, W10) ───────────────────────────────────────────
 
 /** Whether a send of `d` is in flight now (its claim lease on `next_retry_at` has not lapsed). */
 function isInFlight(
   d: Pick<WebhookDelivery, 'status' | 'lastAttemptAt' | 'nextRetryAt'>,
   now: Date,
 ): boolean {
+  return d.status === DELIVERY_STATUS.pending && holdsLease(d, now);
+}
+
+/** Whether a claim's lease on `d` is live (any status: a manual resend leases too). */
+function holdsLease(d: Pick<WebhookDelivery, 'lastAttemptAt' | 'nextRetryAt'>, now: Date): boolean {
   return (
-    d.status === DELIVERY_STATUS.pending &&
     d.lastAttemptAt !== null &&
     d.lastAttemptAt.getTime() > now.getTime() - SEND_LEASE_MS &&
     d.nextRetryAt !== null &&
@@ -584,16 +598,23 @@ function isInFlight(
   );
 }
 
+/** Statuses a re-connect moves to the new endpoint: retrying, and given up (still resendable). */
+const MOVABLE = [DELIVERY_STATUS.pending, DELIVERY_STATUS.failed];
+
 /**
- * A site re-connect (W9), in the redeem transaction: every undelivered (`pending`) delivery of the
- * replaced connection's endpoints moves to the new connection's active endpoint of the same mode —
- * same row, event and payload; a fresh schedule (due now, a new 3-day window; the next send signs
- * with the new endpoint's secret, read at send time). One row per (endpoint, event) stays the
- * rule: when the new endpoint already has a row for the event, the old row is marked `superseded`
- * and never sent. A row whose send is in flight keeps its lease (no second send can start before
- * the first records its outcome) but still moves, so a failed attempt retries to the new site.
+ * A site re-connect (W9, W10), in the redeem transaction. The replaced connection's `pending` and
+ * `failed` deliveries are locked `FOR UPDATE` first (a worker's claim, a single UPDATE, waits on
+ * the lock and then finds the row changed, so it never sends), then each moves to the new
+ * connection's active endpoint of the same mode: same row, event and payload, new
+ * `endpoint_id` / `idempotency_key`; the next send signs with the new endpoint's secret.
+ * - `pending` rows get a fresh window: attempt 0, `first_attempt_at` and `next_retry_at` now. A
+ *   row whose claim lease is live keeps the lease (`last_attempt_at`, `next_retry_at`): the
+ *   worker's conditional outcome write (`writeOutcome`) sees the move and records delivered (its
+ *   send reached the site) or makes the row due now on the new endpoint.
+ * - `failed` rows keep `failed` (the dashboard lists them under the new endpoint; resend works).
+ * - When the new endpoint already has a row for the event (one row per endpoint and event), the
+ *   old row is marked `superseded` instead and is never sent.
  * A mode with no active new endpoint leaves its rows where they are (they fail: endpoint deleted).
- * Returns how many rows moved and how many were superseded.
  */
 export async function repointUndeliveredDeliveries(
   tx: Prisma.TransactionClient,
@@ -615,8 +636,13 @@ export async function repointUndeliveredDeliveries(
   for (const target of to) {
     const sources = from.filter((e) => e.livemode === target.livemode).map((e) => e.id);
     if (sources.length === 0) continue;
+    await tx.$queryRaw`
+      SELECT id FROM webhook_deliveries
+      WHERE endpoint_id = ANY(${sources}) AND status IN ('pending', 'failed')
+      ORDER BY id FOR UPDATE`;
     const rows = await tx.webhookDelivery.findMany({
-      where: { endpointId: { in: sources }, status: DELIVERY_STATUS.pending },
+      where: { endpointId: { in: sources }, status: { in: MOVABLE } },
+      orderBy: { id: 'asc' },
     });
     for (const d of rows) {
       const key = deliveryKey(target.id, d.eventId);
@@ -625,8 +651,8 @@ export async function repointUndeliveredDeliveries(
         select: { id: true },
       });
       if (taken) {
-        await tx.webhookDelivery.updateMany({
-          where: { id: d.id, status: DELIVERY_STATUS.pending },
+        await tx.webhookDelivery.update({
+          where: { id: d.id },
           data: {
             status: DELIVERY_STATUS.superseded,
             nextRetryAt: null,
@@ -636,18 +662,19 @@ export async function repointUndeliveredDeliveries(
         out.superseded++;
         continue;
       }
-      const schedule = isInFlight(d, now)
-        ? {}
-        : {
-            attempt: 0,
-            nextRetryAt: now,
-            firstAttemptAt: null,
-            lastAttemptAt: null,
-            statusCode: null,
-            lastError: null,
-          };
-      await tx.webhookDelivery.updateMany({
-        where: { id: d.id, status: DELIVERY_STATUS.pending },
+      const leased = holdsLease(d, now);
+      const schedule =
+        d.status === DELIVERY_STATUS.pending
+          ? {
+              attempt: 0,
+              firstAttemptAt: now,
+              ...(leased
+                ? {}
+                : { nextRetryAt: now, lastAttemptAt: null, statusCode: null, lastError: null }),
+            }
+          : {};
+      await tx.webhookDelivery.update({
+        where: { id: d.id },
         data: { endpointId: target.id, idempotencyKey: key, ...schedule },
       });
       out.moved++;
@@ -731,28 +758,97 @@ export async function attemptDelivery(
       nextRetryAt = new Date(Math.min(now.getTime() + retryDelayMs(attempt), deadline));
     }
   }
-  await prisma.webhookDelivery.update({
-    where: { id: deliveryId },
-    data: {
-      status,
-      statusCode: outcome.statusCode,
-      lastError: outcome.ok ? null : outcome.error,
-      nextRetryAt,
-      ...(outcome.ok ? { deliveredAt: now } : {}),
-    },
-  });
-  if (nextRetryAt) await enqueue(deliveryId, nextRetryAt, now);
-  if (!outcome.ok && status === DELIVERY_STATUS.failed && !oneOff) {
+  const claim: Claim = {
+    id: deliveryId,
+    endpointId: before.endpointId,
+    status: before.status,
+    leasedAt: now,
+  };
+  const written = await writeOutcome(claim, outcome, { status, nextRetryAt }, now);
+  if (written.nextRetryAt) await enqueue(deliveryId, written.nextRetryAt, now);
+  if (!outcome.ok && written.status === DELIVERY_STATUS.failed && !oneOff) {
     log('warn', 'webhook delivery gave up', { deliveryId, attempt, error: outcome.error });
   }
   return {
     deliveryId,
-    status,
+    status: written.status,
     statusCode: outcome.statusCode,
     attempt,
-    nextRetryAt,
+    nextRetryAt: written.nextRetryAt,
     error: outcome.ok ? null : outcome.error,
   };
+}
+
+/** What a worker holds after its claim: the row as it claimed it, and its lease token. */
+interface Claim {
+  id: string;
+  endpointId: string;
+  status: string;
+  /** `last_attempt_at` written by the claim (the lease token). */
+  leasedAt: Date;
+}
+
+/**
+ * Records a send's outcome only while the worker still holds its claim (W10): same endpoint,
+ * same status, same lease token. Otherwise the row changed under the send and is never
+ * overwritten blindly:
+ * - superseded (a re-connect gave the event to the new endpoint's own row): left as is;
+ * - moved to another endpoint by a re-connect: if this send reached the site, the event was
+ *   delivered (once) and the row says so; if not, the row stays where it is — a `pending` row due
+ *   now on its new endpoint, a `failed` row failed;
+ * - anything else (a later claim took over after the lease lapsed): left to that claim.
+ * Returns the row's status and next retry as they now stand.
+ */
+async function writeOutcome(
+  claim: Claim,
+  outcome: SendOutcome,
+  next: { status: DeliveryStatus; nextRetryAt: Date | null },
+  now: Date,
+): Promise<{ status: DeliveryStatus; nextRetryAt: Date | null }> {
+  const result = {
+    statusCode: outcome.statusCode,
+    lastError: outcome.ok ? null : outcome.error,
+  };
+  const held = await prisma.webhookDelivery.updateMany({
+    where: {
+      id: claim.id,
+      endpointId: claim.endpointId,
+      status: claim.status,
+      lastAttemptAt: claim.leasedAt,
+    },
+    data: {
+      ...result,
+      status: next.status,
+      nextRetryAt: next.nextRetryAt,
+      ...(outcome.ok ? { deliveredAt: now } : {}),
+    },
+  });
+  if (held.count === 1) return next;
+  const row = await prisma.webhookDelivery.findUnique({ where: { id: claim.id } });
+  const as = (r: { status: string; nextRetryAt: Date | null } | null) => ({
+    status: (r?.status ?? next.status) as DeliveryStatus,
+    nextRetryAt: r?.status === DELIVERY_STATUS.pending ? (r?.nextRetryAt ?? null) : null,
+  });
+  if (!row || row.status === DELIVERY_STATUS.superseded || row.endpointId === claim.endpointId) {
+    return as(row);
+  }
+  log('info', 'webhook delivery moved by a re-connect during its send', {
+    deliveryId: claim.id,
+    sent: outcome.ok,
+  });
+  const unchanged = { id: row.id, updatedAt: row.updatedAt };
+  if (outcome.ok) {
+    await prisma.webhookDelivery.updateMany({
+      where: unchanged,
+      data: { ...result, status: DELIVERY_STATUS.delivered, nextRetryAt: null, deliveredAt: now },
+    });
+  } else if (row.status === DELIVERY_STATUS.pending) {
+    await prisma.webhookDelivery.updateMany({
+      where: unchanged,
+      data: { ...result, nextRetryAt: now },
+    });
+  }
+  return as(await prisma.webhookDelivery.findUnique({ where: { id: claim.id } }));
 }
 
 type SendOutcome =
@@ -763,6 +859,7 @@ async function send(d: WebhookDelivery, now: Date): Promise<SendOutcome> {
   const fail = (error: string, permanent = false, statusCode: number | null = null) =>
     ({ ok: false, statusCode, error: error.slice(0, MAX_ERROR_LEN), permanent }) as const;
   const tenant = { merchantId: d.merchantId, livemode: d.livemode };
+  if (beforeSend) await beforeSend(d.id);
   const [endpoint, event] = await Promise.all([
     prisma.webhookEndpoint.findFirst({ where: { id: d.endpointId, ...tenant } }),
     prisma.event.findFirst({ where: { id: d.eventId, ...tenant } }),
