@@ -52,12 +52,13 @@
     "CHECKOUT_TOPUP_ENABLED",
     "EVM_RPC_URLS",
     "CHECKOUT_BASE_URL",
-    "SCREENING_TEST_BLOCKLIST"
+    "SCREENING_TEST_BLOCKLIST",
+    "TENDR_CHECKOUT_BASE_URL"
   ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "public/v1/tendr.js"]
     },
     "dev": {
       "cache": false,

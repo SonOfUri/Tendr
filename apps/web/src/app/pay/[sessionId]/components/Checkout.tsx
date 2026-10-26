@@ -246,6 +246,24 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     setCanClose(bridge.targetOrigin !== null);
     bridge.ready(screenFor(view, new Date()).bridgeStatus);
   }, [view, sessionId]);
+  // Framed by a registered store page: report the page's height (the inline widget sizes its
+  // frame to it), and Esc asks the store page to close (a modal; focus is inside this frame, so
+  // the store page never sees the key itself).
+  const framedForStore = canClose;
+  useEffect(() => {
+    const bridge = bridgeRef.current;
+    if (!framedForStore || !bridge) return;
+    const root = document.querySelector('.pay');
+    const stopHeight = root ? bridge.watchHeight(root) : () => {};
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') bridge.close();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      stopHeight();
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [framedForStore]);
   const bridgeStatus = screen?.bridgeStatus ?? null;
   useEffect(() => {
     bridgeRef.current?.status(bridgeStatus);

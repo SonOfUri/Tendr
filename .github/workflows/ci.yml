@@ -87,7 +87,10 @@ jobs:
 
   e2e:
     # Dashboard end-to-end tests (Playwright, virtual WebAuthn authenticator) against the API and
-    # worker with the in-memory NEAR client running the merchant-account contract.
+    # worker with the in-memory NEAR client running the merchant-account contract, and the checkout
+    # tests (e2e/checkout.spec.ts: simulated 1Click, test screening list). playwright.config.ts
+    # starts every server: API + worker (:4100), web (:3100, tendr.js built for it first), and the
+    # fixture store on a second origin (:3200; 127.0.0.1:3200 is the unregistered origin).
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:

@@ -1,6 +1,15 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium, defineConfig } from '@playwright/test';
+import {
+  API_PORT,
+  API_URL,
+  E2E_CODE_HASH,
+  STORE_PORT,
+  STORE_URL,
+  WEB_PORT,
+  WEB_URL,
+} from './e2e/support/urls';
 
 /** TEST_DATABASE_URL from the environment or the monorepo root .env. */
 function testDatabaseUrl(): string {
@@ -15,12 +24,9 @@ function testDatabaseUrl(): string {
   throw new Error('TEST_DATABASE_URL is not set (environment or root .env)');
 }
 
-// Own ports, so a running `npm run dev` (dev database, real NEAR settings) is never reused by
-// mistake. WebAuthn still runs on RP ID `localhost`; the API is told this origin.
-const WEB_PORT = Number(process.env.E2E_WEB_PORT ?? 3100);
-const API_PORT = Number(process.env.E2E_API_PORT ?? 4100);
-const WEB_URL = `http://localhost:${WEB_PORT}`;
-const API_URL = `http://localhost:${API_PORT}`;
+// Own ports (e2e/support/urls.ts), so a running `npm run dev` (dev database, real NEAR settings) is
+// never reused by mistake. WebAuthn still runs on RP ID `localhost`; the API is told this origin.
+// The fixture store (e2e/fixtures/merchant-server.mjs) is a second origin for the checkout specs.
 
 /**
  * The browser: Playwright's bundled Chromium when it is installed, else the system Google Chrome
@@ -71,28 +77,46 @@ export default defineConfig({
         API_HOST: '127.0.0.1',
         API_BASE_URL: API_URL,
         WEB_URL,
+        // Session URLs point at this web server, and its origin gets the shopper routes' CORS.
+        CHECKOUT_BASE_URL: WEB_URL,
         CORS_ORIGINS: WEB_URL,
         WEBAUTHN_RP_ID: 'localhost',
         WEBAUTHN_ORIGINS: WEB_URL,
         NEAR_CLIENT_DRIVER: 'fake',
         NEAR_FAKE_SIMULATE: '1',
         // Any well-formed code hash: the fake client never deploys anything.
-        MERCHANT_ACCOUNT_CODE_HASH_TEST: '11111111111111111111111111111111',
-        MERCHANT_ACCOUNT_CODE_HASH_LIVE: '11111111111111111111111111111111',
+        MERCHANT_ACCOUNT_CODE_HASH_TEST: E2E_CODE_HASH,
+        MERCHANT_ACCOUNT_CODE_HASH_LIVE: E2E_CODE_HASH,
         MAIL_DRIVER: 'log',
         KEYVAULT_DRIVER: 'local',
         LOG_LEVEL: 'warn',
       },
     },
     {
-      command: `npx next dev --port ${WEB_PORT}`,
+      // tendr.js is built for this server's origin first (served at /v1/tendr.js).
+      command: `node scripts/build-embed.mjs && npx next dev --port ${WEB_PORT}`,
       cwd: __dirname,
       url: WEB_URL,
       reuseExistingServer: false,
       timeout: 180_000,
       env: {
         NEXT_PUBLIC_API_BASE_URL: API_URL,
+        // The middleware's frame-origins lookup (else the root .env's dev API would be asked).
+        API_BASE_URL: API_URL,
         NEXT_PUBLIC_WEBAUTHN_RP_ID: 'localhost',
+        TENDR_CHECKOUT_BASE_URL: WEB_URL,
+      },
+    },
+    {
+      // The fixture store: frames the checkout with tendr.js and receives the signed webhooks.
+      command: 'node e2e/fixtures/merchant-server.mjs',
+      cwd: __dirname,
+      url: `${STORE_URL}/health`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      env: {
+        FIXTURE_PORT: String(STORE_PORT),
+        TENDR_JS_URL: `${WEB_URL}/v1/tendr.js`,
       },
     },
   ],

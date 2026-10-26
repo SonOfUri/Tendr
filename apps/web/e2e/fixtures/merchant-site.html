@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fixture store</title>
+    <!-- merchant-server.mjs fills in the web server's tendr.js URL. -->
+    <script src="__TENDR_JS_URL__"></script>
+  </head>
+  <body>
+    <h1>Fixture store</h1>
+    <p>An order of $25.00.</p>
+    <button type="button" id="pay">Pay with crypto</button>
+    <div id="widget"></div>
+    <h2>Checkout events</h2>
+    <ol id="events"></ol>
+    <script>
+      // ?session=<the session's url>&mode=modal|widget
+      var params = new URLSearchParams(location.search);
+      var sessionUrl = params.get('session');
+      window.__events = [];
+      window.__errors = [];
+      function onEvent(e) {
+        window.__events.push(e);
+        var li = document.createElement('li');
+        li.textContent = JSON.stringify(e);
+        document.getElementById('events').appendChild(li);
+      }
+      function attempt(fn) {
+        try {
+          return fn();
+        } catch (err) {
+          window.__errors.push(String(err && err.message ? err.message : err));
+        }
+      }
+      document.getElementById('pay').addEventListener('click', function () {
+        attempt(function () {
+          return Tendr.open({ sessionUrl: sessionUrl, onEvent: onEvent });
+        });
+      });
+      if (params.get('mode') === 'widget') {
+        attempt(function () {
+          return Tendr.mount(document.getElementById('widget'), {
+            sessionUrl: sessionUrl,
+            onEvent: onEvent,
+          });
+        });
+      }
+    </script>
+  </body>
+</html>

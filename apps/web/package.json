@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 3000",
+    "build:embed": "node scripts/build-embed.mjs",
+    "prebuild": "node scripts/build-embed.mjs",
     "build": "next build",
     "start": "next start --port 3000",
     "lint": "eslint . --max-warnings 0",
@@ -44,6 +46,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
+    "esbuild": "^0.28.2",
     "eslint": "^9.25.1",
     "eslint-config-next": "^15.3.1",
     "typescript": "^5.8.3",

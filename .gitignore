@@ -35,3 +35,6 @@ onchain/target/
 
 # Mainnet verify script state (throwaway passkey)
 .verify-merchant-account-state.json
+
+# Built by apps/web/scripts/build-embed.mjs (prebuild, e2e)
+apps/web/public/v1/tendr.js
