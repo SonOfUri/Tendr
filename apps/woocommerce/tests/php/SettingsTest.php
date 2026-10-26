@@ -71,7 +71,7 @@ class SettingsTest extends Tendr_Test_Case {
 		$this->assertStringNotContainsString( 'data-tendr-connect=', $html );
 	}
 
-	public function test_gateway_is_registered_but_not_yet_available(): void {
+	public function test_gateway_is_registered_and_hidden_from_guests_in_test_mode(): void {
 		$gateways = WC()->payment_gateways()->payment_gateways();
 		$this->assertArrayHasKey( 'tendr', $gateways );
 		$this->assertInstanceOf( Tendr_Gateway::class, $gateways['tendr'] );

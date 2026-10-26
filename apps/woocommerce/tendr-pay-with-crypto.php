@@ -42,6 +42,7 @@ require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-credentials.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-api-client.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-connect.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-settings.php';
+require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-order-status.php';
 
 add_action(
 	'before_woocommerce_init',

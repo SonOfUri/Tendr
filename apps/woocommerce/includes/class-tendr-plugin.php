@@ -61,6 +61,11 @@ final class Tendr_Plugin {
 		add_filter( 'woocommerce_payment_gateways', array( self::class, 'register_gateway' ) );
 		Tendr_Connect::register();
 		Tendr_Settings::register();
+		Tendr_Order_Status::register();
+		if ( class_exists( 'Tendr_Gateway' ) ) {
+			Tendr_Gateway::register();
+		}
+		add_action( 'woocommerce_blocks_payment_method_type_registration', array( self::class, 'register_blocks' ) );
 		return true;
 	}
 
@@ -103,6 +108,19 @@ final class Tendr_Plugin {
 		$gateways   = is_array( $gateways ) ? $gateways : array();
 		$gateways[] = Tendr_Gateway::class;
 		return $gateways;
+	}
+
+	/**
+	 * `woocommerce_blocks_payment_method_type_registration`: "Pay with crypto" in the block checkout.
+	 *
+	 * @param object $registry Automattic\WooCommerce\Blocks\Payments\PaymentMethodRegistry.
+	 */
+	public static function register_blocks( $registry ): void {
+		if ( ! class_exists( \Automattic\WooCommerce\Blocks\Payments\Integrations\AbstractPaymentMethodType::class ) || ! class_exists( 'Tendr_Gateway' ) ) {
+			return;
+		}
+		require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-blocks.php';
+		Tendr_Blocks::register( $registry );
 	}
 
 	/**
