@@ -61,7 +61,8 @@ export function plainOrigins(list: readonly unknown[]): string[] {
  *
  * - frame-ancestors is `'self'` plus the merchant's checkout domains (the store pages allowed to
  *   frame the checkout). `null` means the lookup failed: `'self'` only, failing closed.
- * - connect-src adds the wallet providers' hosts (lib/checkout/wallet-hosts.ts, the one list).
+ * - connect-src adds the wallet providers' hosts, and frame-src is 'self' plus the frames a wallet
+ *   provider needs (both from lib/checkout/wallet-hosts.ts, the one list). Never a script host.
  * - img-src allows https: for the store's logo.
  */
 export function checkoutContentSecurityPolicy(opts: {
@@ -71,9 +72,13 @@ export function checkoutContentSecurityPolicy(opts: {
   /** The merchant's checkout domains, or null when they could not be looked up. */
   frameAncestors: readonly string[] | null;
   walletHosts: readonly string[];
+  walletFrameHosts?: readonly string[];
 }): string {
   const ancestors = ["'self'", ...plainOrigins(opts.frameAncestors ?? [])];
   const wallets = opts.walletHosts.filter((h) => WALLET_SOURCE.test(h));
+  const walletFrames = (opts.walletFrameHosts ?? []).filter(
+    (h) => h.startsWith('https://') && WALLET_SOURCE.test(h),
+  );
   const directives = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${opts.nonce}'${opts.dev ? " 'unsafe-eval'" : ''}`,
@@ -86,6 +91,7 @@ export function checkoutContentSecurityPolicy(opts: {
       ...wallets,
       ...(opts.dev ? ['ws:'] : []),
     ].join(' '),
+    ['frame-src', "'self'", ...walletFrames].join(' '),
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: blob: https:",

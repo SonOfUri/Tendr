@@ -8,6 +8,8 @@ export const publicEnv = {
   apiBaseUrl: (process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000').replace(/\/+$/, ''),
   /** WebAuthn RP ID for signing ceremonies; unset means the page's own host (local dev). */
   webauthnRpId: process.env.NEXT_PUBLIC_WEBAUTHN_RP_ID || undefined,
+  /** Reown (WalletConnect) project id for checkout wallets; unset hides EVM, Solana and Bitcoin. */
+  reownProjectId: process.env.NEXT_PUBLIC_REOWN_PROJECT_ID || null,
 };
 
 /** Server-only config. */

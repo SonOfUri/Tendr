@@ -1,0 +1,46 @@
+// Loads a family's adapter (and through it the wallet SDK). Imported on demand only, from
+// `adapterFor(...).load()` in ./index.ts, so its dynamic imports stay out of the first load.
+import { WalletError } from './errors';
+import { needsReown, type PayTarget, type WalletAdapter, type WalletEnv } from './index';
+
+export async function loadAdapter(target: PayTarget, env: WalletEnv): Promise<WalletAdapter> {
+  if (needsReown(target.family) && !env.reownProjectId) {
+    throw new WalletError('unavailable', { detail: 'no Reown project id' });
+  }
+  switch (target.family) {
+    case 'evm': {
+      const [{ createEvmAdapter }, { appKitSession }] = await Promise.all([
+        import('./evm'),
+        import('./appkit'),
+      ]);
+      return createEvmAdapter(target, appKitSession('eip155', env.reownProjectId!));
+    }
+    case 'solana': {
+      const [{ createSolanaAdapter, solanaConnection }, { appKitSession }] = await Promise.all([
+        import('./solana'),
+        import('./appkit'),
+      ]);
+      return createSolanaAdapter(target, {
+        session: appKitSession('solana', env.reownProjectId!),
+        connection: () => solanaConnection(env.reownProjectId!),
+      });
+    }
+    case 'bitcoin': {
+      const [{ createBitcoinAdapter }, { appKitSession }] = await Promise.all([
+        import('./bitcoin'),
+        import('./appkit'),
+      ]);
+      return createBitcoinAdapter(target, {
+        session: appKitSession('bip122', env.reownProjectId!),
+      });
+    }
+    case 'tron': {
+      const { createTronAdapter } = await import('./tron');
+      return createTronAdapter(target, { win: window as never });
+    }
+    case 'near': {
+      const { createNearAdapter, nearSelectorDeps } = await import('./near');
+      return createNearAdapter(target, nearSelectorDeps(env.pickNearWallet));
+    }
+  }
+}

@@ -1,9 +1,11 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { SessionView } from '@/lib/checkout/api';
+import type { SessionView, Token } from '@/lib/checkout/api';
 import { CheckoutHeader } from './CheckoutHeader';
 import { CopyButton } from './CopyButton';
 import { leftoversNotice } from './PayFlow';
+import { WalletConnect } from './WalletConnect';
+import { canPay } from './WalletPanel';
 
 const VIEW = {
   id: 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0',
@@ -57,5 +59,78 @@ describe('checkout components', () => {
     expect(leftoversNotice(2.5)).toBe("Leftovers under $2.50 aren't returned.");
     expect(leftoversNotice(Number.NaN)).toBe("Small leftovers aren't returned.");
     expect(leftoversNotice(1e21)).toBe("Small leftovers aren't returned.");
+  });
+});
+
+describe('WalletConnect', () => {
+  const NEAR_USDT: Token = {
+    asset_id: 'nep141:usdt.tether-token.near',
+    symbol: 'USDT',
+    blockchain: 'near',
+    decimals: 6,
+    price_usd: '1',
+    popular: true,
+  };
+  const quote = {
+    id: 'quo_1',
+    deposit_address: 'a'.repeat(64),
+    amount_in: '84000000',
+    origin_asset: NEAR_USDT.asset_id,
+    deadline: '2026-10-26T12:10:00Z',
+    refund_address: 'alice.near',
+  };
+  const NOW = Date.parse('2026-10-26T12:00:00Z');
+  const base = {
+    family: 'near' as const,
+    address: 'alice.near',
+    quote,
+    now: NOW,
+    livemode: true,
+    paymentSent: false,
+    busy: false,
+  };
+
+  it('pays only once the quote returns to the connected wallet, while it is live', () => {
+    expect(canPay(base)).toBe(true);
+    expect(canPay({ ...base, address: 'bob.near' })).toBe(false);
+    expect(canPay({ ...base, quote: { ...quote, refund_address: null } })).toBe(false);
+    expect(canPay({ ...base, now: Date.parse(quote.deadline) })).toBe(false);
+    expect(canPay({ ...base, livemode: false })).toBe(false);
+    expect(canPay({ ...base, paymentSent: true })).toBe(false);
+    expect(canPay({ ...base, busy: true })).toBe(false);
+    expect(
+      canPay({
+        ...base,
+        family: 'evm',
+        address: '0xAbCdEf0000000000000000000000000000000001',
+        quote: { ...quote, refund_address: '0xabcdef0000000000000000000000000000000001' },
+      }),
+    ).toBe(true);
+  });
+
+  it('offers "Connect wallet" for a supported token', () => {
+    const html = renderToStaticMarkup(<WalletConnect quote={quote} token={NEAR_USDT} />);
+    expect(html).toContain('Connect wallet');
+  });
+
+  it('hides the pay button once a payment was sent for this quote', () => {
+    const html = renderToStaticMarkup(
+      <WalletConnect quote={quote} token={NEAR_USDT} paymentSent />,
+    );
+    expect(html).toContain('Your payment is on its way');
+    expect(html).not.toContain('<button');
+  });
+
+  it('a token without a wallet route shows only the manual send', () => {
+    const hot: Token = {
+      ...NEAR_USDT,
+      asset_id: 'nep245:v2_1.omni.hot.tg:56_11111111111111111111',
+      blockchain: 'bsc',
+    };
+    const html = renderToStaticMarkup(
+      <WalletConnect quote={{ ...quote, origin_asset: hot.asset_id }} token={hot} />,
+    );
+    expect(html).not.toContain('<button');
+    expect(html).toContain('Send it yourself');
   });
 });

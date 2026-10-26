@@ -11,7 +11,7 @@ import {
   createFrameOriginsLookup,
   needsFrameLookup,
 } from './lib/checkout/frame-origins';
-import { WALLET_CONNECT_HOSTS } from './lib/checkout/wallet-hosts';
+import { WALLET_CONNECT_HOSTS, WALLET_FRAME_HOSTS } from './lib/checkout/wallet-hosts';
 import { checkoutContentSecurityPolicy, contentSecurityPolicy } from './lib/csp';
 
 const publicApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
@@ -32,6 +32,7 @@ async function checkoutPolicy(request: NextRequest, nonce: string, dev: boolean)
     dev,
     frameAncestors: frameable ? await frameOrigins(sessionId) : [],
     walletHosts: WALLET_CONNECT_HOSTS,
+    walletFrameHosts: WALLET_FRAME_HOSTS,
   });
 }
 

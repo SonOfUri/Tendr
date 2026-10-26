@@ -9,9 +9,9 @@ import { RefundAddressField } from './RefundAddressField';
 import { SendDetails } from './SendDetails';
 import { TestModePanel } from './TestModePanel';
 import { TokenPicker } from './TokenPicker';
-import { WalletConnect } from './WalletConnect';
+import { WalletConnect, type WalletQuoteResult } from './WalletConnect';
 
-type Reason = 'choose' | 'auto' | 'refund' | 'retry';
+type Reason = 'choose' | 'auto' | 'refund' | 'retry' | 'wallet';
 
 /** "Leftovers under $1 aren't returned.", the threshold formatted through formatUsd. */
 export function leftoversNotice(thresholdUsd: number): string {
@@ -31,6 +31,9 @@ export function PayFlow({
   now,
   onQuote,
   onRefresh,
+  onDepositSent,
+  sentQuoteId = null,
+  openWalletWindow,
 }: {
   view: SessionView;
   client: CheckoutClient;
@@ -40,6 +43,12 @@ export function PayFlow({
   onQuote: (quote: Quote) => void;
   /** Ask for the latest session state now. */
   onRefresh: () => void;
+  /** A connected wallet sent the deposit for `quoteId`: save and report the hash. */
+  onDepositSent?: (txHash: string, quoteId: string) => void;
+  /** The quote a wallet payment was already sent for (its pay button stays hidden). */
+  sentQuoteId?: string | null;
+  /** Inside a frame: opens the wallet step in a window. */
+  openWalletWindow?: () => Window | null;
 }) {
   const resumed = view.quote
     ? (tokens.find((t) => t.asset_id === view.quote!.origin_asset) ?? null)
@@ -56,7 +65,7 @@ export function PayFlow({
     view.quote && token && view.quote.origin_asset === token.asset_id ? view.quote : null;
 
   const requote = useCallback(
-    async (t: Token, refund: string | null, reason: Reason) => {
+    async (t: Token, refund: string | null, reason: Reason): Promise<WalletQuoteResult> => {
       setLoading(true);
       setFailure(null);
       if (reason !== 'auto') setPriceChanged(false);
@@ -70,11 +79,16 @@ export function PayFlow({
         if (reason === 'auto' && previous !== null && previous !== q.amount_in)
           setPriceChanged(true);
         onQuote(q);
+        return 'ok';
       } catch (err) {
         const f = quoteFailure(err, t.symbol);
         if (f.kind === 'expired') onRefresh();
-        else if (f.kind === 'refund_address') setRefundError(f.message);
-        else setFailure(f);
+        // A connected wallet the API refuses (screening or format): the wallet slot says so.
+        else if (f.kind === 'refund_address') {
+          if (reason === 'wallet') return 'refused';
+          setRefundError(f.message);
+        } else setFailure(f);
+        return 'failed';
       } finally {
         setLoading(false);
       }
@@ -191,15 +205,18 @@ export function PayFlow({
             </p>
           </div>
 
-          <WalletConnect
-            quote={quote}
-            token={token}
-            onWalletAddress={(address) => void requote(token, address, 'refund')}
-            onDepositSent={(txHash) => {
-              void client.deposit(txHash).catch(() => {});
-              onRefresh();
-            }}
-          />
+          {failure?.kind === 'on_its_way' ? null : (
+            <WalletConnect
+              quote={quote}
+              token={token}
+              livemode={view.livemode}
+              sessionId={view.id}
+              paymentSent={sentQuoteId === quote.id}
+              openWalletWindow={openWalletWindow}
+              onWalletAddress={(address) => requote(token, address, 'wallet')}
+              onDepositSent={(txHash) => onDepositSent?.(txHash, quote.id)}
+            />
+          )}
 
           <p className="pay-or muted small">or send it yourself</p>
           <SendDetails

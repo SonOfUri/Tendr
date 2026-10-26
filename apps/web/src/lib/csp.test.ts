@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { checkoutContentSecurityPolicy, contentSecurityPolicy } from './csp';
+import { WALLET_CONNECT_HOSTS, WALLET_FRAME_HOSTS } from './checkout/wallet-hosts';
 
 const directives = (csp: string) =>
   Object.fromEntries(
@@ -39,6 +40,7 @@ describe('checkoutContentSecurityPolicy (/pay/*)', () => {
     apiBaseUrl: 'https://api.usetendr.tech',
     dev: false,
     walletHosts: ['https://rpc.wallet.example', 'wss://relay.wallet.example'],
+    walletFrameHosts: ['https://verify.wallet.example'],
   };
 
   it("frames only from 'self' and the merchant's checkout domains", () => {
@@ -96,6 +98,57 @@ describe('checkoutContentSecurityPolicy (/pay/*)', () => {
       'https://rpc.wallet.example',
       'wss://relay.wallet.example',
     ]);
+  });
+
+  it("frame-src is 'self' plus the wallet frame hosts, filtered like connect-src", () => {
+    const d = directives(
+      checkoutContentSecurityPolicy({
+        ...base,
+        frameAncestors: [],
+        walletFrameHosts: [
+          'https://verify.wallet.example',
+          "https://x.example; script-src 'unsafe-eval'",
+          'javascript:alert(1)',
+          '*',
+        ],
+      }),
+    );
+    expect(d['frame-src']).toEqual(["'self'", 'https://verify.wallet.example']);
+    expect(d['script-src']).toEqual(["'self'", "'nonce-n1'"]);
+  });
+
+  it('uses the wallet-hosts lists: no remote script, no eval, no inline script', () => {
+    const csp = checkoutContentSecurityPolicy({
+      nonce: 'n1',
+      apiBaseUrl: 'https://api.usetendr.tech',
+      dev: false,
+      frameAncestors: [],
+      walletHosts: WALLET_CONNECT_HOSTS,
+      walletFrameHosts: WALLET_FRAME_HOSTS,
+    });
+    const d = directives(csp);
+    expect(d['connect-src']).toEqual([
+      "'self'",
+      'https://api.usetendr.tech',
+      ...WALLET_CONNECT_HOSTS,
+    ]);
+    expect(d['frame-src']).toEqual(["'self'", ...WALLET_FRAME_HOSTS]);
+    // The wallet providers this checkout talks to.
+    expect(WALLET_CONNECT_HOSTS).toEqual(
+      expect.arrayContaining([
+        'wss://relay.walletconnect.org',
+        'https://rpc.walletconnect.org',
+        'https://api.web3modal.org',
+        'https://api.trongrid.io',
+        'https://free.rpc.fastnear.com',
+      ]),
+    );
+    expect(WALLET_FRAME_HOSTS).toEqual([
+      'https://verify.walletconnect.org',
+      'https://verify.walletconnect.com',
+    ]);
+    expect(d['script-src']).toEqual(["'self'", "'nonce-n1'"]);
+    expect(csp).not.toMatch(/unsafe-eval|unsafe-inline'[^;]*script/);
   });
 
   it('allows https images (the store logo) and no eval outside development', () => {

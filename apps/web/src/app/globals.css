@@ -864,6 +864,14 @@ code {
   gap: 0.35rem;
 }
 
+.pay-wallet-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+}
+
 .pay-wallet p {
   text-align: center;
 }

@@ -13,6 +13,8 @@ import { createPoller, type Poller } from '@/lib/checkout/poller';
 import { clearClientSecret, takeClientSecret } from '@/lib/checkout/secret';
 import { screenFor, type ScreenKind } from '@/lib/checkout/status';
 import { publicEnv } from '@/lib/env';
+import { isWalletWindow, openWalletWindow, postWalletDone } from '@/lib/wallets/popup';
+import { createDepositReporter, type PendingTx } from '@/lib/wallets/tx-store';
 import { EmailPanel, NeedsAddressPanel } from './ActionPanels';
 import { CheckoutHeader } from './CheckoutHeader';
 import { PayFlow } from './PayFlow';
@@ -53,18 +55,47 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   const [canClose, setCanClose] = useState(false);
   const pollerRef = useRef<Poller | null>(null);
   const bridgeRef = useRef<EmbedBridge | null>(null);
+  // The wallet window opened from a framed checkout (`?wallet=1`, lib/wallets/popup.ts).
+  const [walletWindow, setWalletWindow] = useState(false);
+  // A connected-wallet deposit already sent (kept across reloads: lib/wallets/tx-store.ts).
+  const [pendingTx, setPendingTx] = useState<PendingTx | null>(null);
   const now = useNow();
 
   useEffect(() => {
     const s = takeClientSecret(sessionId, window);
     setSecret(s);
     if (!s) setFatal('incomplete');
+    setWalletWindow(isWalletWindow(window.location.search));
   }, [sessionId]);
 
   const client = useMemo(
     () => (secret ? createCheckoutClient({ baseUrl: publicEnv.apiBaseUrl, secret }) : null),
     [secret],
   );
+
+  const reporter = useMemo(
+    () =>
+      client
+        ? createDepositReporter({
+            sessionId,
+            storage: () => window.sessionStorage,
+            deposit: (txHash) => client.deposit(txHash),
+            onChange: setPendingTx,
+          })
+        : null,
+    [client, sessionId],
+  );
+  const reporterRef = useRef(reporter);
+  reporterRef.current = reporter;
+
+  // After a reload: a hash saved but not yet acknowledged is posted again (never paid twice).
+  useEffect(() => {
+    if (!reporter) return;
+    setPendingTx(reporter.pending());
+    void reporter.resume().then((r) => {
+      if (r) pollerRef.current?.poke();
+    });
+  }, [reporter]);
 
   useEffect(() => {
     if (!client) return;
@@ -75,7 +106,10 @@ export function Checkout({ sessionId }: { sessionId: string }) {
           setView(v);
           const { terminal, pollMs } = screenFor(v, new Date());
           // SETTLED or REFUNDED (C28): nothing more to wait for, a reload no longer needs it.
-          if (terminal) clearClientSecret(sessionId, window);
+          if (terminal) {
+            clearClientSecret(sessionId, window);
+            reporterRef.current?.clear();
+          }
           return { terminal, intervalMs: pollMs };
         } catch (err) {
           if (err instanceof CheckoutApiError && [401, 403, 404].includes(err.status)) {
@@ -107,6 +141,25 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   useEffect(loadTokens, [loadTokens]);
 
   const refresh = useCallback(() => pollerRef.current?.poke(), []);
+
+  // A connected wallet sent the deposit: save the hash, report it (with retries), and in the
+  // wallet window tell the framed checkout that opened it, then close.
+  const onDepositSent = useCallback(
+    (txHash: string, quoteId: string) => {
+      if (!reporter) return;
+      const reported = reporter.report(txHash, quoteId).finally(refresh);
+      refresh();
+      if (walletWindow && postWalletDone(window, sessionId, txHash)) {
+        const wait = new Promise((r) => setTimeout(r, 2000));
+        void Promise.race([reported, wait]).finally(() => window.close());
+      }
+    },
+    [reporter, refresh, walletWindow, sessionId],
+  );
+  const openWallet = useCallback(
+    () => (secret ? openWalletWindow(window, sessionId, secret) : null),
+    [secret, sessionId],
+  );
   const onQuote = useCallback((q: Quote) => setView((v) => (v ? { ...v, quote: q } : v)), []);
 
   const screen = view ? screenFor(view, new Date(now)) : null;
@@ -195,6 +248,9 @@ export function Checkout({ sessionId }: { sessionId: string }) {
             now={now}
             onQuote={onQuote}
             onRefresh={refresh}
+            onDepositSent={onDepositSent}
+            sentQuoteId={pendingTx?.quoteId ?? null}
+            openWalletWindow={walletWindow ? undefined : openWallet}
           />
         ) : tokensFailed ? (
           <section className="pay-section">
