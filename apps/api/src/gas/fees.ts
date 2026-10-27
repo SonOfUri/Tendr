@@ -3,6 +3,7 @@
 // `estimateNetworkFeeUsd` quotes the live cost of one payment's on-chain transaction per chain:
 //   EVM     eth_gasPrice × the method's gas units (EVM_GAS_UNITS)
 //   Solana  5000 lamports per signature + the median recent priority fee × SOLANA_COMPUTE_UNITS
+//           (+ a new token account's rent for `kora`: the paymaster creates the deposit's)
 //   NEAR    gas_price × the method's gas units (NEAR_GAS_UNITS)
 //   Tron    the energy price (getEnergyFee) × the method's energy + a bandwidth allowance
 // priced in USD at the native coin's price in the 1Click token list. The per-chain unit price is
@@ -47,6 +48,12 @@ export const EVM_GAS_UNITS = {
 /** Solana: lamports per signature, and the compute units a payment (+ fee) transfer uses. */
 export const SOLANA_SIGNATURE_LAMPORTS = 5_000n;
 export const SOLANA_COMPUTE_UNITS = 200_000n;
+/**
+ * Rent-exempt deposit of a new SPL token account (165 bytes), in lamports. A Kora payment creates
+ * the deposit address's token account (a fresh 1Click address has none), and the paymaster pays
+ * it, so it is part of the transaction's cost.
+ */
+export const SOLANA_TOKEN_ACCOUNT_RENT_LAMPORTS = 2_039_280n;
 
 /** NEAR gas per method (a meta-transaction carries the relayer's delegate action overhead). */
 export const NEAR_GAS_UNITS = {
@@ -319,7 +326,9 @@ function nativeCost(
       // Kora: the shopper and the paymaster both sign; a plain send has one signature.
       const signatures = method === 'kora' ? 2n : 1n;
       return (
-        signatures * SOLANA_SIGNATURE_LAMPORTS + ceilDiv(price * SOLANA_COMPUTE_UNITS, 1_000_000n)
+        signatures * SOLANA_SIGNATURE_LAMPORTS +
+        ceilDiv(price * SOLANA_COMPUTE_UNITS, 1_000_000n) +
+        (method === 'kora' ? SOLANA_TOKEN_ACCOUNT_RENT_LAMPORTS : 0n)
       );
     }
     case 'near':
@@ -331,6 +340,20 @@ function nativeCost(
       );
     default:
       throw new Error('unsupported chain');
+  }
+}
+
+/**
+ * Solana's current compute-unit price (micro-lamports per CU): the median recent priority fee
+ * (cached FEE_CACHE_MS, the same figure the quote's fee used). Live mode only. Throws
+ * NETWORK_FEE_UNAVAILABLE when the RPC fails.
+ */
+export async function solanaComputeUnitPrice(): Promise<bigint> {
+  try {
+    return await unitPrice('sol');
+  } catch (err) {
+    log('warn', 'network fee: Solana RPC unavailable', { err: String(err) });
+    throw unavailable('sol', 'rpc');
   }
 }
 

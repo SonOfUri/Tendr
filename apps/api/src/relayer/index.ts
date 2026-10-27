@@ -22,6 +22,7 @@ import { evmTokenAddress } from './evm/tokens.js';
 import { prisma } from '../lib/prisma.js';
 import type { EvmSender } from './evm/sender.js';
 import { SimulatedRelayer } from './simulated.js';
+import { SolanaGasless } from './solana.js';
 import { applyRelayOutcome } from './submissions.js';
 import type {
   ChainFamily,
@@ -43,9 +44,9 @@ export function familyOf(chain: string): ChainFamily | null {
 const relayers = new Map<string, GaslessRelayer>();
 
 /**
- * The gasless relayer for a chain family and mode; null for a family without one yet (Solana,
- * Tron and NEAR arrive in later tasks: their wallets get no gasless option meanwhile). Test mode
- * always gets the simulated relayer.
+ * The gasless relayer for a chain family and mode; null for a family without one yet (Tron and
+ * NEAR arrive in later tasks: their wallets get no gasless option meanwhile). Test mode always
+ * gets the simulated relayer (Solana's simulates inside `SolanaGasless`: no Pimlico, no RPC).
  */
 export function relayerFor(family: ChainFamily, livemode: boolean): GaslessRelayer | null {
   const key = `${family}:${livemode}`;
@@ -57,6 +58,7 @@ export function relayerFor(family: ChainFamily, livemode: boolean): GaslessRelay
       ? new EvmGaslessRelayer(new EvmGasless(true))
       : new SimulatedRelayer('evm', new EvmGasless(false));
   }
+  if (family === 'solana') r = new SolanaGasless(livemode);
   if (r) relayers.set(key, r);
   return r;
 }
@@ -145,14 +147,24 @@ const SignedPartSchema = z
 export const GaslessSubmitInputSchema = z
   .object({
     quote_id: QUOTE_ID,
-    /** Keyed by `to_sign[].kind` from prepare. */
+    /** EVM: keyed by `to_sign[].kind` from prepare. */
     signatures: z
       .record(z.string().regex(/^[a-z_]{1,32}$/), SignedPartSchema)
       .refine((m) => Object.keys(m).length >= 1 && Object.keys(m).length <= 4, {
         message: 'between 1 and 4 signatures',
-      }),
+      })
+      .optional(),
+    /** Solana: the prepared transaction as the wallet signed it (base64 wire bytes). */
+    transaction: z
+      .string()
+      .max(1700)
+      .regex(/^[A-Za-z0-9+/]+={0,2}$/, 'must be a base64 transaction')
+      .optional(),
   })
-  .strict();
+  .strict()
+  .refine((v) => (v.signatures === undefined) !== (v.transaction === undefined), {
+    message: 'send either signatures or transaction',
+  });
 
 async function loadSession(shopper: ShopperCtx) {
   const s = await shopper.db.session.findFirst({ where: { id: shopper.sessionId } });

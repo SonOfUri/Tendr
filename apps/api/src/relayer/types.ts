@@ -52,7 +52,11 @@ export interface PrepareInput {
   fee_mode?: 'token' | 'native';
 }
 
-/** What the shopper signs. EVM: EIP-712 typed data, in signing order. */
+/**
+ * What the shopper signs. EVM: EIP-712 typed data, in signing order. Solana (`kora`): one
+ * `solana_transaction` whose `typed_data` carries the unsigned transaction to sign (see
+ * relayer/solana.ts).
+ */
 export interface PreparePayload {
   quote_id: string;
   method: GaslessMethod;
@@ -74,9 +78,13 @@ export interface PreparePayload {
   paymaster_url?: string;
 }
 
-/** The shopper's signatures, keyed by `to_sign[].kind`, each with the message it signed. */
+/**
+ * The shopper's signatures, keyed by `to_sign[].kind`, each with the message it signed (EVM); or,
+ * for Solana, the transaction the wallet signed (base64 wire bytes) and no signatures.
+ */
 export interface SignedPayload {
   signatures: Record<string, { message: Record<string, unknown>; signature: string }>;
+  transaction?: string;
 }
 
 export interface SubmitResult {

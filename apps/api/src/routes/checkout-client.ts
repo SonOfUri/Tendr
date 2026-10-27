@@ -124,7 +124,10 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
   app.post(`${CHECKOUT_CLIENT_PREFIX}gasless/submit`, shopper, async (req, reply) => {
     const input = GaslessSubmitInputSchema.parse(req.body);
     const { q, relayer } = await gaslessQuote(ctxOf(req), input.quote_id);
-    const res = await relayer.submit(q, { signatures: input.signatures });
+    const res = await relayer.submit(q, {
+      signatures: input.signatures ?? {},
+      ...(input.transaction !== undefined ? { transaction: input.transaction } : {}),
+    });
     return reply.status(202).send({
       submission_id: res.submissionId,
       status: res.status,

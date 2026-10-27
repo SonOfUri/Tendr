@@ -199,9 +199,10 @@ describe('network fees', () => {
       }
     });
 
-    it('Solana: base fee per signature + priority fee', async () => {
+    it('Solana: base fee per signature + priority fee (+ the deposit account rent for kora)', async () => {
       // 2 signatures × 5000 + median priority 1_000_000 µlamports/CU × 200k CU / 1e6 = 200000
-      // → 210000 lamports = 0.00021 SOL × $150 = $0.0315.
+      // + the deposit address's new token account rent 2 039 280 (the paymaster pays it)
+      // → 2 249 280 lamports × $150 / 1e9 = $0.337392.
       const { f, calls } = rpc({
         getRecentPrioritizationFees: {
           result: [
@@ -212,7 +213,9 @@ describe('network fees', () => {
         },
       });
       useFetch(f);
-      expect(await estimateNetworkFeeUsd('sol', 'kora', { livemode: true })).toBe('0.0315');
+      expect(await estimateNetworkFeeUsd('sol', 'kora', { livemode: true })).toBe('0.337392');
+      // A normal send: one signature, no rent counted.
+      expect(await estimateNetworkFeeUsd('sol', 'native', { livemode: true })).toBe('0.03075');
       expect(calls[0]!.url).toBe(env().SOLANA_RPC_URL);
     });
 

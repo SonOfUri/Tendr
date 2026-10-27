@@ -154,6 +154,14 @@ export const SIM_TOKENS: readonly FixtureToken[] = [
     decimals: 9,
     priceMicroUsd: usd(150),
   },
+  {
+    // USDC on Solana (mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v).
+    assetId: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
+    symbol: 'USDC',
+    blockchain: 'sol',
+    decimals: 6,
+    priceMicroUsd: usd(1),
+  },
 ];
 
 const EVM_CHAINS = new Set(['eth', 'base', 'arb', 'op', 'pol', 'bsc', 'avax', 'gnosis', 'bera']);
@@ -290,7 +298,10 @@ export class SimulatedOneClick implements OneClickProvider {
       ? undefined
       : EVM_CHAINS.has(origin.blockchain)
         ? `0x${hex(`sim-deposit:${fingerprint}`, 20)}`
-        : hex(`sim-deposit:${fingerprint}`, 32);
+        : origin.blockchain === 'sol'
+          ? // A Solana address (base58 of 32 bytes), so token accounts can be derived from it.
+            bs58.encode(sha256(`sim-deposit:${fingerprint}`))
+          : hex(`sim-deposit:${fingerprint}`, 32);
     // The address is a hash of the request, so an identical request gets the same address; it
     // keeps whatever state its deposit already reached.
     if (depositAddress) {

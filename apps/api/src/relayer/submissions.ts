@@ -41,6 +41,7 @@ import {
   settleReservation,
 } from '../gas/budget.js';
 import { recognizeTendrLoss } from '../gas/loss-cap.js';
+import { chainFamily } from '../checkout/address-format.js';
 import { gasProvider } from '../gas/quote-fee.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
@@ -60,7 +61,7 @@ export const SUBMITS_PER_ADDRESS_PER_HOUR = 20;
 export const MIN_RELAY_WINDOW_MS = 60_000;
 const SESSION_LIMIT_TTL_S = 3 * 24 * 3600;
 
-/** A transaction the relayer is asked to send. */
+/** An EVM transaction the relayer is asked to send (other families relay their own shape). */
 export interface RelayCall {
   chain: string;
   to: string;
@@ -68,8 +69,8 @@ export interface RelayCall {
 }
 
 /** Sends `call`; throws `RelayNotBroadcast` when nothing reached the chain. */
-export type Broadcast = (
-  call: RelayCall,
+export type Broadcast<C = RelayCall> = (
+  call: C,
   submission: { id: string; giveUpAt: Date },
 ) => Promise<{ txHash: string; relayerTxId?: string }>;
 
@@ -221,7 +222,11 @@ async function claim(
     });
     if (existing) return { id: existing.id, existing: true, row: asResult(existing) };
 
-    const signer = quote.walletAddress!.toLowerCase();
+    // EVM addresses are case-insensitive (stored lower-case); base58 addresses are not.
+    const signer =
+      chainFamily(q.origin.blockchain) === 'evm'
+        ? quote.walletAddress!.toLowerCase()
+        : quote.walletAddress!;
     if (quote.networkFeePaidBy === 'merchant') {
       const { count } = await tx.gasSponsorship.updateMany({
         where: {
@@ -272,8 +277,7 @@ export const sponsorshipReleased = () =>
  * goes back to unclaimed and stays held (its quote may still be relayed or paid); a shopper row is
  * failed (a retry makes a new one).
  */
-async function failUnbroadcast(q: QuoteContext, id: string, reason: string): Promise<void> {
-  const scope = { merchantId: q.shopper.merchantId, livemode: q.shopper.livemode };
+export async function undoClaim(scope: Scope, id: string, reason: string): Promise<void> {
   const lastError = reason.slice(0, 500);
   await tenantTransaction(scope, async (tx) => {
     await tx.gasSponsorship.updateMany({
@@ -311,11 +315,11 @@ function notBroadcastError(err: RelayNotBroadcast): AppError {
  * The shared submit pipeline (see the file header). `verify` checks every signed field against
  * the quote and returns the transaction to relay; it throws GASLESS_PAYLOAD_MISMATCH.
  */
-export async function submitRelayed(
+export async function submitRelayed<C = RelayCall>(
   q: QuoteContext,
   signed: SignedPayload,
-  verify: (q: QuoteContext, signed: SignedPayload) => Promise<RelayCall>,
-  broadcast: Broadcast,
+  verify: (q: QuoteContext, signed: SignedPayload) => Promise<C>,
+  broadcast: Broadcast<C>,
   now: Date = new Date(),
 ): Promise<SubmitResult> {
   const scope = { merchantId: q.shopper.merchantId, livemode: q.shopper.livemode };
@@ -342,7 +346,7 @@ export async function submitRelayed(
     sent = await broadcast(call, { id: claimed.id, giveUpAt: q.quote.deadline });
   } catch (err) {
     if (err instanceof RelayNotBroadcast) {
-      await failUnbroadcast(q, claimed.id, err.message);
+      await undoClaim(scope, claimed.id, err.message);
       throw notBroadcastError(err);
     }
     // Anything else: the outcome is unknown. The row stays `pending`; the relayer's own record

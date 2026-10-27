@@ -717,6 +717,19 @@ fee share, 1Click's fee and the spread.
   Then pay a few cents per chain from a Safe (and a Coinbase Smart Wallet once a v0.7 version is
   listed) through `wallet_sendCalls` with the paymaster capability and check the watcher marks it
   paid and the poll job records the user operation's cost.
+- Solana gasless (Pimlico Kora), before live use: the `pimlico` secret works on
+  `https://solana.pimlico.io/v1/{PIMLICO_SOLANA_NETWORK}/rpc`; fund the Pimlico balance (it pays
+  every Solana fee and the new deposit token account's rent, ~0.00204 SOL, in both fee modes).
+  Confirm each entry of `apps/api/src/relayer/solana-tx.ts` `SOLANA_GASLESS_TOKENS` against the
+  1Click token list (asset id ↔ `contractAddress` = the mint, SPL Token program, decimals). Confirm
+  Pimlico accepts our transaction shape: the paymaster as rent payer of idempotent associated token
+  account creates, our compute-unit limit and price (≤ 200 000 CU, ≤ 1 000 000 µlamports/CU), no
+  payment instruction (Tendr-sponsored), and that a `signAndSendTransaction` JSON-RPC error means
+  nothing was sent (the shopper may retry after one). `SOLANA_RPC_URL` must serve
+  `getSignatureStatuses` with history, `getTransaction`, `isBlockhashValid`,
+  `getSignaturesForAddress` and `getMultipleAccounts`. Then pay a few cents of USDC from Phantom
+  and Solflare, merchant-sponsored and shopper-paid, and check the watcher marks it paid, the poll
+  job records the SOL cost, and the fee lands in the `gas-fees-solana` token account.
 
 **Live checklist (FX for non-USD stores):** the live FX provider is
 [Open Exchange Rates](https://openexchangerates.org) (`FX_PROVIDER=openexchangerates`,

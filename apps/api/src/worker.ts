@@ -20,6 +20,7 @@ import { expireSessions, pollDeposit, scanDueDeposits } from './checkout/watcher
 import { releaseStaleReservations } from './gas/quote-fee.js';
 import { pollEvmRelays } from './relayer/index.js';
 import { pollPaymasterOps } from './relayer/evm/pimlico.js';
+import { pollSolanaRelays } from './relayer/solana.js';
 import { releaseEndedSessionReservations } from './relayer/submissions.js';
 import {
   attemptDelivery,
@@ -73,8 +74,9 @@ export const EXPIRE_SESSIONS_EVERY_MS = 60_000;
 export const RELEASE_GAS_RESERVATIONS_JOB = 'release-gas-reservations';
 export const RELEASE_GAS_RESERVATIONS_EVERY_MS = 60_000;
 /**
- * The EVM relayer's transactions (receipts, stuck replacements, give-ups, outcomes) and Pimlico
- * paymaster user operations (receipts, give-ups), live only.
+ * The EVM relayer's transactions (receipts, stuck replacements, give-ups, outcomes), Pimlico
+ * paymaster user operations (receipts, give-ups) and Solana Kora payments (statuses, outcomes),
+ * live only.
  */
 export const POLL_EVM_RELAYS_JOB = 'poll-evm-relays';
 export const POLL_EVM_RELAYS_EVERY_MS = 15_000;
@@ -149,6 +151,13 @@ export async function processCheckoutJob(
     try {
       const m = await pollPaymasterOps();
       if (m > 0) log('info', 'paymaster outcomes applied', { count: m });
+    } catch (err) {
+      failed ??= err;
+    }
+    // Solana payments sent through Pimlico's Kora paymaster (outcomes from SOLANA_RPC_URL).
+    try {
+      const k = await pollSolanaRelays();
+      if (k > 0) log('info', 'solana relay outcomes applied', { count: k });
     } catch (err) {
       failed ??= err;
     }

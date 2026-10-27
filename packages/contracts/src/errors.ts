@@ -117,6 +117,11 @@ export const ErrorCodes = [
    * e.g. the balance is too low or the authorization was already used). `details.reason`.
    */
   'GASLESS_SUBMIT_FAILED',
+  /**
+   * Gasless submit (Solana): the signed transaction's blockhash is too old (over 60 s since it
+   * was prepared) or was not issued for this quote. Nothing spent; call prepare again and re-sign.
+   */
+  'GASLESS_EXPIRED',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

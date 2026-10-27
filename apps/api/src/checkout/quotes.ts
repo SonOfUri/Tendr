@@ -38,6 +38,7 @@ import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { toJsonDecimal } from '../lib/serialize.js';
 import { gaslessToken } from '../relayer/evm/tokens.js';
+import { solanaGaslessToken } from '../relayer/solana-tx.js';
 import { chainFamily, isValidAddress } from './address-format.js';
 import {
   OneClickError,
@@ -550,6 +551,16 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
     (method === 'eip3009' || method === 'permit' || method === 'paymaster') &&
     chainFamily(origin.blockchain) === 'evm' &&
     !gaslessToken(origin.blockchain, origin.assetId)?.methods.includes(method)
+  ) {
+    throw new AppError('VALIDATION_ERROR', `${method} is not available for this token`, 400, {
+      field: 'gasless_method',
+    });
+  }
+  // Solana: only allow-listed SPL Token program mints (never native SOL, never Token-2022).
+  if (
+    method === 'kora' &&
+    chainFamily(origin.blockchain) === 'solana' &&
+    !solanaGaslessToken(origin.assetId)
   ) {
     throw new AppError('VALIDATION_ERROR', `${method} is not available for this token`, 400, {
       field: 'gasless_method',

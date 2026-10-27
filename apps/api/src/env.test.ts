@@ -342,6 +342,19 @@ describe('loadEnv EVM relayer', () => {
       /PIMLICO_SPONSORSHIP_POLICY_ID/,
     );
   });
+
+  it('picks the Pimlico Solana network (mainnet unless devnet)', () => {
+    expect(loadEnv(base).PIMLICO_SOLANA_NETWORK).toBe('mainnet');
+    expect(loadEnv({ ...base, PIMLICO_SOLANA_NETWORK: ' ' }).PIMLICO_SOLANA_NETWORK).toBe(
+      'mainnet',
+    );
+    expect(loadEnv({ ...base, PIMLICO_SOLANA_NETWORK: 'devnet' }).PIMLICO_SOLANA_NETWORK).toBe(
+      'devnet',
+    );
+    expect(() => loadEnv({ ...base, PIMLICO_SOLANA_NETWORK: 'testnet' })).toThrow(
+      /PIMLICO_SOLANA_NETWORK/,
+    );
+  });
 });
 
 describe('loadEnv gas fee pricing and chain RPCs', () => {

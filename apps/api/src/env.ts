@@ -257,6 +257,15 @@ const EnvSchema = z
         .optional(),
     ),
     /**
+     * Pimlico's Solana paymaster network (Kora JSON-RPC at
+     * `https://solana.pimlico.io/v1/{network}/rpc`; the API key is the stored `pimlico` secret).
+     * Live mode only; test mode never calls Pimlico. Default `mainnet`.
+     */
+    PIMLICO_SOLANA_NETWORK: z.preprocess(
+      blankAsUnset,
+      z.enum(['mainnet', 'devnet']).default('mainnet'),
+    ),
+    /**
      * Live-mode FX rate provider for non-USD order totals. `openexchangerates` (with FX_API_KEY)
      * is the live adapter; `fixed` means no live provider, so live non-USD sessions are
      * FX_RATE_UNAVAILABLE. Live mode never uses fixed rates; test mode always does. Default:
