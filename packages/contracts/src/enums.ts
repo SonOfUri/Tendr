@@ -98,7 +98,8 @@ export const SponsorshipMethodValues = [
 export type SponsorshipMethod = (typeof SponsorshipMethodValues)[number];
 export const SponsorshipMethodSchema = z.enum(SponsorshipMethodValues);
 
-export const SponsorValues = ['merchant', 'tendr'] as const;
+/** `shopper`: a relay whose network fee the shopper paid in the payment token (project 5a). */
+export const SponsorValues = ['merchant', 'tendr', 'shopper'] as const;
 export type Sponsor = (typeof SponsorValues)[number];
 export const SponsorSchema = z.enum(SponsorValues);
 

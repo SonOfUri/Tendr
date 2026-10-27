@@ -270,7 +270,7 @@ describe('gasless checkout routes (test mode: simulated relayer)', () => {
   });
 
   describe('submit', () => {
-    it('merchant sponsors: relays, records the sponsorship, settles at the estimate; paid only once detected', async () => {
+    it('merchant sponsors: relays and records it; paid only once detected; settled when collected', async () => {
       await sponsoring();
       const { s, quote, prepared } = await gaslessQuote();
       const signatures = await signAll(prepared.to_sign, shopper);
@@ -296,14 +296,15 @@ describe('gasless checkout routes (test mode: simulated relayer)', () => {
         quoteId: quote.id,
         signerAddress: shopper.address.toLowerCase(),
         txHash: body.tx_hash,
-        reservationState: 'settled',
+        // Not settled by the relay: only when the payment's proceeds are collected.
+        reservationState: 'reserved',
       });
       expect(sp.costUsd!.toFixed()).toBe('0.04');
-      const m = await prisma.gasBudgetMonth.findFirstOrThrow({
-        where: { merchantId: merchant.id, livemode: false },
-      });
-      expect(m.reservedUsd.toFixed()).toBe('0');
-      expect(m.spentUsd.toFixed()).toBe('0.048');
+      const monthRow = () =>
+        prisma.gasBudgetMonth.findFirstOrThrow({
+          where: { merchantId: merchant.id, livemode: false },
+        });
+      expect((await monthRow()).reservedUsd.toFixed()).toBe('0.048');
       expect(row.depositTxHash).toBe(body.tx_hash);
 
       // Relayed is not paid: no payment until the watcher sees the deposit.
@@ -314,10 +315,11 @@ describe('gasless checkout routes (test mode: simulated relayer)', () => {
       await pollDeposit(quote.deposit_address, { livemode: false });
       const p = await prisma.payment.findFirstOrThrow({ where: { quoteId: quote.id } });
       expect(p.status).toBe('SETTLED');
-      expect(
-        (await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sp.id } }))
-          .recoveredFromPaymentId,
-      ).toBe(p.id);
+      expect(await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sp.id } })).toMatchObject(
+        { reservationState: 'settled', recoveredFromPaymentId: p.id },
+      );
+      expect((await monthRow()).reservedUsd.toFixed()).toBe('0');
+      expect((await monthRow()).spentUsd.toFixed()).toBe('0.048');
 
       const status = await call('GET', `gasless/submissions/${sp.id}`, s.client_secret);
       expect(status.json()).toEqual({
@@ -360,6 +362,43 @@ describe('gasless checkout routes (test mode: simulated relayer)', () => {
       expect(
         await prisma.revenueEntry.count({ where: { paymentId: p.id, source: 'network_fee' } }),
       ).toBe(0);
+    });
+
+    it('a sponsored quote paid by copy-address: settled at the estimate when collected', async () => {
+      await sponsoring();
+      const { quote } = await gaslessQuote();
+      // No relay: the shopper sends from another app to the deposit address.
+      await sim.simulate(quote.deposit_address, 'exact');
+      await pollDeposit(quote.deposit_address, { livemode: false });
+      const p = await prisma.payment.findFirstOrThrow({ where: { quoteId: quote.id } });
+      expect(p.status).toBe('SETTLED');
+      const row = await prisma.quote.findUniqueOrThrow({ where: { id: quote.id } });
+      const sp = await prisma.gasSponsorship.findUniqueOrThrow({
+        where: { id: row.gasSponsorshipId! },
+      });
+      expect(sp).toMatchObject({
+        reservationState: 'settled',
+        recoveredFromPaymentId: p.id,
+        quoteId: null,
+      });
+      const m = await prisma.gasBudgetMonth.findFirstOrThrow({
+        where: { merchantId: merchant.id, livemode: false },
+      });
+      expect(m.spentUsd.toFixed()).toBe('0.048');
+    });
+
+    it('a quote less than a minute from its deadline is not relayed', async () => {
+      await sponsoring();
+      const { s, quote, prepared } = await gaslessQuote();
+      await prisma.quote.update({
+        where: { id: quote.id },
+        data: { deadline: new Date(Date.now() + 30_000) },
+      });
+      const res = await call('POST', 'gasless/submit', s.client_secret, {
+        quote_id: quote.id,
+        signatures: await signAll(prepared.to_sign, shopper),
+      });
+      expect(res.json().error.code).toBe('QUOTE_EXPIRED');
     });
 
     it('submitting twice returns the same submission', async () => {

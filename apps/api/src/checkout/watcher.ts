@@ -41,7 +41,7 @@ import {
   type StatusResponse,
 } from './oneclick/index.js';
 import { keptSmallNetOfFee } from './return-fee.js';
-import { onQuotePaymentDetected } from '../relayer/submissions.js';
+import { onPaymentCollected, onQuotePaymentDetected } from '../relayer/submissions.js';
 import { recordRevenue } from './revenue.js';
 import { liveSenderResolvers } from './senders/index.js';
 import { onScreeningAllowed, screenAddress, type ScreeningOutcome } from './screening.js';
@@ -540,8 +540,7 @@ async function detect(q: QuoteRow, status: StatusResponse): Promise<Payment | nu
         type: 'payment.processing',
         payload: base,
       });
-      // Gas records follow the detected payment: a held sponsorship is charged at its estimate
-      // (also when a sponsored quote was paid by copy-address), confirmed fee legs are revenue.
+      // Confirmed shopper fee legs become revenue once the payment exists.
       await onQuotePaymentDetected(tx, ctx, q, p.id);
       if (s.status === 'PENDING_DEPOSIT') {
         await transitionSession(tx, ctx, s.id, 'PROCESSING', { payment_id: p.id });
@@ -1382,6 +1381,8 @@ async function settle(
       }
       await transitionSession(tx, ctx, s.id, 'SETTLED', { payment_id: p.id });
       await recordRevenue(tx, ctx, p.id);
+      // The proceeds are collected here: a held gas sponsorship is charged at its estimate.
+      await onPaymentCollected(tx, ctx, q, p.id);
       await recordEvent(tx, ctx, {
         aggregateType: 'payment',
         aggregateId: p.id,

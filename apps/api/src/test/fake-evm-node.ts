@@ -9,6 +9,7 @@ export interface FakeReceipt {
   status: 0 | 1;
   gasUsed: bigint;
   effectiveGasPrice: bigint;
+  logs: { address: string; topics: string[]; data: string }[];
 }
 
 type Handler = (params: unknown[]) => unknown;
@@ -32,6 +33,9 @@ export class FakeEvmNode {
   /** Answers `eth_call` (`to`, `data`) → hex. */
   ethCall: (to: string, data: string) => string = () => '0x' + '0'.repeat(64);
 
+  /** Per-method delays (ms) for the next calls: the answer is computed, then held back. */
+  readonly delays = new Map<string, number[]>();
+
   /** Queues one override for the next call of `method`. */
   once(method: string, handler: Handler): void {
     const list = this.overrides.get(method) ?? [];
@@ -40,8 +44,8 @@ export class FakeEvmNode {
   }
 
   /** Mines a broadcast transaction (by hash) with `status`. */
-  mine(hash: string, status: 0 | 1 = 1, gasUsed = 80_000n): void {
-    this.receipts.set(hash, { status, gasUsed, effectiveGasPrice: this.baseFee + this.tip });
+  mine(hash: string, status: 0 | 1 = 1, gasUsed = 80_000n, logs: FakeReceipt['logs'] = []): void {
+    this.receipts.set(hash, { status, gasUsed, effectiveGasPrice: this.baseFee + this.tip, logs });
     this.latestCount += 1n;
     if (this.pendingCount < this.latestCount) this.pendingCount = this.latestCount;
   }
@@ -67,6 +71,9 @@ export class FakeEvmNode {
       }
       throw err; // transport failure
     }
+    // A slow node: the answer is computed now but arrives later.
+    const delay = this.delays.get(body.method)?.shift();
+    if (delay) await new Promise((r) => setTimeout(r, delay));
     return json({ jsonrpc: '2.0', id: body.id, result });
   };
 
@@ -101,6 +108,7 @@ export class FakeEvmNode {
           gasUsed: hex(r.gasUsed),
           effectiveGasPrice: hex(r.effectiveGasPrice),
           blockNumber: '0x11',
+          logs: r.logs,
         };
       }
       case 'eth_call': {

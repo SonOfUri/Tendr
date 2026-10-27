@@ -45,6 +45,7 @@ export interface EvmReceipt {
   gasUsed: bigint;
   effectiveGasPrice: bigint;
   blockNumber: bigint;
+  logs: { address: string; topics: string[]; data: string }[];
 }
 
 const realFetch: FetchLike = (url, init) => fetch(url, init);
@@ -165,6 +166,14 @@ export class EvmRpc {
       gasUsed: toBig(r.gasUsed, 'gasUsed'),
       effectiveGasPrice: toBig(r.effectiveGasPrice, 'effectiveGasPrice'),
       blockNumber: toBig(r.blockNumber, 'blockNumber'),
+      logs: (Array.isArray(r.logs) ? r.logs : []).map((l) => {
+        const log = l as { address?: unknown; topics?: unknown; data?: unknown };
+        return {
+          address: String(log.address ?? ''),
+          topics: Array.isArray(log.topics) ? log.topics.map(String) : [],
+          data: typeof log.data === 'string' ? log.data : '0x',
+        };
+      }),
     };
   }
 

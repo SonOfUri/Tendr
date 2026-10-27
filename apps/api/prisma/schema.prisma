@@ -1343,6 +1343,10 @@ model GasSponsorship {
   relayerTxId            String?              @map("relayer_tx_id")
   /// Why a relayed submission failed.
   lastError              String?              @map("last_error")
+  /// Shopper-paid fee leg: the fee the relayed transaction actually moved to the gas-fee address
+  /// (its `TendrPaid` event; 0 when the authorization was cancelled or skipped). Revenue is booked
+  /// from this, never from the quote.
+  feeCollected           Decimal?             @map("fee_collected") @db.Decimal(78, 0)
   createdAt              DateTime             @default(now()) @map("created_at")
   updatedAt              DateTime             @updatedAt @map("updated_at")
 
@@ -1397,6 +1401,8 @@ model RelayerTransaction {
   gasUsed              Decimal?         @map("gas_used") @db.Decimal(78, 0)
   effectiveGasPrice    Decimal?         @map("effective_gas_price") @db.Decimal(78, 0)
   lastError            String?          @map("last_error")
+  /// Logs of the mined receipt emitted by `to_address` (the purpose decodes them).
+  receiptLogs          Json?            @map("receipt_logs")
   leaseUntil           DateTime?        @map("lease_until")
   /// The outcome was handed to the purpose's handler (gasless: sponsorship updated).
   outcomeHandledAt     DateTime?        @map("outcome_handled_at")

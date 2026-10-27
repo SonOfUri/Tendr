@@ -111,7 +111,12 @@ export class EvmGasless {
       throw gaslessNotAvailable();
     }
     const shopperFee = q.quote.networkFeePaidBy === 'buyer';
-    if (shopperFee && (q.quote.networkFeeMode !== 'token' || !q.quote.networkFeeAmount)) {
+    if (
+      shopperFee &&
+      (q.quote.networkFeeMode !== 'token' ||
+        !q.quote.networkFeeAmount ||
+        q.quote.networkFeeAmount.lte(0))
+    ) {
       throw gaslessNotAvailable();
     }
     const wallet = q.quote.walletAddress!.toLowerCase();

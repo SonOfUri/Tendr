@@ -63,6 +63,11 @@ export class SimulatedRelayer implements GaslessRelayer {
       gasUsed: SIMULATED_GAS_USED,
       costUsd: SIMULATED_FEE_USD[q.origin.blockchain] ?? null,
       reason: null,
+      // The simulated transaction moves exactly the signed fee leg.
+      feeMoved:
+        q.quote.networkFeePaidBy === 'buyer' && q.quote.networkFeeAmount
+          ? BigInt(q.quote.networkFeeAmount.toFixed(0))
+          : null,
     });
     try {
       // The relayed transaction moved the payment to the deposit address.

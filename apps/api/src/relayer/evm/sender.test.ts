@@ -124,6 +124,61 @@ describe('EvmSender', () => {
     expect(new Set(results.map((r) => r.txHash)).size).toBe(3);
   });
 
+  it('a sender whose nonce lock lapsed on a slow RPC never shares a nonce with another', async () => {
+    const slow = new EvmSender({
+      kv,
+      redis,
+      rpc: (chain) => new EvmRpc(chain, 'http://rpc.test', node.fetch),
+      now: () => now,
+      maxFeeGwei: () => undefined,
+      nonceLockTtlMs: 300,
+    });
+    // A reads the nonce (0) at once but gets the answer after its 300 ms lock lapsed.
+    node.delays.set('eth_getTransactionCount', [600]);
+    const a = slow.send(input({ refId: 'gas_a' })).catch((e: unknown) => e);
+    await new Promise((r) => setTimeout(r, 350));
+    // B takes the lapsed lock and sends nonce 0 while A is still waiting.
+    const b = await slow.send(input({ refId: 'gas_b' }));
+    const errA = await a;
+    expect(errA).toBeInstanceOf(EvmNotBroadcastError);
+    expect((errA as EvmNotBroadcastError).reason).toBe('unavailable');
+    const rows = await prisma.relayerTransaction.findMany();
+    expect(rows.map((r) => [r.refId, r.nonce])).toEqual([['gas_b', 0n]]);
+    expect(node.sent).toHaveLength(1);
+    expect(Transaction.from(node.sent[0]!).hash).toBe(b.txHash);
+  });
+
+  it('the database refuses a second in-flight transaction at the same nonce', async () => {
+    await sender.send(input());
+    const row = await prisma.relayerTransaction.findFirstOrThrow();
+    const { id: _id, createdAt: _c, updatedAt: _u, receiptLogs: _l, ...rest } = row;
+    await expect(
+      prisma.relayerTransaction.create({ data: { ...rest, id: 'rtx_dup', txHash: '0xdup' } }),
+    ).rejects.toMatchObject({ code: 'P2002' });
+    // A failed row frees the nonce.
+    await prisma.relayerTransaction.update({ where: { id: row.id }, data: { status: 'failed' } });
+    await prisma.relayerTransaction.create({ data: { ...rest, id: 'rtx_dup', txHash: '0xdup' } });
+  });
+
+  it('a KMS or database failure before the broadcast is not broadcast (retryable), and records nothing', async () => {
+    vi.spyOn(kv, 'sign').mockRejectedValueOnce(new Error('KMS unavailable'));
+    await expect(sender.send(input())).rejects.toMatchObject({
+      name: 'EvmNotBroadcastError',
+      reason: 'unavailable',
+    });
+    expect(await prisma.relayerTransaction.count()).toBe(0);
+
+    // The row insert fails (an invalid value the database refuses).
+    await expect(sender.send(input({ giveUpAt: new Date(Number.NaN) }))).rejects.toMatchObject({
+      reason: 'unavailable',
+    });
+    expect(await prisma.relayerTransaction.count()).toBe(0);
+    expect(node.sent).toHaveLength(0);
+
+    // Nothing is stuck: the next send goes through.
+    expect((await sender.send(input())).broadcast).toBe('submitted');
+  });
+
   it('refuses a fee above EVM_MAX_FEE_GWEI_<CHAIN> and caps fees below it', async () => {
     caps.base = '0.5'; // base fee is 1 gwei: above the cap
     await expect(sender.send(input())).rejects.toMatchObject({ reason: 'fee_cap' });

@@ -8,7 +8,9 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../../app.js';
 import { resetOneClickProviders, SimulatedOneClick } from '../../checkout/oneclick/index.js';
-import { resetTokenCache } from '../../checkout/tokens.js';
+import { resetTokenCache, tokenList } from '../../checkout/tokens.js';
+import { pollDeposit, registerWatcherHooks } from '../../checkout/watcher.js';
+import { fakeNearClient, resetNearClients } from '../../near/client.js';
 import { scopedDb } from '../../db/scoped.js';
 import { resetFeeCache, setFeeDeps } from '../../gas/fees.js';
 import { putGasPolicy } from '../../gas/policy.js';
@@ -20,6 +22,7 @@ import { FakeEvmNode, RpcRefusal } from '../../test/fake-evm-node.js';
 import { createApiKey, createMerchant, createRow, resetDb } from '../../test/helpers.js';
 import { isolatedSimStore } from '../../test/sim-1click.js';
 import { gaslessQuote, pollEvmRelays, resetRelayers } from '../index.js';
+import { releaseEndedSessionReservations } from '../submissions.js';
 import { EvmGasless, EvmGaslessRelayer } from './index.js';
 import { EvmRpc } from './rpc.js';
 import { EvmSender } from './sender.js';
@@ -38,6 +41,7 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
   let sender: EvmSender;
   let relayer: EvmGaslessRelayer;
   let shopper: Wallet;
+  let sim: SimulatedOneClick;
 
   beforeEach(async () => {
     await resetDb();
@@ -45,23 +49,30 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
     resetTokenCache();
     resetRelayers();
     resetFeeCache();
-    resetOneClickProviders({ simulated: new SimulatedOneClick({ store: sim1click.store() }) });
+    resetNearClients();
+    fakeNearClient(false);
+    sim = new SimulatedOneClick({ store: sim1click.store() });
+    resetOneClickProviders({ simulated: sim });
+    registerWatcherHooks();
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    // Live cost pricing reads the native coin's price: ETH on Base at $2500.
+    // Live cost pricing reads the native coin's price: ETH on Base at $2500 (test-mode quotes use
+    // the simulator's list).
     setFeeDeps({
-      tokens: async () =>
-        new Map([
-          [
-            'nep141:base.omft.near',
-            {
-              assetId: 'nep141:base.omft.near',
-              symbol: 'ETH',
-              blockchain: 'base',
-              decimals: 18,
-              priceUsd: '2500',
-            },
-          ],
-        ]),
+      tokens: async (livemode) =>
+        livemode
+          ? new Map([
+              [
+                'nep141:base.omft.near',
+                {
+                  assetId: 'nep141:base.omft.near',
+                  symbol: 'ETH',
+                  blockchain: 'base',
+                  decimals: 18,
+                  priceUsd: '2500',
+                },
+              ],
+            ])
+          : tokenList(false),
     });
     app = await buildApp();
     await app.ready();
@@ -96,6 +107,7 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
     resetTokenCache();
     resetOneClickProviders();
     resetRelayers();
+    resetNearClients();
   });
   afterAll(async () => {
     await sim1click.clear();
@@ -103,7 +115,7 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
   });
 
   /** A sponsored eip3009 quote, its relayer context, and the shopper's signatures. */
-  async function sponsoredQuote() {
+  async function sponsoredQuote(gasPayer?: 'shopper') {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/checkout/sessions',
@@ -114,8 +126,10 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
         external_ref: `order-${Math.random().toString(36).slice(2)}`,
         success_url: 'https://shop.example/thanks',
         cancel_url: 'https://shop.example/cart',
+        ...(gasPayer ? { gas_payer: gasPayer } : {}),
       },
     });
+    expect(res.statusCode, res.body).toBe(201);
     const s = res.json() as { id: string; client_secret: string };
     const qr = await app.inject({
       method: 'POST',
@@ -149,7 +163,26 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
     return { s, q, signatures, sponsorshipId: q.quote.gasSponsorshipId! };
   }
 
-  it('relays one forwarder transaction and records it; confirmation settles at the estimate', async () => {
+  /** A `TendrPaid` log from the forwarder, as a receipt carries it. */
+  function tendrPaid(
+    q: { quote: { depositAddress: string; amountIn: { toFixed(): string } } },
+    fee: bigint,
+  ) {
+    const log = iface.encodeEventLog('TendrPaid', [
+      shopper.address,
+      '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+      q.quote.depositAddress,
+      BigInt(q.quote.amountIn.toFixed()),
+      fee,
+      '0x' + '00'.repeat(32),
+    ]);
+    return { address: FORWARDER, topics: log.topics, data: log.data };
+  }
+
+  const month = () =>
+    prisma.gasBudgetMonth.findFirstOrThrow({ where: { merchantId: merchant.id } });
+
+  it('relays one forwarder transaction; the reservation is settled only when the payment is collected', async () => {
     const { q, signatures, sponsorshipId } = await sponsoredQuote();
     const res = await relayer.submit(q, { signatures });
     expect(res).toMatchObject({ submissionId: sponsorshipId, status: 'submitted' });
@@ -171,23 +204,126 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
       reservationState: 'reserved',
     });
     expect(sp.relayerTxId).toMatch(/^rtx_/);
-    const quote = await prisma.quote.findUniqueOrThrow({ where: { id: q.quote.id } });
-    expect(quote.depositTxHash).toBe(tx.hash);
+    expect(
+      (await prisma.quote.findUniqueOrThrow({ where: { id: q.quote.id } })).depositTxHash,
+    ).toBe(tx.hash);
 
-    // Mined: the poller applies the outcome.
-    node.mine(tx.hash!, 1, 80_000n);
+    // Mined: the outcome records the cost, but the merchant is not charged yet.
+    node.mine(tx.hash!, 1, 80_000n, [tendrPaid(q, 0n)]);
     expect(await pollEvmRelays(sender)).toBe(1);
     sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
-    expect(sp).toMatchObject({ status: 'confirmed', reservationState: 'settled' });
+    expect(sp).toMatchObject({ status: 'confirmed', reservationState: 'reserved' });
     expect(sp.gasUsed!.toFixed()).toBe('80000');
-    // 80 000 gas × 1.1 gwei × $2500 = $0.22 (the merchant was charged the $0.048 estimate).
+    // 80 000 gas × 1.1 gwei × $2500 = $0.22 (the merchant is charged the $0.048 estimate).
     expect(sp.costUsd!.toFixed()).toBe('0.22');
-    const m = await prisma.gasBudgetMonth.findFirstOrThrow({ where: { merchantId: merchant.id } });
-    expect(m.spentUsd.toFixed()).toBe('0.048');
-    expect(m.reservedUsd.toFixed()).toBe('0');
-    // Relayed and mined, still not paid: only the watcher marks payments.
+    expect((await month()).spentUsd.toFixed()).toBe('0');
     expect(await prisma.payment.count()).toBe(0);
     expect(await pollEvmRelays(sender)).toBe(0);
+
+    // The payment arrives and its proceeds are collected: settled at the estimate.
+    await sim.simulate(q.quote.depositAddress, 'exact', { senderAddress: shopper.address });
+    await pollDeposit(q.quote.depositAddress, { livemode: false });
+    const p = await prisma.payment.findFirstOrThrow({ where: { quoteId: q.quote.id } });
+    expect(p.status).toBe('SETTLED');
+    sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    expect(sp).toMatchObject({ reservationState: 'settled', recoveredFromPaymentId: p.id });
+    expect((await month()).spentUsd.toFixed()).toBe('0.048');
+    expect((await month()).reservedUsd.toFixed()).toBe('0');
+  });
+
+  it('front-run: our relay reverts, the reservation stays held, then the payment arrives and it is settled', async () => {
+    const { q, signatures, sponsorshipId } = await sponsoredQuote();
+    const res = await relayer.submit(q, { signatures });
+    node.mine(res.txHash!, 0, 40_000n);
+    await pollEvmRelays(sender);
+    let sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    expect(sp).toMatchObject({
+      status: 'failed',
+      reservationState: 'reserved',
+      sponsor: 'merchant',
+    });
+    expect(sp.lossRecognizedAt).toBeNull();
+
+    // Someone else executed the shopper's authorization: the deposit is there all the same.
+    await sim.simulate(q.quote.depositAddress, 'exact', { senderAddress: shopper.address });
+    await pollDeposit(q.quote.depositAddress, { livemode: false });
+    sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    expect(sp.reservationState).toBe('settled');
+    expect((await month()).spentUsd.toFixed()).toBe('0.048');
+    // The session settled: nothing for the session-end sweep to do.
+    expect(await releaseEndedSessionReservations()).toBe(0);
+  });
+
+  it('a session that ends refunded after the relay: released, and the gas spent is a Tendr loss', async () => {
+    const { s, q, signatures, sponsorshipId } = await sponsoredQuote();
+    const res = await relayer.submit(q, { signatures });
+    node.mine(res.txHash!, 1, 80_000n, [tendrPaid(q, 0n)]);
+    await pollEvmRelays(sender);
+    // Still in flight → not released; the stale-quote sweep never sees it (deposit reported).
+    expect(await releaseEndedSessionReservations()).toBe(0);
+    await prisma.session.update({ where: { id: s.id }, data: { status: 'REFUNDED' } });
+    expect(await releaseEndedSessionReservations()).toBe(1);
+    const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    expect(sp).toMatchObject({ reservationState: 'released', sponsor: 'tendr' });
+    expect(sp.costUsd!.toFixed()).toBe('0.22');
+    expect(sp.lossRecognizedAt).not.toBeNull();
+    expect((await month()).reservedUsd.toFixed()).toBe('0');
+    expect((await month()).spentUsd.toFixed()).toBe('0');
+    expect(await releaseEndedSessionReservations()).toBe(0);
+  });
+
+  it('a relay still in flight when the session expires keeps its hold until it is final', async () => {
+    const { s, q, signatures, sponsorshipId } = await sponsoredQuote();
+    const res = await relayer.submit(q, { signatures });
+    await prisma.session.update({ where: { id: s.id }, data: { status: 'EXPIRED' } });
+    expect(await releaseEndedSessionReservations()).toBe(0);
+    node.mine(res.txHash!, 0, 40_000n);
+    await pollEvmRelays(sender);
+    expect(await releaseEndedSessionReservations()).toBe(1);
+    const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    expect(sp).toMatchObject({ reservationState: 'released', sponsor: 'tendr' });
+    expect(sp.costUsd!.toFixed()).toBe('0.11');
+  });
+
+  describe('shopper pays the fee in the token: revenue from what the receipt moved', () => {
+    it('the fee moved → fee_collected and gas_reimbursement revenue for that amount', async () => {
+      const { q, signatures } = await sponsoredQuote('shopper');
+      expect(Object.keys(signatures)).toEqual(['payment', 'fee']);
+      const res = await relayer.submit(q, { signatures });
+      node.mine(res.txHash!, 1, 80_000n, [tendrPaid(q, 48_000n)]);
+      await pollEvmRelays(sender);
+      const sp = await prisma.gasSponsorship.findUniqueOrThrow({
+        where: { id: res.submissionId },
+      });
+      expect(sp).toMatchObject({ sponsor: 'shopper', status: 'confirmed' });
+      expect(sp.feeCollected!.toFixed()).toBe('48000');
+      await sim.simulate(q.quote.depositAddress, 'exact', { senderAddress: shopper.address });
+      await pollDeposit(q.quote.depositAddress, { livemode: false });
+      const p = await prisma.payment.findFirstOrThrow({ where: { quoteId: q.quote.id } });
+      const gas = await prisma.revenueEntry.findMany({
+        where: { paymentId: p.id, reference: sp.id },
+      });
+      expect(gas.map((g) => [g.source, g.amount.toFixed()])).toEqual([
+        ['gas_reimbursement', '48000'],
+      ]);
+    });
+
+    it('the fee authorization was cancelled (moved 0) → no revenue, the gas is a Tendr loss', async () => {
+      const { q, signatures } = await sponsoredQuote('shopper');
+      const res = await relayer.submit(q, { signatures });
+      node.mine(res.txHash!, 1, 80_000n, [tendrPaid(q, 0n)]);
+      await pollEvmRelays(sender);
+      const sp = await prisma.gasSponsorship.findUniqueOrThrow({
+        where: { id: res.submissionId },
+      });
+      expect(sp).toMatchObject({ status: 'confirmed', sponsor: 'tendr' });
+      expect(sp.feeCollected!.toFixed()).toBe('0');
+      expect(sp.lossRecognizedAt).not.toBeNull();
+      expect(sp.costUsd!.toFixed()).toBe('0.22');
+      await sim.simulate(q.quote.depositAddress, 'exact', { senderAddress: shopper.address });
+      await pollDeposit(q.quote.depositAddress, { livemode: false });
+      expect(await prisma.revenueEntry.count({ where: { reference: sp.id } })).toBe(0);
+    });
   });
 
   it('a payload that does not match makes no RPC call at all', async () => {
@@ -199,7 +335,7 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
     expect(node.calls).toHaveLength(0);
   });
 
-  it('a dry run that reverts: 409, nothing sent, reservation released, session still open', async () => {
+  it('a dry run that reverts: 409, nothing sent, the reservation still held, session open', async () => {
     const { s, q, signatures, sponsorshipId } = await sponsoredQuote();
     node.once('eth_estimateGas', () => {
       throw new RpcRefusal(3, 'execution reverted: FiatTokenV2: authorization is used or canceled');
@@ -209,25 +345,28 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
     expect(err).toMatchObject({ code: 'GASLESS_SUBMIT_FAILED', status: 409 });
     expect(node.count('eth_sendRawTransaction')).toBe(0);
     const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
-    expect(sp).toMatchObject({ status: 'failed', reservationState: 'released' });
+    expect(sp).toMatchObject({ status: 'pending', quoteId: null, reservationState: 'reserved' });
     expect((await prisma.session.findUniqueOrThrow({ where: { id: s.id } })).status).toBe(
       'PENDING_DEPOSIT',
     );
   });
 
-  it('reverted on chain: failed, reservation released, the burned gas is a Tendr loss', async () => {
+  it('a KMS failure before broadcast: not stuck, the reservation held, a retry relays', async () => {
     const { q, signatures, sponsorshipId } = await sponsoredQuote();
-    const res = await relayer.submit(q, { signatures });
-    node.mine(res.txHash!, 0, 40_000n);
-    await pollEvmRelays(sender);
-    const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
-    expect(sp).toMatchObject({
-      status: 'failed',
-      reservationState: 'released',
-      sponsor: 'tendr',
-      lastError: 'reverted on chain',
+    const kv = getKeyVault();
+    vi.spyOn(kv, 'sign').mockRejectedValueOnce(new Error('KMS unavailable'));
+    await expect(relayer.submit(q, { signatures })).rejects.toMatchObject({
+      code: 'PROVIDER_UNAVAILABLE',
+      status: 503,
     });
-    expect(sp.lossRecognizedAt).not.toBeNull();
-    expect(sp.costUsd!.toFixed()).toBe('0.11');
+    const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    expect(sp).toMatchObject({ status: 'pending', quoteId: null, reservationState: 'reserved' });
+    expect(sp.lastError).toMatch(/unavailable/);
+    expect(node.sent).toHaveLength(0);
+
+    // (A database failure on the row insert takes the same path: sender.test.ts.)
+    const res = await relayer.submit(q, { signatures });
+    expect(res).toMatchObject({ submissionId: sponsorshipId, status: 'submitted' });
+    expect(node.sent).toHaveLength(1);
   });
 });

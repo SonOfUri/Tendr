@@ -11,16 +11,25 @@
 //               the session's attempt limit → the family checks every signed field → the
 //               signer's hourly limit → claim (session lock) → broadcast. Refusals before the
 //               broadcast spend no gas.
-//   broadcast   not broadcast → the row fails, the reservation is released, the session stays
-//               open. Broadcast → `submitted`; the quote records the deposit tx (blocks re-quoting
-//               until its deadline) and 1Click is told about it.
-//   confirmed   `confirmed`; a reservation is settled at the quoted estimate (§8.1); a shopper fee
-//               leg becomes `gas_reimbursement` revenue once the payment exists.
-//   failed      `failed`; the reservation is released; gas the chain burned is Tendr's loss
-//               (`recognizeTendrLoss`).
+//   broadcast   not broadcast → the claim is undone (a sponsored reservation stays held for a
+//               retry; a shopper row fails) and the session stays open. Broadcast → `submitted`;
+//               the quote records the deposit tx (blocks re-quoting until its deadline) and 1Click
+//               is told about it.
+//   confirmed   `confirmed` with the actual cost. A shopper fee leg books `gas_reimbursement`
+//               revenue for the fee the receipt shows was MOVED (`TendrPaid`), never the quote's;
+//               a fee leg that moved nothing makes the gas Tendr's loss.
+//   failed      `failed` with the actual cost. A shopper relay's gas is Tendr's loss at once; a
+//               sponsored reservation stays held (the payment may still arrive, e.g. after a
+//               front-run).
+//
+// A sponsored reservation (ruling T5-c, spec §8.1) is settled at the quoted estimate only where
+// the payment's proceeds are actually collected (`onPaymentCollected`, beside `recordRevenue`), and
+// released, with any gas spent recognised as Tendr's loss, when the session ends refunded or
+// expired without that (`releaseEndedSessionReservations`).
 //
 // Paid means detected: none of this marks a session or payment paid. Only the 1Click status and
-// the watcher do; `onQuotePaymentDetected` is their hook back into the gas records.
+// the watcher do; `onQuotePaymentDetected` / `onPaymentCollected` are their hooks into the gas
+// records.
 import { Prisma, type Quote } from '@prisma/client';
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { providerFor } from '../checkout/oneclick/index.js';
@@ -42,6 +51,8 @@ type Scope = { merchantId: string; livemode: boolean };
 export const SUBMITS_PER_SESSION = 5;
 /** Relayed-submit attempts per shopper address per hour (all sessions, all stores). */
 export const SUBMITS_PER_ADDRESS_PER_HOUR = 20;
+/** A quote closer than this to its deadline is not relayed (it would revert on chain after it). */
+export const MIN_RELAY_WINDOW_MS = 60_000;
 const SESSION_LIMIT_TTL_S = 3 * 24 * 3600;
 
 /** A transaction the relayer is asked to send. */
@@ -94,7 +105,9 @@ export function assertRelayable(q: QuoteContext, now: Date): void {
     });
   }
   if (q.quote.supersededAt) throw quoteExpired('was replaced by a newer one');
-  if (q.quote.deadline.getTime() <= now.getTime()) throw quoteExpired('has expired');
+  if (q.quote.deadline.getTime() - MIN_RELAY_WINDOW_MS <= now.getTime()) {
+    throw quoteExpired('has expired');
+  }
   if (!q.quote.walletAddress || !q.quote.networkFeeMethod || q.quote.networkFeeMode === 'native') {
     throw gaslessNotAvailable();
   }
@@ -109,7 +122,7 @@ async function countAttempt(key: string, ttlS: number, max: number): Promise<voi
   try {
     const r = await getRedis().multi().incr(key).expire(key, ttlS, 'NX').exec();
     count = Number(r?.[0]?.[1]);
-    if (!Number.isFinite(count)) throw new Error('no count');
+    if (!Number.isFinite(count) || r?.[0]?.[0] || r?.[1]?.[0]) throw new Error('no count');
   } catch (err) {
     log('warn', 'gasless submit: rate-limit store unavailable', { err: String(err) });
     throw new AppError('PROVIDER_UNAVAILABLE', 'Gasless payments are unavailable; try again', 503);
@@ -189,7 +202,9 @@ async function claim(
       where: { ...scope, id: q.quote.id, sessionId: q.session.id },
     });
     if (!quote || quote.supersededAt) throw quoteExpired('was replaced by a newer one');
-    if (quote.deadline.getTime() <= now.getTime()) throw quoteExpired('has expired');
+    if (quote.deadline.getTime() - MIN_RELAY_WINDOW_MS <= now.getTime()) {
+      throw quoteExpired('has expired');
+    }
     const existing = await tx.gasSponsorship.findFirst({
       where: { ...scope, quoteId: quote.id, status: ACTIVE },
     });
@@ -241,15 +256,23 @@ const sponsorshipReleased = () =>
     409,
   );
 
-/** Marks the submission failed before broadcast and releases its reservation. */
+/**
+ * Nothing reached the chain: undo the claim so the shopper can retry. A sponsored reservation
+ * goes back to unclaimed and stays held (its quote may still be relayed or paid); a shopper row is
+ * failed (a retry makes a new one).
+ */
 async function failUnbroadcast(q: QuoteContext, id: string, reason: string): Promise<void> {
   const scope = { merchantId: q.shopper.merchantId, livemode: q.shopper.livemode };
+  const lastError = reason.slice(0, 500);
   await tenantTransaction(scope, async (tx) => {
     await tx.gasSponsorship.updateMany({
-      where: { ...scope, id, status: 'pending' },
-      data: { status: 'failed', lastError: reason.slice(0, 500) },
+      where: { ...scope, id, status: 'pending', sponsor: 'merchant' },
+      data: { quoteId: null, signerAddress: null, lastError },
     });
-    await releaseReservation(tx, id);
+    await tx.gasSponsorship.updateMany({
+      where: { ...scope, id, status: 'pending', sponsor: 'shopper' },
+      data: { status: 'failed', lastError },
+    });
   });
 }
 
@@ -359,12 +382,19 @@ export interface RelayOutcome {
   /** What the chain charged (USD); null when unknown. */
   costUsd: string | null;
   reason: string | null;
+  /**
+   * Shopper-paid fee leg: the fee the transaction actually moved to Tendr's gas-fee address (the
+   * receipt's `TendrPaid.fee`); null when not applicable (sponsored, or failed).
+   */
+  feeMoved: bigint | null;
 }
 
 /**
  * Applies the chain's final answer to a submission (idempotent: a row already final is left).
- * Confirmed: settles the reservation at the quoted estimate and records a fee leg's revenue.
- * Failed: releases the reservation; gas the chain charged becomes Tendr's loss.
+ * Records the actual cost. A shopper relay books fee revenue for what the receipt moved; a fee
+ * that moved nothing, or a failed shopper relay, makes the gas Tendr's loss. A sponsored
+ * reservation is never touched here: it is settled where the payment is collected, or released at
+ * session end (see the file header).
  */
 export async function applyRelayOutcome(
   submissionId: string,
@@ -381,36 +411,36 @@ export async function applyRelayOutcome(
   }
   const scope = { merchantId: head.merchantId, livemode: head.livemode };
   return tenantTransaction(scope, async (tx) => {
-    // Session first: the lock order every budget path uses (session → month → sponsorship).
     await tx.$queryRaw`SELECT id FROM sessions WHERE id = ${head.sessionId}
       AND merchant_id = ${scope.merchantId} AND livemode = ${scope.livemode} FOR UPDATE`;
     const sp = await tx.gasSponsorship.findFirstOrThrow({ where: { ...scope, id: submissionId } });
     if (sp.status === 'confirmed' || sp.status === 'failed') return false;
-    const common = {
-      ...(outcome.txHash ? { txHash: outcome.txHash } : {}),
-      ...(outcome.gasUsed !== null ? { gasUsed: outcome.gasUsed.toString() } : {}),
-      ...(outcome.costUsd !== null ? { costUsd: outcome.costUsd } : {}),
-    };
-    // The budget first (month row → sponsorship row), then the row's own status: the same row
-    // lock order as `releaseReservation` in the stale-reservation sweep.
-    if (outcome.status === 'confirmed') {
-      if (sp.reservationState === 'reserved' && sp.estimateUsd) {
-        await settleReservation(tx, sp.id, sp.estimateUsd.toFixed());
-      }
-      await tx.gasSponsorship.updateMany({
-        where: { ...scope, id: sp.id },
-        data: { ...common, status: 'confirmed' },
-      });
-      if (sp.sponsor === 'shopper') await recordFeeLegRevenue(tx, scope, sp.id);
-      return true;
-    }
-    if (sp.reservationState === 'reserved') await releaseReservation(tx, sp.id);
+    const confirmed = outcome.status === 'confirmed';
+    const shopper = sp.sponsor === 'shopper';
+    const feeMoved = confirmed && shopper ? (outcome.feeMoved ?? 0n) : null;
     await tx.gasSponsorship.updateMany({
       where: { ...scope, id: sp.id },
-      data: { ...common, status: 'failed', lastError: outcome.reason?.slice(0, 500) ?? null },
+      data: {
+        status: outcome.status,
+        // A failed outcome's mined hash may be the deadline cancel: keep the payment's hash.
+        ...(confirmed && outcome.txHash ? { txHash: outcome.txHash } : {}),
+        ...(outcome.gasUsed !== null ? { gasUsed: outcome.gasUsed.toString() } : {}),
+        ...(outcome.costUsd !== null ? { costUsd: outcome.costUsd } : {}),
+        ...(feeMoved !== null ? { feeCollected: feeMoved.toString() } : {}),
+        ...(confirmed ? {} : { lastError: outcome.reason?.slice(0, 500) ?? null }),
+      },
     });
-    if (outcome.costUsd !== null && new Prisma.Decimal(outcome.costUsd).gt(0)) {
-      await recognizeTendrLoss(tx, sp.id, outcome.costUsd, now);
+    if (feeMoved !== null && feeMoved > 0n) {
+      await recordFeeLegRevenue(tx, scope, sp.id);
+      return true;
+    }
+    // A shopper relay that collected nothing (failed, or its fee authorization was cancelled):
+    // the gas is Tendr's. Unpriced gas falls back to the quoted estimate.
+    if (shopper && (outcome.gasUsed ?? 0n) > 0n) {
+      const cost = outcome.costUsd ?? sp.estimateUsd?.toFixed() ?? null;
+      if (cost !== null && new Prisma.Decimal(cost).gt(0)) {
+        await recognizeTendrLoss(tx, sp.id, cost, now);
+      }
     }
     return true;
   });
@@ -429,7 +459,16 @@ export async function recordFeeLegRevenue(
   const sp = await tx.gasSponsorship.findFirst({
     where: { ...scope, id: submissionId, sponsor: 'shopper', status: 'confirmed' },
   });
-  if (!sp?.quoteId || !sp.feeAmount || !sp.feeAsset || sp.feeAmount.lte(0)) return 0;
+  // Only what the receipt shows was moved (never the quoted fee).
+  if (!sp?.quoteId || !sp.feeCollected || !sp.feeAsset || sp.feeCollected.lte(0)) return 0;
+  const estimate = sp.estimateUsd;
+  const amountUsd =
+    estimate && sp.feeAmount && sp.feeAmount.gt(0)
+      ? estimate
+          .mul(sp.feeCollected)
+          .div(sp.feeAmount)
+          .toDecimalPlaces(6, Prisma.Decimal.ROUND_DOWN)
+      : null;
   const payment = await tx.payment.findFirst({
     where: { ...scope, quoteId: sp.quoteId },
     select: { id: true },
@@ -443,8 +482,8 @@ export async function recordFeeLegRevenue(
         paymentId: payment.id,
         source: 'gas_reimbursement',
         assetId: sp.feeAsset,
-        amount: sp.feeAmount,
-        amountUsd: sp.estimateUsd,
+        amount: sp.feeCollected,
+        amountUsd,
         txHash: sp.txHash,
         reference: sp.id,
       },
@@ -455,37 +494,91 @@ export async function recordFeeLegRevenue(
 }
 
 /**
- * The watcher found the quote's payment (inside its transaction, under the session lock): a
- * reservation still held is settled at the quoted estimate whatever way the shopper paid (a
- * sponsored quote paid by copy-address included: the deduction is in the merchant's proceeds), and
- * confirmed shopper fee legs become revenue.
+ * The watcher found the quote's payment (inside its transaction): confirmed shopper fee legs
+ * become revenue now that the payment exists. Budget reservations are not touched here: 1Click
+ * can still refund after detection (see `onPaymentCollected`).
  */
 export async function onQuotePaymentDetected(
   tx: Tx,
   scope: Scope,
-  quote: Pick<Quote, 'id' | 'gasSponsorshipId'>,
-  paymentId: string,
+  quote: Pick<Quote, 'id'>,
+  _paymentId: string,
 ): Promise<void> {
-  if (quote.gasSponsorshipId) {
-    const sp = await tx.gasSponsorship.findFirst({
-      where: { ...scope, id: quote.gasSponsorshipId },
-      select: { id: true, reservationState: true, estimateUsd: true, sponsor: true },
-    });
-    if (sp?.reservationState === 'reserved' && sp.estimateUsd) {
-      await settleReservation(tx, sp.id, sp.estimateUsd.toFixed());
-    }
-    if (sp && sp.sponsor === 'merchant') {
-      await tx.gasSponsorship.updateMany({
-        where: { ...scope, id: sp.id, recoveredFromPaymentId: null },
-        data: { recoveredFromPaymentId: paymentId },
-      });
-    }
-  }
   const legs = await tx.gasSponsorship.findMany({
     where: { ...scope, quoteId: quote.id, sponsor: 'shopper', status: 'confirmed' },
     select: { id: true },
   });
   for (const leg of legs) await recordFeeLegRevenue(tx, scope, leg.id);
+}
+
+/**
+ * The payment's proceeds were collected (the watcher's settlement, beside `recordRevenue`, under
+ * the session lock): the quote's reservation, still held, is settled at the quoted estimate
+ * (spec §8.1) whatever way the shopper paid (relayed, front-run, or copy-address), and records
+ * the payment it was recovered from.
+ */
+export async function onPaymentCollected(
+  tx: Tx,
+  scope: Scope,
+  quote: Pick<Quote, 'id' | 'gasSponsorshipId'>,
+  paymentId: string,
+): Promise<void> {
+  if (!quote.gasSponsorshipId) return;
+  const sp = await tx.gasSponsorship.findFirst({
+    where: { ...scope, id: quote.gasSponsorshipId },
+    select: { id: true, reservationState: true, estimateUsd: true },
+  });
+  if (sp?.reservationState !== 'reserved' || !sp.estimateUsd) return;
+  await settleReservation(tx, sp.id, sp.estimateUsd.toFixed());
+  await tx.gasSponsorship.updateMany({
+    where: { ...scope, id: sp.id, recoveredFromPaymentId: null },
+    data: { recoveredFromPaymentId: paymentId },
+  });
+}
+
+/** Session statuses that end without the proceeds being collected. */
+const ENDED_UNCOLLECTED = ['EXPIRED', 'REFUNDED'] as const;
+
+/**
+ * Releases reservations still held by sessions that ended refunded or expired (the payment's
+ * proceeds were never collected), once no relay of theirs is still in flight; gas already spent
+ * on a relay becomes Tendr's loss (`recognizeTendrLoss`, the actual cost or, unpriced, the
+ * estimate). Separate from the stale-quote sweep, which skips quotes with a reported deposit.
+ * Returns how many were released.
+ */
+export async function releaseEndedSessionReservations(now: Date = new Date()): Promise<number> {
+  const rows = await prisma.gasSponsorship.findMany({
+    where: {
+      reservationState: 'reserved',
+      session: { status: { in: [...ENDED_UNCOLLECTED] } },
+      NOT: { quoteId: { not: null }, status: { in: ['pending', 'submitted'] } },
+    },
+    select: { id: true, merchantId: true, livemode: true, sessionId: true },
+    take: 500,
+  });
+  let released = 0;
+  for (const r of rows) {
+    const scope = { merchantId: r.merchantId, livemode: r.livemode };
+    try {
+      const did = await tenantTransaction(scope, async (tx) => {
+        const locked = await tx.$queryRaw<{ status: string }[]>`
+          SELECT status::text AS status FROM sessions WHERE id = ${r.sessionId}
+          AND merchant_id = ${scope.merchantId} AND livemode = ${scope.livemode} FOR UPDATE`;
+        if (!ENDED_UNCOLLECTED.some((st) => st === locked[0]?.status)) return false;
+        const sp = await tx.gasSponsorship.findFirstOrThrow({ where: { ...scope, id: r.id } });
+        if (sp.quoteId && (sp.status === 'pending' || sp.status === 'submitted')) return false;
+        if (!(await releaseReservation(tx, sp.id))) return false;
+        const spent = sp.quoteId !== null && sp.gasUsed !== null && sp.gasUsed.gt(0);
+        const cost = sp.costUsd ?? sp.estimateUsd;
+        if (spent && cost && cost.gt(0)) await recognizeTendrLoss(tx, sp.id, cost.toFixed(), now);
+        return true;
+      });
+      if (did) released++;
+    } catch (err) {
+      log('error', 'ended-session gas release failed', { sponsorshipId: r.id, err: String(err) });
+    }
+  }
+  return released;
 }
 
 /** A submission's state, or NOT_FOUND. */

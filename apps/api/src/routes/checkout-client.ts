@@ -90,19 +90,28 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
   // the fee lines), what to sign for the current quote, and the signed payload to relay. Submit
   // checks every signed field against the quote before any gas is spent, and is limited to
   // SUBMITS_PER_SESSION per session and SUBMITS_PER_ADDRESS_PER_HOUR per wallet.
-  app.post(`${CHECKOUT_CLIENT_PREFIX}gasless/options`, shopper, async (req) => {
-    const input = GaslessOptionsInputSchema.parse(req.body);
-    return gaslessOptions(ctxOf(req), input);
-  });
+  app.post(
+    `${CHECKOUT_CLIENT_PREFIX}gasless/options`,
+    // Live: fee RPCs per method; shares the per-session quote limiter.
+    { ...shopper, preHandler: opts.quoteRateLimit },
+    async (req) => {
+      const input = GaslessOptionsInputSchema.parse(req.body);
+      return gaslessOptions(ctxOf(req), input);
+    },
+  );
 
-  app.post(`${CHECKOUT_CLIENT_PREFIX}gasless/prepare`, shopper, async (req) => {
-    const input = GaslessPrepareInputSchema.parse(req.body);
-    const { q, relayer } = await gaslessQuote(ctxOf(req), input.quote_id);
-    return relayer.prepare(q, {
-      ...(input.method ? { method: input.method } : {}),
-      ...(input.fee_mode ? { fee_mode: input.fee_mode } : {}),
-    });
-  });
+  app.post(
+    `${CHECKOUT_CLIENT_PREFIX}gasless/prepare`,
+    { ...shopper, preHandler: opts.quoteRateLimit },
+    async (req) => {
+      const input = GaslessPrepareInputSchema.parse(req.body);
+      const { q, relayer } = await gaslessQuote(ctxOf(req), input.quote_id);
+      return relayer.prepare(q, {
+        ...(input.method ? { method: input.method } : {}),
+        ...(input.fee_mode ? { fee_mode: input.fee_mode } : {}),
+      });
+    },
+  );
 
   app.post(`${CHECKOUT_CLIENT_PREFIX}gasless/submit`, shopper, async (req, reply) => {
     const input = GaslessSubmitInputSchema.parse(req.body);

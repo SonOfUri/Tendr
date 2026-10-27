@@ -39,8 +39,12 @@ export const REPLACE_AFTER_MS = 60_000;
 export const REPLACEMENT_BUMP_PCT = 15n;
 /** Gas limit = the estimate × this / 100. */
 export const GAS_LIMIT_BUFFER_PCT = 120n;
-/** How long the per-chain nonce lock is held at most, and how long a sender waits for it. */
-export const NONCE_LOCK_TTL_MS = 30_000;
+/**
+ * How long the per-chain nonce lock is held at most (above the worst-case send: four 10 s RPC
+ * calls, KMS and the insert; it is renewed, token-checked, right before the row is written), and
+ * how long a sender waits for it.
+ */
+export const NONCE_LOCK_TTL_MS = 120_000;
 export const NONCE_LOCK_WAIT_MS = 15_000;
 /** A row the poller is working on is leased for this long. */
 export const POLL_LEASE_MS = 30_000;
@@ -90,6 +94,8 @@ export interface EvmOutcome {
   gasUsed: bigint | null;
   effectiveGasPrice: bigint | null;
   reason: string | null;
+  /** The mined receipt's logs emitted by the called contract (`to`); [] when none. */
+  logs: { topics: string[]; data: string }[];
 }
 
 export interface EvmSenderDeps {
@@ -99,6 +105,8 @@ export interface EvmSenderDeps {
   now?: () => Date;
   /** `EVM_MAX_FEE_GWEI_<CHAIN>` (gwei decimal) or undefined. */
   maxFeeGwei?: (chain: string) => string | undefined;
+  /** Nonce lock TTL (tests); NONCE_LOCK_TTL_MS by default. */
+  nonceLockTtlMs?: number;
 }
 
 type Row = Prisma.RelayerTransactionGetPayload<object>;
@@ -153,44 +161,55 @@ export class EvmSender {
     } catch (err) {
       throw new EvmNotBroadcastError('the relayer is unavailable', 'unavailable', err);
     }
-    const unlock = await this.lockNonce(input.chain, from);
+    const lock = await this.lockNonce(input.chain, from);
     try {
       const prepared = await this.prepare(rpc, input, from);
-      const signed = await this.sign({
-        chainId,
-        nonce: prepared.nonce,
-        to: input.to,
-        data: input.data,
-        gasLimit: prepared.gasLimit,
-        maxFeePerGas: prepared.maxFee,
-        maxPriorityFeePerGas: prepared.tip,
-      });
-      const row = await prisma.relayerTransaction.create({
-        data: {
-          id: newId('rtx'),
-          chain: input.chain,
+      // Everything up to the first broadcast: nothing has reached the chain, so any failure (KMS,
+      // the database, a lost nonce lock) is EvmNotBroadcastError and the caller may retry.
+      let row: Row;
+      try {
+        const signed = await this.sign({
           chainId,
-          fromAddress: from,
           nonce: prepared.nonce,
-          toAddress: input.to.toLowerCase(),
+          to: input.to,
           data: input.data,
-          gasLimit: prepared.gasLimit.toString(),
-          maxFeePerGas: prepared.maxFee.toString(),
-          maxPriorityFeePerGas: prepared.tip.toString(),
-          rawTx: signed.raw,
-          txHash: signed.hash,
-          txHashes: [signed.hash],
-          status: 'pending',
-          purpose: input.purpose,
-          refId: input.refId,
-          giveUpAt: input.giveUpAt,
-          attempts: 1,
-        },
-      });
+          gasLimit: prepared.gasLimit,
+          maxFeePerGas: prepared.maxFee,
+          maxPriorityFeePerGas: prepared.tip,
+        });
+        // The nonce becomes visible to other senders with this row: the lock must still be ours.
+        if (!(await lock.renew()))
+          throw new Error('the nonce lock expired before the row was written');
+        row = await prisma.relayerTransaction.create({
+          data: {
+            id: newId('rtx'),
+            chain: input.chain,
+            chainId,
+            fromAddress: from,
+            nonce: prepared.nonce,
+            toAddress: input.to.toLowerCase(),
+            data: input.data,
+            gasLimit: prepared.gasLimit.toString(),
+            maxFeePerGas: prepared.maxFee.toString(),
+            maxPriorityFeePerGas: prepared.tip.toString(),
+            rawTx: signed.raw,
+            txHash: signed.hash,
+            txHashes: [signed.hash],
+            status: 'pending',
+            purpose: input.purpose,
+            refId: input.refId,
+            giveUpAt: input.giveUpAt,
+            attempts: 1,
+          },
+        });
+      } catch (err) {
+        // Includes the in-flight nonce unique index (a sender that lost the lock).
+        throw new EvmNotBroadcastError('the relayer is unavailable', 'unavailable', err);
+      }
       const broadcast = await this.broadcastNew(rpc, row);
-      return { txId: row.id, txHash: signed.hash, broadcast };
+      return { txId: row.id, txHash: row.txHash, broadcast };
     } finally {
-      await unlock();
+      await lock.release();
     }
   }
 
@@ -392,6 +411,9 @@ export class EvmSender {
           txHash: hash,
           gasUsed: r.gasUsed.toString(),
           effectiveGasPrice: r.effectiveGasPrice.toString(),
+          receiptLogs: r.logs
+            .filter((l) => l.address.toLowerCase() === row.toAddress)
+            .map((l) => ({ topics: l.topics, data: l.data })),
           lastError: cancelled
             ? 'gave up after the deadline (nonce freed)'
             : r.status === 1
@@ -535,15 +557,23 @@ export class EvmSender {
   // Nonce lock
   // -------------------------------------------------------------------------------------------
 
-  /** Takes the (chain, address) nonce lock; returns its release. Fails closed. */
-  private async lockNonce(chain: string, from: string): Promise<() => Promise<void>> {
+  /**
+   * Takes the (chain, address) nonce lock. `renew()` extends it only while this sender still
+   * holds it (token-checked) and returns false once it was lost; `release()` frees it if still
+   * ours. Fails closed.
+   */
+  private async lockNonce(
+    chain: string,
+    from: string,
+  ): Promise<{ renew: () => Promise<boolean>; release: () => Promise<void> }> {
     const key = `tendr:evm-nonce:${chain}:${from}`;
     const token = randomUUID();
+    const ttl = this.deps.nonceLockTtlMs ?? NONCE_LOCK_TTL_MS;
     const deadline = Date.now() + NONCE_LOCK_WAIT_MS;
     for (;;) {
       let ok: string | null;
       try {
-        ok = await this.deps.redis.set(key, token, 'PX', NONCE_LOCK_TTL_MS, 'NX');
+        ok = await this.deps.redis.set(key, token, 'PX', ttl, 'NX');
       } catch (err) {
         throw new EvmNotBroadcastError('the relayer is unavailable', 'unavailable', err);
       }
@@ -551,19 +581,31 @@ export class EvmSender {
       if (Date.now() > deadline) {
         throw new EvmNotBroadcastError('the relayer is busy; try again', 'unavailable');
       }
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 25));
     }
-    return async () => {
-      try {
-        await this.deps.redis.eval(
-          "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
-          1,
-          key,
-          token,
-        );
-      } catch (err) {
-        log('warn', 'evm relayer: nonce lock release failed', { key, err: String(err) });
-      }
+    return {
+      renew: async () =>
+        Number(
+          await this.deps.redis.eval(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end",
+            1,
+            key,
+            token,
+            String(ttl),
+          ),
+        ) === 1,
+      release: async () => {
+        try {
+          await this.deps.redis.eval(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+            1,
+            key,
+            token,
+          );
+        } catch (err) {
+          log('warn', 'evm relayer: nonce lock release failed', { key, err: String(err) });
+        }
+      },
     };
   }
 }
@@ -579,6 +621,9 @@ function outcomeOf(r: Row): EvmOutcome {
     gasUsed: r.gasUsed ? BigInt(r.gasUsed.toFixed(0)) : null,
     effectiveGasPrice: r.effectiveGasPrice ? BigInt(r.effectiveGasPrice.toFixed(0)) : null,
     reason: r.lastError,
+    logs: Array.isArray(r.receiptLogs)
+      ? (r.receiptLogs as { topics: string[]; data: string }[])
+      : [],
   };
 }
 

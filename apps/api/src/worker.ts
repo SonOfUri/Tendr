@@ -19,6 +19,7 @@ import { sweepReturns } from './checkout/refunds.js';
 import { expireSessions, pollDeposit, scanDueDeposits } from './checkout/watcher.js';
 import { releaseStaleReservations } from './gas/quote-fee.js';
 import { pollEvmRelays } from './relayer/index.js';
+import { releaseEndedSessionReservations } from './relayer/submissions.js';
 import {
   attemptDelivery,
   DELIVER_WEBHOOK_JOB,
@@ -128,7 +129,7 @@ export async function processCheckoutJob(
     return;
   }
   if (job.name === RELEASE_GAS_RESERVATIONS_JOB) {
-    const n = await releaseStaleReservations();
+    const n = (await releaseStaleReservations()) + (await releaseEndedSessionReservations());
     if (n > 0) log('info', 'released gas reservations', { count: n });
     return;
   }

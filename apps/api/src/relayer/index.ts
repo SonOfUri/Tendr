@@ -1,7 +1,8 @@
 // Gasless relayer entry points (project 5a, spec §2.3, §3): `relayerFor(family, livemode)` picks
 // the family's relayer (the simulated one in test mode), and `pollEvmRelays` sees the live EVM
 // relayer's transactions through to an outcome (a worker job).
-import { GaslessMethodSchema } from '@tendr/contracts';
+import { GaslessMethodSchema, TENDR_FORWARDER_ABI } from '@tendr/contracts';
+import { Interface } from 'ethers';
 import { z } from 'zod';
 import { chainFamily, isValidAddress } from '../checkout/address-format.js';
 import type { ShopperCtx } from '../checkout/quotes.js';
@@ -81,6 +82,7 @@ export async function pollEvmRelays(sender: EvmSender = liveEvmSender()): Promis
           gasUsed: o.gasUsed,
           costUsd,
           reason: o.reason,
+          feeMoved: o.status === 'confirmed' ? feeMovedFrom(o.logs) : null,
         });
         applied++;
       }
@@ -223,6 +225,27 @@ export async function gaslessSubmission(shopper: ShopperCtx, id: string) {
   });
   if (!row) throw notFound('Submission not found');
   return { id: row.id, quote_id: row.quoteId, status: row.status, tx_hash: row.txHash };
+}
+
+const FORWARDER_EVENTS = new Interface(TENDR_FORWARDER_ABI as unknown as string);
+
+/**
+ * The fee a mined forwarder call moved to the gas-fee address: the sum of `TendrPaid.fee` in its
+ * receipt (0 when the fee authorization was skipped, or no event: never assumed from the quote).
+ * `TendrPaid` measures only Tendr's own fee here; payment detection never reads it.
+ */
+export function feeMovedFrom(logs: { topics: string[]; data: string }[]): bigint {
+  let fee = 0n;
+  for (const l of logs) {
+    let parsed: ReturnType<Interface['parseLog']>;
+    try {
+      parsed = FORWARDER_EVENTS.parseLog(l);
+    } catch {
+      continue;
+    }
+    if (parsed?.name === 'TendrPaid') fee += parsed.args.fee as bigint;
+  }
+  return fee;
 }
 
 /** Drops the cached relayers (tests). */
