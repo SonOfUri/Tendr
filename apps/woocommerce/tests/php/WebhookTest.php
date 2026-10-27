@@ -1181,4 +1181,70 @@ class WebhookTest extends Tendr_Test_Case {
 		$this->assertNotSame( '', $wpdb->last_error, 'the table is gone' );
 		$this->assertFalse( wp_next_scheduled( Tendr_Webhooks::PRUNE_HOOK ) );
 	}
+
+	// ---------------------------------------------------------------- final wave.
+
+	public function test_review_links_name_the_store_and_the_events_mode(): void {
+		$order = $this->order();
+		$this->session(
+			$order,
+			'HELD',
+			array(
+				array(
+					'status'      => 'HELD',
+					'held_reason' => 'sanctions',
+					'settled_at'  => null,
+				),
+			)
+		);
+
+		$this->deliver( self::event( 'payment.held', $order, array( 'held_reason' => 'sanctions' ) ) );
+
+		$notes = implode( "\n", self::notes( self::fresh( $order ) ) );
+		$this->assertStringContainsString( Tendr_Plugin::checkout_base() . '/dashboard/review?store=mer_a&amp;mode=test', $notes );
+	}
+
+	public function test_an_expiry_without_hold_stock_notes_it_and_leaves_the_order_pending(): void {
+		update_option( 'woocommerce_hold_stock_minutes', '' );
+		$order = $this->order( array( 'stock' => true ) );
+		$this->session( $order, 'EXPIRED', array() );
+
+		$this->assertSame( 200, $this->deliver( self::event( 'checkout.session.expired', $order, array( 'reason' => 'timeout' ) ) )->get_status() );
+
+		$order = self::fresh( $order );
+		$this->assertSame( 'pending', $order->get_status(), 'no hold-stock: WooCommerce would never cancel it' );
+		$notes = implode( "\n", self::notes( $order ) );
+		$this->assertStringContainsString( 'expired without a payment', $notes );
+		$this->assertStringContainsString( 'stays pending', $notes );
+
+		// With hold-stock on, the same expiry cancels (and releases the stock).
+		update_option( 'woocommerce_hold_stock_minutes', '60' );
+		$this->deliver( self::event( 'checkout.session.expired', $order, array( 'reason' => 'timeout' ) ) );
+		$this->assertSame( 'cancelled', self::fresh( $order )->get_status() );
+	}
+
+	public function test_a_late_payment_returned_on_a_held_order_gets_the_late_note(): void {
+		$order = $this->order();
+		$order->update_status( 'on-hold' );
+		$order->update_meta_data( Tendr_Order_Sync::META_HELD, 'pay_01JHELDPAYMENT0000000000000' );
+		$order->save();
+		$this->session(
+			$order,
+			'HELD',
+			array(
+				array(
+					'status'     => 'REFUNDING',
+					'is_late'    => true,
+					'settled_at' => null,
+				),
+			)
+		);
+
+		$this->deliver( self::event( 'payment.refunded', $order, array( 'reason' => 'late' ) ) );
+
+		$notes = implode( "\n", self::notes( self::fresh( $order ) ) );
+		$this->assertStringContainsString( 'late payment is being returned', $notes );
+		$this->assertStringNotContainsString( 'The held payment was returned', $notes );
+		$this->assertSame( 'on-hold', self::fresh( $order )->get_status() );
+	}
 }

@@ -526,8 +526,9 @@ final class Tendr_Settings {
 	 * @param array $connection Public connection details.
 	 */
 	private static function connected( array $connection ): string {
-		$dashboard = Tendr_Plugin::checkout_base() . '/dashboard';
 		$live      = 'live' === Tendr_Connect::mode();
+		$dashboard = Tendr_Plugin::dashboard_url( '/dashboard', $live ? 'live' : 'test' );
+		$review    = Tendr_Plugin::dashboard_url( '/dashboard/review', $live ? 'live' : 'test' );
 		$mode      = $live ? __( 'Live mode', 'tendr' ) : __( 'Test mode', 'tendr' );
 		$post      = admin_url( 'admin-post.php' );
 
@@ -560,7 +561,7 @@ final class Tendr_Settings {
 
 		$html .= '<p>'
 			. '<a class="button" href="' . esc_url( $dashboard ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Open tendr dashboard', 'tendr' ) . '</a> '
-			. '<a class="button" href="' . esc_url( $dashboard . '/review' ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Review queue', 'tendr' ) . '</a> '
+			. '<a class="button" href="' . esc_url( $review ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Review queue', 'tendr' ) . '</a> '
 			. wp_nonce_field( 'tendr_disconnect', 'tendr_disconnect_nonce', false, false )
 			. '<button type="submit" class="button button-link-delete" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', 'tendr_disconnect', $post ) ) . '" data-tendr-disconnect="' . esc_attr( self::disconnect_confirmation() ) . '">' . esc_html__( 'Disconnect', 'tendr' ) . '</button>'
 			. '</p>';

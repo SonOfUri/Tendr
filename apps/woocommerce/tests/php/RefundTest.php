@@ -180,23 +180,33 @@ class RefundTest extends Tendr_Test_Case {
 	 * The session view with the payment and its refunds.
 	 *
 	 * @param WC_Order $order   Order.
-	 * @param array    $refunds Refund views: id => status.
+	 * @param array    $refunds Refund views: id => status, or id => fields to override.
 	 * @param bool     $live    Livemode.
 	 */
 	private function session( WC_Order $order, array $refunds = array(), bool $live = false ): array {
 		$rows = array();
-		foreach ( $refunds as $id => $status ) {
-			$rows[] = array(
-				'id'                => $id,
-				'reason'            => 'merchant',
-				'status'            => $status,
-				'asset_id'          => 'nep141:usdc.near',
-				'amount'            => '10050000',
-				'destination'       => 'ada.near',
-				'destination_chain' => 'near',
-				'needs_address'     => false,
-				'refund_tx_hash'    => 'confirmed' === $status ? 'RefTx123' : null,
-				'created_at'        => '2026-10-26T10:00:00.000Z',
+		foreach ( $refunds as $id => $spec ) {
+			$over   = is_array( $spec ) ? $spec : array( 'status' => $spec );
+			$status = (string) $over['status'];
+			$rows[] = array_merge(
+				array(
+					'id'                  => $id,
+					'reason'              => 'merchant',
+					'status'              => $status,
+					'asset_id'            => 'nep141:usdc.near',
+					'asset_symbol'        => null,
+					'asset_decimals'      => null,
+					'amount'              => '10050000',
+					'destination'         => 'ada.near',
+					'destination_chain'   => 'near',
+					'needs_address'       => false,
+					'refund_tx_hash'      => 'confirmed' === $status ? 'RefTx123' : null,
+					'review_reason'       => null,
+					'refund_external_ref' => null,
+					'merchant_status'     => 'confirmed' === $status ? 'sent' : 'pending',
+					'created_at'          => '2026-10-26T10:00:00.000Z',
+				),
+				$over
 			);
 		}
 		$view                          = array(
@@ -969,5 +979,276 @@ class RefundTest extends Tendr_Test_Case {
 
 		$this->assertStringContainsString( 'awaiting approval in tendr', $html );
 		$this->assertStringContainsString( '10.00', $html );
+	}
+
+	// ---------------------------------------------------------------- final wave.
+
+	/**
+	 * Deliver an event that only makes the plugin re-read the session (a resent payment.succeeded
+	 * of the payment that already paid the order).
+	 *
+	 * @param WC_Order $order Order.
+	 */
+	private function reread( WC_Order $order ): void {
+		++self::$seq;
+		$this->deliver(
+			array(
+				'id'       => sprintf( 'evt_01JREREAD%017d', self::$seq ),
+				'type'     => 'payment.succeeded',
+				'created'  => time(),
+				'livemode' => false,
+				'data'     => array(
+					'payment_id'   => self::PAYMENT_ID,
+					'session_id'   => self::SESSION_ID,
+					'external_ref' => Tendr_Gateway::external_ref( $order->get_id() ),
+				),
+			)
+		);
+	}
+
+	public function test_dashboard_links_name_the_store_and_the_orders_mode(): void {
+		$order = $this->paid_order();
+		$this->request_refund( $order, '10.00' );
+		$this->assertStringContainsString( '/dashboard/approvals?store=mer_a&amp;mode=test', self::notes( self::fresh( $order ) )[0] );
+
+		$live = $this->paid_order( array( 'livemode' => true ) );
+		$this->request_refund( $live, '10.00' );
+		$this->assertStringContainsString( '/dashboard/approvals?store=mer_a&amp;mode=live', self::notes( self::fresh( $live ) )[0] );
+	}
+
+	/**
+	 * Order item rows whose order is gone (left by a draft refund).
+	 */
+	private static function orphan_items(): int {
+		global $wpdb;
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery
+		return (int) $wpdb->get_var(
+			"SELECT COUNT(*) FROM {$wpdb->prefix}woocommerce_order_items i
+			LEFT JOIN {$wpdb->posts} p ON p.ID = i.order_id
+			LEFT JOIN {$wpdb->prefix}wc_orders o ON o.id = i.order_id
+			WHERE p.ID IS NULL AND o.id IS NULL"
+		);
+		// phpcs:enable
+	}
+
+	/**
+	 * An itemized refund request leaves no item rows of WooCommerce's draft refund behind.
+	 *
+	 * @dataProvider storages
+	 *
+	 * @param bool $hpos Use HPOS storage.
+	 */
+	public function test_an_itemized_request_leaves_no_orphan_item_rows( bool $hpos ): void {
+		add_filter( 'pre_option_woocommerce_custom_orders_table_enabled', static fn() => $hpos ? 'yes' : 'no' );
+		$order  = $this->paid_order();
+		$before = self::orphan_items();
+		$item   = current( $order->get_items() );
+
+		$this->request_refund(
+			$order,
+			'24.50',
+			array(
+				'line_items' => array(
+					$item->get_id() => array(
+						'qty'          => 1,
+						'refund_total' => '24.50',
+					),
+				),
+			)
+		);
+
+		$this->assertSame( $before, self::orphan_items() );
+	}
+
+	public function test_a_pending_request_whose_refund_closed_in_tendr_stops_counting(): void {
+		$order = $this->paid_order();
+		$ext   = $this->request_refund( $order, '10.00' );
+		$this->assertSame( '10', Tendr_Refunds::pending_total( self::fresh( $order ) ) );
+
+		$this->session(
+			$order,
+			array(
+				'ref_1' => array(
+					'status'              => 'failed',
+					'merchant_status'     => 'cancelled',
+					'refund_external_ref' => $ext,
+				),
+			)
+		);
+		$this->reread( $order );
+
+		$order = self::fresh( $order );
+		$this->assertSame( '0', Tendr_Refunds::pending_total( $order ) );
+		$this->assertSame( 'cancelled', Tendr_Refunds::requests( $order )[ $ext ]['state'] );
+		$this->assertStringContainsString( 'closed in tendr without being sent', self::notes( $order )[0] );
+	}
+
+	/**
+	 * Make a request look `$seconds` old.
+	 *
+	 * @param WC_Order $order   Order.
+	 * @param string   $ext     Its external_ref.
+	 * @param int      $seconds Age.
+	 */
+	private static function age( WC_Order $order, string $ext, int $seconds ): void {
+		$fresh                            = self::fresh( $order );
+		$requests                         = $fresh->get_meta( Tendr_Refunds::META );
+		$requests[ $ext ]['requested_at'] = time() - $seconds;
+		$fresh->update_meta_data( Tendr_Refunds::META, $requests );
+		$fresh->save();
+	}
+
+	public function test_a_pending_request_tendr_no_longer_lists_stops_counting(): void {
+		$order = $this->paid_order();
+		$ext   = $this->request_refund( $order, '10.00' );
+
+		$this->session( $order, array() );
+		$this->reread( $order );
+		$this->assertSame( '10', Tendr_Refunds::pending_total( self::fresh( $order ) ), 'just asked: not yet' );
+
+		self::age( $order, $ext, 15 * MINUTE_IN_SECONDS );
+		$this->reread( $order );
+
+		$this->assertSame( '0', Tendr_Refunds::pending_total( self::fresh( $order ) ) );
+		$this->assertSame( 'lapsed', Tendr_Refunds::requests( self::fresh( $order ) )[ $ext ]['state'] );
+	}
+
+	public function test_an_unconfirmed_request_tendr_never_received_stops_counting_after_a_while(): void {
+		$order                = $this->paid_order();
+		$this->refund_replies = array( array( 502, null ) );
+		self::refund( $order, '10.00' );
+		$ext = $this->last_ref();
+
+		// Just asked: tendr may still be working on it.
+		$this->session( $order, array() );
+		$this->reread( $order );
+		$this->assertSame( 'unconfirmed', Tendr_Refunds::requests( self::fresh( $order ) )[ $ext ]['state'] );
+
+		// Later, tendr still lists no refund with its reference: it never existed.
+		self::age( $order, $ext, 15 * MINUTE_IN_SECONDS );
+		$this->reread( $order );
+
+		$order = self::fresh( $order );
+		$this->assertSame( 'lapsed', Tendr_Refunds::requests( $order )[ $ext ]['state'] );
+		$this->assertSame( '0', Tendr_Refunds::pending_total( $order ) );
+		$this->assertStringContainsString( 'has no record', self::notes( $order )[0] );
+	}
+
+	public function test_an_unconfirmed_request_tendr_lists_is_adopted_on_any_reread(): void {
+		$order                = $this->paid_order();
+		$this->refund_replies = array( array( 502, null ) );
+		self::refund( $order, '10.00' );
+		$ext = $this->last_ref();
+
+		$this->session(
+			$order,
+			array(
+				'ref_8' => array(
+					'status'              => 'pending',
+					'merchant_status'     => 'pending',
+					'refund_external_ref' => $ext,
+				),
+			)
+		);
+		$this->reread( $order );
+
+		$req = Tendr_Refunds::requests( self::fresh( $order ) )[ $ext ];
+		$this->assertSame( 'ref_8', $req['refund_id'] );
+		$this->assertSame( 'pending', $req['state'] );
+	}
+
+	public function test_an_unconfirmed_request_can_be_dismissed_by_a_store_manager(): void {
+		$order                = $this->paid_order();
+		$this->refund_replies = array( array( 502, null ) );
+		self::refund( $order, '10.00' );
+		$ext = $this->last_ref();
+
+		ob_start();
+		Tendr_Refunds::render_pending( self::fresh( $order ) );
+		$box = (string) ob_get_clean();
+		$this->assertStringContainsString( 'action=tendr_dismiss_refund', $box );
+		$this->assertStringContainsString( 'name="tendr_dismiss_refund_nonce"', $box );
+		$this->assertStringContainsString( 'value="' . $ext . '"', $box );
+
+		$customer = self::factory()->user->create( array( 'role' => 'customer' ) );
+		$admin    = get_current_user_id();
+		wp_set_current_user( $customer );
+		$this->assertWPError( Tendr_Refunds::dismiss( $order->get_id(), $ext ) );
+		wp_set_current_user( $admin );
+
+		$this->assertTrue( Tendr_Refunds::dismiss( $order->get_id(), $ext ) );
+		$order = self::fresh( $order );
+		$this->assertSame( 'dismissed', Tendr_Refunds::requests( $order )[ $ext ]['state'] );
+		$this->assertSame( '0', Tendr_Refunds::pending_total( $order ) );
+		$this->assertStringContainsString( 'dismissed', self::notes( $order )[0] );
+
+		// A request tendr confirmed cannot be dismissed (it may still be sent).
+		$ext2 = $this->request_refund( $order, '5.00' );
+		$this->assertWPError( Tendr_Refunds::dismiss( $order->get_id(), $ext2 ) );
+	}
+
+	public function test_a_review_note_names_why_the_refund_waits(): void {
+		$order                = $this->paid_order();
+		$this->refund_replies = array(
+			array(
+				201,
+				array(
+					'id'                  => 'ref_7',
+					'status'              => 'review',
+					'review_reason'       => 'needs_swap_route',
+					'amount_usd'          => '10.00',
+					'refund_external_ref' => 'x',
+					'payment_id'          => self::PAYMENT_ID,
+					'created'             => time(),
+				),
+			),
+		);
+
+		$this->request_refund( $order, '10.00' );
+
+		$note = self::notes( self::fresh( $order ) )[0];
+		$this->assertStringContainsString( 'paid from another chain', $note );
+		$this->assertStringContainsString( 'swap route', $note );
+	}
+
+	public function test_a_dashboard_refund_note_shows_the_token_amount_with_its_symbol(): void {
+		$order = $this->paid_order();
+		$this->session(
+			$order,
+			array(
+				'ref_dash' => array(
+					'status'         => 'confirmed',
+					'asset_symbol'   => 'USDC',
+					'asset_decimals' => 6,
+				),
+			)
+		);
+		$event = self::refund_event( 'refund.sent', $order, 'ref_dash', '' );
+		unset( $event['data']['refund_external_ref'] );
+
+		$this->deliver( $event );
+
+		$note = self::notes( self::fresh( $order ) )[0];
+		$this->assertStringContainsString( '10.05 USDC', $note );
+		$this->assertStringNotContainsString( 'token base units', $note );
+	}
+
+	public function test_a_sent_refund_note_shows_the_token_amount(): void {
+		$order = $this->paid_order();
+		$ext   = $this->request_refund( $order, '10.00' );
+		$this->session(
+			$order,
+			array(
+				'ref_1' => array(
+					'status'         => 'confirmed',
+					'asset_symbol'   => 'USDC',
+					'asset_decimals' => 6,
+				),
+			)
+		);
+
+		$this->deliver( self::refund_event( 'refund.sent', $order, 'ref_1', $ext ) );
+
+		$this->assertStringContainsString( 'Refund of $10.00 sent by tendr (10.05 USDC', self::notes( self::fresh( $order ) )[0] );
 	}
 }

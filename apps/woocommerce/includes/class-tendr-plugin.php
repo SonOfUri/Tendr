@@ -144,6 +144,25 @@ final class Tendr_Plugin {
 	}
 
 	/**
+	 * A tendr dashboard page for this site's store and a mode (M3): `?store=<store id>&mode=…`, so
+	 * a merchant with several stores, or whose dashboard is in the other mode, lands on the right
+	 * queue.
+	 *
+	 * @param string $path Dashboard path, e.g. `/dashboard/review`.
+	 * @param string $mode 'test' | 'live'.
+	 */
+	public static function dashboard_url( string $path, string $mode ): string {
+		$args       = array();
+		$connection = class_exists( 'Tendr_Connect' ) ? Tendr_Connect::connection() : null;
+		$store      = is_array( $connection ) ? (string) ( $connection['store_id'] ?? '' ) : '';
+		if ( '' !== $store && preg_match( '/^[A-Za-z0-9_]{1,64}$/', $store ) ) {
+			$args['store'] = $store;
+		}
+		$args['mode'] = 'live' === $mode ? 'live' : 'test';
+		return add_query_arg( $args, self::checkout_base() . $path );
+	}
+
+	/**
 	 * `tendr-woocommerce/<plugin> WordPress/<wp> WooCommerce/<wc>`.
 	 */
 	public static function user_agent(): string {

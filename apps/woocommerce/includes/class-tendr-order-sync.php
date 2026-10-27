@@ -13,7 +13,8 @@
  * | … overpaid                                    | + note: the extra is returned (or kept, < $1)    |
  * | payment.refunded underpaid/failed, can pay    | stays Pending, note                              |
  * | payment.refunded underpaid/failed, closed     | Pending → Failed, note                           |
- * | checkout.session.expired, no payment          | Pending → Cancelled (WooCommerce restocks)       |
+ * | checkout.session.expired, no payment          | Pending → Cancelled (WooCommerce restocks) when   |
+ * |                                               | WooCommerce holds stock; else note, stays Pending |
  * | payment.late / payment.refunded late          | note only                                        |
  * | payment.held, order not paid                  | Pending/Failed → On hold, note with review link  |
  * | payment.held, order already paid or cancelled | note only                                        |
@@ -67,6 +68,9 @@ final class Tendr_Order_Sync {
 
 	/** Seconds the session re-read may take inside a webhook request. */
 	const REREAD_TIMEOUT = 5;
+
+	/** The session whose expiry was noted on an order kept pending (no hold-stock). */
+	const META_EXPIRED_NOTED = '_tendr_expired_noted';
 
 	/** The payment that settled for another total than the order's (I1): it never marked it paid. */
 	const META_AMOUNT_MISMATCH = '_tendr_amount_mismatch';
@@ -173,7 +177,24 @@ final class Tendr_Order_Sync {
 		}
 
 		self::remember_asset( $order, $data );
+		$result = self::apply_confirmed( $order, $event, $view );
+		if ( ! is_wp_error( $result ) ) {
+			// C5: the fresh view also says which refund requests tendr closed or never received.
+			Tendr_Refunds::reconcile( wc_get_order( $order->get_id() ), $event, $view );
+		}
+		return $result;
+	}
 
+	/**
+	 * Apply an event the re-read confirmed belongs to the order.
+	 *
+	 * @param WC_Order $order Order.
+	 * @param array    $event Verified event.
+	 * @param array    $view  Session view.
+	 * @return string|WP_Error
+	 */
+	private static function apply_confirmed( WC_Order $order, array $event, array $view ) {
+		$data = $event['data'];
 		if ( in_array( $event['type'], self::REFUND_EVENTS, true )
 			|| ( 'payment.refunded' === $event['type'] && 'merchant' === ( $data['reason'] ?? null ) ) ) {
 			return self::apply_refund_event( $order, $event, $view );
@@ -247,7 +268,7 @@ final class Tendr_Order_Sync {
 				$order,
 				$event,
 				__( 'A crypto payment settled for this order, but the order stays on hold because an earlier payment for it is held for review. Check the tendr review queue before shipping.', 'tendr' )
-				. ' ' . $details . ' ' . self::review_link()
+				. ' ' . $details . ' ' . self::review_link( self::mode_of( $event ) )
 			);
 			return 'applied';
 		}
@@ -334,13 +355,13 @@ final class Tendr_Order_Sync {
 				$order,
 				$event,
 				__( 'tendr is holding a crypto return for this order for review: the wallet that paid failed sanctions screening. Nothing is sent until it is reviewed.', 'tendr' )
-				. ' ' . $details . ' ' . self::review_link()
+				. ' ' . $details . ' ' . self::review_link( self::mode_of( $event ) )
 			);
 			return 'applied';
 		}
 
 		$text = __( 'A crypto payment for this order is on hold for review: the paying wallet failed sanctions screening. tendr never releases held funds on its own, and this order will not move to Processing.', 'tendr' )
-			. ' ' . $details . ' ' . self::review_link();
+			. ' ' . $details . ' ' . self::review_link( self::mode_of( $event ) );
 
 		if ( $order->has_status( array( 'pending', 'failed' ) ) ) {
 			$order->update_meta_data( self::META_HELD, (string) $payment['id'] );
@@ -418,7 +439,7 @@ final class Tendr_Order_Sync {
 			return 'applied';
 		}//end if
 
-		if ( 'on-hold' === $order->get_status() && '' !== (string) $order->get_meta( self::META_HELD ) ) {
+		if ( 'on-hold' === $order->get_status() && (string) $order->get_meta( self::META_HELD ) === (string) ( $payment['id'] ?? '' ) ) {
 			self::note(
 				$order,
 				$event,
@@ -453,8 +474,28 @@ final class Tendr_Order_Sync {
 		) {
 			return 'noop';
 		}
+		if ( ! self::holds_stock() ) {
+			// M4: without hold-stock WooCommerce never cancels an unpaid order (an invoice order may
+			// wait for days); the 30-minute checkout ending must not either. Paying again starts a
+			// new checkout.
+			if ( (string) $order->get_meta( self::META_EXPIRED_NOTED ) === (string) $view['id'] ) {
+				return 'noop';
+			}
+			$order->update_meta_data( self::META_EXPIRED_NOTED, (string) $view['id'] );
+			$order->save();
+			self::note( $order, $event, __( 'The crypto checkout expired without a payment. The order stays pending: the shopper can pay it again from the order, which starts a new checkout.', 'tendr' ) );
+			return 'applied';
+		}
 		$order->update_status( 'cancelled', self::prefix( $event ) . __( 'The crypto checkout expired without a payment.', 'tendr' ) );
 		return 'applied';
+	}
+
+	/**
+	 * Whether WooCommerce holds stock for unpaid orders (and so cancels them when the hold ends).
+	 */
+	private static function holds_stock(): bool {
+		$minutes = get_option( 'woocommerce_hold_stock_minutes' );
+		return 'yes' === get_option( 'woocommerce_manage_stock' ) && is_numeric( $minutes ) && (float) $minutes > 0;
 	}
 
 	// ------------------------------------------------------------------ state helpers.
@@ -674,10 +715,21 @@ final class Tendr_Order_Sync {
 	}
 
 	/**
-	 * A link to the tendr review queue.
+	 * 'live' | 'test': the mode of an event.
+	 *
+	 * @param array $event Event.
 	 */
-	public static function review_link(): string {
-		$url = Tendr_Plugin::checkout_base() . '/dashboard/review';
+	private static function mode_of( array $event ): string {
+		return empty( $event['livemode'] ) ? 'test' : 'live';
+	}
+
+	/**
+	 * A link to the tendr review queue of this store, in a mode.
+	 *
+	 * @param string $mode 'test' | 'live'.
+	 */
+	public static function review_link( string $mode ): string {
+		$url = Tendr_Plugin::dashboard_url( '/dashboard/review', $mode );
 		return esc_html__( 'Review queue:', 'tendr' ) . ' <a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $url ) . '</a>';
 	}
 

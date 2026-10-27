@@ -24,7 +24,9 @@
  * `_tendr_refund_seq`, taken under the order lock) =>
  * - `refund_id`    tendr refund id (`ref_…`; '' while unconfirmed);
  * - `state`        'pending' (awaiting signers) | 'review' (a person must act in tendr first) |
- *                  'unconfirmed' (tendr's answer was lost) | 'sent' | 'cancelled' | 'failed';
+ *                  'unconfirmed' (tendr's answer was lost) | 'sent' | 'cancelled' | 'failed' |
+ *                  'lapsed' (tendr no longer lists it, or never received it) | 'dismissed' (an
+ *                  unconfirmed request a store manager dismissed);
  * - `amount`       in the order currency, as WooCommerce formatted it;
  * - `reason`, `line_items`, `restock`, `restocked`, `payment_id`, `mode`, `requested_at`;
  * - `wc_refund_id` the WooCommerce refund recorded on `refund.sent`.
@@ -51,6 +53,15 @@ final class Tendr_Refunds {
 	/** States whose amount may still leave (counted against what can be refunded). */
 	const OPEN_STATES = array( 'pending', 'review', 'unconfirmed' );
 
+	/**
+	 * Seconds after which a request tendr's re-read does not list is taken as gone (C5): long
+	 * enough that it is never a request still being made.
+	 */
+	const LAPSE_AFTER = 5 * MINUTE_IN_SECONDS;
+
+	/** Nonce action for dismissing an unconfirmed request. */
+	const DISMISS_NONCE = 'tendr_dismiss_refund';
+
 	/** API errors that may hide a refund tendr did create (its answer was lost). */
 	const AMBIGUOUS_CODES = array( 'tendr_unreachable', 'tendr_bad_response', 'IDEMPOTENCY_IN_PROGRESS' );
 
@@ -67,6 +78,7 @@ final class Tendr_Refunds {
 	public static function register(): void {
 		add_action( 'woocommerce_create_refund', array( self::class, 'before_save' ), 10, 2 );
 		add_action( 'woocommerce_admin_order_data_after_order_details', array( self::class, 'render_pending' ) );
+		add_action( 'admin_post_tendr_dismiss_refund', array( self::class, 'handle_dismiss_request' ) );
 	}
 
 	// ------------------------------------------------------------------ requesting.
@@ -96,11 +108,36 @@ final class Tendr_Refunds {
 			return;
 		}
 		if ( empty( $args['refund_payment'] ) ) {
-			self::guard_manual( $order, (float) ( $args['amount'] ?? 0 ), $refund->get_id() );
+			try {
+				self::guard_manual( $order, (float) ( $args['amount'] ?? 0 ), $refund->get_id() );
+			} catch ( Exception $e ) {
+				self::drop_draft_items( $refund );
+				throw $e;
+			}
 			return;
 		}
 		$result = self::request( $order->get_id(), $args, $refund->get_id() );
+		self::drop_draft_items( $refund );
 		throw new Exception( is_wp_error( $result ) ? $result->get_error_message() : $result ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- plain text: WooCommerce shows it in an alert / REST error.
+	}
+
+	/**
+	 * Delete the item rows WooCommerce already stored for its draft refund (it saved them while
+	 * totalling): WooCommerce deletes the draft itself when the hook throws, but on HPOS not its
+	 * items, which would stay behind as orphan `woocommerce_order_items` rows.
+	 *
+	 * @param WC_Order_Refund $refund The draft.
+	 */
+	private static function drop_draft_items( WC_Order_Refund $refund ): void {
+		if ( $refund->get_id() <= 0 ) {
+			return;
+		}
+		// Deleted one by one: remove_order_items() only forgets them until the next save.
+		foreach ( $refund->get_items( array( 'line_item', 'fee', 'shipping', 'tax', 'coupon' ) ) as $item_id => $item ) {
+			if ( $item_id > 0 ) {
+				wc_delete_order_item( (int) $item_id );
+			}
+		}
 	}
 
 	/**
@@ -244,15 +281,17 @@ final class Tendr_Refunds {
 			self::save_requests( $order, $requests );
 
 			if ( $review ) {
+				$why  = self::review_reason_text( isset( $result['review_reason'] ) && is_string( $result['review_reason'] ) ? $result['review_reason'] : '' );
 				$note = esc_html(
 					sprintf(
-						/* translators: %s: amount. */
-						__( 'Refund of %s is waiting for manual review in tendr before it can be approved. Refunds are paid in your settlement asset: when the shopper paid from another chain or from an exchange, someone on your team must choose the route or the address in tendr first. Nothing has been refunded yet.', 'tendr' ),
-						$money
+						/* translators: 1: amount, 2: why it waits (a sentence). */
+						__( 'Refund of %1$s is waiting for manual review in tendr before it can be approved. %2$s Nothing has been refunded yet.', 'tendr' ),
+						$money,
+						$why
 					)
-				) . ' ' . Tendr_Order_Sync::review_link();
+				) . ' ' . Tendr_Order_Sync::review_link( $mode );
 			} else {
-				$url  = Tendr_Plugin::checkout_base() . '/dashboard/approvals';
+				$url  = Tendr_Plugin::dashboard_url( '/dashboard/approvals', $mode );
 				$note = esc_html(
 					sprintf(
 						/* translators: %s: amount. */
@@ -271,6 +310,28 @@ final class Tendr_Refunds {
 		} finally {
 			Tendr_Order_Sync::unlock_order( $order_id );
 		}//end try
+	}
+
+	/**
+	 * Why a refund waits for a person, from tendr's `review_reason` (C6).
+	 *
+	 * @param string $reason Review reason ('' when tendr gave none).
+	 */
+	private static function review_reason_text( string $reason ): string {
+		switch ( $reason ) {
+			case 'needs_swap_route':
+				return __( 'The shopper paid from another chain than your settlement asset\'s: someone on your team must choose the swap route in tendr.', 'tendr' );
+			case 'no_sender':
+				return __( 'tendr does not know the wallet that paid: someone on your team must enter where to send the refund in tendr.', 'tendr' );
+			case 'unsupported_chain':
+				return __( 'tendr cannot send to the chain the shopper paid from: someone on your team must choose another destination in tendr.', 'tendr' );
+			case 'sanctions':
+				return __( 'The wallet that paid failed sanctions screening: someone on your team must review it in tendr (a legal acknowledgement is required).', 'tendr' );
+			case 'price_unavailable':
+				return __( 'tendr could not price the refund in your settlement asset: someone on your team must retry it in tendr.', 'tendr' );
+			default:
+				return __( 'Refunds are paid in your settlement asset: when the shopper paid from another chain or from an exchange, someone on your team must choose the route or the address in tendr first.', 'tendr' );
+		}
 	}
 
 	// ------------------------------------------------------------------ events.
@@ -472,8 +533,12 @@ final class Tendr_Refunds {
 			wc_restock_refunded_items( $order, $req['line_items'] );
 		}
 
-		/* translators: %s: amount. */
-		$text  = esc_html( sprintf( __( 'Refund of %s sent by tendr.', 'tendr' ), $money ) );
+		$tokens = self::token_amount( $row );
+		$text   = '' !== $tokens && ! str_contains( $tokens, '(' )
+			/* translators: 1: amount in the order currency, 2: token amount, e.g. "10.05 USDC". */
+			? esc_html( sprintf( __( 'Refund of %1$s sent by tendr (%2$s, network cost included).', 'tendr' ), $money, $tokens ) )
+			/* translators: %s: amount. */
+			: esc_html( sprintf( __( 'Refund of %s sent by tendr.', 'tendr' ), $money ) );
 		$text .= self::transaction_text( $row, $event );
 		/* translators: %s: tendr refund id. */
 		$text .= ' ' . esc_html( sprintf( __( 'tendr refund %s.', 'tendr' ), $req['refund_id'] ) );
@@ -511,12 +576,11 @@ final class Tendr_Refunds {
 		$order->update_meta_data( self::UNTRACKED_META, array_slice( $noted, -50 ) );
 		$order->save_meta_data();
 
-		$amount = isset( $row['amount'] ) && is_scalar( $row['amount'] ) ? (string) $row['amount'] : '';
-		$asset  = isset( $row['asset_id'] ) && is_string( $row['asset_id'] ) ? $row['asset_id'] : '';
 		$text   = esc_html__( 'tendr sent a refund for this order that was not requested from WooCommerce (for example, from the tendr dashboard).', 'tendr' );
-		if ( '' !== $amount ) {
-			/* translators: 1: amount in token base units, 2: token (asset id). */
-			$text .= ' ' . esc_html( sprintf( __( 'Amount: %1$s (token base units) of %2$s.', 'tendr' ), $amount, $asset ) );
+		$tokens = self::token_amount( $row );
+		if ( '' !== $tokens ) {
+			/* translators: %s: token amount, e.g. "1.25 USDC". */
+			$text .= ' ' . esc_html( sprintf( __( 'Amount: %s.', 'tendr' ), $tokens ) );
 		}
 		$text .= self::transaction_text( $row, $event );
 		/* translators: %s: tendr refund id. */
@@ -524,6 +588,30 @@ final class Tendr_Refunds {
 		$text .= ' ' . esc_html__( 'WooCommerce has not recorded it: add the refund to this order by hand (Refund, then "Refund manually") so the totals match.', 'tendr' );
 		Tendr_Order_Sync::note( $order, $event, $text );
 		return 'applied';
+	}
+
+	/**
+	 * A refund row's amount as "1.25 USDC" when tendr names the asset's symbol and decimals (C6),
+	 * else "<base units> (token base units) of <asset id>", or ''.
+	 *
+	 * @param array $row The refund in the session view.
+	 */
+	private static function token_amount( array $row ): string {
+		$amount = isset( $row['amount'] ) && is_scalar( $row['amount'] ) ? (string) $row['amount'] : '';
+		if ( ! preg_match( '/^\d+$/', $amount ) ) {
+			return '';
+		}
+		$symbol   = isset( $row['asset_symbol'] ) && is_string( $row['asset_symbol'] ) && preg_match( '/^[A-Za-z0-9.$_-]{1,16}$/', $row['asset_symbol'] ) ? $row['asset_symbol'] : '';
+		$decimals = isset( $row['asset_decimals'] ) && is_int( $row['asset_decimals'] ) && $row['asset_decimals'] >= 0 && $row['asset_decimals'] <= 36 ? $row['asset_decimals'] : null;
+		if ( '' !== $symbol && null !== $decimals ) {
+			$padded = str_pad( $amount, $decimals + 1, '0', STR_PAD_LEFT );
+			$whole  = 0 === $decimals ? $padded : substr( $padded, 0, -$decimals );
+			$frac   = 0 === $decimals ? '' : rtrim( substr( $padded, -$decimals ), '0' );
+			return $whole . ( '' !== $frac ? '.' . $frac : '' ) . ' ' . $symbol;
+		}
+		$asset = isset( $row['asset_id'] ) && is_string( $row['asset_id'] ) ? $row['asset_id'] : '';
+		/* translators: 1: amount in token base units, 2: token (asset id). */
+		return sprintf( __( '%1$s (token base units) of %2$s', 'tendr' ), $amount, $asset );
 	}
 
 	/**
@@ -578,6 +666,170 @@ final class Tendr_Refunds {
 			}
 		}
 		return null;
+	}
+
+	// ------------------------------------------------------------------ reconciling.
+
+	/**
+	 * C5: after any verified event of the order (whatever its type), compare the order's open
+	 * requests with the fresh session view, so a request stops reserving its amount once tendr
+	 * says it will never be sent. Only requests of a payment the view lists are judged:
+	 * - tendr lists it (by refund id, or by its external_ref for one never confirmed): adopt the
+	 *   id; `cancelled` there → cancelled here (note);
+	 * - tendr does not list it, LAPSE_AFTER after it was asked: lapsed (note).
+	 * A sent refund is left to `refund.sent`, which records it. Called under the order lock.
+	 *
+	 * @param WC_Order|false $order Order.
+	 * @param array          $event Verified event.
+	 * @param array          $view  The session as re-read from the API.
+	 */
+	public static function reconcile( $order, array $event, array $view ): void {
+		if ( ! $order instanceof WC_Order ) {
+			return;
+		}
+		$requests = self::requests( $order );
+		$changed  = false;
+		foreach ( $requests as $ext => $req ) {
+			if ( ! in_array( $req['state'], self::OPEN_STATES, true ) ) {
+				continue;
+			}
+			$refunds = self::refunds_of_payment( $view, (string) $req['payment_id'] );
+			if ( null === $refunds ) {
+				// Another session's payment: this view cannot tell.
+				continue;
+			}
+			$row = null;
+			foreach ( $refunds as $candidate ) {
+				$by_id  = '' !== $req['refund_id'] && ( $candidate['id'] ?? null ) === $req['refund_id'];
+				$by_ref = '' === $req['refund_id'] && ( $candidate['refund_external_ref'] ?? null ) === $ext;
+				if ( $by_id || $by_ref ) {
+					$row = $candidate;
+					break;
+				}
+			}
+			$money = self::money( $order, $req['amount'] );
+			if ( null === $row ) {
+				if ( time() - (int) $req['requested_at'] < self::LAPSE_AFTER ) {
+					continue;
+				}
+				$req['state'] = 'lapsed';
+				Tendr_Order_Sync::note(
+					$order,
+					$event,
+					esc_html(
+						sprintf(
+							/* translators: 1: amount, 2: refund reference. */
+							__( 'tendr has no record of the refund request of %1$s (%2$s): nothing was refunded, and it no longer counts against what can be refunded.', 'tendr' ),
+							$money,
+							$ext
+						)
+					)
+				);
+			} else {
+				if ( '' === $req['refund_id'] && is_string( $row['id'] ?? null ) ) {
+					$req['refund_id'] = $row['id'];
+					$req['state']     = 'pending';
+				}
+				$status = $row['merchant_status'] ?? null;
+				if ( 'cancelled' === $status ) {
+					$req['state'] = 'cancelled';
+					Tendr_Order_Sync::note(
+						$order,
+						$event,
+						/* translators: %s: amount. */
+						esc_html( sprintf( __( 'The refund of %s was closed in tendr without being sent: nothing was refunded, and it no longer counts against what can be refunded.', 'tendr' ), $money ) )
+					);
+				} elseif ( 'review' === $status && 'pending' === $req['state'] ) {
+					$req['state'] = 'review';
+				}
+			}//end if
+			$requests[ $ext ] = $req;
+			$changed          = true;
+		}//end foreach
+		if ( $changed ) {
+			self::save_requests( $order, $requests );
+		}
+	}
+
+	/**
+	 * The refund rows of payment `$payment_id` in a session view, or null when the view does not
+	 * list that payment.
+	 *
+	 * @param array  $view       Session view.
+	 * @param string $payment_id Payment id.
+	 * @return array<int, array>|null
+	 */
+	private static function refunds_of_payment( array $view, string $payment_id ): ?array {
+		foreach ( ( isset( $view['payments'] ) && is_array( $view['payments'] ) ) ? $view['payments'] : array() as $payment ) {
+			if ( is_array( $payment ) && '' !== $payment_id && ( $payment['id'] ?? null ) === $payment_id ) {
+				$rows = isset( $payment['refunds'] ) && is_array( $payment['refunds'] ) ? $payment['refunds'] : array();
+				return array_values( array_filter( $rows, 'is_array' ) );
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * C5: a store manager dismisses a request tendr never confirmed (its answer was lost and
+	 * nothing has said since whether tendr has it): it stops counting against what can be
+	 * refunded. If tendr did have it after all, its `refund.sent` still records it.
+	 *
+	 * @param int    $order_id Order id.
+	 * @param string $ext      The request's external_ref.
+	 * @return true|WP_Error
+	 */
+	public static function dismiss( int $order_id, string $ext ) {
+		if ( ! current_user_can( 'manage_woocommerce' ) ) {
+			return new WP_Error( 'tendr_refund_forbidden', __( 'You are not allowed to change refunds.', 'tendr' ) );
+		}
+		if ( ! Tendr_Order_Sync::lock_order( $order_id ) ) {
+			return new WP_Error( 'tendr_refund_busy', __( 'This order is being updated by tendr right now. Try again in a moment.', 'tendr' ) );
+		}
+		try {
+			$order    = wc_get_order( $order_id );
+			$requests = $order instanceof WC_Order ? self::requests( $order ) : array();
+			$req      = $requests[ $ext ] ?? null;
+			if ( ! $order instanceof WC_Order || null === $req || 'unconfirmed' !== $req['state'] ) {
+				return new WP_Error( 'tendr_refund_not_dismissable', __( 'Only a refund request tendr never confirmed can be dismissed.', 'tendr' ) );
+			}
+			$req['state']     = 'dismissed';
+			$requests[ $ext ] = $req;
+			self::save_requests( $order, $requests );
+			$user = wp_get_current_user();
+			$order->add_order_note(
+				esc_html(
+					sprintf(
+						/* translators: 1: amount, 2: refund reference, 3: user name. */
+						__( 'The unconfirmed refund request of %1$s (%2$s) was dismissed by %3$s: it no longer counts against what can be refunded. If tendr sends it after all, this order is still updated.', 'tendr' ),
+						self::money( $order, $req['amount'] ),
+						$ext,
+						$user->display_name
+					)
+				)
+			);
+			return true;
+		} finally {
+			Tendr_Order_Sync::unlock_order( $order_id );
+		}//end try
+	}
+
+	/**
+	 * `admin-post.php?action=tendr_dismiss_refund` (POST from the order screen, nonce, capability).
+	 */
+	public static function handle_dismiss_request(): void {
+		$nonce    = isset( $_POST['tendr_dismiss_refund_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['tendr_dismiss_refund_nonce'] ) ) : '';
+		$order_id = isset( $_POST['tendr_dismiss_order'] ) ? absint( $_POST['tendr_dismiss_order'] ) : 0;
+		$ext      = isset( $_POST['tendr_dismiss_refund'] ) ? sanitize_text_field( wp_unslash( $_POST['tendr_dismiss_refund'] ) ) : '';
+		if ( ! wp_verify_nonce( $nonce, self::DISMISS_NONCE . '_' . $order_id ) || ! current_user_can( 'manage_woocommerce' ) ) {
+			wp_die( esc_html__( 'You are not allowed to do that.', 'tendr' ), 403 );
+		}
+		$result = self::dismiss( $order_id, $ext );
+		if ( is_wp_error( $result ) ) {
+			wp_die( esc_html( $result->get_error_message() ), 409 );
+		}
+		$order = wc_get_order( $order_id );
+		wp_safe_redirect( $order instanceof WC_Order ? $order->get_edit_order_url() : admin_url() );
+		exit;
 	}
 
 	// ------------------------------------------------------------------ state.
@@ -653,8 +905,9 @@ final class Tendr_Refunds {
 		if ( ! $order instanceof WC_Order ) {
 			return;
 		}
-		$lines = array();
-		foreach ( self::requests( $order ) as $req ) {
+		$lines   = array();
+		$dismiss = array();
+		foreach ( self::requests( $order ) as $ext => $req ) {
 			$money = self::money( $order, $req['amount'] );
 			switch ( $req['state'] ) {
 				case 'pending':
@@ -667,7 +920,8 @@ final class Tendr_Refunds {
 					break;
 				case 'unconfirmed':
 					/* translators: %s: amount. */
-					$lines[] = sprintf( __( '%s: not confirmed by tendr; check the tendr dashboard', 'tendr' ), $money );
+					$lines[]                        = sprintf( __( '%s: not confirmed by tendr; check the tendr dashboard', 'tendr' ), $money );
+					$dismiss[ count( $lines ) - 1 ] = $ext;
 					break;
 			}
 		}
@@ -676,8 +930,21 @@ final class Tendr_Refunds {
 		}
 		echo '<div class="notice notice-info inline tendr-pending-refunds" style="clear:both;margin:12px 0 0;"><p><strong>'
 			. esc_html__( 'Refunds not yet sent (not counted in the totals):', 'tendr' ) . '</strong></p><ul>';
-		foreach ( $lines as $line ) {
-			echo '<li>' . esc_html( $line ) . '</li>';
+		$action = add_query_arg( 'action', 'tendr_dismiss_refund', admin_url( 'admin-post.php' ) );
+		$nonce  = false;
+		foreach ( $lines as $i => $line ) {
+			echo '<li>' . esc_html( $line );
+			if ( isset( $dismiss[ $i ] ) && current_user_can( 'manage_woocommerce' ) ) {
+				if ( ! $nonce ) {
+					// The box sits inside the order form: the button posts it to its own action.
+					wp_nonce_field( self::DISMISS_NONCE . '_' . $order->get_id(), 'tendr_dismiss_refund_nonce' );
+					echo '<input type="hidden" name="tendr_dismiss_order" value="' . esc_attr( (string) $order->get_id() ) . '">';
+					$nonce = true;
+				}
+				echo ' <button type="submit" class="button button-small" formmethod="post" formaction="' . esc_url( $action ) . '" name="tendr_dismiss_refund" value="' . esc_attr( $dismiss[ $i ] ) . '">'
+					. esc_html__( 'Dismiss', 'tendr' ) . '</button>';
+			}
+			echo '</li>';
 		}
 		echo '</ul></div>';
 	}
