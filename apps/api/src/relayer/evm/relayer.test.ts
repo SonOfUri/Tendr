@@ -495,6 +495,99 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
     });
   });
 
+  describe('a confirmed relay waits for its payment to be collected (N4)', () => {
+    it('re-quote after the deadline keeps the hold, no loss; the old quote is then collected and settled', async () => {
+      const { s, q, signatures, sponsorshipId: oldId } = await sponsoredQuote();
+      const res = await relayer.submit(q, { signatures });
+      node.mine(res.txHash!, 1, 80_000n, [tendrPaid(q, 0n)]);
+      await pollEvmRelays(sender);
+      // Mined near its deadline; the watcher has not detected the deposit yet. The shopper re-quotes.
+      await prisma.quote.update({
+        where: { id: q.quote.id },
+        data: { deadline: new Date(Date.now() - 1000) },
+      });
+      const fresh = await requote(s.client_secret);
+      let old = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: oldId } });
+      expect(old).toMatchObject({
+        status: 'confirmed',
+        reservationState: 'reserved',
+        sponsor: 'merchant',
+      });
+      expect(old.lossRecognizedAt).toBeNull();
+      expect(await releaseEndedSessionReservations()).toBe(0);
+
+      // The relayed deposit is detected and collected on the old quote.
+      await sim.simulate(q.quote.depositAddress, 'exact', { senderAddress: shopper.address });
+      await pollDeposit(q.quote.depositAddress, { livemode: false });
+      const p = await prisma.payment.findFirstOrThrow({ where: { quoteId: q.quote.id } });
+      expect(p.status).toBe('SETTLED');
+      old = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: oldId } });
+      expect(old).toMatchObject({ reservationState: 'settled', recoveredFromPaymentId: p.id });
+      expect(old.lossRecognizedAt).toBeNull();
+      // The unused re-quote's hold is released, with no loss (nothing was relayed).
+      const neu = await prisma.gasSponsorship.findUniqueOrThrow({
+        where: { id: fresh.gasSponsorshipId! },
+      });
+      expect(neu).toMatchObject({ reservationState: 'released', sponsor: 'merchant' });
+      expect((await month()).spentUsd.toFixed()).toBe('0.048');
+      expect((await month()).reservedUsd.toFixed()).toBe('0');
+      expect(
+        await prisma.gasSponsorship.count({ where: { lossRecognizedAt: { not: null } } }),
+      ).toBe(0);
+    });
+
+    it('a confirmed relay whose session ends refunded: released with its gas as a loss, once', async () => {
+      const { s, q, signatures, sponsorshipId } = await sponsoredQuote();
+      const res = await relayer.submit(q, { signatures });
+      node.mine(res.txHash!, 1, 80_000n, [tendrPaid(q, 0n)]);
+      await pollEvmRelays(sender);
+      await prisma.session.update({ where: { id: s.id }, data: { status: 'REFUNDED' } });
+      expect(await releaseEndedSessionReservations()).toBe(1);
+      const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+      expect(sp).toMatchObject({ reservationState: 'released', sponsor: 'tendr' });
+      const at = sp.lossRecognizedAt;
+      expect(at).not.toBeNull();
+      expect(await releaseEndedSessionReservations()).toBe(0);
+      expect(
+        (await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } }))
+          .lossRecognizedAt,
+      ).toEqual(at);
+    });
+
+    it('a confirmed relay is not released by the SETTLED sweep', async () => {
+      const { s, q, signatures, sponsorshipId } = await sponsoredQuote();
+      const res = await relayer.submit(q, { signatures });
+      node.mine(res.txHash!, 1, 80_000n, [tendrPaid(q, 0n)]);
+      await pollEvmRelays(sender);
+      await prisma.session.update({ where: { id: s.id }, data: { status: 'SETTLED' } });
+      expect(await releaseEndedSessionReservations()).toBe(0);
+      expect(
+        (await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } }))
+          .reservationState,
+      ).toBe('reserved');
+    });
+  });
+
+  it('the receipt Transfer fallback never books more than the signed fee (N5)', async () => {
+    const { q, signatures } = await sponsoredQuote('shopper');
+    const res = await relayer.submit(q, { signatures });
+    const feeTo = evmAddress((await getKeyVault().publicKey('gas-fees-evm')).raw);
+    const pad = (a: string) => '0x' + a.slice(2).toLowerCase().padStart(64, '0');
+    const transfer = {
+      address: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+      topics: [
+        '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',
+        pad(shopper.address),
+        pad(feeTo),
+      ],
+      data: '0x' + 1_000_000n.toString(16).padStart(64, '0'),
+    };
+    node.mine(res.txHash!, 1, 80_000n, [transfer, tendrPaid(q, 0n)]);
+    await pollEvmRelays(sender);
+    const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: res.submissionId } });
+    expect(sp.feeCollected!.toFixed()).toBe('48000');
+  });
+
   it('fee leg front-run inside the same transaction: the Transfer to the gas-fee address counts (N3)', async () => {
     const { q, signatures } = await sponsoredQuote('shopper');
     const res = await relayer.submit(q, { signatures });

@@ -48,6 +48,26 @@ interface MonthRow {
   count: number;
 }
 
+/**
+ * A relayed hold that cannot be resolved yet (project 5a, ruling T5-c): its relay is still in
+ * flight (`pending` / `submitted`), or it confirmed and the payment it delivered awaits collection
+ * (`confirmed` while still `reserved`: a collected one is `settled`). Such a hold is only settled
+ * at that payment's collection, or released (with the gas as Tendr's loss) when the session ends
+ * expired or refunded. Every release path skips it.
+ */
+export function holdAwaitingResolution(sp: { quoteId: string | null; status: string }): boolean {
+  return (
+    sp.quoteId !== null &&
+    (sp.status === 'pending' || sp.status === 'submitted' || sp.status === 'confirmed')
+  );
+}
+
+/** `holdAwaitingResolution` as a Prisma filter (wrap in `NOT` to exclude such holds). */
+export const HOLD_AWAITING_RESOLUTION: Prisma.GasSponsorshipWhereInput = {
+  quoteId: { not: null },
+  status: { in: ['pending', 'submitted', 'confirmed'] },
+};
+
 /** Creates the month's row if absent, then locks it for the rest of the transaction. */
 async function lockMonth(tx: Tx, scope: ScopeContext, month: string): Promise<MonthRow> {
   await tx.gasBudgetMonth.createMany({
@@ -158,14 +178,13 @@ export async function reserveBudget(
     FOR UPDATE`;
   if (session.length === 0) throw new Error(`reserveBudget: session ${input.sessionId} not found`);
 
-  // A hold whose relay is still in flight is kept: its outcome (and any gas lost) is settled by
-  // the relayer's own paths (project 5a, ruling T5-c).
+  // A relayed hold awaiting its outcome or its payment's collection is kept (ruling T5-c).
   const previous = await tx.gasSponsorship.findMany({
     where: {
       ...scope,
       sessionId: input.sessionId,
       reservationState: 'reserved',
-      NOT: { quoteId: { not: null }, status: { in: ['pending', 'submitted'] } },
+      NOT: HOLD_AWAITING_RESOLUTION,
     },
     select: { id: true },
   });

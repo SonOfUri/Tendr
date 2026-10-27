@@ -84,12 +84,13 @@ export async function pollEvmRelays(sender: EvmSender = liveEvmSender()): Promis
         if (o.status === 'confirmed') {
           const sp = await prisma.gasSponsorship.findUnique({
             where: { id: o.refId },
-            select: { feeAsset: true },
+            select: { feeAsset: true, feeAmount: true },
           });
           const token = sp?.feeAsset ? evmTokenAddress(sp.feeAsset) : null;
           feeMoved = feeMovedFrom(o.logs, {
             forwarder: evmForwarderAddress(),
             ...(token ? { token, feeTo: await evmGasFeeAddress() } : {}),
+            ...(sp?.feeAmount ? { cap: BigInt(sp.feeAmount.toFixed(0)) } : {}),
           });
         }
         await applyRelayOutcome(o.refId, {
@@ -256,7 +257,7 @@ const TRANSFER_TOPIC0 = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55
  */
 export function feeMovedFrom(
   logs: { address?: string; topics: string[]; data: string }[],
-  where: { forwarder: string; token?: string; feeTo?: string },
+  where: { forwarder: string; token?: string; feeTo?: string; cap?: bigint },
 ): bigint {
   let fee = 0n;
   for (const l of logs) {
@@ -281,7 +282,8 @@ export function feeMovedFrom(
       continue;
     }
   }
-  return fee;
+  // Never more than the fee the shopper signed.
+  return where.cap !== undefined && fee > where.cap ? where.cap : fee;
 }
 
 /** Drops the cached relayers (tests). */

@@ -200,6 +200,38 @@ describe('gas budget reservations', () => {
     expect(row?.count).toBe(1);
   });
 
+  it('a new reservation keeps a hold whose relay is in flight or awaits collection', async () => {
+    const m = await setup('50');
+    const s = await session(m.id);
+    const quote = await createRow('Quote', m.id, false, { sessionId: s });
+    for (const status of ['submitted', 'confirmed'] as const) {
+      const held = await reserve(m.id, s, '0.5');
+      await prisma.gasSponsorship.update({
+        where: { id: held!.sponsorshipId },
+        data: { quoteId: quote.id as string, status },
+      });
+      const next = await reserve(m.id, s, '0.3');
+      const kept = await prisma.gasSponsorship.findUniqueOrThrow({
+        where: { id: held!.sponsorshipId },
+      });
+      expect(kept.reservationState).toBe('reserved');
+      // The fresh, unrelayed reservation is still replaced as before.
+      await prisma.$transaction((tx) => releaseReservation(tx, next!.sponsorshipId));
+      await prisma.$transaction((tx) => releaseReservation(tx, held!.sponsorshipId));
+    }
+    // A relay that failed no longer holds it back.
+    const failed = await reserve(m.id, s, '0.5');
+    await prisma.gasSponsorship.update({
+      where: { id: failed!.sponsorshipId },
+      data: { quoteId: quote.id as string, status: 'failed' },
+    });
+    await reserve(m.id, s, '0.3');
+    expect(
+      (await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: failed!.sponsorshipId } }))
+        .reservationState,
+    ).toBe('released');
+  });
+
   it('refuses a session of another merchant or mode', async () => {
     const m = await setup();
     const other = await createMerchant();

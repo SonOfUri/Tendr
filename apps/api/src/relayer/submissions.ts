@@ -34,7 +34,12 @@ import { Prisma, type Quote } from '@prisma/client';
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { providerFor } from '../checkout/oneclick/index.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
-import { releaseReservation, settleReservation } from '../gas/budget.js';
+import {
+  HOLD_AWAITING_RESOLUTION,
+  holdAwaitingResolution,
+  releaseReservation,
+  settleReservation,
+} from '../gas/budget.js';
 import { recognizeTendrLoss } from '../gas/loss-cap.js';
 import { gasProvider } from '../gas/quote-fee.js';
 import { AppError, notFound } from '../lib/errors.js';
@@ -560,9 +565,9 @@ export async function onPaymentCollected(
     }
   }
   if (!session) return;
-  // The session is paid: holds of its other (superseded) quotes will never be collected. Release
-  // them; gas their relays spent is Tendr's loss. A relay still in flight is left to the
-  // session-end sweep, which waits for its outcome.
+  // The session is paid: holds of its other (superseded) quotes will not be collected through
+  // this payment. Release them; gas their relays spent is Tendr's loss. A hold awaiting its relay
+  // or its own payment's collection is kept (`holdAwaitingResolution`).
   const others = await tx.gasSponsorship.findMany({
     where: {
       ...scope,
@@ -572,14 +577,14 @@ export async function onPaymentCollected(
     },
   });
   for (const o of others) {
-    if (inFlight(o)) continue;
+    if (holdAwaitingResolution(o)) continue;
     await releaseHold(tx, scope, o, new Date());
   }
 }
 
 /**
  * A re-quote replaced the quote holding `sponsorshipId`: release its hold (gas a failed relay of
- * it spent is Tendr's loss). A relay still in flight keeps its hold for the session-end sweep.
+ * it spent is Tendr's loss). A hold awaiting its relay or its payment's collection is kept.
  */
 export async function releaseReplacedHold(
   tx: Tx,
@@ -588,13 +593,8 @@ export async function releaseReplacedHold(
   now: Date,
 ): Promise<void> {
   const sp = await tx.gasSponsorship.findFirst({ where: { ...scope, id: sponsorshipId } });
-  if (!sp || sp.reservationState !== 'reserved' || inFlight(sp)) return;
+  if (!sp || sp.reservationState !== 'reserved' || holdAwaitingResolution(sp)) return;
   await releaseHold(tx, scope, sp, now);
-}
-
-/** A sponsorship whose relay has not reached a final outcome. */
-function inFlight(sp: { quoteId: string | null; status: string }): boolean {
-  return sp.quoteId !== null && (sp.status === 'pending' || sp.status === 'submitted');
 }
 
 /**
@@ -621,11 +621,21 @@ async function releaseHold(
 }
 
 /**
- * Final session statuses. A hold still `reserved` on one of them is never collected: refunded or
- * expired sessions collected nothing, and a settled session's collected quote was settled already
- * (`onPaymentCollected`), so what is left belongs to a superseded quote.
+ * Final session statuses. Refunded or expired sessions collected nothing: every hold whose relay
+ * is final is released, a confirmed one included (its gas is Tendr's loss). On a settled session
+ * the collected quote's hold was settled in the same transaction, so a hold left there belongs to
+ * a superseded quote: released unless it still awaits its relay or its own payment's collection.
  */
 const ENDED_UNCOLLECTED = ['EXPIRED', 'REFUNDED', 'SETTLED'] as const;
+const ENDED_NOTHING_COLLECTED = ['EXPIRED', 'REFUNDED'];
+
+/** Whether the session-end sweep must still wait for this hold. */
+function sweepMustWait(sessionStatus: string, sp: { quoteId: string | null; status: string }) {
+  if (ENDED_NOTHING_COLLECTED.includes(sessionStatus)) {
+    return sp.quoteId !== null && (sp.status === 'pending' || sp.status === 'submitted');
+  }
+  return holdAwaitingResolution(sp);
+}
 
 /**
  * Releases reservations still held by sessions that ended refunded or expired (the payment's
@@ -638,8 +648,13 @@ export async function releaseEndedSessionReservations(now: Date = new Date()): P
   const rows = await prisma.gasSponsorship.findMany({
     where: {
       reservationState: 'reserved',
-      session: { status: { in: [...ENDED_UNCOLLECTED] } },
-      NOT: { quoteId: { not: null }, status: { in: ['pending', 'submitted'] } },
+      OR: [
+        {
+          session: { status: { in: ['EXPIRED', 'REFUNDED'] } },
+          NOT: { quoteId: { not: null }, status: { in: ['pending', 'submitted'] } },
+        },
+        { session: { status: 'SETTLED' }, NOT: HOLD_AWAITING_RESOLUTION },
+      ],
     },
     select: { id: true, merchantId: true, livemode: true, sessionId: true },
     take: 500,
@@ -652,9 +667,10 @@ export async function releaseEndedSessionReservations(now: Date = new Date()): P
         const locked = await tx.$queryRaw<{ status: string }[]>`
           SELECT status::text AS status FROM sessions WHERE id = ${r.sessionId}
           AND merchant_id = ${scope.merchantId} AND livemode = ${scope.livemode} FOR UPDATE`;
-        if (!ENDED_UNCOLLECTED.some((st) => st === locked[0]?.status)) return false;
+        const status = locked[0]?.status ?? '';
+        if (!ENDED_UNCOLLECTED.some((st) => st === status)) return false;
         const sp = await tx.gasSponsorship.findFirstOrThrow({ where: { ...scope, id: r.id } });
-        if (sp.reservationState !== 'reserved' || inFlight(sp)) return false;
+        if (sp.reservationState !== 'reserved' || sweepMustWait(status, sp)) return false;
         return releaseHold(tx, scope, sp, now);
       });
       if (did) released++;
