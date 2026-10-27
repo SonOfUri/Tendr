@@ -212,8 +212,31 @@ enum SponsorshipMethod {
   paymaster_erc20
   energy
   fee_payer
+  /// The Tendr payment forwarder (EIP-2612 permit, or Tron exact approve, + signed TendrPayment).
+  forwarder
+  /// NEAR NEP-366 meta-transaction (signed delegate action) relayed by `relayer-near`.
+  meta_tx
+  /// Pimlico's Solana paymaster (Kora).
+  kora
 
   @@map("sponsorship_method")
+}
+
+/// How a shopper-paid network fee is paid: in the payment token (gasless) or the chain's coin.
+enum FeeMode {
+  token
+  native
+
+  @@map("fee_mode")
+}
+
+/// A sponsorship's hold on the merchant's monthly gas budget.
+enum GasReservationState {
+  reserved
+  settled
+  released
+
+  @@map("gas_reservation_state")
 }
 
 enum Sponsor {
@@ -496,6 +519,7 @@ model Merchant {
   payoutAllowlist             PayoutAllowlistEntry[]
   webhookEndpoints            WebhookEndpoint[]
   gasPolicies                 GasPolicy[]
+  gasBudgetMonths             GasBudgetMonth[]
   paymentLinks                PaymentLink[]
   sessions                    Session[]
   quotes                      Quote[]
@@ -864,8 +888,31 @@ model GasPolicy {
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
 
+  @@unique([merchantId, livemode])
   @@index([merchantId])
   @@map("gas_policies")
+}
+
+/// A merchant's gas budget use for one calendar month (UTC) in one mode (spec 5a §2.2).
+/// `reservedUsd` is held by sponsorships not yet settled, `spentUsd` is settled; a reservation
+/// only succeeds while reserved + spent + the new amount stays within the policy's budget.
+model GasBudgetMonth {
+  id          String   @id
+  merchantId  String   @map("merchant_id")
+  livemode    Boolean
+  /// `YYYY-MM`
+  month       String
+  reservedUsd Decimal  @default(0) @map("reserved_usd") @db.Decimal(18, 6)
+  spentUsd    Decimal  @default(0) @map("spent_usd") @db.Decimal(18, 6)
+  /// Sponsorships charged to this month (reserved or settled).
+  count       Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@unique([merchantId, livemode, month])
+  @@map("gas_budget_months")
 }
 
 // ─── Payments core ──────────────────────────────────────────────────────────
@@ -1075,6 +1122,7 @@ model Payment {
   refunds                  Refund[]
   revenueEntries           RevenueEntry[]
   recoveredGasSponsorships GasSponsorship[]
+  hookCalls                HookCall[]
   settlementClaims         SettlementClaim[]
 
   @@unique([id, merchantId, livemode])
@@ -1199,39 +1247,61 @@ model HookCall {
   merchantId     String           @map("merchant_id")
   livemode       Boolean
   sessionId      String           @map("session_id")
+  /// The settled payment this call notifies the integrator's contract of.
+  paymentId      String           @map("payment_id")
   chain          String
   targetContract String           @map("target_contract")
+  /// The session's `hook_data`, as sent in the call.
+  hookData       Json             @map("hook_data")
   txHash         String?          @map("tx_hash")
   attempt        Int              @default(0)
   status         ExternalTxStatus @default(pending)
+  /// When the next attempt is due (retry backoff); null once the call is done.
+  nextRetryAt    DateTime?        @map("next_retry_at")
+  /// A worker's claim on the call (at most one attempt in flight).
+  leaseUntil     DateTime?        @map("lease_until")
+  /// The last failure (e.g. the revert reason).
+  lastError      String?          @map("last_error")
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
   session  Session  @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  payment  Payment  @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([merchantId])
   @@index([sessionId])
+  @@index([paymentId])
+  @@index([status, nextRetryAt])
   @@map("hook_calls")
 }
 
 model GasSponsorship {
-  id                     String            @id
-  merchantId             String            @map("merchant_id")
+  id                     String               @id
+  merchantId             String               @map("merchant_id")
   livemode               Boolean
-  sessionId              String            @map("session_id")
+  sessionId              String               @map("session_id")
   chain                  String
-  txHash                 String?           @map("tx_hash")
+  txHash                 String?              @map("tx_hash")
   method                 SponsorshipMethod
   provider               String
-  userOpHash             String?           @map("user_op_hash")
+  userOpHash             String?              @map("user_op_hash")
   sponsor                Sponsor
-  gasUsed                Decimal?          @map("gas_used") @db.Decimal(78, 0)
-  costUsd                Decimal?          @map("cost_usd") @db.Decimal(18, 6)
-  recoveredFromPaymentId String?           @map("recovered_from_payment_id")
-  status                 ExternalTxStatus  @default(pending)
-  createdAt              DateTime          @default(now()) @map("created_at")
-  updatedAt              DateTime          @updatedAt @map("updated_at")
+  gasUsed                Decimal?             @map("gas_used") @db.Decimal(78, 0)
+  costUsd                Decimal?             @map("cost_usd") @db.Decimal(18, 6)
+  recoveredFromPaymentId String?              @map("recovered_from_payment_id")
+  status                 ExternalTxStatus     @default(pending)
+  /// Shopper-paid fee: how it was paid; null when the merchant sponsors.
+  feeMode                FeeMode?             @map("fee_mode")
+  /// Shopper-paid token fee: the asset (1Click id) and amount (base units) signed.
+  feeAsset               String?              @map("fee_asset")
+  feeAmount              Decimal?             @map("fee_amount") @db.Decimal(78, 0)
+  /// The quoted network cost (USD): what the merchant is charged when it sponsors (spec §8.1).
+  estimateUsd            Decimal?             @map("estimate_usd") @db.Decimal(18, 6)
+  /// The hold on the monthly gas budget; null when nothing was reserved (shopper-paid).
+  reservationState       GasReservationState? @map("reservation_state")
+  createdAt              DateTime             @default(now()) @map("created_at")
+  updatedAt              DateTime             @updatedAt @map("updated_at")
 
   merchant             Merchant @relation(fields: [merchantId], references: [id])
   session              Session  @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)

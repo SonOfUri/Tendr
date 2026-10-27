@@ -10,6 +10,7 @@ export type IdPrefix =
   | 'pal'
   | 'whe'
   | 'gpol'
+  | 'gbm' // gas_budget_months
   | 'plink'
   | 'ses'
   | 'quo'

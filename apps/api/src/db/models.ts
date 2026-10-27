@@ -7,6 +7,7 @@ export const PER_MODE_MODELS = [
   'PayoutAllowlistEntry',
   'WebhookEndpoint',
   'GasPolicy',
+  'GasBudgetMonth',
   'PaymentLink',
   'Session',
   'Quote',

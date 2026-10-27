@@ -40,7 +40,12 @@ docker run --rm -v "$PWD/infra/terraform:/tf" -w /tf/gcp hashicorp/terraform:1.9
     (`relayer-accounts` pays gas for merchant account contract calls and can move no funds; its
     NEAR implicit account, the hex of its public key, is funded out of band)
   - `relayer-evm`, `gas-tron` — `EC_SIGN_SECP256K1_SHA256`
-  - No EVM or Solana gas keys: that sponsorship goes through Pimlico (an API key stored as a secret).
+  - `gas-fees-evm`, `gas-fees-tron` — `EC_SIGN_SECP256K1_SHA256`; `gas-fees-near`,
+    `gas-fees-solana` — `EC_SIGN_ED25519`. Receive-only accounts for shopper-paid network fees
+    (one `gas-fees-evm` address on every EVM chain); only the fee sweep job signs with them, to
+    swap collected fees to USDC. Kept apart from the relayer keys.
+  - No EVM or Solana gas-paying keys: that sponsorship goes through Pimlico (an API key stored as a
+    secret).
 - `protection_level` defaults to `HSM`. If Cloud KMS rejects an algorithm at HSM level in the chosen
   location, set a per-key fallback in `protection_level_overrides` (e.g.
   `{ "relayer-near" = "SOFTWARE" }`). Run `npm run kms:verify --workspace=@tendr/api` first, with

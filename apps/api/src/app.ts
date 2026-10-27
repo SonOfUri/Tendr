@@ -17,6 +17,7 @@ import {
 } from './routes/checkout-client.js';
 import { checkoutSessionRoutes } from './routes/checkout-sessions.js';
 import { connectRoutes } from './routes/connect.js';
+import { gasRoutes } from './routes/gas.js';
 import { healthRoutes } from './routes/health.js';
 import { merchantSettingsRoutes } from './routes/merchant-settings.js';
 import { merchantRoutes } from './routes/merchants.js';
@@ -230,6 +231,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     verifyRateLimit: limiters.notificationEmailVerify,
   });
   await app.register(connectRoutes, { tokenRateLimit: limiters.connectToken });
+  await app.register(gasRoutes);
   opts.extraRoutes?.(app);
 
   return app;
