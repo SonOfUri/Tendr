@@ -778,6 +778,19 @@ then goes out and WooCommerce records it. To let refunds go out as soon as they 
 refund cap on the dashboard's **Security → Refund cap** ("Ask to set the refund cap"); raising the
 cap is itself a proposal that takes effect 24 hours after approval.
 
+**Known limits (pilot).**
+
+- **Staging clones.** A copy of a connected site carries the original's site id, so its order
+  numbers produce the same `external_ref`s and the API refuses its sessions for orders the
+  original also has. Connect a staging copy to a different store (and keep it in test mode).
+- **Re-connecting to a different store.** Re-connecting hands the old connection over only within
+  the same store. If a site re-connects to another store, its old connection stays live until it
+  is removed under **Settings → Connected sites** of the old store.
+- **Disconnect while a payment is in flight.** Open sessions without a deposit are closed on
+  Disconnect, and pending orders get a note. While the site stays disconnected, WooCommerce's
+  hold-stock run cancels those orders; once it re-connects, an order whose payment belongs to the
+  earlier connection is kept pending with a note. Check the tendr dashboard for such orders.
+
 **Releasing a version.**
 
 1. Bump the version in `tendr-pay-with-crypto.php` (header and `TENDR_VERSION`), the readme's
