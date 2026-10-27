@@ -8,13 +8,13 @@
 // WordPress calls the API at host.docker.internal; the API delivers webhooks to localhost:8892/3.
 //
 // The steps run in order on one store:
-//  1. Connect A through the popup: sign up → store → passkey → recovery kit → approve. No `tdr_` /
-//     `whsec_` string ever appears in any WP admin HTML (checked on every admin response).
-//     Connect B to the same store.
+//  1. Connect A through the popup: sign up → store → passkey → recovery kit → choose payout →
+//     approve. No `tdr_` / `whsec_` string ever appears in any WP admin page or site JSON answer
+//     (checked on every one). Connect B to the same store.
 //  2. Admin purchase in the Blocks checkout → simulate exact → Processing; "You got paid" mailed.
 //  3. An NGN store converts at checkout; the order note has the rate.
 //  4. Refund 0.50 → not refunded → approve in the dashboard → refund.sent → partially refunded.
-//  5. B gets only its own events, none of A's.
+//  5. A and B each get only their own events.
 //  6. Re-connect A → the old key gets 401; then a logged-out guest does not see the method in the
 //     Blocks checkout (test mode); then Disconnect → that key gets 401 too.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -42,8 +42,6 @@ const FRAME = 'iframe[title="Tendr checkout"]';
 const SECRET = /tdr_(test|live|pk)_|whsec_/;
 const REFUND_ALERT =
   'Refund of $0.50 sent to your Tendr signers for approval. WooCommerce will record it once it is sent.';
-/** The settlement asset in test mode (the simulated 1Click fixture USDC on NEAR). */
-const SETTLEMENT_ASSET = 'nep141:usdc.test';
 
 type Credential = Record<string, unknown>;
 
@@ -154,24 +152,44 @@ async function dashboardApi<T>(
   );
 }
 
-/** Watches every WP admin HTML response in `context` for secret-shaped strings. */
-function watchAdminHtml(context: BrowserContext): { seen: string[]; leaks: string[] } {
+/**
+ * Watches every WP admin page and every JSON answer of the two sites (wp-admin, admin-ajax, the
+ * REST API) in `context` for secret-shaped strings. `settled()` waits for every body read.
+ */
+function watchSiteResponses(context: BrowserContext): {
+  seen: string[];
+  leaks: string[];
+  settled: () => Promise<void>;
+} {
   const seen: string[] = [];
   const leaks: string[] = [];
+  const reads: Promise<void>[] = [];
   const sites = Object.values(SITES).map((s) => s.url);
   context.on('response', (res: Response) => {
     const url = res.url();
-    if (!sites.some((s) => url.startsWith(`${s}/wp-admin`))) return;
-    if (!(res.headers()['content-type'] ?? '').includes('text/html')) return;
-    void res
-      .text()
-      .then((html) => {
-        seen.push(url);
-        if (SECRET.test(html)) leaks.push(url);
-      })
-      .catch(() => undefined);
+    if (!sites.some((s) => url.startsWith(`${s}/wp-admin`) || url.startsWith(`${s}/wp-json`))) {
+      return;
+    }
+    const type = res.headers()['content-type'] ?? '';
+    if (!type.includes('text/html') && !type.includes('json')) return;
+    reads.push(
+      res
+        .text()
+        .then((body) => {
+          seen.push(url);
+          if (SECRET.test(body)) leaks.push(url);
+        })
+        // A page replaced before its body was read (a redirect, a reload): nothing to scan.
+        .catch(() => undefined),
+    );
   });
-  return { seen, leaks };
+  return {
+    seen,
+    leaks,
+    settled: async () => {
+      await Promise.allSettled(reads);
+    },
+  };
 }
 
 async function login(page: Page, site: SiteId): Promise<void> {
@@ -323,7 +341,7 @@ test.describe.serial('WooCommerce plugin', () => {
   let admin: Page;
   let adminB: Page;
   let dash: Page;
-  let html: { seen: string[]; leaks: string[] };
+  let html: ReturnType<typeof watchSiteResponses>;
   let passkeys: Credential[] = [];
   let keyA = '';
   let paid: { id: number; key: string };
@@ -331,7 +349,7 @@ test.describe.serial('WooCommerce plugin', () => {
   test.beforeAll(async ({ browser }) => {
     context = await browser.newContext();
     await blockExternal(context);
-    html = watchAdminHtml(context);
+    html = watchSiteResponses(context);
     admin = await context.newPage();
   });
   test.afterAll(async () => {
@@ -374,7 +392,14 @@ test.describe.serial('WooCommerce plugin', () => {
     await popup.getByRole('button', { name: 'I’ve saved it' }).click();
     await popup.getByLabel(/second group of your kit/).fill(groups[1]!);
     await popup.getByRole('button', { name: 'Confirm and turn on' }).click();
+    // Choose payout (spec §2): USDC is preselected; the owner approves it with the passkey, and
+    // with one signer it takes effect at once. (The step waits for the new test account.)
     await expect(popup.getByRole('heading', { name: 'Where your payments go' })).toBeVisible();
+    await expect(popup.getByRole('radio', { name: /USDC/ })).toBeChecked({ timeout: 60_000 });
+    await popup.getByRole('button', { name: 'Approve payout' }).click();
+    await expect(popup.getByText(/Payout set: .* test payments settle in USDC/)).toBeVisible({
+      timeout: 60_000,
+    });
     await popup.getByRole('button', { name: 'Continue' }).click();
 
     // The passkey is reused by the dashboard and the other popups.
@@ -388,39 +413,35 @@ test.describe.serial('WooCommerce plugin', () => {
     expect(keyA).toMatch(/^tdr_test_/);
     expect(await apiStatus('/v1/connect/status', keyA)).toBe(200);
 
-    // Go live reports what is missing, and the site stays in test mode.
+    // The payout chosen in the popup makes the test connection ready (once the account mirrors it).
+    await expect
+      .poll(
+        async () => {
+          const res = await fetch(`${API_URL}/v1/connect/status`, {
+            headers: { authorization: `Bearer ${keyA}` },
+          });
+          return ((await res.json()) as { ready: boolean }).ready;
+        },
+        { message: 'test connection ready', timeout: 60_000 },
+      )
+      .toBe(true);
+
+    // Go live reports precisely what is missing (no live account yet), and the site stays in test.
     await admin.getByRole('button', { name: 'Switch to live mode' }).click();
     await expect(
       admin.getByText('This site stays in test mode until your store is ready to go live:'),
     ).toBeVisible();
+    await expect(admin.getByText('Finish going live on your tendr dashboard')).toBeVisible();
+    await expect(admin.getByText('Add a payout method')).toHaveCount(0);
     await expect(admin.getByText('Test mode', { exact: true })).toBeVisible();
 
-    // The store's payout: settle in test USDC into its own account. The dashboard has no settlement
-    // screen yet, so the proposal is drafted through the API and approved in the dashboard.
+    // The dashboard (for approving refunds later), with the same passkey.
     dash = await context.newPage();
     await authenticator(dash, passkeys);
-    await dash.goto(`${WEB_URL}/dashboard`);
+    await dash.goto(`${WEB_URL}/dashboard/settings/payout`);
     await expect(
-      dash
-        .locator('section.card', { has: dash.getByRole('heading', { name: 'Test account' }) })
-        .getByText('Ready'),
-    ).toBeVisible({ timeout: 60_000 });
-    const draft = await dashboardApi<{ id: string }>(dash, '/v1/account/proposals', {
-      method: 'POST',
-      json: {
-        action: {
-          set_settlement: {
-            dest_asset: SETTLEMENT_ASSET,
-            payout_mode: 'intents',
-            saved_address_id: null,
-          },
-        },
-      },
-    });
-    expect(draft.status, JSON.stringify(draft.body)).toBe(201);
-    await dash.goto(`${WEB_URL}/dashboard/approvals/${draft.body.id}`);
-    await dash.getByRole('button', { name: 'Approve with passkey' }).click();
-    await expect(dash.locator('.card-head .status')).toHaveText('executed');
+      dash.locator('p', { hasText: /test payments settle in USDC into its tendr account/ }),
+    ).toBeVisible();
 
     // Site B connects to the same store: signed in already, so it only picks the store.
     adminB = await context.newPage();
@@ -506,12 +527,13 @@ test.describe.serial('WooCommerce plugin', () => {
         { message: 'refund proposal', timeout: 60_000 },
       )
       .not.toBe('');
+    // Still nothing refunded while the proposal waits for the signers.
+    expect(wpPhp('a', `echo wc_get_order(${paid.id})->get_total_refunded();`)).toBe('0');
     await dash.goto(`${WEB_URL}/dashboard/approvals/${proposalId}`);
     await dash.getByRole('button', { name: 'Approve with passkey' }).click();
     // Above the refund cap a refund is timelocked (5 s in this run, 24 h on chain); the worker
     // then executes it.
     await expect(dash.locator('.card-head .status')).toHaveText(/timelocked|executed/);
-    expect(wpPhp('a', `echo wc_get_order(${paid.id})->get_total_refunded();`)).toBe('0');
 
     // refund.sent reaches WordPress, which records the refund now.
     await expect
@@ -524,7 +546,7 @@ test.describe.serial('WooCommerce plugin', () => {
     expect(orderNotes('a', paid.id)).toContain('Refund of $0.50 sent by tendr');
   });
 
-  test('5. site B receives none of site A’s events', async () => {
+  test('5. sites A and B each receive only their own events', async () => {
     // B takes a payment of its own (the test purchase), so its webhook does work.
     await adminB.goto(settingsUrl('b'));
     await adminB.getByRole('button', { name: 'Make a test purchase' }).click();
@@ -543,7 +565,9 @@ test.describe.serial('WooCommerce plugin', () => {
     const idsB = wpSql('b', 'SELECT event_id FROM wp_tendr_events').map((r) => r[0]);
     expect(idsA.length).toBeGreaterThan(0);
     expect(idsB.length).toBeGreaterThan(0);
+    // Each site gets only its own events, in both directions.
     expect(idsB.filter((id) => idsA.includes(id))).toEqual([]);
+    expect(idsA.filter((id) => idsB.includes(id))).toEqual([]);
   });
 
   test('6. re-connect revokes the old key; a guest never sees the method; disconnect revokes', async ({
@@ -584,8 +608,10 @@ test.describe.serial('WooCommerce plugin', () => {
     expect(await apiStatus('/v1/connect/status', keyA2)).toBe(401);
     expect(testKey('a')).toBe('');
 
-    // Every WP admin page this run loaded was free of secret-shaped strings.
-    expect(html.seen.length).toBeGreaterThan(10);
+    // Every WP admin page and site JSON answer this run loaded was free of secret-shaped strings.
+    await html.settled();
+    expect(html.seen.filter((u) => u.includes('/wp-admin')).length).toBeGreaterThan(10);
+    expect(html.seen.filter((u) => u.includes('/wp-json')).length).toBeGreaterThan(0);
     expect(html.leaks).toEqual([]);
   });
 });

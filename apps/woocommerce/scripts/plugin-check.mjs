@@ -28,6 +28,11 @@ const IGNORED = {
     'The pilot is distributed from usetendr.tech with its own update feed (spec §9); a WordPress.org build must drop includes/class-tendr-updater.php.',
 };
 
+function fail(message) {
+  console.error(`plugin-check: ${message}`);
+  process.exit(1);
+}
+
 function wpCli(args) {
   return execFileSync('npx', ['wp-env', 'run', CONFIG, 'cli', '--', 'wp', ...args], {
     cwd: ROOT,
@@ -52,10 +57,31 @@ const out = wpCli([
 
 const results = [];
 let file = null;
+let blocks = 0;
 for (const line of out.split('\n')) {
   const t = line.trim();
   if (t.startsWith('FILE: ')) file = t.slice('FILE: '.length);
-  else if (t.startsWith('[')) for (const r of JSON.parse(t)) results.push({ file, ...r });
+  else if (t.startsWith('[')) {
+    let rows;
+    try {
+      rows = JSON.parse(t);
+    } catch {
+      fail(`could not parse Plugin Check output line: ${t.slice(0, 200)}`);
+    }
+    if (!Array.isArray(rows)) fail(`unexpected Plugin Check output line: ${t.slice(0, 200)}`);
+    blocks += 1;
+    for (const r of rows) {
+      if (typeof r?.type !== 'string' || typeof r?.code !== 'string') {
+        fail(`unexpected Plugin Check result: ${JSON.stringify(r).slice(0, 200)}`);
+      }
+      results.push({ file, ...r });
+    }
+  }
+}
+// A clean run says so; anything else that parsed to nothing means the format changed, and an
+// empty result must not pass silently.
+if (blocks === 0 && !/No errors found/i.test(out)) {
+  fail(`no results could be read from Plugin Check's output:\n${out.slice(0, 2000)}`);
 }
 
 const errors = results.filter((r) => r.type === 'ERROR');

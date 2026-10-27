@@ -740,9 +740,9 @@ installed on the host.
 The end-to-end test (`apps/web/e2e/woocommerce.spec.ts`) needs Docker plus the e2e Postgres and
 Redis, and runs with `npm run test:e2e:woocommerce --workspace=@tendr/web`. Its global setup builds
 the zip and resets both sites. Each site installs the zip through **Plugins → Add New → Upload**,
-connects through the popup (sign-up, store, passkey, recovery kit, approve), pays in the Blocks
-checkout, converts an NGN order, refunds through a signer approval, checks that the second site
-gets none of the first site's events, re-connects and disconnects (the old keys get 401), and
+connects through the popup (sign-up, store, passkey, recovery kit, choose payout, approve), pays in
+the Blocks checkout, converts an NGN order, refunds through a signer approval, checks that each site
+gets only its own events, re-connects and disconnects (the old keys get 401), and
 checks that a guest never sees the method in test mode. WordPress calls the API at
 `host.docker.internal:4100`; on Linux set `E2E_API_HOST=0.0.0.0` so the API is reachable there.
 
@@ -759,7 +759,24 @@ checks that a guest never sees the method in test mode. WordPress calls the API 
 It offers an update only when the feed's version is greater than the installed one and the
 package is a `.zip` under `/downloads/woocommerce/` on the feed's origin. Before WordPress installs
 it, the plugin downloads the package itself and checks its sha256 against the feed; on a mismatch
-it deletes the file and the update stops.
+it deletes the file and the update stops. The checksum comes from the same origin as the zip, so it
+catches a corrupted or swapped download, not a compromised origin (there is no signature yet). The
+feed origin follows the `TENDR_CHECKOUT_BASE` constant, which only `wp-config.php` can set (a
+staging origin is deliberate).
+
+**Payout.** Connect asks where payments settle (USDC on NEAR by default, or another offered token)
+for a new store, and for a picked store that has none. The owner approves the `set_settlement`
+proposal with their passkey in the popup. When the store needs more signers, the site still
+connects and `GET /v1/connect/status` reports "Add a payout method" until they approve. The same
+choice is on the dashboard's **Settings → Payout** page, per mode (live payout is set there when
+going live).
+
+**Refunds wait 24 hours by default.** A refund clicked in WooCommerce is a `refund` proposal. The
+merchant account timelocks every refund above the asset's daily refund cap, and the cap starts at
+0, so every refund waits 24 hours after the signers approve it (any signer can cancel meanwhile),
+then goes out and WooCommerce records it. To let refunds go out as soon as they are approved, set a
+refund cap on the dashboard's **Security → Refund cap** ("Ask to set the refund cap"); raising the
+cap is itself a proposal that takes effect 24 hours after approval.
 
 **Releasing a version.**
 
@@ -787,7 +804,7 @@ The committed manifest stays the `0.0.0` placeholder until the first release, so
 - [ ] Pay one small live order in each checkout (Blocks and classic) and check the order note,
       the "You got paid" email and the payout.
 - [ ] Refund part of it from WooCommerce: the order stays unrefunded until the signers approve,
-      then shows the refund.
+      then (at the default refund cap of 0) 24 hours more, then shows the refund.
 - [ ] **FX provider for non-USD stores:** live uses Open Exchange Rates (`FX_PROVIDER=openexchangerates`,
       `FX_API_KEY`) on a plan whose rates refresh well inside 10 minutes; see
       [Live checklist (FX for non-USD stores)](#mainnet-checks-for-checkout). Then pay one live
