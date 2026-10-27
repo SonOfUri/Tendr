@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import type { ErrorCode } from '@tendr/contracts';
 
 export class AppError extends Error {
@@ -36,4 +37,22 @@ export function invalidState(message: string) {
 
 export function providerNotConfigured(message: string) {
   return new AppError('PROVIDER_NOT_CONFIGURED', message, 503);
+}
+
+/**
+ * Prisma errors a route can trigger by input alone, mapped to fixed public messages so a
+ * unique-violation or missing-row probe is a 4xx without internal details, never a 500.
+ */
+export const PRISMA_ERRORS: Partial<
+  Record<string, { status: number; code: 'CONFLICT' | 'NOT_FOUND'; message: string }>
+> = {
+  P2002: { status: 409, code: 'CONFLICT', message: 'Resource already exists' },
+  P2025: { status: 404, code: 'NOT_FOUND', message: 'Resource not found' },
+};
+
+/** The public mapping of a known Prisma error (`PRISMA_ERRORS`), or undefined. */
+export function prismaErrorFor(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError
+    ? PRISMA_ERRORS[error.code]
+    : undefined;
 }

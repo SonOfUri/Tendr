@@ -1,5 +1,4 @@
 import cors from '@fastify/cors';
-import { Prisma } from '@prisma/client';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import { env } from './env.js';
@@ -7,7 +6,7 @@ import { auth } from './gateway/auth.js';
 import { idempotency } from './gateway/idempotency.js';
 import { createRateLimiters, type RateLimitKind } from './gateway/rate-limit.js';
 import { closeClient, closeRedis, createRedis, getRedis, whenReady } from './lib/redis.js';
-import { AppError } from './lib/errors.js';
+import { AppError, prismaErrorFor } from './lib/errors.js';
 import { log } from './lib/logger.js';
 import { accountRoutes } from './routes/accounts.js';
 import { authRoutes } from './routes/auth.js';
@@ -52,17 +51,6 @@ const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 export function requestIdFor(header: unknown): string {
   return typeof header === 'string' && REQUEST_ID.test(header) ? header : randomUUID();
 }
-
-/**
- * Prisma errors a route can trigger by input alone, mapped to fixed public messages so a
- * unique-violation or missing-row probe is a 4xx without internal details, never a 500.
- */
-const PRISMA_ERRORS: Partial<
-  Record<string, { status: number; code: 'CONFLICT' | 'NOT_FOUND'; message: string }>
-> = {
-  P2002: { status: 409, code: 'CONFLICT', message: 'Resource already exists' },
-  P2025: { status: 404, code: 'NOT_FOUND', message: 'Resource not found' },
-};
 
 export async function buildApp(opts: BuildAppOptions = {}) {
   const app = Fastify({
@@ -165,8 +153,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
         },
       });
     }
-    const mapped =
-      error instanceof Prisma.PrismaClientKnownRequestError ? PRISMA_ERRORS[error.code] : undefined;
+    const mapped = prismaErrorFor(error);
     if (mapped) {
       return reply.status(mapped.status).send({
         error: { code: mapped.code, message: mapped.message, requestId },

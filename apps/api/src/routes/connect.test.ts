@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { Event, Merchant } from '@prisma/client';
+import { Prisma, type Event, type Merchant } from '@prisma/client';
 import { ConnectTokenResponseSchema, type MerchantUserRole } from '@tendr/contracts';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +10,8 @@ import {
   fanOutEvent,
   listDeliveries,
   resendDelivery,
+  SEND_LEASE_MS,
+  setBeforeFanOutWriteHook,
   setWebhookResolver,
   setBeforeSendHook,
   setWebhookTransport,
@@ -60,6 +62,7 @@ describe('connect routes', () => {
     setWebhookResolver(null);
     setWebhookTransport(null);
     setBeforeSendHook(null);
+    setBeforeFanOutWriteHook(null);
     logSpy.mockRestore();
     vi.useRealTimers();
   });
@@ -620,6 +623,26 @@ describe('connect routes', () => {
     expectInvalidGrant(await raw('', { 'content-type': 'application/json' }));
   });
 
+  it('C8: token maps a Prisma unique/missing-row error to INVALID_GRANT, never a 500', async () => {
+    const { code, verifier } = await approve();
+    const original = prisma.$transaction.bind(prisma);
+    const db = prisma as unknown as { $transaction: unknown };
+    try {
+      for (const prismaCode of ['P2002', 'P2025']) {
+        db.$transaction = () =>
+          Promise.reject(
+            new Prisma.PrismaClientKnownRequestError('boom', {
+              code: prismaCode,
+              clientVersion: 'test',
+            }),
+          );
+        expectInvalidGrant(await token({ code, code_verifier: verifier, site_url: SITE }));
+      }
+    } finally {
+      db.$transaction = original;
+    }
+  });
+
   it('token: a rate-limited call stays 429 RATE_LIMITED', async () => {
     const body = { code: 'nope', code_verifier: pkce().verifier, site_url: SITE };
     for (let i = 0; i < 10; i += 1) await token(body);
@@ -925,6 +948,97 @@ describe('connect routes', () => {
     expect((await resendDelivery(ctx, row.id)).status).toBe('delivered');
     expect(sent).toHaveLength(1);
     expect(sent[0]!.url).toBe(newTest.url);
+  });
+
+  // ─── C9: re-pointing races ──────────────────────────────────────────────────
+
+  it('C9: superseded while its send was in flight and the send succeeded → the new endpoint’s row is marked delivered, never sent again', async () => {
+    const sent: WebhookRequest[] = [];
+    const { ev, row } = await pendingOnFirstSite();
+    // The re-connect's endpoint already has a row for the event (an earlier fan-out).
+    const { code, verifier } = await approve();
+    const pendingConn = await prisma.connection.findFirstOrThrow({
+      where: { redeemedAt: null, revokedAt: null },
+    });
+    const newTest = await newTestEndpoint(pendingConn.id);
+    const preId = `whd_pre_${ev.id}`;
+    await prisma.webhookDelivery.create({
+      data: {
+        id: preId,
+        merchantId: merchant.id,
+        livemode: false,
+        endpointId: newTest.id,
+        eventId: ev.id,
+        eventType: ev.type,
+        idempotencyKey: deliveryKey(newTest.id, ev.id),
+        nextRetryAt: new Date(),
+      },
+    });
+    let redeemed = false;
+    setWebhookTransport(async (req) => {
+      sent.push(req);
+      // The POST to the old site is on the wire when the site re-connects.
+      if (!redeemed) {
+        redeemed = true;
+        expect((await token({ code, code_verifier: verifier, site_url: SITE })).statusCode).toBe(
+          200,
+        );
+      }
+      return { status: 200 };
+    });
+    await attemptDelivery(row.id);
+    expect((await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: row.id } })).status).toBe(
+      'superseded',
+    );
+    expect(await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: preId } })).toMatchObject({
+      status: 'delivered',
+      nextRetryAt: null,
+    });
+    await sweepDueDeliveries();
+    await drain();
+    expect(sent.filter((x) => x.headers['tendr-event-id'] === ev.id)).toHaveLength(1);
+  });
+
+  it('C9: a manual resend is refused while another manual send of the row holds its lease', async () => {
+    const { row } = await pendingOnFirstSite();
+    const now = new Date();
+    await prisma.webhookDelivery.update({
+      where: { id: row.id },
+      data: {
+        status: 'delivered',
+        lastAttemptAt: now,
+        nextRetryAt: new Date(now.getTime() + SEND_LEASE_MS),
+      },
+    });
+    const sent: WebhookRequest[] = [];
+    setWebhookTransport(async (req) => {
+      sent.push(req);
+      return { status: 200 };
+    });
+    const ctx = { merchantId: merchant.id, livemode: false };
+    await expect(resendDelivery(ctx, row.id)).rejects.toMatchObject({ status: 409 });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('C9: a fan-out that read the old endpoint before a re-connect and writes after it lands on the new endpoint', async () => {
+    const sent: WebhookRequest[] = [];
+    setWebhookTransport(async (req) => {
+      sent.push(req);
+      return { status: 200 };
+    });
+    const first = await connect();
+    const ev = await succeededFor(await paymentOn(first.connection_id));
+    let second: Awaited<ReturnType<typeof connect>> | null = null;
+    setBeforeFanOutWriteHook(async () => {
+      setBeforeFanOutWriteHook(null);
+      second = await connect();
+    });
+    expect(await fanOutEvent(ev)).toBe(1);
+    const newTest = await newTestEndpoint(second!.connection_id);
+    const rows = await prisma.webhookDelivery.findMany({ where: { eventId: ev.id } });
+    expect(rows.map((r) => r.endpointId)).toEqual([newTest.id]);
+    await drain();
+    expect(sent.filter((x) => x.headers['tendr-event-id'] === ev.id)).toHaveLength(1);
   });
 
   it('W8: two re-connects in a row (A→B→C) deliver to C', async () => {

@@ -23,7 +23,7 @@ import {
   replaceConnection,
 } from '../connect/authorize.js';
 import { requireDashboardUser, requirePrincipal } from '../gateway/principal.js';
-import { AppError, forbidden, unauthorized } from '../lib/errors.js';
+import { AppError, forbidden, prismaErrorFor, unauthorized } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
 
 const manage = {
@@ -51,13 +51,17 @@ export const TOKEN_BODY_LIMIT = 16_384;
 /**
  * `/v1/connect/token` answers every client failure with the same INVALID_GRANT, transport-level
  * ones included (unparseable JSON, a missing or wrong content type, a body over the limit), so
- * nothing distinguishes one cause from another. A rate limit stays 429 (RATE_LIMITED); server
+ * nothing distinguishes one cause from another; so are the Prisma errors the global handler maps
+ * to a 4xx (`PRISMA_ERRORS`). A rate limit stays 429 (RATE_LIMITED); server
  * errors are logged without the body and stay 500.
  */
 function tokenErrorHandler(error: unknown, req: FastifyRequest, reply: FastifyReply) {
   const requestId = req.id;
+  // C8: a Prisma error a request can cause by itself (PRISMA_ERRORS) is a client failure too.
   const status =
-    error instanceof AppError ? error.status : (error as { statusCode?: number }).statusCode;
+    error instanceof AppError
+      ? error.status
+      : (prismaErrorFor(error)?.status ?? (error as { statusCode?: number }).statusCode);
   if (status === 429) {
     return reply.status(429).send({
       error: { code: 'RATE_LIMITED', message: 'Too many requests', requestId },

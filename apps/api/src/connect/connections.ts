@@ -324,7 +324,8 @@ export async function revokeConnection(
   if (by !== 'site' && domain) {
     const peer = await tx.connection.findFirst({
       where: { merchantId, siteOrigin: domain, revokedAt: null, id: { not: connectionId } },
-      orderBy: { createdAt: 'asc' },
+      // The oldest live peer; the id breaks a tie, so the choice is deterministic (C7).
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       select: { id: true },
     });
     await tx.connection.update({ where: { id: connectionId }, data: { addedDomain: null } });

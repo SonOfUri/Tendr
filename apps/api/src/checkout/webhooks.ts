@@ -399,6 +399,16 @@ export function setBeforeSendHook(fn: ((deliveryId: string) => Promise<void>) | 
   beforeSend = fn;
 }
 
+let beforeFanOutWrite: (() => Promise<void>) | null = null;
+
+/**
+ * Test hook: runs in `fanOutEvent` after it chose the endpoints and before it writes the rows
+ * (null removes it). Lets a test land a re-connect between the two.
+ */
+export function setBeforeFanOutWriteHook(fn: (() => Promise<void>) | null): void {
+  beforeFanOutWrite = fn;
+}
+
 // ─── scheduling ─────────────────────────────────────────────────────────────
 
 export interface DeliverJobData {
@@ -547,37 +557,53 @@ export async function fanOutEvent(event: Event, now = new Date()): Promise<numbe
   if (!isDeliverableEventType(event.type)) return 0; // C23: internal events never leave
   if (!event.merchantId || event.livemode === null) return 0;
   const ctx = { merchantId: event.merchantId, livemode: event.livemode };
-  let endpoints = (
-    await prisma.webhookEndpoint.findMany({
-      where: { ...ctx, active: true },
-      select: { id: true, events: true, connectionId: true },
-    })
-  ).filter((e) => subscribed(e, event.type));
-  if (endpoints.some((e) => e.connectionId !== null)) {
-    const connection = await eventConnectionId(event, ctx);
-    endpoints = endpoints.filter((e) => forConnection(e, connection));
-  }
-  if (endpoints.length === 0) return 0;
   const sessionId = await sessionOf(ctx, event.payload);
-  await prisma.webhookDelivery.createMany({
-    data: endpoints.map((e) => ({
-      id: newId('whd'),
-      ...ctx,
-      endpointId: e.id,
-      sessionId,
-      eventId: event.id,
-      eventType: event.type,
-      idempotencyKey: deliveryKey(e.id, event.id),
-      nextRetryAt: now,
-    })),
-    skipDuplicates: true,
-  });
-  const rows = await prisma.webhookDelivery.findMany({
-    where: { ...ctx, eventId: event.id, status: DELIVERY_STATUS.pending, attempt: 0 },
-    select: { id: true },
-  });
-  for (const r of rows) await enqueue(r.id, now, now);
-  return endpoints.length;
+  // C9: the rows are written holding a share lock on the chosen endpoints, and only while all of
+  // them are still active. A re-connect deactivates the old endpoints (a row lock) before it
+  // re-points their deliveries, so a fan-out either commits first (its rows get re-pointed) or
+  // sees the endpoint gone and chooses again (its rows go to the new endpoint): never stranded.
+  for (let round = 0; round < 3; round++) {
+    let endpoints = (
+      await prisma.webhookEndpoint.findMany({
+        where: { ...ctx, active: true },
+        select: { id: true, events: true, connectionId: true },
+      })
+    ).filter((e) => subscribed(e, event.type));
+    if (endpoints.some((e) => e.connectionId !== null)) {
+      const connection = await eventConnectionId(event, ctx);
+      endpoints = endpoints.filter((e) => forConnection(e, connection));
+    }
+    if (endpoints.length === 0) return 0;
+    if (beforeFanOutWrite) await beforeFanOutWrite();
+    const ids = endpoints.map((e) => e.id);
+    const written = await prisma.$transaction(async (tx) => {
+      const live = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM webhook_endpoints WHERE id = ANY(${ids}) AND active ORDER BY id FOR SHARE`;
+      if (live.length !== ids.length) return false; // one went away meanwhile: choose again
+      await tx.webhookDelivery.createMany({
+        data: endpoints.map((e) => ({
+          id: newId('whd'),
+          ...ctx,
+          endpointId: e.id,
+          sessionId,
+          eventId: event.id,
+          eventType: event.type,
+          idempotencyKey: deliveryKey(e.id, event.id),
+          nextRetryAt: now,
+        })),
+        skipDuplicates: true,
+      });
+      return true;
+    });
+    if (!written) continue;
+    const rows = await prisma.webhookDelivery.findMany({
+      where: { ...ctx, eventId: event.id, status: DELIVERY_STATUS.pending, attempt: 0 },
+      select: { id: true },
+    });
+    for (const r of rows) await enqueue(r.id, now, now);
+    return endpoints.length;
+  }
+  throw new Error(`webhook fan-out for ${event.id} kept losing its endpoints; retrying later`);
 }
 
 /** The event's session, when it names one of this merchant + mode (for the delivery's FK). */
@@ -655,12 +681,14 @@ export async function repointUndeliveredDeliveries(
   for (const target of to) {
     const sources = from.filter((e) => e.livemode === target.livemode).map((e) => e.id);
     if (sources.length === 0) continue;
-    await tx.$queryRaw`
+    const locked = await tx.$queryRaw<{ id: string }[]>`
       SELECT id FROM webhook_deliveries
       WHERE endpoint_id = ANY(${sources}) AND status IN ('pending', 'failed')
       ORDER BY id FOR UPDATE`;
+    // C9: exactly the rows locked above. A row committed after the lock is not ours to move; the
+    // fan-out writes under a share lock on the endpoint, so none can appear for a deactivated one.
     const rows = await tx.webhookDelivery.findMany({
-      where: { endpointId: { in: sources }, status: { in: MOVABLE } },
+      where: { id: { in: locked.map((r) => r.id) }, status: { in: MOVABLE } },
       orderBy: { id: 'asc' },
     });
     for (const d of rows) {
@@ -741,6 +769,8 @@ export async function attemptDelivery(
   // A superseded row (W9: its event went to the re-connected site's endpoint) is never sent.
   if (before.status === DELIVERY_STATUS.superseded) return null;
   if (isInFlight(before, now)) return null;
+  // C9: a manual send of a delivered / failed row leases it too; a second one waits for it.
+  if (opts.manual && holdsLease(before, now)) return null;
   const due =
     before.status === DELIVERY_STATUS.pending &&
     (before.nextRetryAt === null || before.nextRetryAt <= now);
@@ -848,6 +878,12 @@ async function writeOutcome(
     status: (r?.status ?? next.status) as DeliveryStatus,
     nextRetryAt: r?.status === DELIVERY_STATUS.pending ? (r?.nextRetryAt ?? null) : null,
   });
+  if (row?.status === DELIVERY_STATUS.superseded && outcome.ok) {
+    // C9: superseded while this send was on the wire, and the send reached the site: the event is
+    // delivered, so the new endpoint's own row for it must not send it again.
+    await markSuccessorDelivered(row, result, now);
+    return as(row);
+  }
   if (!row || row.status === DELIVERY_STATUS.superseded || row.endpointId === claim.endpointId) {
     return as(row);
   }
@@ -868,6 +904,41 @@ async function writeOutcome(
     });
   }
   return as(await prisma.webhookDelivery.findUnique({ where: { id: claim.id } }));
+}
+
+/**
+ * The row a re-connect gave the superseded delivery's event to — on the live successor
+ * connection's active endpoint of the same mode — becomes `delivered`, unless it is being sent
+ * right now (its own send then records the outcome).
+ */
+async function markSuccessorDelivered(
+  superseded: WebhookDelivery,
+  result: { statusCode: number | null; lastError: string | null },
+  now: Date,
+): Promise<void> {
+  const tenant = { merchantId: superseded.merchantId, livemode: superseded.livemode };
+  const old = await prisma.webhookEndpoint.findFirst({
+    where: { id: superseded.endpointId, ...tenant },
+    select: { connectionId: true },
+  });
+  if (!old?.connectionId) return;
+  const live = await liveConnectionId(old.connectionId, superseded.merchantId);
+  if (!live) return;
+  const targets = await prisma.webhookDelivery.findMany({
+    where: {
+      ...tenant,
+      eventId: superseded.eventId,
+      status: DELIVERY_STATUS.pending,
+      endpoint: { connectionId: live, active: true },
+    },
+  });
+  for (const t of targets) {
+    if (isInFlight(t, now)) continue;
+    await prisma.webhookDelivery.updateMany({
+      where: { id: t.id, updatedAt: t.updatedAt, status: DELIVERY_STATUS.pending },
+      data: { ...result, status: DELIVERY_STATUS.delivered, nextRetryAt: null, deliveredAt: now },
+    });
+  }
 }
 
 type SendOutcome =

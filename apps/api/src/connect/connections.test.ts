@@ -317,6 +317,22 @@ describe('connections', () => {
     expect(await domainsOf(m.id)).toEqual([]);
   });
 
+  it('C7: the domain hand-over picks the oldest live peer, by id when created at the same time', async () => {
+    const a = await connect(m.id, u.id, 'https://shop.example.com');
+    const b = await connect(m.id, u.id, 'https://shop.example.com/b');
+    const c = await connect(m.id, u.id, 'https://shop.example.com/c');
+    const at = new Date('2026-01-01T00:00:00Z');
+    // Same creation time; b is rewritten last, so a plain scan meets c's row first.
+    await prisma.connection.update({ where: { id: c.connection.id }, data: { createdAt: at } });
+    await prisma.connection.update({ where: { id: b.connection.id }, data: { createdAt: at } });
+    expect(b.connection.id < c.connection.id).toBe(true);
+    await revoke(a.connection.id, 'dashboard');
+    const owner = async (id: string) =>
+      (await prisma.connection.findUniqueOrThrow({ where: { id } })).addedDomain;
+    expect(await owner(b.connection.id)).toBe('https://shop.example.com');
+    expect(await owner(c.connection.id)).toBeNull();
+  });
+
   it("siteOriginOf('https://shop.example.com/store/') → { origin:'https://shop.example.com', path:'/store' }", () => {
     expect(siteOriginOf('https://shop.example.com/store/')).toEqual({
       origin: 'https://shop.example.com',
