@@ -1032,6 +1032,41 @@
   color: var(--demo-error);
 }
 
+.demo-wallet-slot .pay-test {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid var(--demo-panel-border);
+  background: var(--demo-chip);
+}
+
+.demo-wallet-slot .pay-test .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.demo-wallet-slot .pay-test .pay-button-small {
+  width: auto;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-radius: 999px;
+}
+
+.demo-checkout-card[data-skin='gaming'] .demo-wallet-slot .pay-test {
+  border-radius: 4px;
+  border-color: #2d3b2e;
+  background: #0d1410;
+}
+
+.demo-checkout-card[data-skin='gaming'] .demo-wallet-slot .pay-test .pay-button-small {
+  border-radius: 3px;
+  font-size: 0.42rem;
+  letter-spacing: 0.04em;
+}
+
 /* Reown AppKit / WalletConnect modal above the fixed demo playground */
 w3m-modal,
 wcm-modal,

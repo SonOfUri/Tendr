@@ -312,7 +312,8 @@ export function WalletPanel({
             </button>
           ) : (
             <p className="muted small">
-              Test mode: payments aren&apos;t sent from wallets. Use the test controls below.
+              Test mode: wallets connect, but nothing is sent from them. Simulate a payment with the
+              buttons below.
             </p>
           )}
         </>

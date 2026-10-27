@@ -18,6 +18,7 @@ import {
   type WalletQuoteResult,
   type WalletSendResult,
 } from '@/app/pay/[sessionId]/components/WalletConnect';
+import { TestModePanel } from '@/app/pay/[sessionId]/components/TestModePanel';
 import type { DemoCheckoutBootstrap, DemoSlug } from '@/lib/demo';
 import { DemoAssetModal } from './DemoAssetModal';
 import { DemoStatusCard } from './DemoStatusCard';
@@ -380,6 +381,17 @@ export function DemoCheckoutPanel({
                   onWalletAddress={requoteForWallet}
                   onDepositSent={onDepositSent}
                 />
+                {view && !view.livemode ? (
+                  <TestModePanel
+                    client={client}
+                    kind="pay"
+                    onDone={() => {
+                      void refresh()
+                        .then(() => setPhase('waiting'))
+                        .catch(() => undefined);
+                    }}
+                  />
+                ) : null}
               </div>
             ) : null}
           </>
