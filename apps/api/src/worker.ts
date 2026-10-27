@@ -146,8 +146,12 @@ export async function processCheckoutJob(
       failed = err;
     }
     // Smart-wallet user operations sponsored through Pimlico (receipts from Pimlico).
-    const m = await pollPaymasterOps();
-    if (m > 0) log('info', 'paymaster outcomes applied', { count: m });
+    try {
+      const m = await pollPaymasterOps();
+      if (m > 0) log('info', 'paymaster outcomes applied', { count: m });
+    } catch (err) {
+      failed ??= err;
+    }
     if (failed) throw failed;
     return;
   }

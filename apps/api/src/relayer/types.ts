@@ -66,6 +66,12 @@ export interface PreparePayload {
   amount: string;
   fee_amount: string;
   to_sign: { kind: string; typed_data: unknown }[];
+  /**
+   * `paymaster` only: the exact calls the smart wallet batches (`wallet_sendCalls`), and the URL to
+   * pass as its `paymasterService` capability (bound to this quote; never log it).
+   */
+  calls?: { to: string; value: string; data: string }[];
+  paymaster_url?: string;
 }
 
 /** The shopper's signatures, keyed by `to_sign[].kind`, each with the message it signed. */

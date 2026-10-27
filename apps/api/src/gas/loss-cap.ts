@@ -46,14 +46,30 @@ export async function recognizeTendrLoss(
   return count === 1;
 }
 
-/** The unrecovered sponsorship losses recognised on the UTC day of `now` in the mode, in USD. */
+/**
+ * The unrecovered sponsorship losses recognised on the UTC day of `now` in the mode, in USD: the
+ * whole cost of Tendr losses (`sponsor = tendr`), plus the unrecovered part (`unrecovered_usd`,
+ * cost above what was collected) of sponsorships that are not themselves a Tendr loss.
+ */
 async function lossToday(livemode: boolean, now: Date): Promise<Prisma.Decimal> {
   const { start, end } = dayBounds(now);
-  const { _sum } = await prisma.gasSponsorship.aggregate({
-    where: { livemode, sponsor: 'tendr', lossRecognizedAt: { gte: start, lt: end } },
-    _sum: { costUsd: true },
-  });
-  return _sum.costUsd ?? new Prisma.Decimal(0);
+  const [whole, part] = await Promise.all([
+    prisma.gasSponsorship.aggregate({
+      where: { livemode, sponsor: 'tendr', lossRecognizedAt: { gte: start, lt: end } },
+      _sum: { costUsd: true },
+    }),
+    prisma.gasSponsorship.aggregate({
+      where: {
+        livemode,
+        NOT: { sponsor: 'tendr' },
+        unrecoveredAt: { gte: start, lt: end },
+      },
+      _sum: { unrecoveredUsd: true },
+    }),
+  ]);
+  return (whole._sum.costUsd ?? new Prisma.Decimal(0)).plus(
+    part._sum.unrecoveredUsd ?? new Prisma.Decimal(0),
+  );
 }
 
 /**

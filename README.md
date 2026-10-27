@@ -695,9 +695,18 @@ fee share, 1Click's fee and the spread.
   `putSecret(key, 'pimlico')` (never an env var); set `PIMLICO_SPONSORSHIP_POLICY_ID` if a policy
   is used; fund the Pimlico balance; confirm Pimlico serves EntryPoint v0.8 on each chain (v0.7 is
   assumed) and that Safe's MultiSendCallOnly is deployed at the addresses in
-  `apps/api/src/relayer/evm/user-op.ts`. Then pay a few cents per chain from a Coinbase Smart
-  Wallet and a Safe through `wallet_sendCalls` with the paymaster capability and check the watcher
-  marks it paid and the poll job records the user operation's cost.
+  `apps/api/src/relayer/evm/user-op.ts`. Confirm every address and runtime in
+  `apps/api/src/relayer/evm/known-accounts.ts` on each chain: the Coinbase Smart Wallet
+  implementation and factory (and which EntryPoint that implementation accepts: v1 is v0.6-only,
+  which this proxy refuses), the Solady ERC-1967 proxy runtime the factory deploys, the SafeProxy
+  runtime prefix, the Safe singletons and the Safe 4337 module. Confirm Pimlico's
+  `pm_getPaymasterData` `paymasterData` layout (`mode | validUntil | validAfter | signature`) and
+  that its `validUntil` stays within the quote deadline + 1 h (otherwise every sponsorship is
+  refused), and whether `pm_getPaymasterStubData` ever returns `isFinal: true` (the proxy forces
+  `false`). `API_BASE_URL` must be the public API origin (the paymaster URL is built from it).
+  Then pay a few cents per chain from a Safe (and a Coinbase Smart Wallet once a v0.7 version is
+  listed) through `wallet_sendCalls` with the paymaster capability and check the watcher marks it
+  paid and the poll job records the user operation's cost.
 
 **Live checklist (FX for non-USD stores):** the live FX provider is
 [Open Exchange Rates](https://openexchangerates.org) (`FX_PROVIDER=openexchangerates`,

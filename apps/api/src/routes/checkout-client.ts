@@ -31,7 +31,11 @@ import {
   gaslessQuote,
   gaslessSubmission,
 } from '../relayer/index.js';
-import { paymasterFor } from '../relayer/evm/pimlico.js';
+import {
+  PAYMASTER_URL_PREFIX,
+  handlePaymasterUrl,
+  preparePaymaster,
+} from '../relayer/evm/pimlico.js';
 import { requirePrincipal } from '../gateway/principal.js';
 import { notFound, unauthorized } from '../lib/errors.js';
 
@@ -107,10 +111,13 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
     async (req) => {
       const input = GaslessPrepareInputSchema.parse(req.body);
       const { q, relayer } = await gaslessQuote(ctxOf(req), input.quote_id);
-      return relayer.prepare(q, {
+      const opts = {
         ...(input.method ? { method: input.method } : {}),
         ...(input.fee_mode ? { fee_mode: input.fee_mode } : {}),
-      });
+      };
+      // A smart wallet's sponsored calls: the calls to batch and the quote's paymaster URL.
+      if (q.quote.networkFeeMethod === 'paymaster') return preparePaymaster(q, opts);
+      return relayer.prepare(q, opts);
     },
   );
 
@@ -125,14 +132,18 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
     });
   });
 
-  // The ERC-7677 paymaster endpoint (JSON-RPC 2.0: pm_getPaymasterStubData, pm_getPaymasterData)
-  // the pay page hands a smart wallet as `wallet_sendCalls`' paymasterService. Sponsors only a user
-  // operation whose calls are exactly the current quote's payment (relayer/evm/pimlico.ts). Always
-  // 200 with a JSON-RPC response; refusals are JSON-RPC errors.
-  app.post(`${CHECKOUT_CLIENT_PREFIX}gasless/paymaster`, shopper, async (req) => {
-    const ctx = ctxOf(req);
-    return paymasterFor(ctx.livemode).handle(ctx, req.body);
-  });
+  // Ruling T6-f: the ERC-7677 paymaster URL a smart wallet calls itself (EIP-5792
+  // `paymasterService`): JSON-RPC 2.0 `pm_getPaymasterStubData` / `pm_getPaymasterData`. The
+  // random token in the path (issued by gasless/prepare, stored hashed) is the only credential and
+  // binds the request to one quote; no client secret, any origin (CORS without credentials, see
+  // app.ts). The path is a bearer capability: never log it (the request log records the route
+  // pattern only). Limited per IP and per token, plus the per-session / per-wallet counters.
+  // Always 200 with a JSON-RPC response, except 401 for an unknown token.
+  app.post<{ Params: { token: string } }>(
+    `${PAYMASTER_URL_PREFIX}:token`,
+    { config: { auth: 'public', publicLimit: 'route' } },
+    async (req) => handlePaymasterUrl(req.params.token, req.body, req.ip),
+  );
 
   app.get<{ Params: { id: string } }>(
     `${CHECKOUT_CLIENT_PREFIX}gasless/submissions/:id`,

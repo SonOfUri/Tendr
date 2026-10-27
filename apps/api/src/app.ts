@@ -8,6 +8,7 @@ import { createRateLimiters, type RateLimitKind } from './gateway/rate-limit.js'
 import { closeClient, closeRedis, createRedis, getRedis, whenReady } from './lib/redis.js';
 import { AppError, prismaErrorFor } from './lib/errors.js';
 import { log } from './lib/logger.js';
+import { PAYMASTER_URL_PREFIX } from './relayer/evm/pimlico.js';
 import { accountRoutes } from './routes/accounts.js';
 import { authRoutes } from './routes/auth.js';
 import {
@@ -94,7 +95,15 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(cors, {
     delegator: (req, cb) => {
       const url = req.url ?? '';
-      if (
+      if (url.startsWith(PAYMASTER_URL_PREFIX)) {
+        // A wallet (any origin) calls the per-quote paymaster URL; its token is the credential.
+        cb(null, {
+          origin: '*',
+          credentials: false,
+          methods: ['POST'],
+          allowedHeaders: ['content-type'],
+        });
+      } else if (
         url.startsWith(CHECKOUT_CLIENT_PREFIX) ||
         url.split('?')[0] === CHECKOUT_REFUND_ADDRESS_PATH
       ) {

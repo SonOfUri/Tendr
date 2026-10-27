@@ -2,39 +2,53 @@
 // endpoint the pay page passes to a smart wallet as EIP-5792 `wallet_sendCalls`'
 // `paymasterService` capability. It answers `pm_getPaymasterStubData` and `pm_getPaymasterData`,
 // forwarding to Pimlico (API key: stored secret, purpose `pimlico`) ONLY for a user operation whose
-// calls are exactly the current quote's payment:
+// calls are exactly the payment of the quote its URL was issued for:
 //
 //   token.transfer(depositAddress, amount_in)
 //   token.transfer(gas-fees-evm address, fee_amount)      only when the shopper pays in the token
 //
 // with no native value and no other call, from the quote's wallet, on the quote's chain, through
-// EntryPoint v0.7 / v0.8. Anything else is a JSON-RPC error: nothing is sponsored and the pay page
+// EntryPoint v0.7 / v0.8, and (live) from an account whose code is a known implementation
+// (known-accounts.ts), with gas fees at most PAYMASTER_GAS_PRICE_MULTIPLIER × the live gas price and
+// a bounded total cost. Anything else is a JSON-RPC error: nothing is sponsored and the pay page
 // falls back. The deposit address and amounts come from the quote, the fee recipient from the
 // `gas-fees-evm` key; nothing the shopper's money can reach is taken from the request.
+//
+// Transport (ruling T6-f): the wallet calls the URL itself, so the capability is in the URL:
+// `/v1/checkout/paymaster/:token`, a random 32-byte token issued by `gasless/prepare` for a
+// `paymaster` quote, stored only as its SHA-256, bound to that one quote (merchant, mode and
+// session all come from the quote row). A leaked URL lets its holder ask for sponsorship of exactly
+// that quote's calls from that quote's wallet until the quote ends; it can also pin the quote with
+// an operation the shopper never signs (another operation with the same sender and nonce can
+// still replace it; a different nonce is refused until the pinned one is given up).
 //
 // `pm_getPaymasterData` is the commitment point: the submission is recorded (`gas_sponsorships`,
 // method `paymaster`, provider `pimlico`, `user_op_hash` of the final operation) on the quote's
 // reservation (merchant sponsors; it must still be `reserved`) or as a `sponsor = shopper` row.
-// The same user operation asked again gets the same paymaster data; another one for the quote is
-// refused while one is in flight. The outcome comes from Pimlico's `eth_getUserOperationReceipt`
-// (`pollPaymasterOps`, in the EVM relayer's poll job); settlement and loss then follow the shared
-// lifecycle (relayer/submissions.ts). Test mode never calls Pimlico: simulated paymaster data,
-// and the operation is "mined" at once, as the simulated relayer does.
+// The same user operation asked again gets the same paymaster data. The outcome comes from
+// Pimlico's `eth_getUserOperationReceipt` (`pollPaymasterOps`, in the EVM relayer's poll job);
+// settlement and loss then follow the shared lifecycle (relayer/submissions.ts), and any cost
+// above what is recovered is recognised for the daily loss cap. Test mode never calls Pimlico or
+// an RPC: simulated paymaster data, and the operation is "mined" at once.
 //
 // Never asks for EIP-7702 delegation (spec §8.3): an operation carrying an authorization is refused.
+import { createHash, randomBytes } from 'node:crypto';
 import { Prisma, type Quote } from '@prisma/client';
 import { Interface, keccak256, toUtf8Bytes } from 'ethers';
 import { z } from 'zod';
 import { providerFor, simulatedOneClick } from '../../checkout/oneclick/index.js';
 import type { ShopperCtx } from '../../checkout/quotes.js';
+import { scopedDb } from '../../db/scoped.js';
 import { tenantTransaction } from '../../db/tenant-transaction.js';
 import { env } from '../../env.js';
 import { SIMULATED_FEE_USD, nativeUsd } from '../../gas/fees.js';
-import { AppError } from '../../lib/errors.js';
+import { lossCapReached } from '../../gas/loss-cap.js';
+import { AppError, unauthorized } from '../../lib/errors.js';
 import { newId } from '../../lib/ids.js';
 import { log } from '../../lib/logger.js';
 import { prisma } from '../../lib/prisma.js';
 import { getSecret } from '../../secrets/secrets.js';
+import { gaslessQuote } from '../index.js';
 import { SIMULATED_GAS_USED } from '../simulated.js';
 import {
   ACTIVE,
@@ -50,9 +64,10 @@ import {
   simulatedRelayTxHash,
   sponsorshipReleased,
 } from '../submissions.js';
-import { gaslessQuote } from '../index.js';
-import type { QuoteContext } from '../types.js';
+import type { PrepareInput, PreparePayload, QuoteContext } from '../types.js';
+import { assertKnownAccount } from './accounts.js';
 import { evmGasFeeAddress } from './index.js';
+import { EvmRpc } from './rpc.js';
 import { EVM_CHAIN_IDS, gaslessToken, type GaslessToken } from './tokens.js';
 import {
   SUPPORTED_ENTRY_POINTS,
@@ -62,6 +77,7 @@ import {
   parseUserOp,
   userOpHash,
   type AccountCall,
+  type AccountFormat,
   type UserOp,
 } from './user-op.js';
 
@@ -71,18 +87,27 @@ export const PIMLICO_SECRET_PURPOSE = 'pimlico';
 export const PAYMASTER_METHODS = ['pm_getPaymasterStubData', 'pm_getPaymasterData'] as const;
 type PaymasterMethod = (typeof PAYMASTER_METHODS)[number];
 
+/** The paymaster URL path prefix (outside the client-secret routes; any origin may call it). */
+export const PAYMASTER_URL_PREFIX = '/v1/checkout/paymaster/';
+
 /** `pm_getPaymasterStubData` per session (lifetime) and per wallet per hour (after validation). */
 export const STUB_CALLS_PER_SESSION = 20;
 export const STUB_CALLS_PER_ADDRESS_PER_HOUR = 60;
+/** Requests per paymaster URL token (lifetime of its quote) and per IP per minute. */
+export const PAYMASTER_CALLS_PER_TOKEN = 40;
+export const PAYMASTER_CALLS_PER_IP_PER_MINUTE = 120;
 /** A recorded operation with no receipt this long past its quote's deadline is given up. */
 export const PAYMASTER_GIVE_UP_MS = 60 * 60_000;
+/** Once Pimlico's signature has expired (`validUntil`), this long more before giving up. */
+export const PAYMASTER_VALIDITY_GRACE_MS = 2 * 60_000;
 /**
  * The most an operation may cost Tendr at its own limits (every gas limit × maxFeePerGas): this
- * multiple of the quote's network fee, and never less than PAYMASTER_MAX_COST_FLOOR_USD. Bounds
- * what a shopper's wallet can make Tendr's Pimlico balance pay (e.g. an inflated priority fee).
+ * multiple of the quote's network fee, and never less than PAYMASTER_MAX_COST_FLOOR_USD.
  */
 export const PAYMASTER_MAX_COST_MULTIPLIER = 10;
 export const PAYMASTER_MAX_COST_FLOOR_USD = '0.25';
+/** `maxFeePerGas` and `maxPriorityFeePerGas` may be at most this multiple of the live gas price. */
+export const PAYMASTER_GAS_PRICE_MULTIPLIER = 2n;
 
 /** JSON-RPC error codes used by the proxy. */
 export const RPC_ERRORS = {
@@ -138,6 +163,13 @@ interface StoredPaymaster {
   entryPoint: string;
   chainId: number;
   result: PaymasterResult;
+  /** The operation's sender and nonce: a replacement must keep both (only one can ever land). */
+  sender: string;
+  nonce: string;
+  /** Pimlico's signature expiry (unix seconds). */
+  validUntil: number;
+  /** Every user-operation hash issued for this submission, oldest first (all are polled). */
+  hashes: string[];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -163,7 +195,14 @@ export async function pimlicoApiKey(): Promise<string> {
   return getSecret(row.id);
 }
 
-const redact = (s: string, key: string) => (key ? s.split(key).join('[redacted]') : s);
+/** Removes the key, raw and URL-encoded, from `s`. */
+function redact(s: string, key: string): string {
+  if (!key) return s;
+  let out = s;
+  for (const form of new Set([key, encodeURIComponent(key)]))
+    out = out.split(form).join('[redacted]');
+  return out;
+}
 
 /** Pimlico's bundler/paymaster JSON-RPC: `https://api.pimlico.io/v2/{chainId}/rpc?apikey=…`. */
 export class PimlicoClient {
@@ -204,6 +243,20 @@ export class PimlicoClient {
   }
 }
 
+/**
+ * The expiry (`validUntil`, unix seconds) of a Pimlico verifying-paymaster signature, from its
+ * `paymasterData`: `mode byte ((mode << 1) | allowAllBundlers) | validUntil (6) | validAfter (6) |
+ * signature`. Null for any other layout (an unknown mode or too short): such data is not
+ * sponsored, since its validity cannot be bounded.
+ */
+export function pimlicoValidUntil(paymasterData: string): number | null {
+  const hex = paymasterData.toLowerCase().replace(/^0x/, '');
+  if (hex.length < 2 * (1 + 12 + 64)) return null;
+  const mode = parseInt(hex.slice(0, 2), 16) >> 1;
+  if (mode !== 0) return null;
+  return Number(BigInt('0x' + hex.slice(2, 14)));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Validation against the quote
 // ---------------------------------------------------------------------------------------------
@@ -213,12 +266,20 @@ const ERC20 = new Interface(['function transfer(address to, uint256 amount)']);
 const refused = (message: string, field: string) =>
   new AppError('GASLESS_PAYLOAD_MISMATCH', message, 409, { field });
 
+const unavailable = () =>
+  new AppError(
+    'PROVIDER_UNAVAILABLE',
+    'Sponsorship is unavailable for this payment; pay another way',
+    503,
+  );
+
 interface Checked {
   q: QuoteContext;
   op: UserOp;
   entryPoint: string;
   chainId: number;
   token: GaslessToken;
+  format: AccountFormat;
 }
 
 /** The calls the quote allows, in order: the payment, then (shopper pays in the token) the fee. */
@@ -248,28 +309,31 @@ async function expectedCalls(q: QuoteContext, token: GaslessToken): Promise<Acco
   return out;
 }
 
-/** The session's current quote, made for a `paymaster` payment, still payable. */
-async function currentPaymasterQuote(shopper: ShopperCtx, now: Date): Promise<QuoteContext> {
-  const current = await shopper.db.quote.findFirst({
-    where: { sessionId: shopper.sessionId, supersededAt: null },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true },
-  });
-  if (!current) throw new AppError('CONFLICT', 'Request a quote first', 409);
-  const { q } = await gaslessQuote(shopper, current.id);
+/** The quote `quoteId` (the one the URL was issued for), made for `paymaster`, still payable. */
+async function paymasterQuote(
+  shopper: ShopperCtx,
+  quoteId: string,
+  now: Date,
+): Promise<QuoteContext> {
+  const { q } = await gaslessQuote(shopper, quoteId);
   assertRelayable(q, now);
   if (q.quote.networkFeeMethod !== 'paymaster') throw gaslessNotAvailable();
   return q;
 }
 
-/** Every check that does not need Pimlico: quote, chain, entry point, sender, the exact calls. */
-async function check(shopper: ShopperCtx, params: unknown[], now: Date): Promise<Checked> {
+/** The checks that need neither Pimlico nor an RPC: quote, chain, entry point, sender, calls. */
+async function check(
+  shopper: ShopperCtx,
+  quoteId: string,
+  params: unknown[],
+  now: Date,
+): Promise<Checked> {
   const p = ParamsSchema.safeParse(params);
   if (!p.success) {
     throw new UserOpRefused('params must be [userOp, entryPoint, chainId, context?]');
   }
   const [rawOp, entryPointRaw, chainIdRaw] = p.data;
-  const q = await currentPaymasterQuote(shopper, now);
+  const q = await paymasterQuote(shopper, quoteId, now);
   const chain = q.origin.blockchain;
   const chainId = EVM_CHAIN_IDS[chain];
   const token = gaslessToken(chain, q.quote.originAssetId);
@@ -285,7 +349,7 @@ async function check(shopper: ShopperCtx, params: unknown[], now: Date): Promise
   if (op.sender.toLowerCase() !== q.quote.walletAddress!.toLowerCase()) {
     throw refused('The user operation is not from the quoted wallet', 'sender');
   }
-  const { calls } = decodeAccountCalls(op.callData);
+  const { format, calls } = decodeAccountCalls(op.callData);
   const expected = await expectedCalls(q, token);
   if (calls.length !== expected.length) {
     throw refused('The user operation makes other calls than the quoted payment', 'calls');
@@ -297,7 +361,7 @@ async function check(shopper: ShopperCtx, params: unknown[], now: Date): Promise
       throw refused('The user operation does not match the quoted payment', `calls.${i}`);
     }
   }
-  return { q, op, entryPoint, chainId, token };
+  return { q, op, entryPoint, chainId, token, format };
 }
 
 /** The operation as the wallet will sign it: the paymaster fields of `result` filled in. */
@@ -321,7 +385,7 @@ async function assertCostBounded(q: QuoteContext, op: UserOp): Promise<void> {
   try {
     usd = await nativeUsd(q.origin.blockchain, maxUserOpCostWei(op), q.shopper.livemode);
   } catch {
-    throw new AppError('PROVIDER_UNAVAILABLE', 'Gasless payments are unavailable; try again', 503);
+    throw unavailable();
   }
   const quoted = (q.quote.networkFeeUsd ?? new Prisma.Decimal(0)).mul(
     PAYMASTER_MAX_COST_MULTIPLIER,
@@ -330,6 +394,124 @@ async function assertCostBounded(q: QuoteContext, op: UserOp): Promise<void> {
   if (new Prisma.Decimal(usd).gt(limit)) {
     throw refused('The user operation’s gas limits or fees are too high to sponsor', 'gas');
   }
+}
+
+/** Refuses gas fees above PAYMASTER_GAS_PRICE_MULTIPLIER × the chain's live gas price. */
+async function assertFeesBounded(rpc: EvmRpc, op: UserOp): Promise<void> {
+  let price: bigint;
+  try {
+    price = BigInt(String(await rpc.request('eth_gasPrice', [])));
+  } catch {
+    throw unavailable();
+  }
+  const max = price * PAYMASTER_GAS_PRICE_MULTIPLIER;
+  if (BigInt(op.maxFeePerGas ?? '0x0') > max || BigInt(op.maxPriorityFeePerGas ?? '0x0') > max) {
+    throw refused('The user operation’s gas fees are too high to sponsor', 'gas');
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Per-quote URL (ruling T6-f)
+// ---------------------------------------------------------------------------------------------
+
+const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+
+/** SHA-256 hex of a paymaster URL token (the only form stored). */
+export function paymasterTokenHash(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+/**
+ * A fresh paymaster URL for the quote (replacing any earlier one): 32 random bytes, stored as
+ * their SHA-256. The URL is returned to the shopper once and never logged.
+ */
+export async function issuePaymasterUrl(q: QuoteContext): Promise<string> {
+  const token = randomBytes(32).toString('base64url');
+  await q.shopper.db.quote.updateMany({
+    where: { id: q.quote.id, sessionId: q.session.id },
+    data: { paymasterTokenHash: paymasterTokenHash(token) },
+  });
+  return `${env().API_BASE_URL.replace(/\/+$/, '')}${PAYMASTER_URL_PREFIX}${token}`;
+}
+
+/**
+ * `gasless/prepare` for a `paymaster` quote: nothing to sign as typed data; the exact calls the
+ * wallet must batch (`wallet_sendCalls`) and the paymaster URL to pass as `paymasterService`.
+ */
+export async function preparePaymaster(
+  q: QuoteContext,
+  input: PrepareInput,
+): Promise<PreparePayload> {
+  assertRelayable(q, new Date());
+  if (q.quote.networkFeeMethod !== 'paymaster') throw gaslessNotAvailable();
+  if (input.method && input.method !== 'paymaster') {
+    throw new AppError('GASLESS_PAYLOAD_MISMATCH', 'The quote is for another method', 409, {
+      field: 'method',
+    });
+  }
+  const chain = q.origin.blockchain;
+  const chainId = EVM_CHAIN_IDS[chain];
+  const token = gaslessToken(chain, q.quote.originAssetId);
+  if (!chainId || !token || !token.methods.includes('paymaster')) throw gaslessNotAvailable();
+  const calls = await expectedCalls(q, token);
+  const shopperFee = q.quote.networkFeePaidBy === 'buyer';
+  return {
+    quote_id: q.quote.id,
+    method: 'paymaster',
+    chain,
+    chain_id: chainId,
+    signer: q.quote.walletAddress!.toLowerCase(),
+    deadline: q.quote.deadline.toISOString(),
+    amount: q.quote.amountIn.toFixed(0),
+    fee_amount: shopperFee ? q.quote.networkFeeAmount!.toFixed(0) : '0',
+    to_sign: [],
+    calls: calls.map((c) => ({ to: c.to, value: '0x0', data: c.data })),
+    paymaster_url: await issuePaymasterUrl(q),
+  };
+}
+
+/**
+ * The paymaster URL's handler: resolves the token to its quote (merchant, mode and session from
+ * that row only), applies the per-IP and per-token limits, and answers the JSON-RPC request.
+ * An unknown token is 401.
+ */
+export async function handlePaymasterUrl(
+  token: string,
+  body: unknown,
+  ip: string,
+): Promise<JsonRpcResponse> {
+  try {
+    await countAttempt(
+      `tendr:gasless:pm-url:ip:${ip}:${Math.floor(Date.now() / 60_000)}`,
+      60,
+      PAYMASTER_CALLS_PER_IP_PER_MINUTE,
+      { max_per_ip_per_minute: PAYMASTER_CALLS_PER_IP_PER_MINUTE },
+    );
+  } catch (err) {
+    return rpcError(envelopeId(body), toRpcError(err, 'unknown'));
+  }
+  if (!TOKEN_RE.test(token)) throw unauthorized();
+  const hash = paymasterTokenHash(token);
+  const quote = await prisma.quote.findUnique({
+    where: { paymasterTokenHash: hash },
+    select: { id: true, merchantId: true, livemode: true, sessionId: true },
+  });
+  if (!quote) throw unauthorized();
+  const scope = { merchantId: quote.merchantId, livemode: quote.livemode };
+  const shopper: ShopperCtx = { ...scope, db: scopedDb(scope), sessionId: quote.sessionId };
+  try {
+    await countAttempt(
+      `tendr:gasless:pm-url:tok:${hash}`,
+      3 * 24 * 3600,
+      PAYMASTER_CALLS_PER_TOKEN,
+      {
+        max_per_url: PAYMASTER_CALLS_PER_TOKEN,
+      },
+    );
+  } catch (err) {
+    return rpcError(envelopeId(body), toRpcError(err, quote.sessionId));
+  }
+  return paymasterFor(quote.livemode).handle(shopper, body, quote.id);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -352,7 +534,16 @@ function storedOf(row: { paymasterData: Prisma.JsonValue | null }): StoredPaymas
   const v = row.paymasterData as Partial<StoredPaymaster> | null;
   if (!v || typeof v.entryPoint !== 'string' || typeof v.chainId !== 'number') return null;
   const r = PaymasterResultSchema.safeParse(v.result);
-  return r.success ? { entryPoint: v.entryPoint, chainId: v.chainId, result: r.data } : null;
+  if (!r.success || typeof v.sender !== 'string' || typeof v.nonce !== 'string') return null;
+  return {
+    entryPoint: v.entryPoint,
+    chainId: v.chainId,
+    result: r.data,
+    sender: v.sender,
+    nonce: v.nonce,
+    validUntil: typeof v.validUntil === 'number' ? v.validUntil : 0,
+    hashes: Array.isArray(v.hashes) ? v.hashes.filter((h) => typeof h === 'string') : [],
+  };
 }
 
 /** The stored result when `op` is the operation already recorded for the quote. */
@@ -376,8 +567,29 @@ function sameOperation(
     : null;
 }
 
+/**
+ * Whether `op` may replace the recorded operation: still awaiting its outcome, same entry point,
+ * sender and nonce (the EntryPoint executes at most one of them), e.g. re-estimated gas.
+ */
+function replaceable(
+  row: { status: string; paymasterData: Prisma.JsonValue | null },
+  op: UserOp,
+  entryPoint: string,
+): boolean {
+  const stored = storedOf(row);
+  return (
+    row.status === 'submitted' &&
+    !!stored &&
+    stored.entryPoint === entryPoint &&
+    stored.sender === op.sender.toLowerCase() &&
+    BigInt(stored.nonce) === BigInt(op.nonce)
+  );
+}
+
 export interface PaymasterDeps {
   pimlico?: PimlicoClient;
+  /** The chain's RPC (account code, gas price). Live only. */
+  rpc?: (chain: string) => EvmRpc;
   /** Pimlico sponsorship policy (default: PIMLICO_SPONSORSHIP_POLICY_ID). */
   policyId?: () => string | undefined;
   now?: () => Date;
@@ -385,7 +597,7 @@ export interface PaymasterDeps {
 
 export class PaymasterProxy {
   constructor(
-    /** Live: forward to Pimlico. Test mode: simulated data, never Pimlico. */
+    /** Live: forward to Pimlico, verify accounts and fees on chain. Test mode: simulated. */
     private readonly live: boolean,
     private readonly deps: PaymasterDeps = {},
   ) {}
@@ -394,46 +606,39 @@ export class PaymasterProxy {
     return this.deps.pimlico ?? defaultPimlico();
   }
 
+  private rpc(chain: string): EvmRpc {
+    return (this.deps.rpc ?? ((c: string) => EvmRpc.forChain(c)))(chain);
+  }
+
   private context(): Record<string, string> {
     const id = (this.deps.policyId ?? (() => env().PIMLICO_SPONSORSHIP_POLICY_ID))();
     return id ? { sponsorshipPolicyId: id } : {};
   }
 
-  /** Answers one JSON-RPC request for the shopper's session. Never throws. */
-  async handle(shopper: ShopperCtx, body: unknown): Promise<JsonRpcResponse> {
+  /** Answers one JSON-RPC request for the quote `quoteId` of the shopper's session. Never throws. */
+  async handle(shopper: ShopperCtx, body: unknown, quoteId: string): Promise<JsonRpcResponse> {
     const envelope = EnvelopeSchema.safeParse(body);
-    const id: RpcId = envelope.success
-      ? envelope.data.id
-      : body && typeof body === 'object' && 'id' in body
-        ? ((body as { id: unknown }).id as RpcId)
-        : null;
-    const safeId = typeof id === 'string' || typeof id === 'number' ? id : null;
+    const id = envelopeId(body);
     if (!envelope.success) {
-      return rpcError(safeId, { code: RPC_ERRORS.invalidRequest, message: 'Invalid request' });
+      return rpcError(id, { code: RPC_ERRORS.invalidRequest, message: 'Invalid request' });
     }
     const method = envelope.data.method;
     if (!(PAYMASTER_METHODS as readonly string[]).includes(method)) {
-      return rpcError(safeId, {
+      return rpcError(id, {
         code: RPC_ERRORS.methodNotFound,
         message: `Method not found: only ${PAYMASTER_METHODS.join(', ')}`,
       });
     }
     try {
-      const result = await this.dispatch(
-        shopper,
-        method as PaymasterMethod,
-        envelope.data.params ?? [],
-      );
-      return { jsonrpc: '2.0', id: safeId, result };
+      const params = envelope.data.params ?? [];
+      const result =
+        method === 'pm_getPaymasterStubData'
+          ? await this.stubData(shopper, quoteId, params)
+          : await this.paymasterData(shopper, quoteId, params);
+      return { jsonrpc: '2.0', id, result };
     } catch (err) {
-      return rpcError(safeId, toRpcError(err, shopper.sessionId));
+      return rpcError(id, toRpcError(err, shopper.sessionId));
     }
-  }
-
-  private dispatch(shopper: ShopperCtx, method: PaymasterMethod, params: unknown[]) {
-    return method === 'pm_getPaymasterStubData'
-      ? this.stubData(shopper, params)
-      : this.paymasterData(shopper, params);
   }
 
   private now(): Date {
@@ -451,11 +656,32 @@ export class PaymasterProxy {
     if (held?.reservationState !== 'reserved') throw sponsorshipReleased();
   }
 
-  /** Gas estimation data: validated like the real thing, records nothing. */
-  async stubData(shopper: ShopperCtx, params: unknown[]): Promise<PaymasterResult> {
-    const now = this.now();
-    const c = await check(shopper, params, now);
+  /**
+   * Tendr's daily loss cap stops every paymaster sponsorship (both modes: a shopper-paid
+   * operation is still paid from Tendr's Pimlico balance), and live, the account must be a
+   * known implementation.
+   */
+  private async admissible(c: Checked, now: Date): Promise<void> {
+    if (await lossCapReached(c.q.shopper.livemode, now)) throw gaslessNotAvailable();
     await this.requireHeld(c.q);
+    if (!this.live) return;
+    try {
+      await assertKnownAccount(this.rpc(c.q.origin.blockchain), c.op, c.format, now.getTime());
+    } catch (err) {
+      if (err instanceof UserOpRefused) throw err;
+      throw unavailable();
+    }
+  }
+
+  /** Gas estimation data: validated like the real thing, records nothing. */
+  async stubData(
+    shopper: ShopperCtx,
+    quoteId: string,
+    params: unknown[],
+  ): Promise<PaymasterResult> {
+    const now = this.now();
+    const c = await check(shopper, quoteId, params, now);
+    await this.admissible(c, now);
     const wallet = c.q.quote.walletAddress!.toLowerCase();
     const limits = {
       max_per_session: STUB_CALLS_PER_SESSION,
@@ -473,14 +699,21 @@ export class PaymasterProxy {
       STUB_CALLS_PER_ADDRESS_PER_HOUR,
       limits,
     );
-    if (!this.live) return simulatedResult(c.q.quote.id, true);
-    return this.forward('pm_getPaymasterStubData', c);
+    const result = this.live
+      ? await this.forward('pm_getPaymasterStubData', c)
+      : simulatedResult(c.q.quote, true);
+    // Never final: the wallet must always come back for pm_getPaymasterData (the commitment).
+    return { ...result, isFinal: false };
   }
 
   /** The commitment point: forwards, records the submission, returns the paymaster data. */
-  async paymasterData(shopper: ShopperCtx, params: unknown[]): Promise<PaymasterResult> {
+  async paymasterData(
+    shopper: ShopperCtx,
+    quoteId: string,
+    params: unknown[],
+  ): Promise<PaymasterResult> {
     const now = this.now();
-    const c = await check(shopper, params, now);
+    const c = await check(shopper, quoteId, params, now);
     const { q, op, entryPoint, chainId } = c;
     const scope = scopeOf(q);
     const active = await prisma.gasSponsorship.findFirst({
@@ -490,22 +723,45 @@ export class PaymasterProxy {
     if (active) {
       const same = sameOperation(active, op, entryPoint, chainId);
       if (same) return same;
-      throw inFlight();
+      if (!replaceable(active, op, entryPoint)) throw inFlight();
     }
-    await this.requireHeld(q);
+    await this.admissible(c, now);
     await assertCostBounded(q, op);
+    if (this.live) await assertFeesBounded(this.rpc(q.origin.blockchain), op);
     // The limits count only operations that passed validation (ruling T6-e).
     await countSessionAttempt(q);
     await countAddressAttempt(q, now);
 
     const result = this.live
       ? await this.forward('pm_getPaymasterData', c)
-      : simulatedResult(q.quote.id, false);
+      : simulatedResult(q.quote, false);
     const final = withPaymaster(op, result);
+    if (!final.paymasterVerificationGasLimit || !final.paymasterPostOpGasLimit) {
+      throw new UserOpRefused(
+        'the paymaster gas limits must be set (from pm_getPaymasterStubData)',
+      );
+    }
     // Again with the paymaster's own gas limits, as the wallet will sign it.
     await assertCostBounded(q, final);
+    const validUntil = pimlicoValidUntil(result.paymasterData);
+    const horizon = Math.floor((q.quote.deadline.getTime() + PAYMASTER_GIVE_UP_MS) / 1000);
+    if (!validUntil || validUntil > horizon) {
+      log('warn', 'paymaster proxy: paymaster signature validity unbounded or too long', {
+        quoteId: q.quote.id,
+        validUntil,
+      });
+      throw unavailable();
+    }
     const hash = userOpHash(final, entryPoint, chainId);
-    const recorded = await record(q, now, { entryPoint, chainId, result }, hash, op);
+    const recorded = await record(q, now, hash, op, {
+      entryPoint,
+      chainId,
+      result,
+      sender: op.sender.toLowerCase(),
+      nonce: op.nonce,
+      validUntil,
+      hashes: [hash],
+    });
     if (recorded.existing) return recorded.result;
     if (!this.live) await simulateMined(q, recorded.id);
     return result;
@@ -526,20 +782,12 @@ export class PaymasterProxy {
         quoteId: c.q.quote.id,
         err: err instanceof PimlicoError ? err.message : 'request failed',
       });
-      throw new AppError(
-        'PROVIDER_UNAVAILABLE',
-        'Sponsorship is unavailable for this payment; pay another way',
-        503,
-      );
+      throw unavailable();
     }
     const r = PaymasterResultSchema.safeParse(raw);
     if (!r.success) {
       log('warn', 'paymaster proxy: unexpected Pimlico result', { method, quoteId: c.q.quote.id });
-      throw new AppError(
-        'PROVIDER_UNAVAILABLE',
-        'Sponsorship is unavailable for this payment; pay another way',
-        503,
-      );
+      throw unavailable();
     }
     return r.data;
   }
@@ -547,15 +795,16 @@ export class PaymasterProxy {
 
 /**
  * Records the submission under the session lock: claims the quote's reservation (merchant
- * sponsors) or creates a `sponsor = shopper` row. A concurrent request that recorded the same
- * operation first is returned as is; another operation is refused.
+ * sponsors) or creates a `sponsor = shopper` row; or replaces a recorded operation with one of the
+ * same sender and nonce. A concurrent request that recorded the same operation first is returned
+ * as is; any other operation is refused.
  */
 async function record(
   q: QuoteContext,
   now: Date,
-  stored: StoredPaymaster,
   hash: string,
   op: UserOp,
+  stored: StoredPaymaster,
 ): Promise<{ id: string; existing: boolean; result: PaymasterResult }> {
   const scope = scopeOf(q);
   return tenantTransaction(scope, async (tx) => {
@@ -573,7 +822,21 @@ async function record(
     if (existing) {
       const same = sameOperation(existing, op, stored.entryPoint, stored.chainId);
       if (same) return { id: existing.id, existing: true, result: same };
-      throw inFlight();
+      if (!replaceable(existing, op, stored.entryPoint)) throw inFlight();
+      const previous = storedOf(existing)!;
+      const replaced: StoredPaymaster = {
+        ...stored,
+        hashes: [...previous.hashes.filter((h) => h !== hash), hash],
+      };
+      const { count } = await tx.gasSponsorship.updateMany({
+        where: { ...scope, id: existing.id, status: 'submitted', userOpHash: existing.userOpHash },
+        data: {
+          userOpHash: hash,
+          paymasterData: replaced as unknown as Prisma.InputJsonValue,
+        },
+      });
+      if (count !== 1) throw inFlight();
+      return { id: existing.id, existing: false, result: stored.result };
     }
     const signer = quote.walletAddress!.toLowerCase();
     const json = stored as unknown as Prisma.InputJsonValue;
@@ -622,11 +885,17 @@ async function record(
   });
 }
 
-/** Test mode: obviously simulated paymaster data, deterministic per quote. */
-function simulatedResult(quoteId: string, stub: boolean): PaymasterResult {
+/**
+ * Test mode: obviously simulated paymaster data, deterministic per quote, in the verifying
+ * layout with `validUntil` = the give-up horizon.
+ */
+function simulatedResult(quote: Pick<Quote, 'id' | 'deadline'>, stub: boolean): PaymasterResult {
+  const validUntil = Math.floor((quote.deadline.getTime() + PAYMASTER_GIVE_UP_MS) / 1000);
+  const sig = keccak256(toUtf8Bytes(`tendr:simulated-paymaster:${quote.id}`)).slice(2);
   return {
     paymaster: SIMULATED_PAYMASTER,
-    paymasterData: keccak256(toUtf8Bytes(`tendr:simulated-paymaster:${quoteId}`)),
+    paymasterData:
+      '0x00' + validUntil.toString(16).padStart(12, '0') + '0'.repeat(12) + sig + sig + '1b',
     paymasterVerificationGasLimit: '0x186a0',
     paymasterPostOpGasLimit: '0x1',
     ...(stub ? { isFinal: false } : {}),
@@ -639,7 +908,7 @@ export const SIMULATED_PAYMASTER = '0x000000000000000000000000000000000000dead';
 /** Test mode: the operation is mined at once and the deposit reaches the simulated 1Click. */
 async function simulateMined(q: QuoteContext, id: string): Promise<void> {
   const txHash = simulatedRelayTxHash(id);
-  await applyRelayOutcome(id, {
+  const applied = await applyRelayOutcome(id, {
     status: 'confirmed',
     txHash,
     gasUsed: SIMULATED_GAS_USED,
@@ -650,6 +919,7 @@ async function simulateMined(q: QuoteContext, id: string): Promise<void> {
         ? BigInt(q.quote.networkFeeAmount.toFixed(0))
         : null,
   });
+  if (applied) await recordUnrecovered(id, new Date());
   await markDepositTx(q.quote, txHash);
   try {
     await simulatedOneClick().simulate(q.quote.depositAddress, 'exact', {
@@ -680,6 +950,47 @@ async function markDepositTx(
   } catch (err) {
     log('warn', 'paymaster: 1Click deposit notice failed', { quoteId: quote.id, err: String(err) });
   }
+}
+
+/**
+ * The part of a mined operation's actual cost Tendr will not recover, recorded once
+ * (`unrecovered_usd`, counted by the daily loss cap): cost − the collected fee's USD value
+ * (shopper pays) or cost − the merchant's quoted estimate (merchant sponsors). Nothing when the
+ * row is already a whole Tendr loss, unpriced, or recovered in full.
+ */
+export async function recordUnrecovered(id: string, now: Date): Promise<boolean> {
+  const head = await prisma.gasSponsorship.findUnique({
+    where: { id },
+    select: { merchantId: true, livemode: true },
+  });
+  if (!head) return false;
+  const scope = { merchantId: head.merchantId, livemode: head.livemode };
+  return tenantTransaction(scope, async (tx) => {
+    const sp = await tx.gasSponsorship.findFirst({ where: { ...scope, id } });
+    if (!sp || sp.sponsor === 'tendr' || sp.unrecoveredAt || !sp.costUsd) return false;
+    const estimate = sp.estimateUsd ?? new Prisma.Decimal(0);
+    let recovered: Prisma.Decimal;
+    if (sp.sponsor === 'shopper') {
+      recovered =
+        sp.feeCollected && sp.feeAmount && sp.feeAmount.gt(0)
+          ? estimate.mul(sp.feeCollected).div(sp.feeAmount)
+          : new Prisma.Decimal(0);
+    } else {
+      recovered = estimate;
+    }
+    const loss = sp.costUsd.minus(recovered).toDecimalPlaces(6, Prisma.Decimal.ROUND_UP);
+    if (loss.lte(0)) return false;
+    await tx.gasSponsorship.updateMany({
+      where: { ...scope, id, unrecoveredAt: null },
+      data: { unrecoveredUsd: loss, unrecoveredAt: now },
+    });
+    return true;
+  });
+}
+
+function envelopeId(body: unknown): RpcId {
+  const id = body && typeof body === 'object' && 'id' in body ? (body as { id: unknown }).id : null;
+  return typeof id === 'string' || typeof id === 'number' ? id : null;
 }
 
 /** JSON-RPC error for anything the proxy throws (never a stack, never a secret). */
@@ -719,6 +1030,11 @@ export function paymasterFor(livemode: boolean): PaymasterProxy {
     proxies.set(livemode, p);
   }
   return p;
+}
+
+/** Replaces the proxy for a mode (tests). */
+export function setPaymaster(livemode: boolean, proxy: PaymasterProxy): void {
+  proxies.set(livemode, proxy);
 }
 
 /** Drops the cached proxies and client (tests). */
@@ -766,12 +1082,20 @@ export function userOpFeeMoved(
   return fee > where.cap ? where.cap : fee;
 }
 
+/** When a recorded operation with no receipt is given up: once Pimlico's signature expired. */
+function giveUpAt(row: { paymasterData: Prisma.JsonValue | null }, deadline: Date): number {
+  const stored = storedOf(row);
+  if (stored?.validUntil) return stored.validUntil * 1000 + PAYMASTER_VALIDITY_GRACE_MS;
+  return deadline.getTime() + PAYMASTER_GIVE_UP_MS;
+}
+
 /**
- * One pass over live paymaster submissions awaiting their outcome: asks Pimlico for each
- * operation's receipt and applies it (`applyRelayOutcome`: actual gas and cost, a shopper fee leg's
- * revenue from what moved, loss rules). An operation with no receipt PAYMASTER_GIVE_UP_MS past its
- * quote's deadline is failed (the wallet never sent it; no gas spent). Returns how many outcomes
- * were applied.
+ * One pass over paymaster submissions awaiting their outcome: asks Pimlico for the receipt of
+ * every operation hash issued for each (a replacement keeps its predecessors) and applies the one
+ * that landed (`applyRelayOutcome`: actual gas and cost, a shopper fee leg's revenue from what
+ * moved, loss rules), then records any cost not recovered. A submission with no receipt once
+ * Pimlico's signature has expired is failed (nothing can land any more; no gas spent). Rows are
+ * visited least recently checked first. Returns how many outcomes were applied.
  */
 export async function pollPaymasterOps(
   deps: {
@@ -802,9 +1126,19 @@ export async function pollPaymasterOps(
     const chainId = EVM_CHAIN_IDS[row.chain];
     if (!quote || !chainId) continue;
     try {
-      const raw = await pimlico.request(chainId, 'eth_getUserOperationReceipt', [row.userOpHash]);
-      if (raw === null) {
-        if (now.getTime() > quote.deadline.getTime() + PAYMASTER_GIVE_UP_MS) {
+      const stored = storedOf(row);
+      const hashes = [...new Set([row.userOpHash!, ...(stored?.hashes ?? [])])];
+      let raw: unknown = null;
+      let landed: string | null = null;
+      for (const h of hashes) {
+        raw = await pimlico.request(chainId, 'eth_getUserOperationReceipt', [h]);
+        if (raw !== null) {
+          landed = h;
+          break;
+        }
+      }
+      if (landed === null) {
+        if (now.getTime() > giveUpAt(row, quote.deadline)) {
           if (
             await applyRelayOutcome(
               row.id,
@@ -821,6 +1155,12 @@ export async function pollPaymasterOps(
           ) {
             applied++;
           }
+        } else {
+          // Checked: the next pass visits rows not checked for longest first.
+          await prisma.gasSponsorship.updateMany({
+            where: { id: row.id, status: 'submitted' },
+            data: { updatedAt: now },
+          });
         }
         continue;
       }
@@ -828,6 +1168,12 @@ export async function pollPaymasterOps(
       if (!r.success) {
         log('warn', 'paymaster: unreadable user operation receipt', { sponsorshipId: row.id });
         continue;
+      }
+      if (landed !== row.userOpHash) {
+        await prisma.gasSponsorship.updateMany({
+          where: { id: row.id, status: 'submitted' },
+          data: { userOpHash: landed },
+        });
       }
       const receipt = r.data;
       let costUsd: string | null = null;
@@ -861,8 +1207,11 @@ export async function pollPaymasterOps(
         },
         now,
       );
-      if (did) applied++;
-      if (did && receipt.success) await markDepositTx(quote, txHash);
+      if (did) {
+        applied++;
+        await recordUnrecovered(row.id, now);
+        if (receipt.success) await markDepositTx(quote, txHash);
+      }
     } catch (err) {
       log('warn', 'paymaster: receipt lookup failed', {
         sponsorshipId: row.id,
