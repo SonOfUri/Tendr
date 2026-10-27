@@ -717,6 +717,36 @@ class CheckoutTest extends Tendr_Test_Case {
 		$this->assertFalse( self::cancel_run( $order->get_id() ), 'paid: the webhook moves the order' );
 	}
 
+	public function test_auto_cancel_keeps_an_order_whose_session_belongs_to_an_earlier_connection(): void {
+		self::connect_locally( 'a' );
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+		$this->assertSame( Tendr_Connect::connection()['id'], wc_get_order( $order->get_id() )->get_meta( '_tendr_connection_id' ) );
+
+		Tendr_Connect::disconnect();
+		self::connect_locally( 'b' );
+		$this->expire_reply = array( 404, self::error( 'NOT_FOUND', 'Session not found' ) );
+
+		$this->assertFalse( self::cancel_run( $order->get_id() ) );
+		$this->assertFalse( self::cancel_run( $order->get_id() ) );
+		$this->assertSame( 1, self::notes_with( $order->get_id(), 'belongs to an earlier connection' ) );
+	}
+
+	public function test_auto_cancel_still_cancels_a_not_found_session_of_the_same_connection_or_a_legacy_order(): void {
+		self::connect_locally( 'a' );
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+		$this->expire_reply = array( 404, self::error( 'NOT_FOUND', 'Session not found' ) );
+		$this->assertTrue( self::cancel_run( $order->get_id() ), 'same connection' );
+
+		$legacy = wc_get_order( $order->get_id() );
+		$legacy->delete_meta_data( '_tendr_connection_id' );
+		$legacy->save();
+		Tendr_Connect::disconnect();
+		self::connect_locally( 'b' );
+		$this->assertTrue( self::cancel_run( $order->get_id() ), 'legacy order without a stored connection' );
+	}
+
 	public function test_a_404_that_is_not_the_api_never_replaces_the_session(): void {
 		self::connect_locally();
 		$order = self::order();

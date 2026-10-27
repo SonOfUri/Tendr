@@ -30,6 +30,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 
 	const META_SESSION_ID   = '_tendr_session_id';
 	const META_SESSION_URL  = '_tendr_session_url';
+	const META_CONNECTION   = '_tendr_connection_id';
 	const META_MODE         = '_tendr_mode';
 	const META_ATTEMPT      = '_tendr_attempt';
 	const META_EXTERNAL_REF = '_tendr_external_ref';
@@ -552,6 +553,10 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		$order->update_meta_data( self::META_SESSION_URL, $url );
 		$order->update_meta_data( self::META_MODE, $mode );
 		$order->update_meta_data( self::META_EXTERNAL_REF, $external_ref );
+		$connection = Tendr_Connect::connection();
+		if ( null !== $connection ) {
+			$order->update_meta_data( self::META_CONNECTION, (string) $connection['id'] );
+		}
 		$order->save();
 		$order->add_order_note(
 			'live' === $mode
@@ -708,7 +713,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	}
 
 	/**
-	 * Why the order must stay pending ('deposit' | 'payment' | 'unreachable'), or null to cancel.
+	 * Why the order must stay pending ('deposit' | 'payment' | 'earlier_connection' | 'unreachable'), or null to cancel.
 	 *
 	 * @param WC_Order $order      Order.
 	 * @param string   $session_id Its session.
@@ -731,6 +736,13 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 			$result = $view;
 		}
 		if ( self::is_not_found( $result ) ) {
+			// Sessions are scoped per connection: one made under an earlier connection answers
+			// NOT_FOUND even though a deposit may be in flight, so never cancel on that answer.
+			$stored  = (string) $order->get_meta( self::META_CONNECTION );
+			$current = Tendr_Connect::connection();
+			if ( '' !== $stored && null !== $current && $stored !== (string) $current['id'] ) {
+				return 'earlier_connection';
+			}
 			return null;
 		}
 		return self::is_temporary( $result ) ? 'unreachable' : null;
@@ -766,6 +778,8 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 				return __( 'Not cancelled: a crypto deposit is in progress for this order. The order stays pending and its stock stays held until tendr confirms the payment.', 'tendr' );
 			case 'payment':
 				return __( 'Not cancelled: tendr has a crypto payment for this order. The order stays pending until tendr confirms it.', 'tendr' );
+			case 'earlier_connection':
+				return __( 'This order\'s tendr payment belongs to an earlier connection — it can\'t be checked from here. Check the tendr dashboard before cancelling.', 'tendr' );
 			default:
 				return __( 'Not cancelled yet: tendr could not be reached to close the crypto checkout. WooCommerce will try again on its next run.', 'tendr' );
 		}
