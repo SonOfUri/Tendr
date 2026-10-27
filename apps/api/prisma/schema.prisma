@@ -1300,6 +1300,9 @@ model GasSponsorship {
   estimateUsd            Decimal?             @map("estimate_usd") @db.Decimal(18, 6)
   /// The hold on the monthly gas budget; null when nothing was reserved (shopper-paid).
   reservationState       GasReservationState? @map("reservation_state")
+  /// When Tendr recognised the cost as its own loss (`sponsor = tendr`, `recognizeTendrLoss`);
+  /// the daily loss cap counts by this time.
+  lossRecognizedAt       DateTime?            @map("loss_recognized_at")
   createdAt              DateTime             @default(now()) @map("created_at")
   updatedAt              DateTime             @updatedAt @map("updated_at")
 
@@ -1309,6 +1312,7 @@ model GasSponsorship {
 
   @@index([merchantId])
   @@index([sessionId])
+  @@index([livemode, lossRecognizedAt])
   @@map("gas_sponsorships")
 }
 

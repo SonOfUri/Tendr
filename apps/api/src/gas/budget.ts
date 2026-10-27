@@ -90,23 +90,50 @@ async function monthEventOnce(
   });
 }
 
-/** `gas.budget_low` when this change takes reserved + spent from below 80 % to at least 80 %. */
+/**
+ * The budget event payload (delivered as webhook `data`): the mode, month, budget and the month's
+ * reserved, spent and remaining amounts as decimal strings.
+ */
+function budgetFigures(
+  scope: ScopeContext,
+  month: string,
+  budget: Decimal,
+  reserved: Decimal,
+  spent: Decimal,
+) {
+  return {
+    mode: scope.livemode ? 'live' : 'test',
+    month,
+    budget_usd: budget.toFixed(),
+    reserved_usd: reserved.toFixed(),
+    spent_usd: spent.toFixed(),
+    remaining_usd: Dec.max(0, budget.minus(reserved).minus(spent)).toFixed(),
+  };
+}
+
+/**
+ * `gas.budget_low` when this change takes reserved + spent from below 80 % of the budget to at
+ * least 80 %. `reserved` and `spent` are the month's figures after the change.
+ */
 async function maybeBudgetLow(
   tx: Tx,
   scope: ScopeContext,
   month: string,
   row: MonthRow,
-  before: Decimal,
-  after: Decimal,
+  reserved: Decimal,
+  spent: Decimal,
 ): Promise<void> {
   const budget = await monthlyBudget(tx, scope);
   const threshold = budget.mul(LOW_RATIO);
-  if (before.gte(threshold) || after.lt(threshold)) return;
-  await monthEventOnce(tx, scope, row, GAS_BUDGET_LOW, {
-    month,
-    budget_usd: budget.toFixed(),
-    used_usd: after.toFixed(),
-  });
+  const before = row.reserved_usd.plus(row.spent_usd);
+  if (before.gte(threshold) || reserved.plus(spent).lt(threshold)) return;
+  await monthEventOnce(
+    tx,
+    scope,
+    row,
+    GAS_BUDGET_LOW,
+    budgetFigures(scope, month, budget, reserved, spent),
+  );
 }
 
 /**
@@ -114,7 +141,8 @@ async function maybeBudgetLow(
  * `gas_sponsorships` row (`reservation_state = reserved`, `estimate_usd = usd`). A session holds at
  * most one reservation: an earlier one still reserved is released in the same transaction.
  * Returns null, and records `gas.budget_exhausted` (once per month), when reserved + spent + usd
- * would exceed the month's budget. Throws when the session is not the merchant's in that mode.
+ * would exceed the month's budget. That event is written in the caller's transaction: a caller
+ * that gets null should still commit (and fall back to "shopper pays"), or the event is lost. Throws when the session is not the merchant's in that mode.
  * Must run inside the caller's transaction.
  */
 export async function reserveBudget(
@@ -143,9 +171,7 @@ export async function reserveBudget(
   const after = before.plus(usd);
   if (after.gt(budget)) {
     await monthEventOnce(tx, scope, row, GAS_BUDGET_EXHAUSTED, {
-      month,
-      budget_usd: budget.toFixed(),
-      used_usd: before.toFixed(),
+      ...budgetFigures(scope, month, budget, row.reserved_usd, row.spent_usd),
       requested_usd: usd.toFixed(),
     });
     return null;
@@ -170,7 +196,7 @@ export async function reserveBudget(
     where: { id: row.id },
     data: { reservedUsd: { increment: usd }, count: { increment: 1 } },
   });
-  await maybeBudgetLow(tx, scope, month, row, before, after);
+  await maybeBudgetLow(tx, scope, month, row, row.reserved_usd.plus(usd), row.spent_usd);
   return { sponsorshipId: id };
 }
 
@@ -223,8 +249,14 @@ export async function settleReservation(
       where: { id: sponsorshipId },
       data: { reservationState: 'settled' },
     });
-    const before = row.reserved_usd.plus(row.spent_usd);
-    await maybeBudgetLow(tx, scope, month, row, before, before.minus(estimate).plus(amount));
+    await maybeBudgetLow(
+      tx,
+      scope,
+      month,
+      row,
+      row.reserved_usd.minus(estimate),
+      row.spent_usd.plus(amount),
+    );
   });
 }
 

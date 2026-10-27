@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import type { ResolvedGasSponsor, StoredFeePayer } from './enums.js';
 
-/** Webhook event types, exactly the checkout spec §8 list. */
+/**
+ * Webhook event types: the checkout spec §8 list, plus the gas budget events (gasless spec §5):
+ * `gas.budget_low` (reserved + spent crossed 80 % of the month's budget) and
+ * `gas.budget_exhausted` (a sponsorship was refused for budget), each at most once a month.
+ */
 export const WebhookEventTypeValues = [
   'checkout.session.expired',
   'payment.detected',
@@ -15,6 +19,8 @@ export const WebhookEventTypeValues = [
   'refund.needs_address',
   'refund.cancelled',
   'refund.failed',
+  'gas.budget_low',
+  'gas.budget_exhausted',
 ] as const;
 export type WebhookEventType = (typeof WebhookEventTypeValues)[number];
 export const WebhookEventTypeSchema = z.enum(WebhookEventTypeValues);

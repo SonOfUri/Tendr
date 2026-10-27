@@ -29,6 +29,8 @@ describe('checkout contracts', () => {
       'refund.needs_address',
       'refund.cancelled',
       'refund.failed',
+      'gas.budget_low',
+      'gas.budget_exhausted',
     ]);
     expect(WebhookEventTypeSchema.safeParse('payment.settled').success).toBe(false);
   });

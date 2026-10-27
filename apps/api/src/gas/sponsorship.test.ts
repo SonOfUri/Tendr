@@ -2,7 +2,7 @@ import type { GasPolicyInput } from '@tendr/contracts';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import { createMerchant, createRow, resetDb } from '../test/helpers.js';
-import { GAS_LOSS_CAP_REACHED, lossCapReached } from './loss-cap.js';
+import { GAS_LOSS_CAP_REACHED, lossCapReached, recognizeTendrLoss } from './loss-cap.js';
 import { putGasPolicy } from './policy.js';
 import { decideSponsor, type DecideSponsorInput } from './sponsorship.js';
 
@@ -38,14 +38,15 @@ function input(merchantId: string, o: Partial<DecideSponsorInput> = {}): DecideS
   };
 }
 
-/** A Tendr-borne loss (sponsor = tendr) of `usd` recorded at `at`, in `livemode`. */
-async function loss(usd: string, at: Date, livemode = false) {
+/**
+ * A merchant sponsorship (created at `createdAt`, default `at`) whose `usd` cost Tendr recognised
+ * as its own loss at `at`, in `livemode`.
+ */
+async function loss(usd: string, at: Date, livemode = false, createdAt = at) {
   const m = await createMerchant();
-  await createRow('GasSponsorship', m.id, livemode, {
-    sponsor: 'tendr',
-    costUsd: usd,
-    createdAt: at,
-  });
+  const row = await createRow('GasSponsorship', m.id, livemode, { createdAt });
+  await prisma.$transaction((tx) => recognizeTendrLoss(tx, row.id, usd, at));
+  return row.id;
 }
 
 describe('decideSponsor', () => {
@@ -283,5 +284,40 @@ describe('lossCapReached', () => {
     expect(await lossCapReached(false, NOW)).toBe(true);
     expect(await lossCapReached(true, NOW)).toBe(true);
     expect(await lossCapReached(true, new Date('2026-10-16T00:00:00Z'))).toBe(false);
+  });
+
+  it('counts a loss on the UTC day it was recognised, not the day the sponsorship was made', async () => {
+    // Made three days ago, recognised today: counts today.
+    await loss('50', NOW, false, new Date('2026-10-12T09:00:00Z'));
+    expect(await lossCapReached(false, NOW)).toBe(true);
+    expect(await lossCapReached(false, new Date('2026-10-12T12:00:00Z'))).toBe(false);
+  });
+});
+
+describe('recognizeTendrLoss', () => {
+  beforeEach(async () => {
+    await resetDb();
+  });
+
+  it('moves the sponsorship to sponsor = tendr with its cost and recognition time, once', async () => {
+    const id = await loss('0.3', NOW, false, new Date('2026-10-10T00:00:00Z'));
+    const row = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id } });
+    expect(row.sponsor).toBe('tendr');
+    expect(row.costUsd?.toFixed()).toBe('0.3');
+    expect(row.lossRecognizedAt?.toISOString()).toBe(NOW.toISOString());
+    // A second call changes nothing (the loss keeps its first recognition time and cost).
+    const later = new Date('2026-10-20T00:00:00Z');
+    expect(await prisma.$transaction((tx) => recognizeTendrLoss(tx, id, '9', later))).toBe(false);
+    const again = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id } });
+    expect(again.lossRecognizedAt?.toISOString()).toBe(NOW.toISOString());
+    expect(again.costUsd?.toFixed()).toBe('0.3');
+  });
+
+  it('rejects a malformed cost', async () => {
+    const m = await createMerchant();
+    const row = await createRow('GasSponsorship', m.id, false, {});
+    await expect(
+      prisma.$transaction((tx) => recognizeTendrLoss(tx, row.id, '-1', NOW)),
+    ).rejects.toThrow();
   });
 });

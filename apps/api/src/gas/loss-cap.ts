@@ -1,11 +1,13 @@
 // The Tendr-wide daily cap on unrecovered sponsorship losses (project 5a, spec §2.2, §2.5).
 //
-// A merchant-sponsored cost Tendr could not recover is recorded with `sponsor = tendr`. Once the
-// day's (UTC) total of those costs in a mode reaches TENDR_SPONSOR_LOSS_CAP_USD, new payments are
+// A merchant-sponsored cost Tendr could not recover is recorded with `sponsor = tendr` and the time
+// it was recognised (`recognizeTendrLoss`). Once the total of the losses recognised on the current
+// UTC day in a mode reaches TENDR_SPONSOR_LOSS_CAP_USD, new payments are
 // not sponsored (the shopper pays) and operators are alerted: an internal system event
 // `gas.loss_cap_reached` (never a webhook) plus an `OPS ALERT` log line, once per UTC day per mode
 // (the same pattern as the watcher's ops events).
 import { Prisma } from '@prisma/client';
+import { UsdAmountSchema } from '@tendr/contracts';
 import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
 import { log } from '../lib/logger.js';
@@ -24,19 +26,39 @@ function dayBounds(at: Date): { start: Date; end: Date } {
   return { start, end: new Date(start.getTime() + 86_400_000) };
 }
 
-/** Today's (UTC) unrecovered sponsorship losses in the mode, in USD. */
+/**
+ * Records a sponsorship's cost as Tendr's own loss (spec §2.5: recovery from the merchant was
+ * impossible): `sponsor = tendr`, `cost_usd = costUsd`, `loss_recognized_at = at`. Only a
+ * sponsorship not already a Tendr loss changes; returns false (a no-op) otherwise, so the loss
+ * keeps its first recognition time. Must run inside the caller's transaction.
+ */
+export async function recognizeTendrLoss(
+  tx: Prisma.TransactionClient,
+  sponsorshipId: string,
+  costUsd: string,
+  at: Date,
+): Promise<boolean> {
+  const cost = UsdAmountSchema.parse(costUsd);
+  const { count } = await tx.gasSponsorship.updateMany({
+    where: { id: sponsorshipId, NOT: { sponsor: 'tendr' } },
+    data: { sponsor: 'tendr', costUsd: cost, lossRecognizedAt: at },
+  });
+  return count === 1;
+}
+
+/** The unrecovered sponsorship losses recognised on the UTC day of `now` in the mode, in USD. */
 async function lossToday(livemode: boolean, now: Date): Promise<Prisma.Decimal> {
   const { start, end } = dayBounds(now);
   const { _sum } = await prisma.gasSponsorship.aggregate({
-    where: { livemode, sponsor: 'tendr', createdAt: { gte: start, lt: end } },
+    where: { livemode, sponsor: 'tendr', lossRecognizedAt: { gte: start, lt: end } },
     _sum: { costUsd: true },
   });
   return _sum.costUsd ?? new Prisma.Decimal(0);
 }
 
 /**
- * Whether today's (UTC, by sponsorship `created_at`) total `cost_usd` of `sponsor = tendr`
- * sponsorships in the mode has reached TENDR_SPONSOR_LOSS_CAP_USD.
+ * Whether the total `cost_usd` of `sponsor = tendr` sponsorships in the mode whose loss was
+ * recognised (`loss_recognized_at`) on the UTC day of `now` has reached TENDR_SPONSOR_LOSS_CAP_USD.
  */
 export async function lossCapReached(livemode: boolean, now: Date): Promise<boolean> {
   return (await lossToday(livemode, now)).gte(env().TENDR_SPONSOR_LOSS_CAP_USD);

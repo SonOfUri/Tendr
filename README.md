@@ -433,7 +433,12 @@ secret (`whsec_...`) is shown once, at creation and on rotation.
   - `checkout.session.expired`;
   - `payment.detected`, `payment.processing`, `payment.succeeded`, `payment.refunded`,
     `payment.late`, `payment.held`;
-  - `refund.pending`, `refund.sent`, `refund.needs_address`, `refund.cancelled`, `refund.failed`.
+  - `refund.pending`, `refund.sent`, `refund.needs_address`, `refund.cancelled`, `refund.failed`;
+  - `gas.budget_low` (sponsored gas reserved + spent crossed 80 % of the month's budget) and
+    `gas.budget_exhausted` (a payment was not sponsored because the budget is used up), each at
+    most once per calendar month (UTC) per mode. `data`: `mode` (`test`/`live`), `month`
+    (`YYYY-MM`), `budget_usd`, `reserved_usd`, `spent_usd`, `remaining_usd`, plus
+    `requested_usd` on `gas.budget_exhausted`.
 - `refund.cancelled` means the refund's proposal was rejected by the signers or expired;
   `refund.failed` means it failed when it executed on chain. Either way no money moved for that
   proposal. `data` has `refund_id`, `payment_id`, `session_id`, `external_ref`, `asset`, `amount`

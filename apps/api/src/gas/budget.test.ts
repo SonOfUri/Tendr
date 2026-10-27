@@ -1,5 +1,14 @@
 import type { Prisma } from '@prisma/client';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  attemptDelivery,
+  createEndpoint,
+  fanOutEvent,
+  setWebhookQueue,
+  setWebhookResolver,
+  setWebhookTransport,
+  type WebhookRequest,
+} from '../checkout/webhooks.js';
 import { prisma } from '../lib/prisma.js';
 import { createMerchant, createRow, resetDb } from '../test/helpers.js';
 import {
@@ -207,7 +216,14 @@ describe('gas budget reservations', () => {
     expect(await low()).toBe(1);
     const ev = await prisma.event.findFirstOrThrow({ where: { type: GAS_BUDGET_LOW } });
     expect(ev.livemode).toBe(false);
-    expect(ev.payload).toMatchObject({ month: MONTH, budget_usd: '50' });
+    expect(ev.payload).toEqual({
+      mode: 'test',
+      month: MONTH,
+      budget_usd: '50',
+      reserved_usd: '41',
+      spent_usd: '0',
+      remaining_usd: '9',
+    });
     await reserve(m.id, await session(m.id), '5'); // 92 %
     expect(await low()).toBe(1);
   });
@@ -217,8 +233,97 @@ describe('gas budget reservations', () => {
     await reserve(m.id, await session(m.id), '0.9');
     expect(await reserve(m.id, await session(m.id), '0.5')).toBeNull();
     expect(await reserve(m.id, await session(m.id), '0.2')).toBeNull();
-    expect(
-      await prisma.event.count({ where: { merchantId: m.id, type: GAS_BUDGET_EXHAUSTED } }),
-    ).toBe(1);
+    const evs = await prisma.event.findMany({
+      where: { merchantId: m.id, type: GAS_BUDGET_EXHAUSTED },
+    });
+    expect(evs).toHaveLength(1);
+    expect(evs[0]!.payload).toEqual({
+      mode: 'test',
+      month: MONTH,
+      budget_usd: '1',
+      reserved_usd: '0.9',
+      spent_usd: '0',
+      remaining_usd: '0.1',
+      requested_usd: '0.5',
+    });
+  });
+
+  it('two parallel first reservations in a brand-new month share one month row; the budget holds', async () => {
+    const m = await setup('50');
+    const [a, b] = [await session(m.id), await session(m.id)];
+    const results = await Promise.all([reserve(m.id, a, '30'), reserve(m.id, b, '30')]);
+    expect(results.filter((r) => r !== null)).toHaveLength(1);
+    const rows = await prisma.gasBudgetMonth.findMany({ where: { merchantId: m.id } });
+    expect(rows).toHaveLength(1);
+    expect(n(rows[0]!.reservedUsd)).toBe('30');
+    expect(rows[0]!.count).toBe(1);
+  });
+});
+
+describe('gas budget webhooks', () => {
+  let sent: WebhookRequest[];
+  beforeEach(async () => {
+    await resetDb();
+    sent = [];
+    setWebhookResolver(async () => [{ address: '93.184.216.34', family: 4 }]);
+    setWebhookTransport(async (req) => {
+      sent.push(req);
+      return { status: 200 };
+    });
+  });
+  afterEach(() => {
+    setWebhookTransport(null);
+    setWebhookResolver(null);
+    setWebhookQueue(null);
+  });
+
+  async function deliver(type: string) {
+    const ev = await prisma.event.findFirstOrThrow({ where: { type } });
+    expect(await fanOutEvent(ev)).toBe(1);
+    const d = await prisma.webhookDelivery.findFirstOrThrow({ where: { eventId: ev.id } });
+    expect((await attemptDelivery(d.id))?.status).toBe('delivered');
+    return JSON.parse(sent.at(-1)!.body) as { type: string; livemode: boolean; data: unknown };
+  }
+
+  it('a subscribed endpoint receives gas.budget_low and gas.budget_exhausted', async () => {
+    const m = await setup('50');
+    const ctx = { merchantId: m.id, livemode: false };
+    await createEndpoint(ctx, {
+      url: 'https://shop.example/hooks',
+      events: ['gas.budget_low', 'gas.budget_exhausted'],
+    });
+    await createEndpoint(ctx, { url: 'https://other.example/hooks', events: ['refund.sent'] });
+    await reserve(m.id, await session(m.id), '45');
+    expect(await reserve(m.id, await session(m.id), '10')).toBeNull();
+
+    expect(await deliver(GAS_BUDGET_LOW)).toEqual(
+      expect.objectContaining({
+        type: 'gas.budget_low',
+        livemode: false,
+        data: {
+          mode: 'test',
+          month: MONTH,
+          budget_usd: '50',
+          reserved_usd: '45',
+          spent_usd: '0',
+          remaining_usd: '5',
+        },
+      }),
+    );
+    expect(await deliver(GAS_BUDGET_EXHAUSTED)).toEqual(
+      expect.objectContaining({
+        type: 'gas.budget_exhausted',
+        data: {
+          mode: 'test',
+          month: MONTH,
+          budget_usd: '50',
+          reserved_usd: '45',
+          spent_usd: '0',
+          remaining_usd: '5',
+          requested_usd: '10',
+        },
+      }),
+    );
+    expect(sent.every((r) => r.url === 'https://shop.example/hooks')).toBe(true);
   });
 });

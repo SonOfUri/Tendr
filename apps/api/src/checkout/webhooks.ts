@@ -111,9 +111,19 @@ const DATA_KEYS = [
 ] as const;
 
 /** Keys a merchant may see only on the named event types (on top of DATA_KEYS). */
+const GAS_BUDGET_KEYS = [
+  'mode',
+  'month',
+  'budget_usd',
+  'reserved_usd',
+  'spent_usd',
+  'remaining_usd',
+] as const;
 const TYPE_DATA_KEYS: Readonly<Partial<Record<string, readonly string[]>>> = {
   'refund.cancelled': ['status'],
   'refund.failed': ['status'],
+  'gas.budget_low': GAS_BUDGET_KEYS,
+  'gas.budget_exhausted': [...GAS_BUDGET_KEYS, 'requested_usd'],
 };
 
 /**
