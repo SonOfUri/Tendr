@@ -317,3 +317,26 @@ jobs:
           scripts/build.sh --features testnet-admin merchant-account
       - name: Sandbox tests
         run: cargo test -p merchant-account --test sandbox
+
+  onchain-evm:
+    # TendrForwarder (onchain/evm). Foundry runs only through onchain/scripts/forge.sh, which
+    # starts the pinned Foundry Docker image (Docker is available on GitHub's ubuntu runners).
+    # The workflow has no path filters, so this runs on every push and pull request.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the Solidity dependencies
+        # Only the two pinned submodules; their own nested submodules are not needed.
+        run: git submodule update --init --depth 1 onchain/evm/lib/openzeppelin-contracts onchain/evm/lib/forge-std
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Format
+        run: onchain/scripts/forge.sh fmt --check
+      - name: Tests
+        run: onchain/scripts/forge.sh test
+      - name: Gas snapshot
+        run: onchain/scripts/forge.sh snapshot --check
+      - name: TypeScript ABI is up to date
+        run: onchain/scripts/forwarder-abi.sh --check

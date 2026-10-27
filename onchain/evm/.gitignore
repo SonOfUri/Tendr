@@ -1,0 +1,5 @@
+out/
+cache/
+broadcast/
+# forge.sh points HOME here so the downloaded solc survives between runs.
+.foundry-home/

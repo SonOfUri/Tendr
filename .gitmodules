@@ -1,0 +1,7 @@
+[submodule "onchain/evm/lib/forge-std"]
+	path = onchain/evm/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+[submodule "onchain/evm/lib/openzeppelin-contracts"]
+	path = onchain/evm/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+	shallow = true

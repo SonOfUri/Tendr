@@ -1,0 +1,27 @@
+# TendrForwarder (gasless EVM and Tron payments). Built and tested only through
+# onchain/scripts/forge.sh, which runs the pinned Foundry Docker image.
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.37"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 10000
+via_ir = false
+bytecode_hash = "none"
+cbor_metadata = false
+offline = false
+remappings = [
+  "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+  "forge-std/=lib/forge-std/src/",
+]
+
+[fuzz]
+runs = 512
+seed = "0x7e4d7"
+
+[fmt]
+line_length = 100
