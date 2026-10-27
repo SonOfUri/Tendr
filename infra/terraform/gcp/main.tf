@@ -31,10 +31,10 @@ locals {
     "gas-tron"         = "EC_SIGN_SECP256K1_SHA256" # Tron energy/bandwidth sponsorship (project 5)
     # Gas-fee accounts (project 5a): receive shopper-paid network fees; receive-only, used only by
     # the fee sweep job. Kept apart from the relayer keys so a stolen relayer key never reaches them.
-    "gas-fees-evm"     = "EC_SIGN_SECP256K1_SHA256" # one address on every EVM chain
-    "gas-fees-tron"    = "EC_SIGN_SECP256K1_SHA256"
-    "gas-fees-near"    = "EC_SIGN_ED25519"
-    "gas-fees-solana"  = "EC_SIGN_ED25519"
+    "gas-fees-evm"    = "EC_SIGN_SECP256K1_SHA256" # one address on every EVM chain
+    "gas-fees-tron"   = "EC_SIGN_SECP256K1_SHA256"
+    "gas-fees-near"   = "EC_SIGN_ED25519"
+    "gas-fees-solana" = "EC_SIGN_ED25519"
   }
 
   kek_name = "tendr-kek"
