@@ -1347,6 +1347,9 @@ model GasSponsorship {
   /// (its `TendrPaid` event; 0 when the authorization was cancelled or skipped). Revenue is booked
   /// from this, never from the quote.
   feeCollected           Decimal?             @map("fee_collected") @db.Decimal(78, 0)
+  /// Pimlico paymaster submission: `{ entryPoint, chainId, result }`, the ERC-7677
+  /// `pm_getPaymasterData` result handed to the wallet (returned again for the same user operation).
+  paymasterData          Json?                @map("paymaster_data")
   createdAt              DateTime             @default(now()) @map("created_at")
   updatedAt              DateTime             @updatedAt @map("updated_at")
 

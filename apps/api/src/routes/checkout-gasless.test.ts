@@ -147,7 +147,7 @@ describe('gasless checkout routes (test mode: simulated relayer)', () => {
   const feeAddress = async () => evmAddress((await getKeyVault().publicKey('gas-fees-evm')).raw);
 
   describe('options', () => {
-    it('merchant sponsors: both EVM methods, no fee choice', async () => {
+    it('merchant sponsors: every EVM method, no fee choice', async () => {
       await sponsoring();
       const s = await newSession();
       const res = await call('POST', 'gasless/options', s.client_secret, {
@@ -162,6 +162,14 @@ describe('gasless checkout routes (test mode: simulated relayer)', () => {
         options: [
           { method: 'eip3009', paid_by: 'merchant', reason: null, fee_modes: [], token_fee: null },
           { method: 'permit', paid_by: 'merchant', reason: null, fee_modes: [], token_fee: null },
+          // Smart wallets with an EIP-5792 paymaster capability (Pimlico).
+          {
+            method: 'paymaster',
+            paid_by: 'merchant',
+            reason: null,
+            fee_modes: [],
+            token_fee: null,
+          },
         ],
       });
       // Options reserve nothing.

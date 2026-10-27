@@ -84,7 +84,8 @@ export class RelayNotBroadcast extends Error {
   }
 }
 
-const ACTIVE: Prisma.GasSponsorshipWhereInput['status'] = {
+/** Submission statuses that hold a quote (one at a time per quote). */
+export const ACTIVE: Prisma.GasSponsorshipWhereInput['status'] = {
   in: ['pending', 'submitted', 'confirmed'],
 };
 
@@ -122,7 +123,15 @@ export function assertRelayable(q: QuoteContext, now: Date): void {
  * Counts one attempt against a limit (`key` expires `ttlS` after its first use); 429 when over.
  * Fails closed: the limits are what keep spam signatures from draining the relayer's gas.
  */
-async function countAttempt(key: string, ttlS: number, max: number): Promise<void> {
+export async function countAttempt(
+  key: string,
+  ttlS: number,
+  max: number,
+  limits: Record<string, number> = {
+    max_per_session: SUBMITS_PER_SESSION,
+    max_per_address_per_hour: SUBMITS_PER_ADDRESS_PER_HOUR,
+  },
+): Promise<void> {
   let count: number;
   try {
     const r = await getRedis().multi().incr(key).expire(key, ttlS, 'NX').exec();
@@ -133,15 +142,12 @@ async function countAttempt(key: string, ttlS: number, max: number): Promise<voi
     throw new AppError('PROVIDER_UNAVAILABLE', 'Gasless payments are unavailable; try again', 503);
   }
   if (count > max) {
-    throw new AppError('RATE_LIMITED', 'Too many payment attempts; try again later', 429, {
-      max_per_session: SUBMITS_PER_SESSION,
-      max_per_address_per_hour: SUBMITS_PER_ADDRESS_PER_HOUR,
-    });
+    throw new AppError('RATE_LIMITED', 'Too many payment attempts; try again later', 429, limits);
   }
 }
 
 /** Every attempt on the session counts, valid or not. */
-const countSessionAttempt = (q: QuoteContext) =>
+export const countSessionAttempt = (q: QuoteContext) =>
   countAttempt(
     `tendr:gasless:submit:ses:${q.session.id}`,
     SESSION_LIMIT_TTL_S,
@@ -152,7 +158,7 @@ const countSessionAttempt = (q: QuoteContext) =>
  * Per signer address, counted only once the signatures verify: anyone can name an address in a
  * quote, but only its owner can sign for it, so a stranger cannot use up another wallet's limit.
  */
-const countAddressAttempt = (q: QuoteContext, now: Date) =>
+export const countAddressAttempt = (q: QuoteContext, now: Date) =>
   countAttempt(
     `tendr:gasless:submit:addr:${q.quote.walletAddress!.toLowerCase()}:${Math.floor(now.getTime() / 3_600_000)}`,
     3600,
@@ -179,7 +185,7 @@ function asResult(row: {
 }
 
 /** Locks the session row and re-checks it can still take a payment. */
-async function lockOpenSession(tx: Tx, scope: Scope, sessionId: string, now: Date) {
+export async function lockOpenSession(tx: Tx, scope: Scope, sessionId: string, now: Date) {
   const rows = await tx.$queryRaw<{ status: string; expires_at: Date }[]>`
     SELECT status::text AS status, expires_at FROM sessions
     WHERE id = ${sessionId} AND merchant_id = ${scope.merchantId} AND livemode = ${scope.livemode}
@@ -254,7 +260,7 @@ async function claim(
   });
 }
 
-const sponsorshipReleased = () =>
+export const sponsorshipReleased = () =>
   new AppError(
     'SPONSORSHIP_RELEASED',
     'The network fee sponsorship for this quote is no longer held; request a new quote',

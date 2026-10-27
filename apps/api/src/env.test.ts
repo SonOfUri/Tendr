@@ -328,6 +328,20 @@ describe('loadEnv EVM relayer', () => {
       /EVM_MAX_FEE_GWEI_BSC/,
     );
   });
+
+  it('takes an optional Pimlico sponsorship policy id', () => {
+    expect(loadEnv(base).PIMLICO_SPONSORSHIP_POLICY_ID).toBeUndefined();
+    expect(
+      loadEnv({ ...base, PIMLICO_SPONSORSHIP_POLICY_ID: ' ' }).PIMLICO_SPONSORSHIP_POLICY_ID,
+    ).toBeUndefined();
+    expect(
+      loadEnv({ ...base, PIMLICO_SPONSORSHIP_POLICY_ID: 'sp_sharp_wolf' })
+        .PIMLICO_SPONSORSHIP_POLICY_ID,
+    ).toBe('sp_sharp_wolf');
+    expect(() => loadEnv({ ...base, PIMLICO_SPONSORSHIP_POLICY_ID: 'sp_x&apikey=evil' })).toThrow(
+      /PIMLICO_SPONSORSHIP_POLICY_ID/,
+    );
+  });
 });
 
 describe('loadEnv gas fee pricing and chain RPCs', () => {

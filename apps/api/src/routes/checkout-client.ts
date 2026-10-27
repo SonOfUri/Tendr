@@ -31,6 +31,7 @@ import {
   gaslessQuote,
   gaslessSubmission,
 } from '../relayer/index.js';
+import { paymasterFor } from '../relayer/evm/pimlico.js';
 import { requirePrincipal } from '../gateway/principal.js';
 import { notFound, unauthorized } from '../lib/errors.js';
 
@@ -122,6 +123,15 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
       status: res.status,
       tx_hash: res.txHash ?? null,
     });
+  });
+
+  // The ERC-7677 paymaster endpoint (JSON-RPC 2.0: pm_getPaymasterStubData, pm_getPaymasterData)
+  // the pay page hands a smart wallet as `wallet_sendCalls`' paymasterService. Sponsors only a user
+  // operation whose calls are exactly the current quote's payment (relayer/evm/pimlico.ts). Always
+  // 200 with a JSON-RPC response; refusals are JSON-RPC errors.
+  app.post(`${CHECKOUT_CLIENT_PREFIX}gasless/paymaster`, shopper, async (req) => {
+    const ctx = ctxOf(req);
+    return paymasterFor(ctx.livemode).handle(ctx, req.body);
   });
 
   app.get<{ Params: { id: string } }>(

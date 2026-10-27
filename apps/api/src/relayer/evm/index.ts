@@ -36,7 +36,7 @@ import type {
 import { buildToSign, noncesCalldata, verifySigned, type EvmPaymentContext } from './payment.js';
 import { EvmRpc } from './rpc.js';
 import { EvmNotBroadcastError, EvmSender } from './sender.js';
-import { EVM_CHAIN_IDS, gaslessToken, type EvmRelayMethod } from './tokens.js';
+import { EVM_CHAIN_IDS, EVM_RELAY_METHODS, gaslessToken, type EvmRelayMethod } from './tokens.js';
 
 let feeAddress: string | null = null;
 
@@ -65,7 +65,11 @@ export class EvmGasless {
     private readonly rpc: (chain: string) => EvmRpc = (chain) => EvmRpc.forChain(chain),
   ) {}
 
-  /** Best first: EIP-3009 (one transfer per leg), then the permit forwarder. */
+  /**
+   * Best first: EIP-3009 (one transfer per leg), the permit forwarder, then a smart wallet's
+   * Pimlico-sponsored calls (`paymaster`: offered for any wallet; only a wallet with an EIP-5792
+   * paymaster capability can use it).
+   */
   async options(c: GaslessContext): Promise<GaslessOption[]> {
     const token = gaslessToken(c.origin.blockchain, c.origin.assetId);
     if (!token) return [];
@@ -107,7 +111,15 @@ export class EvmGasless {
     const token = gaslessToken(chain, q.quote.originAssetId);
     const method = q.quote.networkFeeMethod as EvmRelayMethod | null;
     const chainId = EVM_CHAIN_IDS[chain];
-    if (!token || !method || !token.methods.includes(method) || !chainId) {
+    // A `paymaster` quote is never relayed here: the shopper's smart wallet submits it through
+    // Pimlico (relayer/evm/pimlico.ts).
+    if (
+      !token ||
+      !method ||
+      !EVM_RELAY_METHODS.includes(method) ||
+      !token.methods.includes(method) ||
+      !chainId
+    ) {
       throw gaslessNotAvailable();
     }
     const shopperFee = q.quote.networkFeePaidBy === 'buyer';

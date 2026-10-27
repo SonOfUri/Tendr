@@ -8,13 +8,17 @@
 // wallet pays gas itself ("You'll need {coin} for the network fee").
 //
 // Seeded with Circle's native USDC (FiatTokenV2_2: EIP-3009 and EIP-2612, domain "USD Coin" / "2")
-// on Ethereum, Base, Arbitrum, Optimism, Polygon and Avalanche. The codebase's token tables name no
+// on Ethereum, Base, Arbitrum, Optimism, Polygon and Avalanche, also for smart-wallet `paymaster`
+// payments. The codebase's token tables name no
 // other permit token on these chains. Before go-live, read `name()` / `version()` (or
 // `eip712Domain()`) of each listed contract on chain (README live checklist).
 import type { GaslessMethod } from '@tendr/contracts';
 
 /** The gasless methods the EVM relayer submits itself (through the TendrForwarder). */
 export type EvmRelayMethod = Extract<GaslessMethod, 'eip3009' | 'permit'>;
+/** Every EVM gasless method: the relayer's own, and Pimlico-sponsored smart-wallet calls. */
+export type EvmGaslessMethod = EvmRelayMethod | Extract<GaslessMethod, 'paymaster'>;
+export const EVM_RELAY_METHODS: readonly EvmGaslessMethod[] = ['eip3009', 'permit'];
 
 export interface GaslessToken {
   /** 1Click blockchain id. */
@@ -23,7 +27,11 @@ export interface GaslessToken {
   address: string;
   symbol: string;
   decimals: number;
-  methods: readonly EvmRelayMethod[];
+  /**
+   * Best first. `paymaster`: a plain `transfer` batched by a smart wallet whose user operation
+   * Pimlico sponsors (any listed token qualifies: it moves exactly the amount transferred).
+   */
+  methods: readonly EvmGaslessMethod[];
   /** The token's own EIP-712 domain (its EIP-3009 and permit signatures). */
   domain: { name: string; version: string };
 }
@@ -33,7 +41,7 @@ const usdc = (chain: string, address: string): GaslessToken => ({
   address,
   symbol: 'USDC',
   decimals: 6,
-  methods: ['eip3009', 'permit'],
+  methods: ['eip3009', 'permit', 'paymaster'],
   domain: { name: 'USD Coin', version: '2' },
 });
 

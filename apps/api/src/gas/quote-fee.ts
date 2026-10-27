@@ -22,7 +22,7 @@ import { gasEstimateUsd } from '../checkout/gas-estimates.js';
 import { AppError } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
-import { releaseReservation } from './budget.js';
+import { HOLD_AWAITING_RESOLUTION, releaseReservation } from './budget.js';
 import {
   estimateHookFeeUsd,
   estimateNetworkFeeUsd,
@@ -311,7 +311,8 @@ export async function releaseStaleReservations(now: Date = new Date()): Promise<
   const cutoff = new Date(now.getTime() - RESERVATION_GRACE_MS);
   const stale = await prisma.quote.findMany({
     where: {
-      gasSponsorship: { reservationState: 'reserved' },
+      // A hold whose relay (or sponsored user operation) awaits its outcome is not stale.
+      gasSponsorship: { reservationState: 'reserved', NOT: HOLD_AWAITING_RESOLUTION },
       depositTxSubmittedAt: null,
       payments: { none: {} },
       OR: [{ supersededAt: { not: null } }, { deadline: { lte: cutoff } }],

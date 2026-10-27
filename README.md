@@ -691,6 +691,13 @@ fee share, 1Click's fee and the spread.
   chain; `EVM_RPC_URLS` points at endpoints that accept `eth_sendRawTransaction`. Then relay one
   EIP-3009 and one permit payment of a few cents per chain and check the watcher (not the relay)
   marks it paid.
+- Pimlico paymaster proxy (smart wallets), before live use: store the API key with
+  `putSecret(key, 'pimlico')` (never an env var); set `PIMLICO_SPONSORSHIP_POLICY_ID` if a policy
+  is used; fund the Pimlico balance; confirm Pimlico serves EntryPoint v0.8 on each chain (v0.7 is
+  assumed) and that Safe's MultiSendCallOnly is deployed at the addresses in
+  `apps/api/src/relayer/evm/user-op.ts`. Then pay a few cents per chain from a Coinbase Smart
+  Wallet and a Safe through `wallet_sendCalls` with the paymaster capability and check the watcher
+  marks it paid and the poll job records the user operation's cost.
 
 **Live checklist (FX for non-USD stores):** the live FX provider is
 [Open Exchange Rates](https://openexchangerates.org) (`FX_PROVIDER=openexchangerates`,

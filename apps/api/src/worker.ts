@@ -19,6 +19,7 @@ import { sweepReturns } from './checkout/refunds.js';
 import { expireSessions, pollDeposit, scanDueDeposits } from './checkout/watcher.js';
 import { releaseStaleReservations } from './gas/quote-fee.js';
 import { pollEvmRelays } from './relayer/index.js';
+import { pollPaymasterOps } from './relayer/evm/pimlico.js';
 import { releaseEndedSessionReservations } from './relayer/submissions.js';
 import {
   attemptDelivery,
@@ -71,7 +72,10 @@ export const EXPIRE_SESSIONS_EVERY_MS = 60_000;
 /** Releases gas-budget reservations of replaced or expired, unused quotes. */
 export const RELEASE_GAS_RESERVATIONS_JOB = 'release-gas-reservations';
 export const RELEASE_GAS_RESERVATIONS_EVERY_MS = 60_000;
-/** The EVM relayer's transactions: receipts, stuck replacements, give-ups, outcomes (live only). */
+/**
+ * The EVM relayer's transactions (receipts, stuck replacements, give-ups, outcomes) and Pimlico
+ * paymaster user operations (receipts, give-ups), live only.
+ */
 export const POLL_EVM_RELAYS_JOB = 'poll-evm-relays';
 export const POLL_EVM_RELAYS_EVERY_MS = 15_000;
 /** Merchant webhook sends (one job per attempt, delayed for retries) and the due-retry sweep. */
@@ -134,8 +138,17 @@ export async function processCheckoutJob(
     return;
   }
   if (job.name === POLL_EVM_RELAYS_JOB) {
-    const n = await pollEvmRelays();
-    if (n > 0) log('info', 'evm relay outcomes applied', { count: n });
+    let failed: unknown = null;
+    try {
+      const n = await pollEvmRelays();
+      if (n > 0) log('info', 'evm relay outcomes applied', { count: n });
+    } catch (err) {
+      failed = err;
+    }
+    // Smart-wallet user operations sponsored through Pimlico (receipts from Pimlico).
+    const m = await pollPaymasterOps();
+    if (m > 0) log('info', 'paymaster outcomes applied', { count: m });
+    if (failed) throw failed;
     return;
   }
   throw new Error(`unknown checkout job ${job.name}`);

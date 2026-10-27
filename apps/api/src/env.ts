@@ -245,6 +245,18 @@ const EnvSchema = z
     EVM_MAX_FEE_GWEI_GNOSIS: evmMaxFeeGwei,
     EVM_MAX_FEE_GWEI_BERA: evmMaxFeeGwei,
     /**
+     * Optional Pimlico sponsorship policy id, sent with every paymaster request the checkout's
+     * paymaster proxy forwards (project 5a). The Pimlico API key itself is a stored secret
+     * (`putSecret`, purpose `pimlico`), never an env var.
+     */
+    PIMLICO_SPONSORSHIP_POLICY_ID: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^[A-Za-z0-9_-]{1,128}$/, 'must be a Pimlico sponsorship policy id (sp_…)')
+        .optional(),
+    ),
+    /**
      * Live-mode FX rate provider for non-USD order totals. `openexchangerates` (with FX_API_KEY)
      * is the live adapter; `fixed` means no live provider, so live non-USD sessions are
      * FX_RATE_UNAVAILABLE. Live mode never uses fixed rates; test mode always does. Default:

@@ -544,10 +544,10 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
       { field: 'wallet_address' },
     );
   }
-  // EVM: only allow-listed tokens can be relayed (no fee-on-transfer or rebasing tokens).
+  // EVM: only allow-listed tokens are relayed or sponsored (no fee-on-transfer or rebasing tokens).
   const method = input.gasless_method;
   if (
-    (method === 'eip3009' || method === 'permit') &&
+    (method === 'eip3009' || method === 'permit' || method === 'paymaster') &&
     chainFamily(origin.blockchain) === 'evm' &&
     !gaslessToken(origin.blockchain, origin.assetId)?.methods.includes(method)
   ) {
