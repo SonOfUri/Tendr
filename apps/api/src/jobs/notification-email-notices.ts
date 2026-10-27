@@ -23,7 +23,8 @@ import {
   verifyLink,
 } from '../merchants/notification-email.js';
 import { oneLine, sendOncePerEvent } from '../merchants/store-notices.js';
-import { deleteSecret, getSecret } from '../secrets/secrets.js';
+import { log } from '../lib/logger.js';
+import { deleteSecret, readSecretUncached } from '../secrets/secrets.js';
 import { handlerNamesFor, registerEventHandler } from './handlers.js';
 
 type Payload = Record<string, unknown>;
@@ -119,11 +120,20 @@ export async function onNotificationEmailRequested(e: Event): Promise<void> {
     m.notificationEmailTokenHash === str(p.token_hash)
   ) {
     try {
-      const raw = await getSecret(ref);
-      await sendOncePerEvent(e.id, 'notification_email_verify', [pending], {
-        ...verifyMessage(name, pending, verifyLink(raw)),
-      });
-      // Sent: the raw token is no longer needed anywhere (the row keeps only its hash).
+      // C12: read once, never cached; a token that is gone (swept, cleaned up) means the link can
+      // never be built — skip it rather than fail the job forever. A new request sends a new link.
+      const raw = await readSecretUncached(ref);
+      if (raw === null) {
+        log('warn', 'notification email link token missing; link not sent', {
+          merchantId: e.merchantId,
+          eventId: e.id,
+        });
+      } else {
+        await sendOncePerEvent(e.id, 'notification_email_verify', [pending], {
+          ...verifyMessage(name, pending, verifyLink(raw)),
+        });
+      }
+      // Sent (or unsendable): the raw token is no longer needed anywhere (the row keeps its hash).
       await prisma.$transaction(async (tx) => {
         await tx.merchant.updateMany({
           where: { id: e.merchantId!, notificationEmailLinkSecretRef: ref },

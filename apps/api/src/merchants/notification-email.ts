@@ -28,6 +28,7 @@ import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
 import { sha256 } from '../lib/crypto.js';
 import { AppError } from '../lib/errors.js';
+import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { deleteSecret, putSecret } from '../secrets/secrets.js';
 import { ownerEmails } from './store-notices.js';
@@ -57,6 +58,13 @@ export const invalidLink = () =>
     'INVALID_LINK',
     'This link is invalid, used, expired or replaced by a newer one',
     400,
+  );
+
+export const noOneToNotify = () =>
+  new AppError(
+    'NO_ONE_TO_NOTIFY',
+    'No one could be told about this change: the store has no notification email and no owner with a verified email. Set it from the tendr dashboard.',
+    409,
   );
 
 export const verifyLink = (raw: string): string => {
@@ -126,6 +134,11 @@ export async function requestNotificationEmail(
   actor: SettingsActor,
   now = new Date(),
 ): Promise<Prisma.MerchantUncheckedUpdateInput> {
+  const notify = await currentRecipients(m);
+  // C12: the warning to the current address (or the owners) is what makes a change by a
+  // connected site visible. With no one to warn, a site cannot change it; a signed-in member
+  // can, from the dashboard.
+  if (notify.length === 0 && actor.by === 'connection') throw noOneToNotify();
   await endPending(tx, m);
   const raw = randomBytes(32).toString('base64url');
   const tokenHash = sha256(raw);
@@ -141,7 +154,7 @@ export async function requestNotificationEmail(
       token_hash: tokenHash,
       requested_by: actor,
       requested_from: await requestedFrom(tx, m.id, actor),
-      notify: await currentRecipients(m),
+      notify,
     },
   });
   return {
@@ -258,4 +271,60 @@ export async function verifyNotificationEmail(
     });
     return { notification_email: email, store_name: m.name };
   });
+}
+
+/** An unreferenced link token is deleted only once it is this old (never one still committing). */
+export const ORPHAN_LINK_SECRET_AGE_MS = 60 * 60_000;
+
+/**
+ * Notification-email housekeeping (C12, worker, every minute):
+ * - a pending change whose link expired is ended (its encrypted token deleted, the columns
+ *   cleared), so an expired token never lingers in KeyVault;
+ * - a link token no store refers to (left by an interrupted cleanup) is deleted once it is older
+ *   than ORPHAN_LINK_SECRET_AGE_MS.
+ * Returns how many of each it removed.
+ */
+export async function sweepNotificationEmailLinks(
+  now = new Date(),
+): Promise<{ expired: number; orphans: number }> {
+  let expired = 0;
+  const due = await prisma.merchant.findMany({
+    where: {
+      notificationEmailPending: { not: null },
+      notificationEmailTokenExpiresAt: { lte: now },
+    },
+    select: { id: true },
+    take: 500,
+  });
+  for (const d of due) {
+    const ended = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${d.id} FOR UPDATE`;
+      const m = await tx.merchant.findUnique({
+        where: { id: d.id },
+        select: { ...PENDING_SELECT, notificationEmailTokenExpiresAt: true },
+      });
+      const at = m?.notificationEmailTokenExpiresAt;
+      if (!m || !m.notificationEmailPending || !at || at > now) return false;
+      await tx.merchant.update({ where: { id: m.id }, data: await endPending(tx, m) });
+      return true;
+    });
+    if (ended) expired += 1;
+  }
+
+  const referenced = await prisma.merchant.findMany({
+    where: { notificationEmailLinkSecretRef: { not: null } },
+    select: { notificationEmailLinkSecretRef: true },
+  });
+  const keep = referenced.map((r) => r.notificationEmailLinkSecretRef!);
+  const { count: orphans } = await prisma.secret.deleteMany({
+    where: {
+      purpose: LINK_SECRET_PURPOSE,
+      id: { notIn: keep },
+      createdAt: { lte: new Date(now.getTime() - ORPHAN_LINK_SECRET_AGE_MS) },
+    },
+  });
+  if (expired > 0 || orphans > 0) {
+    log('info', 'swept notification email links', { expired, orphans });
+  }
+  return { expired, orphans };
 }

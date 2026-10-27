@@ -15,7 +15,9 @@ import {
   LINK_SECRET_PURPOSE,
   NOTIFICATION_EMAIL_REQUESTED,
   NOTIFICATION_EMAIL_VERIFIED,
+  sweepNotificationEmailLinks,
 } from '../merchants/notification-email.js';
+import { putSecret } from '../secrets/secrets.js';
 import { dashHeaders, loginAs, memoryMailer, type Login } from '../test/dashboard.js';
 import { createApiKey, createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
 
@@ -596,5 +598,66 @@ describe('store settings from a connection key, and the notification email', () 
     } finally {
       await limited.close();
     }
+  });
+
+  it('C12: the verify link reads its token uncached; a missing token skips the link instead of retrying forever', async () => {
+    const { raw } = await connectionKey();
+    await byKey('PATCH', raw, { notification_email: 'gone@shop.example' });
+    const row = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } });
+    // The encrypted token disappeared (an earlier sweep, a manual cleanup).
+    await prisma.secret.delete({ where: { id: row.notificationEmailLinkSecretRef! } });
+    await deliver(); // does not throw
+    expect(mails('notification_email_verify')).toHaveLength(0);
+    // The warning still went out, and the dangling reference is cleared.
+    expect(mails('notification_email_change_requested').map((m) => m.to)).toEqual([ownerEmail]);
+    expect(
+      (await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } }))
+        .notificationEmailLinkSecretRef,
+    ).toBeNull();
+  });
+
+  it('C12: the sweeper ends expired pending changes and deletes orphaned link tokens', async () => {
+    const { raw } = await connectionKey();
+    await byKey('PATCH', raw, { notification_email: 'expired@shop.example' });
+    // An orphan: a link token no store refers to, older than an hour.
+    const orphan = await putSecret('x'.repeat(43), LINK_SECRET_PURPOSE);
+    await prisma.secret.update({
+      where: { id: orphan },
+      data: { createdAt: new Date(Date.now() - 2 * 3600_000) },
+    });
+    // A fresh unreferenced one (a request still committing) is left alone.
+    const fresh = await putSecret('y'.repeat(43), LINK_SECRET_PURPOSE);
+    // Not expired yet: nothing to sweep for the store.
+    expect(await sweepNotificationEmailLinks()).toEqual({ expired: 0, orphans: 1 });
+    expect(await prisma.secret.findUnique({ where: { id: orphan } })).toBeNull();
+    expect(await prisma.secret.findUnique({ where: { id: fresh } })).not.toBeNull();
+    const pending = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } });
+    expect(pending.notificationEmailPending).toBe('expired@shop.example');
+
+    const later = new Date(Date.now() + 25 * 3600_000);
+    expect(await sweepNotificationEmailLinks(later)).toMatchObject({ expired: 1 });
+    const row = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } });
+    expect(row).toMatchObject({
+      notificationEmailPending: null,
+      notificationEmailTokenHash: null,
+      notificationEmailLinkSecretRef: null,
+    });
+    expect(
+      await prisma.secret.count({ where: { id: pending.notificationEmailLinkSecretRef! } }),
+    ).toBe(0);
+  });
+
+  it('C12: a connected site cannot change the notification email when no one could be warned', async () => {
+    // No current address and no owner with a verified email: nobody would hear of the change.
+    await prisma.user.updateMany({ data: { emailVerifiedAt: null } });
+    const { raw } = await connectionKey();
+    const res = await byKey('PATCH', raw, { notification_email: 'silent@evil.example' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('NO_ONE_TO_NOTIFY');
+    const row = await prisma.merchant.findUniqueOrThrow({ where: { id: merchant.id } });
+    expect(row.notificationEmailPending).toBeNull();
+    // From the dashboard (the person asking is signed in) it still works.
+    const mine = await byUser('PATCH', owner, { notification_email: 'mine@shop.example' });
+    expect(mine.statusCode, mine.body).toBe(200);
   });
 });

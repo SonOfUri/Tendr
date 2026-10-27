@@ -26,6 +26,7 @@ import {
   type DeliverJobData,
 } from './checkout/webhooks.js';
 import { sweepConnections } from './connect/authorize.js';
+import { sweepNotificationEmailLinks } from './merchants/notification-email.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
 // Registers every event handler; must load before the dispatcher runs (see dispatchOnce).
@@ -49,7 +50,10 @@ import { closeClient, createRedis, whenReady } from './lib/redis.js';
 const HEALTH_CHECK_TIMEOUT_MS = 1000;
 /** Re-screens SCREENING_PENDING payments (backoff is per payment); runs every minute. */
 export const RETRY_SCREENINGS_JOB = 'retry-pending-screenings';
-/** Deletes expired Connect credentials and revokes connections never redeemed; every minute. */
+/**
+ * Deletes expired Connect credentials and revokes connections never redeemed, and ends expired
+ * notification-email links (deleting their tokens); every minute.
+ */
 export const SWEEP_CONNECTIONS_JOB = 'sweep-connections';
 /** The payment watcher's queue: the 5 s scan, one poll job per due address, the expiry sweep. */
 export const CHECKOUT_QUEUE = 'tendr-checkout';
@@ -135,6 +139,8 @@ async function processMaintenanceJob(job: Job): Promise<void> {
   }
   if (job.name === SWEEP_CONNECTIONS_JOB) {
     await sweepConnections();
+    // C12: expired / orphaned notification-email link tokens, on the same minute tick.
+    await sweepNotificationEmailLinks();
     return;
   }
   if (job.name !== PURGE_IDEMPOTENCY_JOB) throw new Error(`unknown maintenance job ${job.name}`);

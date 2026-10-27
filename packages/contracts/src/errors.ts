@@ -82,6 +82,12 @@ export const ErrorCodes = [
    * replaced by a newer request. One code for every cause.
    */
   'INVALID_LINK',
+  /**
+   * A connected site asked to change the notification email, but no one could be warned about it:
+   * the store has no notification email and no owner with a verified email. Set it from the
+   * dashboard instead.
+   */
+  'NO_ONE_TO_NOTIFY',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

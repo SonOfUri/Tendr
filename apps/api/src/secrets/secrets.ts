@@ -53,6 +53,16 @@ export async function takeSecret(
   return value;
 }
 
+/**
+ * Decrypts the secret `ref` without caching it (a single-use value, such as a verify link's token,
+ * must not linger in memory). Returns null when the row is gone.
+ */
+export async function readSecretUncached(ref: string): Promise<string | null> {
+  const row = await prisma.secret.findUnique({ where: { id: ref } });
+  if (!row) return null;
+  return Buffer.from(await getKeyVault().decrypt(row.ciphertext, row.id)).toString('utf8');
+}
+
 /** Deletes the secret `ref` (no-op when already gone), in the caller's transaction. */
 export async function deleteSecret(
   ref: string,
