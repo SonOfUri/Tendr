@@ -242,8 +242,15 @@ describe('payment watcher', () => {
     const bySource = Object.fromEntries(rev.map((e) => [e.source, e]));
     expect(Object.keys(bySource).sort()).toEqual(['app_fee', 'network_fee', 'oneclick_fee']);
     expect(bySource.app_fee!.assetId).toBe(ETH);
+    // 50 bps of what 1Click charges appFees on (ONECLICK_APP_FEE_BASE = output): the output's
+    // USD value converted to origin units at the quote's price.
+    const qRow = await prisma.quote.findUniqueOrThrow({ where: { id: q.id } });
+    const outUnits = qRow
+      .amountOutUsd!.mul(qRow.amountIn)
+      .div(qRow.amountInUsd!)
+      .toDecimalPlaces(0, 1 /* ROUND_DOWN */);
     expect(bySource.app_fee!.amount.toFixed()).toBe(
-      ((BigInt(q.amount_in) * 50n) / 10_000n).toString(),
+      outUnits.mul(50).div(10_000).toDecimalPlaces(0, 1).toFixed(),
     );
     // The quote's own network-fee estimate (simulated eth), not the old static table.
     expect(bySource.network_fee!.amountUsd?.toFixed()).toBe('1.2');

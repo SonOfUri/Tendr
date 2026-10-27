@@ -183,13 +183,30 @@ describe('buildQuoteRequests', () => {
     expect(real(quote('1', '1')).amount).toBe('12345678');
   });
 
-  it('shopper pays fees, sponsored: the output shrinks by the deduction, collected by appFees', () => {
-    const { real, networkFeeBps } = buildQuoteRequests(input({ merchantDeductionUsd: '0.80' }));
-    const req = real(quote('1', '1'));
-    expect(req.amount).toBe('24200000');
+  it('shopper pays fees, sponsored: dry = the unsponsored EXACT_OUTPUT, real = exactly its amountIn', () => {
+    const { dry, real, networkFeeBps } = buildQuoteRequests(
+      input({ merchantDeductionUsd: '0.80' }),
+    );
+    // The dry quote is the unsponsored order: Tendr's fee only.
+    expect(dry).toMatchObject({ dry: true, swapType: 'EXACT_OUTPUT', amount: '25000000' });
+    expect(dry.appFees).toEqual([{ recipient: 'fees.tendr.testnet', fee: 50 }]);
     // ceil(0.80 × (10000 + 50) / 24.20) = ceil(332.23…) = 333
     expect(networkFeeBps).toBe(333);
+    const req = real(quote('10060000000000000', '25.15'));
+    expect(req).toMatchObject({ dry: false, swapType: 'EXACT_INPUT', amount: '10060000000000000' });
     expect(req.appFees).toEqual([{ recipient: 'fees.tendr.testnet', fee: 50 + 333 }]);
+    expect(() => real(quote('0', '1'))).toThrow(OneClickError);
+  });
+
+  it('the input-charged model sizes the bps on the input', () => {
+    // shopper: ceil(0.80 × (10000 − 50) / 25) = 319; merchant: ceil(0.80 × 10000 / 25) = 320
+    expect(buildQuoteRequests(input({ merchantDeductionUsd: '0.80' }), 'input').networkFeeBps).toBe(
+      319,
+    );
+    expect(
+      buildQuoteRequests(input({ feePayer: 'merchant', merchantDeductionUsd: '0.80' }), 'input')
+        .networkFeeBps,
+    ).toBe(320);
   });
 
   it('merchant pays fees, sponsored: same send, the deduction is collected by appFees', () => {
@@ -209,7 +226,8 @@ describe('buildQuoteRequests', () => {
     expect(buildQuoteRequests(input({ merchantDeductionUsd: '0' })).networkFeeBps).toBe(0);
     // Sponsored with no Tendr fee: appFees carries only the deduction.
     // ceil(0.25 × 10000 / 24.75) = ceil(101.01…) = 102
-    const { real } = buildQuoteRequests(input({ feeBps: 0, merchantDeductionUsd: '0.25' }));
+    const { dry, real } = buildQuoteRequests(input({ feeBps: 0, merchantDeductionUsd: '0.25' }));
+    expect(dry.appFees).toBeUndefined();
     expect(real(quote('1', '1')).appFees).toEqual([{ recipient: 'fees.tendr.testnet', fee: 102 }]);
   });
 
@@ -402,41 +420,49 @@ describe('assertWithinMinimum', () => {
 describe('sponsored quotes against the 1Click simulator', () => {
   // A store that keeps nothing: these tests read only the quote amounts.
   const store = { create: async () => true } as unknown as SimStore;
-  const sim = new SimulatedOneClick({ store });
   const USDC_BASE = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near';
 
-  async function priced(over: Partial<PricingInput>) {
-    const reqs = buildQuoteRequests(
-      input({
-        originAsset: USDC_BASE,
-        originDecimals: 6,
-        recipient: 'shop.tendr.testnet',
-        ...over,
-      }),
-    );
-    const res = await sim.quote(reqs.real(await sim.quote(reqs.dry)));
-    if (over.feePayer === 'merchant') assertWithinTarget(res, reqs.targetUsd);
-    return res.quote;
-  }
+  for (const appFeeBase of ['output', 'input'] as const) {
+    const sim = new SimulatedOneClick({ store, appFeeBase });
 
-  for (const feePayer of ['merchant', 'shopper'] as const) {
-    for (const [order, fee] of [
-      ['25.00', '0.048'],
-      ['7.50', '0.96'],
-      ['1234.56', '1'],
-    ] as const) {
-      it(`${feePayer} pays Tendr's fee, $${order} order, $${fee} sponsored: same send, merchant gets less by the fee`, async () => {
-        const plain = await priced({ feePayer, orderAmount: order });
-        const sponsored = await priced({ feePayer, orderAmount: order, merchantDeductionUsd: fee });
-        // The shopper's send is the same within the assertWithinTarget tolerance (50 bps).
-        assertWithinTarget({ correlationId: 'x', quote: sponsored }, plain.amountInUsd!);
-        // The merchant's output is lower by the fee, within the same tolerance of the fee.
-        const less = Number(plain.amountOutUsd) - Number(sponsored.amountOutUsd);
-        expect(Math.abs(less - Number(fee))).toBeLessThanOrEqual(
-          Number(order) * (pricing.DEFAULT_TARGET_TOLERANCE_BPS / 10_000),
-        );
-        expect(less).toBeGreaterThan(Number(fee) * 0.95);
-      });
+    async function priced(over: Partial<PricingInput>) {
+      const reqs = buildQuoteRequests(
+        input({
+          originAsset: USDC_BASE,
+          originDecimals: 6,
+          recipient: 'shop.tendr.testnet',
+          ...over,
+        }),
+        appFeeBase,
+      );
+      const res = await sim.quote(reqs.real(await sim.quote(reqs.dry)));
+      if (over.feePayer === 'merchant') assertWithinTarget(res, reqs.targetUsd);
+      return res.quote;
+    }
+
+    for (const feePayer of ['merchant', 'shopper'] as const) {
+      for (const [order, fee] of [
+        ['25.00', '0.048'],
+        ['7.50', '0.075'],
+        ['1000.00', '0.048'],
+        ['1234.56', '1'],
+      ] as const) {
+        it(`${appFeeBase}-charged appFees, ${feePayer} pays Tendr's fee, $${order} order, $${fee} sponsored: the exact same send, merchant gets about the fee less`, async () => {
+          const plain = await priced({ feePayer, orderAmount: order });
+          const sponsored = await priced({
+            feePayer,
+            orderAmount: order,
+            merchantDeductionUsd: fee,
+          });
+          // The shopper sends exactly what they would without sponsorship, to the base unit.
+          expect(sponsored.amountIn).toBe(plain.amountIn);
+          // The merchant's output is lower by at least about the fee, and by at most the fee plus
+          // 1 bps of the order (whole-bps rounding) plus 1Click's own fee on it.
+          const less = Number(plain.amountOutUsd) - Number(sponsored.amountOutUsd);
+          expect(less).toBeGreaterThan(Number(fee) * 0.98);
+          expect(less).toBeLessThanOrEqual(Number(fee) * 1.01 + Number(order) * 0.0001 + 0.000002);
+        });
+      }
     }
   }
 });

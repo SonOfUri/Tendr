@@ -3,7 +3,6 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { resetOneClickProviders, SimulatedOneClick } from '../checkout/oneclick/index.js';
-import { assertWithinTarget } from '../checkout/pricing.js';
 import { resetTokenCache } from '../checkout/tokens.js';
 import { SIMULATED_FEE_USD } from '../gas/fees.js';
 import { putGasPolicy } from '../gas/policy.js';
@@ -788,19 +787,10 @@ describe('shopper checkout routes', () => {
           reason: null,
         });
         expect(q.fee_amount).toBeNull();
-        // The shopper sends the same as without sponsorship (within the target tolerance).
-        assertWithinTarget(
-          {
-            correlationId: 'x',
-            quote: {
-              amountIn: q.amount_in,
-              amountInUsd: q.amount_in_usd,
-              amountOut: '0',
-              amountOutUsd: '0',
-            },
-          },
-          plain.json().amount_in_usd,
-        );
+        // The shopper sends exactly what they would without sponsorship, to the base unit.
+        expect(q.amount_in).toBe(plain.json().amount_in);
+        // Their fee line does not include the fee the merchant sponsors.
+        expect(q.fee_lines).toEqual(plain.json().fee_lines);
         // The merchant receives about $0.048 less.
         const [a, b] = await Promise.all([
           prisma.quote.findFirstOrThrow({ where: { sessionId: plainS.id } }),
@@ -866,7 +856,18 @@ describe('shopper checkout routes', () => {
       expect(res.json().fee_amount).toBeNull();
     });
 
-    it('budget refused: the shopper pays and the reason reaches the pay page', async () => {
+    /** The store's own view of a session (secret key). */
+    const merchantSession = async (id: string) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/v1/checkout/sessions/${id}`,
+        headers: { authorization: `Bearer ${testKey}` },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      return res.json();
+    };
+
+    it('budget refused: the shopper pays; the pay page sees not_sponsored, the store sees budget', async () => {
       await sponsoring({ monthly_budget_usd: '1', per_payment_cap_usd: '1' });
       await prisma.gasBudgetMonth.create({
         data: {
@@ -886,11 +887,64 @@ describe('shopper checkout routes', () => {
       expect(res.json().network_fee).toMatchObject({
         paid_by: 'shopper',
         fee_mode: 'token',
-        reason: 'budget',
+        reason: 'not_sponsored',
       });
       const view = (await call('GET', 'session', s.client_secret)).json();
-      expect(view.network_fee.reason).toBe('budget');
+      expect(view.network_fee.reason).toBe('not_sponsored');
+      expect(view.quote.network_fee.reason).toBe('not_sponsored');
+      expect(res.body).not.toContain('budget');
+      expect((await merchantSession(s.id)).network_fee.reason).toBe('budget');
       expect(await prisma.gasSponsorship.count()).toBe(0);
+    });
+
+    it('sponsorship above 100 bps of the order: the shopper pays (per_payment_cap)', async () => {
+      await sponsoring();
+      // $0.048 is 1.6 % of a $3 order.
+      const s = await newSession({ amount: '3.00' });
+      const res = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      expect(res.json().network_fee).toMatchObject({
+        paid_by: 'shopper',
+        fee_mode: 'token',
+        reason: 'not_sponsored',
+      });
+      expect((await merchantSession(s.id)).network_fee).toMatchObject({
+        paid_by: 'shopper',
+        reason: 'per_payment_cap',
+      });
+      expect(await prisma.gasSponsorship.count()).toBe(0);
+      // $5: $0.048 is under 1 %, so the merchant sponsors.
+      const ok = await newSession({ amount: '5.00' });
+      const q = await call('POST', 'quote', ok.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(q.json().network_fee.paid_by).toBe('merchant');
+    });
+
+    it('sponsored, shopper pays Tendr fee: the fee line excludes the sponsored fee', async () => {
+      await sponsoring();
+      const s = await newSession({ fee_payer: 'shopper' });
+      const res = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const q = res.json();
+      expect(q.network_fee.paid_by).toBe('merchant');
+      const row = await prisma.quote.findFirstOrThrow({ where: { sessionId: s.id } });
+      // What the shopper sends minus the $25 order: the merchant's deduction is not in it.
+      const expected = row.amountInUsd!.minus(25).toDecimalPlaces(2, 0).toFixed(2);
+      expect(q.fee_lines).toEqual([
+        { kind: 'network_and_service', label: 'Network & service fee', amount_usd: expected },
+      ]);
+      // Under the sponsored out (in − out), the line would have been larger.
+      expect(row.amountInUsd!.minus(row.amountOutUsd!).toNumber()).toBeGreaterThan(
+        Number(expected) + 0.04,
+      );
     });
 
     it('a re-quote releases the previous reservation', async () => {

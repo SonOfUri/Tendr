@@ -15,7 +15,9 @@ import { nearClient, type NearClient, type TxStatusResult } from '../../near/cli
 import { eventLog } from '../../near/events.js';
 import { RedisSimStore, type SimDeposit, type SimStore } from './sim-store.js';
 import {
+  ONECLICK_APP_FEE_BASE,
   OneClickError,
+  type AppFeeBase,
   type OneClickProvider,
   type QuoteRequest,
   type QuoteResponse,
@@ -192,6 +194,8 @@ export interface SimulatedOneClickOptions {
   intentsContract?: string;
   /** Defaults to Redis (shared across processes). */
   store?: SimStore;
+  /** What `appFees` are charged on; defaults to ONECLICK_APP_FEE_BASE (tests try the other). */
+  appFeeBase?: AppFeeBase;
 }
 
 export class SimulatedOneClick implements OneClickProvider {
@@ -199,8 +203,10 @@ export class SimulatedOneClick implements OneClickProvider {
   private readonly near: () => NearClient;
   private readonly intentsContract: () => string;
   private readonly store: SimStore;
+  private readonly appFeeBase: AppFeeBase;
 
   constructor(opts: SimulatedOneClickOptions = {}) {
+    this.appFeeBase = opts.appFeeBase ?? ONECLICK_APP_FEE_BASE;
     this.now = opts.now ?? (() => new Date());
     this.near = opts.near ?? (() => nearClient(false));
     const intents = opts.intentsContract;
@@ -243,15 +249,24 @@ export class SimulatedOneClick implements OneClickProvider {
 
     const amount = BigInt(req.amount);
     let amountIn: bigint, amountOut: bigint, inUsd: bigint, outUsd: bigint;
+    // Fees on the output: in = out × (1e4 + bps) / 1e4. On the input: out = in × (1e4 − bps) / 1e4.
+    const onOutput = this.appFeeBase === 'output';
+    if (!onOutput && feeBps >= 10_000n) {
+      throw new OneClickError('fees take the whole amount', 400, 'INVALID_APP_FEE');
+    }
     if (req.swapType === 'EXACT_OUTPUT') {
       amountOut = amount;
       outUsd = (amountOut * dest.priceMicroUsd) / pow10(dest.decimals);
-      inUsd = ceilDiv(outUsd * (10_000n + feeBps), 10_000n);
+      inUsd = onOutput
+        ? ceilDiv(outUsd * (10_000n + feeBps), 10_000n)
+        : ceilDiv(outUsd * 10_000n, 10_000n - feeBps);
       amountIn = ceilDiv(inUsd * pow10(origin.decimals), origin.priceMicroUsd);
     } else {
       amountIn = amount;
       inUsd = (amountIn * origin.priceMicroUsd) / pow10(origin.decimals);
-      outUsd = (inUsd * 10_000n) / (10_000n + feeBps);
+      outUsd = onOutput
+        ? (inUsd * 10_000n) / (10_000n + feeBps)
+        : (inUsd * (10_000n - feeBps)) / 10_000n;
       amountOut = (outUsd * pow10(dest.decimals)) / dest.priceMicroUsd;
     }
 
@@ -385,6 +400,18 @@ export class SimulatedOneClick implements OneClickProvider {
     return view(depositAddress, next);
   }
 
+  /**
+   * One `appFees` entry's credit in the settlement asset: `out × bps` on the output, or
+   * `in × bps` (= `out × bps / (1e4 − Σbps)`) on the input.
+   */
+  private appFeeCredit(d: SimDeposit, bps: number): bigint {
+    if (this.appFeeBase === 'output') return (d.amountOut * BigInt(bps)) / 10_000n;
+    const total = BigInt(
+      SIM_ONECLICK_FEE_BPS + (d.req.appFees ?? []).reduce((sum, f) => sum + f.fee, 0),
+    );
+    return (d.amountOut * BigInt(bps)) / (10_000n - total);
+  }
+
   /** `d` is the stored state; each successful credit is recorded on it and saved at once. */
   private async settle(depositAddress: string, d: SimDeposit): Promise<void> {
     if (d.req.recipientType !== 'INTENTS') return;
@@ -393,7 +420,7 @@ export class SimulatedOneClick implements OneClickProvider {
       ...(d.req.appFees ?? []).map((f, i) => ({
         id: `fee:${i}`,
         account: f.recipient,
-        amount: (d.amountOut * BigInt(f.fee)) / 10_000n,
+        amount: this.appFeeCredit(d, f.fee),
       })),
     ].filter((c) => c.amount > 0n && !d.credited.includes(c.id));
     const client = this.near();
@@ -433,7 +460,7 @@ export class SimulatedOneClick implements OneClickProvider {
         { account: d.req.recipient, amount: d.amountOut },
         ...(d.req.appFees ?? []).map((f) => ({
           account: f.recipient,
-          amount: (d.amountOut * BigInt(f.fee)) / 10_000n,
+          amount: this.appFeeCredit(d, f.fee),
         })),
       ].filter((c) => c.amount > 0n);
       return {

@@ -11,9 +11,10 @@ import { QUOTE_TTL_MS, type FeePayer, type GasPayer } from '@tendr/contracts';
 import { env } from '../env.js';
 import { AppError } from '../lib/errors.js';
 import {
+  ONECLICK_APP_FEE_BASE,
   OneClickError,
   truncateUntrusted,
-  type AppFee,
+  type AppFeeBase,
   type QuoteRequest,
   type QuoteResponse,
 } from './oneclick/types.js';
@@ -204,7 +205,10 @@ export interface PricingInput {
 }
 
 export interface QuoteRequests {
-  /** Dry EXACT_INPUT probe of one whole origin token; its amountInUsd / amountIn is the price. */
+  /**
+   * Dry EXACT_INPUT probe of one whole origin token (its amountInUsd / amountIn is the price), or,
+   * for a sponsored shopper-pays-fees quote, the dry unsponsored EXACT_OUTPUT quote of the order.
+   */
   dry: QuoteRequest;
   /** The real (deposit-allocating) request, sized from the dry result where needed. */
   real: (dryResult: QuoteResponse) => QuoteRequest;
@@ -232,18 +236,26 @@ function tooSmall(message: string, details?: unknown): AppError {
  * - Merchant pays fees: EXACT_INPUT sized from the dry price so the shopper's amountInUsd equals
  *   the order total; all fees and spread come out of the merchant's amount_out.
  *
- * A merchant deduction (sponsored network fee + hook estimate, spec §8.1) lowers the merchant's
- * amount_out and never the shopper's send: it is collected as extra `appFees` basis points
- * (`networkFeeBps`). EXACT_INPUT keeps the shopper's amount and adds the bps; EXACT_OUTPUT asks for
- * the order minus the deduction and adds bps sized so the shopper's amountIn matches the
- * unsponsored quote (1Click charges `appFees` on the output: in = out × (1 + bps / 10 000)).
- * Basis points round UP (Tendr collects at least the deduction); the shopper's amountIn matches
- * the unsponsored quote within `assertWithinTarget`'s tolerance.
+ * A merchant deduction D (sponsored network fee + hook estimate, spec §8.1) lowers the merchant's
+ * amount_out and never changes the shopper's send: it is collected as `networkFeeBps` extra
+ * `appFees` basis points (charged on ONECLICK_APP_FEE_BASE).
+ * - Merchant pays fees: the shopper's amountIn is sized exactly as without D (same dry price,
+ *   same target); only the bps grow.
+ * - Shopper pays fees: the dry quote is the UNSPONSORED EXACT_OUTPUT quote of the order (Tendr's
+ *   fee only); the real quote is EXACT_INPUT for exactly its amountIn with the extra bps. The
+ *   shopper's send equals the unsponsored quote's to the base unit, whatever 1Click's own fee.
+ *
+ * The bps are whole numbers, rounded UP: Tendr collects at least D. That over-collects from the
+ * merchant by less than 1 bps of the charging base (e.g. under $0.10 on a $1000 order). The
+ * revenue records what was collected (`network_fee_bps`), not D.
  *
  * Settlement assets are USD stablecoins in the pilot, so a USD order and an order in the
  * settlement asset are both 1:1 with the settlement asset.
  */
-export function buildQuoteRequests(input: PricingInput): QuoteRequests {
+export function buildQuoteRequests(
+  input: PricingInput,
+  appFeeBase: AppFeeBase = ONECLICK_APP_FEE_BASE,
+): QuoteRequests {
   if (input.amountCurrency !== 'USD' && input.amountCurrency !== input.settlementAsset) {
     throw new AppError(
       'VALIDATION_ERROR',
@@ -263,20 +275,13 @@ export function buildQuoteRequests(input: PricingInput): QuoteRequests {
       network_fee_usd: microToNumber(deductMicro),
     });
   }
-  const tendr = BigInt(input.feeBps) + 10_000n;
-  let networkBps = 0n;
-  if (deductMicro > 0n) {
-    if (input.feePayer === 'shopper') {
-      // Output O − D at (f + g) bps costs the same as O at f bps: g = D × (1e4 + f) / (O − D).
-      networkBps = ceilDiv(deductMicro * tendr, orderMicro - deductMicro);
-    } else {
-      // Input I at (f + g) bps yields D less than at f bps:
-      // g = D × (1e4 + f)² / (I × 1e4 − D × (1e4 + f)).
-      const den = orderMicro * 10_000n - deductMicro * tendr;
-      if (den <= 0n) throw tooSmall('The network fee covers the whole order');
-      networkBps = ceilDiv(deductMicro * tendr * tendr, den);
-    }
-  }
+  const networkBps = deductionBps(
+    orderMicro,
+    deductMicro,
+    BigInt(input.feeBps),
+    input.feePayer,
+    appFeeBase,
+  );
   const totalBps = BigInt(input.feeBps) + networkBps;
   if (totalBps >= 10_000n) {
     throw tooSmall('The network fee is too large for this order', {
@@ -285,10 +290,8 @@ export function buildQuoteRequests(input: PricingInput): QuoteRequests {
     });
   }
   const networkFeeBps = Number(networkBps);
-  const appFees: AppFee[] | undefined =
-    totalBps > 0n ? [{ recipient: input.feeAccount, fee: Number(totalBps) }] : undefined;
 
-  const base = {
+  const withFees = (bps: bigint) => ({
     slippageTolerance: input.slippageBps ?? env().CHECKOUT_SLIPPAGE_BPS,
     originAsset: input.originAsset,
     depositType: 'ORIGIN_CHAIN' as const,
@@ -298,8 +301,51 @@ export function buildQuoteRequests(input: PricingInput): QuoteRequests {
     recipient: input.recipient,
     recipientType: input.recipientType,
     deadline,
-    ...(appFees ? { appFees } : {}),
-  };
+    ...(bps > 0n ? { appFees: [{ recipient: input.feeAccount, fee: Number(bps) }] } : {}),
+  });
+  const base = withFees(totalBps);
+  const targetUsd = microToDecimal(orderMicro);
+
+  if (input.feePayer === 'shopper') {
+    // The order in settlement base units. Rounds UP (via toBaseUnits).
+    const orderBase = toBaseUnits(input.orderAmount, input.settlementDecimals);
+    if (networkBps === 0n) {
+      const dry: QuoteRequest = {
+        dry: true,
+        swapType: 'EXACT_INPUT',
+        ...base,
+        amount: (10n ** BigInt(input.originDecimals)).toString(),
+      };
+      const real: QuoteRequest = {
+        dry: false,
+        swapType: 'EXACT_OUTPUT',
+        ...base,
+        amount: orderBase.toString(),
+      };
+      return { dry, real: () => real, targetUsd, networkFeeBps };
+    }
+    // Sponsored: price the unsponsored quote, then send exactly its amountIn with the extra bps.
+    const dry: QuoteRequest = {
+      dry: true,
+      swapType: 'EXACT_OUTPUT',
+      ...withFees(BigInt(input.feeBps)),
+      amount: orderBase.toString(),
+    };
+    return {
+      dry,
+      targetUsd,
+      networkFeeBps,
+      real: (dryResult) => {
+        const amountIn = parseResponseInt('amountIn', dryResult.quote.amountIn);
+        if (amountIn <= 0n) {
+          throw new OneClickError('Dry quote has no usable amountIn', null, 'BAD_RESPONSE', {
+            amountIn: dryResult.quote.amountIn,
+          });
+        }
+        return { dry: false, swapType: 'EXACT_INPUT', ...base, amount: amountIn.toString() };
+      },
+    };
+  }
 
   const dry: QuoteRequest = {
     dry: true,
@@ -307,23 +353,6 @@ export function buildQuoteRequests(input: PricingInput): QuoteRequests {
     ...base,
     amount: (10n ** BigInt(input.originDecimals)).toString(),
   };
-  const targetUsd = microToDecimal(orderMicro);
-
-  if (input.feePayer === 'shopper') {
-    // Order in settlement base units (rounds UP, via toBaseUnits) minus the deduction in
-    // settlement base units (rounds UP: the merchant receives at least D less).
-    const deductBase = toScaled(microToDecimal(deductMicro), input.settlementDecimals, 'up');
-    const amount = toBaseUnits(input.orderAmount, input.settlementDecimals) - deductBase;
-    if (amount <= 0n) throw tooSmall('The network fee covers the whole order');
-    const real: QuoteRequest = {
-      dry: false,
-      swapType: 'EXACT_OUTPUT',
-      ...base,
-      amount: amount.toString(),
-    };
-    return { dry, real: () => real, targetUsd, networkFeeBps };
-  }
-
   return {
     dry,
     targetUsd,
@@ -346,6 +375,33 @@ export function buildQuoteRequests(input: PricingInput): QuoteRequests {
       return { dry: false, swapType: 'EXACT_INPUT', ...base, amount: amountIn.toString() };
     },
   };
+}
+
+/**
+ * The whole extra `appFees` bps g that take D (micro-USD) from the merchant's output of an order
+ * O (micro-USD) with Tendr's fee f bps, rounded UP. 1Click's own fee is ignored (second order).
+ * - Output-charged (in = out × (1e4 + bps)/1e4):
+ *   - shopper pays fees (in fixed at O(1e4 + f)/1e4): out drops by D when g = D(1e4 + f)/(O − D);
+ *   - merchant pays fees (in = O): g = D(1e4 + f)² / (O·1e4 − D(1e4 + f)).
+ * - Input-charged (out = in × (1e4 − bps)/1e4), each bps takes in/1e4:
+ *   - shopper pays fees (in = O·1e4/(1e4 − f)): g = D(1e4 − f)/O;
+ *   - merchant pays fees (in = O): g = D·1e4/O.
+ */
+function deductionBps(
+  o: bigint,
+  d: bigint,
+  f: bigint,
+  feePayer: FeePayer,
+  appFeeBase: AppFeeBase,
+): bigint {
+  if (d === 0n) return 0n;
+  if (appFeeBase === 'input') {
+    return feePayer === 'shopper' ? ceilDiv(d * (10_000n - f), o) : ceilDiv(d * 10_000n, o);
+  }
+  if (feePayer === 'shopper') return ceilDiv(d * (10_000n + f), o - d);
+  const den = o * 10_000n - d * (10_000n + f);
+  if (den <= 0n) throw tooSmall('The network fee covers the whole order');
+  return ceilDiv(d * (10_000n + f) * (10_000n + f), den);
 }
 
 // ---------------------------------------------------------------------------------------------

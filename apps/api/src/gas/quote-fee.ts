@@ -9,7 +9,7 @@
 //     chain's coin (`native`, a normal wallet send).
 // An integrator session (`delivery = HOOK`) also has the hook call's estimate taken from the
 // merchant's proceeds; it never counts against the budget (§4.2).
-import type { Prisma, SponsorshipMethod } from '@prisma/client';
+import { Prisma, type SponsorshipMethod } from '@prisma/client';
 import {
   type FeeMode,
   type GasPayer,
@@ -146,8 +146,15 @@ export async function planNetworkFee(input: PlanInput): Promise<NetworkFeePlan> 
     throw err;
   }
   const feeUsd = withFeeMargin(raw);
-  const decision = input.forceShopper
-    ? { paidBy: 'shopper' as const, reason: input.forceShopper }
+  // Sponsorship is collected as whole appFees bps whose charging base is still unconfirmed
+  // (ONECLICK_APP_FEE_BASE): it is capped at MAX_SPONSORED_ORDER_BPS of the order.
+  const overCap = new Prisma.Decimal(feeUsd)
+    .plus(hookUsd)
+    .mul(10_000)
+    .gt(input.session.amount.mul(MAX_SPONSORED_ORDER_BPS));
+  const forced = input.forceShopper ?? (overCap ? 'per_payment_cap' : undefined);
+  const decision = forced
+    ? { paidBy: 'shopper' as const, reason: forced }
     : await decideSponsor({
         merchantId: input.merchantId,
         livemode: input.livemode,
@@ -234,8 +241,33 @@ type FeeColumns = {
   networkFeeReason: string | null;
 };
 
-/** `network_fee` for a quote; null for a quote made before gasless payments. */
-export function networkFeeView(q: FeeColumns): NetworkFeeView | null {
+/**
+ * The most a merchant may sponsor (network fee + integrator hook estimate), in basis points of the
+ * order. Above it the shopper pays (`per_payment_cap`).
+ */
+export const MAX_SPONSORED_ORDER_BPS = 100;
+
+/** Reasons the pay page may see as they are; any other becomes `not_sponsored`. */
+const SHOPPER_REASONS = new Set(['shopper_choice', 'fee_unavailable', 'fee_token_unpriced']);
+
+/**
+ * The reason as the shopper may see it. The merchant's budget, caps, the shopper's payment history
+ * and Tendr's loss cap are private: they read `not_sponsored`. The pay page still sees the
+ * reasons that decide which fee options it shows.
+ */
+export function shopperReason(reason: string | null): string | null {
+  return reason === null || SHOPPER_REASONS.has(reason) ? reason : 'not_sponsored';
+}
+
+/**
+ * `network_fee` for a quote; null for a quote made before gasless payments. `shopper`: the
+ * pay-page view, with the reason made public-safe (`shopperReason`); merchant views and webhooks
+ * keep the full reason.
+ */
+export function networkFeeView(
+  q: FeeColumns,
+  audience: 'merchant' | 'shopper' = 'merchant',
+): NetworkFeeView | null {
   if (!q.networkFeePaidBy || !q.networkFeeUsd) return null;
   const token = q.networkFeeMode === 'token';
   return {
@@ -245,7 +277,7 @@ export function networkFeeView(q: FeeColumns): NetworkFeeView | null {
     asset: token ? q.originAssetId : null,
     usd: q.networkFeeUsd.toFixed(),
     method: q.networkFeeMethod,
-    reason: q.networkFeeReason,
+    reason: audience === 'shopper' ? shopperReason(q.networkFeeReason) : q.networkFeeReason,
   };
 }
 

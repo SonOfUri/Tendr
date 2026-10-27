@@ -29,12 +29,24 @@ describe('revenueLines', () => {
         networkFeePaidBy: 'merchant',
       }),
     );
-    expect(l.gas_reimbursement!.amount.toFixed()).toBe('102500'); // 41 bps × 25 USDC
-    expect(l.gas_reimbursement!.amountUsd!.toFixed()).toBe('0.1025');
-    expect(l.app_fee!.amountUsd!.toFixed()).toBe('0.125');
-    // 25 − 24.70 − 0.125 − 0.1025
-    expect(l.oneclick_fee!.amountUsd!.toFixed()).toBe('0.0725');
+    // appFees are charged on the output (ONECLICK_APP_FEE_BASE): 41 bps × 24.70 USDC.
+    expect(l.gas_reimbursement!.amount.toFixed()).toBe('101270');
+    expect(l.gas_reimbursement!.amountUsd!.toFixed()).toBe('0.10127');
+    expect(l.app_fee!.amountUsd!.toFixed()).toBe('0.1235');
+    // 25 − 24.70 − 0.1235 − 0.10127
+    expect(l.oneclick_fee!.amountUsd!.toFixed()).toBe('0.07523');
     expect(l.network_fee).toBeUndefined();
+  });
+
+  it('input-charged appFees take their bps of amount_in', () => {
+    const l = bySource(
+      revenueLines(
+        { ...base, amountOutUsd: new D('24.70'), networkFeeBps: 41, networkFeePaidBy: 'merchant' },
+        'input',
+      ),
+    );
+    expect(l.gas_reimbursement!.amount.toFixed()).toBe('102500'); // 41 bps × 25 USDC
+    expect(l.app_fee!.amount.toFixed()).toBe('125000');
   });
 
   it("the shopper's own fee is the quote's estimate; without one, the static table", () => {

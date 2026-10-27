@@ -5,9 +5,9 @@
 // quote's `network_fee_bps`, project 5a §8.1).
 //
 // Every row is in the payment's ORIGIN asset base units at the quote's price, with its USD value
-// in `amount_usd`: Tendr's fee is `fee_bps × amount_in`, the gas reimbursement
-// `network_fee_bps × amount_in`; the other lines are USD figures converted at the quote's
-// `amount_in / amount_in_usd`. Rows with a zero amount are not written. A shopper-paid token fee
+// in `amount_usd`: Tendr's fee is `fee_bps` and the gas reimbursement `network_fee_bps` of the
+// value 1Click charges `appFees` on (ONECLICK_APP_FEE_BASE: the output, or the input); the USD
+// figures are converted to units at the quote's `amount_in / amount_in_usd`. Rows with a zero amount are not written. A shopper-paid token fee
 // is not a line here: it is collected outside the swap, by the relayed transaction.
 // One row per (payment, source) (a unique index): recording twice is a no-op.
 import { Prisma } from '@prisma/client';
@@ -16,6 +16,7 @@ import { assertTransaction } from '../events/record.js';
 import { newId } from '../lib/ids.js';
 import { notFound } from '../lib/errors.js';
 import { gasEstimateUsd } from './gas-estimates.js';
+import { ONECLICK_APP_FEE_BASE, appFeeBaseValue, type AppFeeBase } from './oneclick/types.js';
 
 const D = Prisma.Decimal;
 type Decimal = Prisma.Decimal;
@@ -34,20 +35,23 @@ export interface RevenueLine {
  * `networkFee*` fields are the quote's; `chain` is the origin chain (the static network-fee
  * estimate for quotes made before gasless payments).
  */
-export function revenueLines(input: {
-  originAsset: string;
-  chain: string;
-  amountIn: Decimal;
-  amountInUsd: Decimal | null;
-  amountOutUsd: Decimal | null;
-  feeBps: number;
-  /** `appFees` basis points that collected the merchant-sponsored fee (and hook estimate). */
-  networkFeeBps: number;
-  /** The quote's network fee (USD); null on quotes made before gasless payments. */
-  networkFeeUsd: Decimal | null;
-  /** Who paid the network fee; null on quotes made before gasless payments. */
-  networkFeePaidBy: 'merchant' | 'buyer' | null;
-}): RevenueLine[] {
+export function revenueLines(
+  input: {
+    originAsset: string;
+    chain: string;
+    amountIn: Decimal;
+    amountInUsd: Decimal | null;
+    amountOutUsd: Decimal | null;
+    feeBps: number;
+    /** `appFees` basis points that collected the merchant-sponsored fee (and hook estimate). */
+    networkFeeBps: number;
+    /** The quote's network fee (USD); null on quotes made before gasless payments. */
+    networkFeeUsd: Decimal | null;
+    /** Who paid the network fee; null on quotes made before gasless payments. */
+    networkFeePaidBy: 'merchant' | 'buyer' | null;
+  },
+  appFeeBase: AppFeeBase = ONECLICK_APP_FEE_BASE,
+): RevenueLine[] {
   const { amountIn, amountInUsd } = input;
   const bps = new D(input.feeBps).div(10_000);
   const usdToUnits = (usd: Decimal): Decimal =>
@@ -56,11 +60,20 @@ export function revenueLines(input: {
       : new D(0);
   const usd = (v: Decimal | null) => (v ? v.toDecimalPlaces(6, D.ROUND_HALF_UP) : null);
 
-  const appFee = amountIn.mul(bps).toDecimalPlaces(0, D.ROUND_DOWN);
-  const appFeeUsd = amountInUsd ? amountInUsd.mul(bps) : null;
+  // The value `appFees` are charged on, in origin units and in USD.
+  const feeBaseUnits = appFeeBaseValue(
+    { input: amountIn, output: input.amountOutUsd ? usdToUnits(input.amountOutUsd) : new D(0) },
+    appFeeBase,
+  );
+  const feeBaseUsd = appFeeBaseValue(
+    { input: amountInUsd, output: input.amountOutUsd },
+    appFeeBase,
+  );
+  const appFee = feeBaseUnits.mul(bps).toDecimalPlaces(0, D.ROUND_DOWN);
+  const appFeeUsd = feeBaseUsd ? feeBaseUsd.mul(bps) : null;
   const gasBps = new D(input.networkFeeBps).div(10_000);
-  const gas = amountIn.mul(gasBps).toDecimalPlaces(0, D.ROUND_DOWN);
-  const gasUsd = amountInUsd ? amountInUsd.mul(gasBps) : null;
+  const gas = feeBaseUnits.mul(gasBps).toDecimalPlaces(0, D.ROUND_DOWN);
+  const gasUsd = feeBaseUsd ? feeBaseUsd.mul(gasBps) : null;
   const lines: RevenueLine[] = [
     { source: 'app_fee', assetId: input.originAsset, amount: appFee, amountUsd: usd(appFeeUsd) },
   ];

@@ -681,6 +681,8 @@ fee share, 1Click's fee and the spread.
   opens in a popup, the payment goes through, and the frame shows the result.
 - Pay in wNEAR from a NEAR wallet that holds only NEAR. The checkout wraps the shortfall first.
 - Pay Tron USDT through TronLink.
+- Confirm 1Click charges appFees on the output (ONECLICK_APP_FEE_BASE) before enabling live gas
+  sponsorship.
 
 **Live checklist (FX for non-USD stores):** the live FX provider is
 [Open Exchange Rates](https://openexchangerates.org) (`FX_PROVIDER=openexchangerates`,

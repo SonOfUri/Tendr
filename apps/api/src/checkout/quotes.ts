@@ -174,10 +174,19 @@ function currentQuote(ctx: ShopperCtx) {
 
 type QuoteRow = NonNullable<Awaited<ReturnType<typeof currentQuote>>>;
 
-/** "Network & service fee" = what the shopper sends minus what the store receives (USD). */
-function feeLines(feePayer: FeePayer, q: Pick<QuoteRow, 'amountInUsd' | 'amountOutUsd'>) {
+/**
+ * "Network & service fee" = what the shopper sends minus what the store receives (USD). When the
+ * store gives up part of its output for the network (a sponsored fee or an integrator hook
+ * estimate, `network_fee_bps` > 0), the line is what the shopper sends minus the order total
+ * instead: the store's deduction is never the shopper's fee.
+ */
+function feeLines(
+  feePayer: FeePayer,
+  q: Pick<QuoteRow, 'amountInUsd' | 'amountOutUsd' | 'networkFeeBps'>,
+  orderUsd: Prisma.Decimal,
+) {
   if (feePayer !== 'shopper' || !q.amountInUsd || !q.amountOutUsd) return [];
-  const fee = q.amountInUsd.minus(q.amountOutUsd);
+  const fee = q.amountInUsd.minus(q.networkFeeBps > 0 ? orderUsd : q.amountOutUsd);
   if (fee.lte(0)) return [];
   return [
     {
@@ -189,9 +198,10 @@ function feeLines(feePayer: FeePayer, q: Pick<QuoteRow, 'amountInUsd' | 'amountO
   ];
 }
 
-function quoteView(q: QuoteRow, feePayer: FeePayer, now = new Date()) {
+/** `orderUsd`: the session's order total (USD, or the settlement stablecoin 1:1). */
+function quoteView(q: QuoteRow, feePayer: FeePayer, orderUsd: Prisma.Decimal, now = new Date()) {
   const direct = q.refundType === 'ORIGIN_CHAIN';
-  const networkFee = networkFeeView(q);
+  const networkFee = networkFeeView(q, 'shopper');
   return {
     id: q.id,
     origin_asset: q.originAssetId,
@@ -212,7 +222,7 @@ function quoteView(q: QuoteRow, feePayer: FeePayer, now = new Date()) {
      */
     refund: direct ? ('origin_chain' as const) : ('store' as const),
     refund_address: direct ? q.refundTo : null,
-    fee_lines: feeLines(feePayer, q),
+    fee_lines: feeLines(feePayer, q, orderUsd),
     /** Show the notice that leftovers worth under `small_overpay_usd` are not returned. */
     small_overpay_notice: true,
     small_overpay_usd: SMALL_OVERPAY_USD,
@@ -375,9 +385,9 @@ export async function shopperSessionView(ctx: ShopperCtx) {
     gas_payer: gasPayerFromDb(s.gasSponsor),
     success_url: s.successUrl,
     cancel_url: s.cancelUrl,
-    quote: quote ? quoteView(quote, feePayer) : null,
+    quote: quote ? quoteView(quote, feePayer, s.amount) : null,
     /** The current quote's network fee (who pays, how, why); null without a quote. */
-    network_fee: quote ? networkFeeView(quote) : null,
+    network_fee: quote ? networkFeeView(quote, 'shopper') : null,
     payments: payments.map((p) => ({
       id: p.id,
       state: shopperState(p),
@@ -564,9 +574,9 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
     if (writtenId) {
       // The row this request wrote (a concurrent quote may already have superseded it).
       const stored = await ctx.db.quote.findFirstOrThrow({ where: { id: writtenId } });
-      return quoteView(stored, feePayer);
+      return quoteView(stored, feePayer, s.amount);
     }
-    plan = await planFor('budget');
+    if (pass < 2) plan = await planFor('budget');
   }
   throw new Error('unreachable: a shopper-paid quote never needs a reservation');
 }
