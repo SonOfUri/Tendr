@@ -83,7 +83,7 @@ export function DemoPlayground() {
       const scenario = params.get('scenario');
       const match = scenario ? DEMOS.find((d) => d.slug === scenario) : undefined;
       if (match) setSlug(match.slug);
-      setSettledHint(match?.successHint ?? DEMOS[0].successHint);
+      setSettledHint(match?.successHint ?? DEMOS[0]!.successHint);
     }
     window.history.replaceState(null, '', '/demo');
   }, []);
