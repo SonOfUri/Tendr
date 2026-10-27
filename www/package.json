@@ -1,0 +1,9 @@
+{
+  "name": "@tendr/www",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tendr marketing landing (usetendr.tech)",
+  "scripts": {
+    "build": "echo \"Static Framer export — no build step\""
+  }
+}
