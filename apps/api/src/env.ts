@@ -123,6 +123,18 @@ const EnvSchema = z
         .default(String(DEFAULT_GAS_MAX_USD)),
     ),
     /**
+     * Tendr-wide daily cap (USD, per mode, UTC day) on unrecovered sponsorship losses
+     * (`gas_sponsorships.sponsor = tendr`). Once reached, new payments are not sponsored (the
+     * shopper pays) and operators are alerted. A decimal string, never parsed as a float.
+     */
+    TENDR_SPONSOR_LOSS_CAP_USD: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^\d+(\.\d+)?$/, 'must be a non-negative decimal')
+        .default('50'),
+    ),
+    /**
      * Underpay top-up ("send the remaining X to the same address" while the quote is live).
      * Unset: on in test mode (the simulator accumulates deposits), off in live mode until the
      * mainnet check confirms 1Click accumulates a top-up. Set: applies to both modes.

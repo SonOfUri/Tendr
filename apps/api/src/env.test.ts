@@ -286,6 +286,21 @@ describe('loadEnv checkout base url', () => {
   });
 });
 
+describe('loadEnv TENDR_SPONSOR_LOSS_CAP_USD', () => {
+  it('defaults to $50, treats blank as unset, accepts a decimal and rejects junk', () => {
+    expect(loadEnv(base).TENDR_SPONSOR_LOSS_CAP_USD).toBe('50');
+    expect(loadEnv({ ...base, TENDR_SPONSOR_LOSS_CAP_USD: ' ' }).TENDR_SPONSOR_LOSS_CAP_USD).toBe(
+      '50',
+    );
+    expect(
+      loadEnv({ ...base, TENDR_SPONSOR_LOSS_CAP_USD: '12.5' }).TENDR_SPONSOR_LOSS_CAP_USD,
+    ).toBe('12.5');
+    expect(() => loadEnv({ ...base, TENDR_SPONSOR_LOSS_CAP_USD: '-1' })).toThrow(
+      /TENDR_SPONSOR_LOSS_CAP_USD/,
+    );
+  });
+});
+
 describe('loadEnv checkout pricing', () => {
   it('defaults slippage to 100 bps and the gas cap to $2', () => {
     const e = loadEnv(base);
