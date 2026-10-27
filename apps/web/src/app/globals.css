@@ -43,10 +43,27 @@ main {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
   font-family: var(--tendr-font-display);
   font-weight: 700;
   font-size: 1.35rem;
   letter-spacing: -0.03em;
+}
+
+.brand-logo,
+.tendr-logo {
+  display: block;
+  border-radius: 7px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.site-footer-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .nav {
@@ -877,7 +894,9 @@ code {
 }
 
 .pay-button {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   padding: 0.75rem 1.25rem;
   border-radius: var(--tendr-radius);
@@ -887,6 +906,31 @@ code {
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+}
+
+.pay-button-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.pay-button-spinner {
+  width: 0.95em;
+  height: 0.95em;
+  border-radius: 999px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: tendr-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pay-button-spinner {
+    animation: none;
+    border-right-color: currentColor;
+    opacity: 0.55;
+  }
 }
 
 .pay-button:disabled {

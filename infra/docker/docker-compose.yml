@@ -4,7 +4,7 @@ services:
     container_name: tendr-postgres
     restart: unless-stopped
     ports:
-      - "5433:5432"
+      - "15432:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

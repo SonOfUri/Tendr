@@ -1,9 +1,13 @@
 import Link from 'next/link';
+import { TendrLogo } from '@/components/TendrLogo';
 
 export function SiteFooter() {
   return (
     <footer className="site-footer">
-      <p>Tendr — One checkout. Every way to pay.</p>
+      <p className="site-footer-brand">
+        <TendrLogo size={22} />
+        Tendr — One checkout. Every way to pay.
+      </p>
       <p>
         <Link href="/privacy">Privacy</Link>
         {' · '}

@@ -15,8 +15,11 @@ export default function HomePage() {
             payment complexity, so your product doesn’t have to.
           </p>
           <div className="cta-row">
+            <Link href="/demo">
+              <Button>Explore the demo</Button>
+            </Link>
             <Link href="/dashboard">
-              <Button>Build with Tendr</Button>
+              <Button variant="secondary">Build with Tendr</Button>
             </Link>
           </div>
         </div>
@@ -51,18 +54,18 @@ export default function HomePage() {
           one shared checkout engine.
         </p>
         <div className="grid-3">
-          <div className="tile">
+          <Link href="/demo/ecommerce" className="tile">
             <h3>E-commerce</h3>
             <p>Confirm orders after settlement, not after a button click.</p>
-          </div>
-          <div className="tile">
+          </Link>
+          <Link href="/demo/fintech" className="tile">
             <h3>Fintech</h3>
             <p>Fund features, with test mode clearly separated from live.</p>
-          </div>
-          <div className="tile">
+          </Link>
+          <Link href="/demo/gaming" className="tile">
             <h3>Gaming</h3>
             <p>Unlock items only after payment reaches a verified success state.</p>
-          </div>
+          </Link>
         </div>
       </section>
 

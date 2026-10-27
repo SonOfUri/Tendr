@@ -17,5 +17,7 @@ export function serverEnv() {
   return {
     apiBaseUrl: process.env.API_BASE_URL ?? publicEnv.apiBaseUrl,
     webUrl: process.env.WEB_URL ?? 'http://localhost:3000',
+    /** Demo Merchant secret test key from seed — never expose to the browser. */
+    tendrSecretKeyTest: process.env.TENDR_SECRET_KEY_TEST ?? '',
   };
 }

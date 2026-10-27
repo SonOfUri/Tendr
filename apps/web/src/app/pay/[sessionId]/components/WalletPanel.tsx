@@ -262,7 +262,10 @@ export function WalletPanel({
           disabled={busy}
           aria-busy={busy}
         >
-          {busy ? 'Connecting…' : 'Connect wallet'}
+          <span className="pay-button-label">
+            {busy ? <span className="pay-button-spinner" aria-hidden /> : null}
+            <span>{busy ? 'Connecting' : 'Connect wallet'}</span>
+          </span>
         </button>
       ) : (
         <>
@@ -292,13 +295,20 @@ export function WalletPanel({
               className="pay-button"
               onClick={() => void pay()}
               disabled={!payable}
-              aria-busy={phase === 'sending'}
+              aria-busy={phase === 'sending' || phase === 'quoting'}
             >
-              {phase === 'sending'
-                ? 'Confirm in your wallet…'
-                : phase === 'quoting'
-                  ? 'Updating your price…'
-                  : `Pay ${amount ?? ''} ${token.symbol}`}
+              <span className="pay-button-label">
+                {phase === 'sending' || phase === 'quoting' ? (
+                  <span className="pay-button-spinner" aria-hidden />
+                ) : null}
+                <span>
+                  {phase === 'sending'
+                    ? 'Confirm in your wallet'
+                    : phase === 'quoting'
+                      ? 'Updating your price'
+                      : `Pay ${amount ?? ''} ${token.symbol}`}
+                </span>
+              </span>
             </button>
           ) : (
             <p className="muted small">
