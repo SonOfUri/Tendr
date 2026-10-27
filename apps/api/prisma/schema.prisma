@@ -1078,9 +1078,12 @@ model Quote {
   /// signatures the relayer accepts for this quote. Null for a copy-address quote.
   walletAddress        String?             @map("wallet_address")
   /// SHA-256 (hex) of the quote's paymaster URL token (`/v1/checkout/paymaster/:token`, method
-  /// `paymaster`): the URL a smart wallet calls for sponsorship of exactly this quote's calls. The
-  /// token itself is never stored.
+  /// `paymaster`): the URL a smart wallet calls for sponsorship of exactly this quote's calls.
+  /// Requests are looked up by this hash.
   paymasterTokenHash   String?             @unique @map("paymaster_token_hash")
+  /// The token itself as a stored secret (`secrets`, envelope-encrypted, purpose `paymaster-url`),
+  /// so a repeated gasless/prepare returns the same URL instead of minting a new one.
+  paymasterTokenRef    String?             @map("paymaster_token_ref")
   createdAt            DateTime            @default(now()) @map("created_at")
 
   merchant          Merchant         @relation(fields: [merchantId], references: [id])

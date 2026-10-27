@@ -699,11 +699,21 @@ fee share, 1Click's fee and the spread.
   `apps/api/src/relayer/evm/known-accounts.ts` on each chain: the Coinbase Smart Wallet
   implementation and factory (and which EntryPoint that implementation accepts: v1 is v0.6-only,
   which this proxy refuses), the Solady ERC-1967 proxy runtime the factory deploys, the SafeProxy
-  runtime prefix, the Safe singletons and the Safe 4337 module. Confirm Pimlico's
+  runtime prefix, the Safe singletons, the Safe 4337 module and the Safe fallback-handler slot. Confirm Pimlico's
   `pm_getPaymasterData` `paymasterData` layout (`mode | validUntil | validAfter | signature`) and
   that its `validUntil` stays within the quote deadline + 1 h (otherwise every sponsorship is
   refused), and whether `pm_getPaymasterStubData` ever returns `isFinal: true` (the proxy forces
   `false`). `API_BASE_URL` must be the public API origin (the paymaster URL is built from it).
+  Confirm how far back Pimlico's `eth_getUserOperationReceipt` searches on each chain: the poll
+  job must not be down longer than that lookback before an operation's `validUntil` + 2 min, or a
+  landed operation reads as "not seen" and is failed with its cost unrecorded. Track the refusal
+  rate of the fee bound (`maxFeePerGas` / `maxPriorityFeePerGas` ≤ 2 × `eth_gasPrice`) per chain:
+  EIP-1559 wallets that set `2 × baseFee + tip` may exceed it when the base fee rises; raise
+  `PAYMASTER_GAS_PRICE_MULTIPLIER` if normal wallets are refused. Accepted risk: an account is
+  verified when sponsorship is asked for, but its owner can change it (a Safe's singleton, fallback
+  handler or modules; a Coinbase implementation) before the signed operation lands; an operation
+  that then moves nothing is recognised as Tendr's loss and bounded by the daily loss cap
+  (`TENDR_SPONSOR_LOSS_CAP_USD`).
   Then pay a few cents per chain from a Safe (and a Coinbase Smart Wallet once a v0.7 version is
   listed) through `wallet_sendCalls` with the paymaster capability and check the watcher marks it
   paid and the poll job records the user operation's cost.

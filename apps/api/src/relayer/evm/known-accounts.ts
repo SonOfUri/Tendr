@@ -10,11 +10,18 @@
 //             Coinbase Smart Wallet implementation; counterfactual: the listed factory's
 //             `createAccount(bytes[] owners, uint256 nonce)` (it always deploys the listed
 //             implementation). Calls: `execute` / `executeBatch`.
-//   safe      SafeProxy whose singleton (storage slot 0) is a listed Safe singleton, with the Safe
-//             4337 module enabled. Calls: `executeUserOp` / `executeUserOpWithErrorString`.
+//   safe      SafeProxy whose singleton (storage slot 0) is a listed Safe singleton, with a listed
+//             Safe 4337 module both enabled and set as its fallback handler. Calls: `executeUserOp` / `executeUserOpWithErrorString`.
 //             Counterfactual Safes are not sponsored (their setup data is not verified).
 //   ERC-7579  none listed: no implementation is verified the same way yet, so 7579 accounts are
 //             refused.
+//
+// Accepted residual risk (time of check vs. time of use): an account is verified when sponsorship
+// is asked for (cached 60 s), but its owner can still change it before the signed operation lands
+// (swap a Safe's singleton, fallback handler or modules; upgrade a Coinbase implementation), within
+// the paymaster signature's validity (at most the quote deadline + 1 h). No check before signing
+// can prevent that. Such an operation that moves nothing is recognised as Tendr's loss, and the
+// daily loss cap (TENDR_SPONSOR_LOSS_CAP_USD) bounds it.
 
 /** keccak256("eip1967.proxy.implementation") − 1. */
 export const ERC1967_IMPLEMENTATION_SLOT =
@@ -55,6 +62,14 @@ export const SAFE_SINGLETONS: readonly string[] = [
 
 /** Safe 4337 module for EntryPoint v0.7 (v0.3.0), lower-case. */
 export const SAFE_4337_MODULES: readonly string[] = ['0x75cf11467937ce3f2f357ce24ffc3dbf8fd5c226'];
+
+/**
+ * keccak256("fallback_manager.handler.address"): the Safe's fallback handler. On a Safe,
+ * `validateUserOp` and `executeUserOp` are not singleton functions: the Safe forwards them to this
+ * handler, which alone decides what runs. It must be the enabled 4337 module.
+ */
+export const SAFE_FALLBACK_HANDLER_SLOT =
+  '0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5';
 
 /** `isModuleEnabled(address)`. */
 export const SAFE_IS_MODULE_ENABLED_SELECTOR = '0x2d9ad53d';

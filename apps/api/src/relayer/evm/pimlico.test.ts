@@ -62,6 +62,8 @@ const KEY = 'pim_SUPERSECRETKEY123';
 const PM = '0x777777777777aec03fd955926dbf81597e66834c';
 const TRANSFER_TOPIC0 = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const GAS_PRICE = 10_000_000n; // 0.01 gwei
+/** keccak256("fallback_manager.handler.address"): the Safe's fallback handler. */
+const FALLBACK_HANDLER_SLOT = '0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5';
 const SAFE_METADATA = 'a2646970667358221220' + 'ab'.repeat(32) + '64736f6c6343' + '000706' + '0033';
 
 const erc20 = new Interface(['function transfer(address,uint256)']);
@@ -168,10 +170,18 @@ class FakeChain {
       zeroPadValue(impl, 32),
     );
   }
-  safe(address: string, opts: { module?: boolean } = {}) {
-    this.code.set(address.toLowerCase(), SAFE_PROXY_RUNTIME_PREFIX + SAFE_METADATA);
-    this.storage.set(`${address.toLowerCase()}:0`, zeroPadValue(SAFE_SINGLETONS[0]!, 32));
-    if (opts.module !== false) this.modules.add(`${address.toLowerCase()}:${SAFE_4337_MODULES[0]}`);
+  safe(
+    address: string,
+    opts: { module?: boolean; handler?: string; singleton?: string; code?: string } = {},
+  ) {
+    const a = address.toLowerCase();
+    this.code.set(a, opts.code ?? SAFE_PROXY_RUNTIME_PREFIX + SAFE_METADATA);
+    this.storage.set(`${a}:0`, zeroPadValue(opts.singleton ?? SAFE_SINGLETONS[0]!, 32));
+    this.storage.set(
+      `${a}:${BigInt(FALLBACK_HANDLER_SLOT)}`,
+      zeroPadValue(opts.handler ?? SAFE_4337_MODULES[0]!, 32),
+    );
+    if (opts.module !== false) this.modules.add(`${a}:${SAFE_4337_MODULES[0]}`);
   }
 }
 
@@ -605,6 +615,79 @@ describe('Pimlico paymaster proxy', () => {
       resultOf(await ask(p, rpc('pm_getPaymasterData', batched)));
     });
 
+    /** A single-call Safe operation for the quote, the Safe set up by `setup`. */
+    async function safeCase(p: Q, setup: () => void) {
+      chain.code.clear();
+      chain.storage.clear();
+      chain.modules.clear();
+      resetAccountCache();
+      setup();
+      const op = userOp(
+        accounts.encodeFunctionData('executeUserOp', [p.payment.to, 0n, p.payment.data, 0]),
+      );
+      return ask(p, rpc('pm_getPaymasterData', op));
+    }
+
+    it('a Safe whose fallback handler is not the 4337 module is refused (N1)', async () => {
+      const p = await paymasterQuote();
+      // A real-looking SafeProxy, listed singleton, module enabled, but its own fallback handler:
+      // the handler runs validateUserOp / executeUserOp, so it could pay nothing.
+      const evil = '0x' + '66'.repeat(20);
+      const res = await safeCase(p, () => {
+        chain.safe(wallet, { handler: evil });
+        // The attacker may enable its own handler as a module too.
+        chain.modules.add(`${wallet.toLowerCase()}:${evil}`);
+      });
+      expect(errorOf(res)?.code).toBe(-32602);
+      expect(pimlico.calls).toEqual([]);
+      resultOf(await safeCase(p, () => chain.safe(wallet)));
+    });
+
+    it('a Safe on an unlisted singleton is refused (N3)', async () => {
+      const p = await paymasterQuote();
+      const res = await safeCase(p, () =>
+        chain.safe(wallet, { singleton: '0x' + '77'.repeat(20) }),
+      );
+      expect(errorOf(res)?.code).toBe(-32602);
+      expect(pimlico.calls).toEqual([]);
+    });
+
+    it('SafeProxy code with anything but a CBOR metadata tail is refused (N3)', async () => {
+      const p = await paymasterQuote();
+      for (const code of [
+        SAFE_PROXY_RUNTIME_PREFIX + SAFE_METADATA + '00',
+        SAFE_PROXY_RUNTIME_PREFIX + '6000f3' + SAFE_METADATA,
+        SAFE_PROXY_RUNTIME_PREFIX,
+      ]) {
+        const res = await safeCase(p, () => chain.safe(wallet, { code }));
+        expect(errorOf(res)?.code).toBe(-32602);
+      }
+      expect(pimlico.calls).toEqual([]);
+    });
+
+    it('counterfactual: refused when code exists, with another selector, or with non-Coinbase calls (N3)', async () => {
+      const p = await paymasterQuote();
+      const factory = COINBASE_SMART_WALLET_FACTORIES[0];
+      const createAccount = '0x3ffba36f' + '00'.repeat(64);
+      const big = { verificationGasLimit: toBeHex(400_000n) };
+      // Already deployed (a Coinbase wallet is on chain at the sender).
+      const deployed = userOp(cbBatch(p.calls), { factory, factoryData: createAccount, ...big });
+      expect(errorOf(await ask(p, rpc('pm_getPaymasterData', deployed)))?.code).toBe(-32602);
+      chain.code.delete(wallet.toLowerCase());
+      const otherSelector = userOp(cbBatch(p.calls), {
+        factory,
+        factoryData: '0x12345678' + '00'.repeat(64),
+        ...big,
+      });
+      expect(errorOf(await ask(p, rpc('pm_getPaymasterData', otherSelector)))?.code).toBe(-32602);
+      const safeCalls = userOp(
+        accounts.encodeFunctionData('executeUserOp', [p.payment.to, 0n, p.payment.data, 0]),
+        { factory, factoryData: createAccount, ...big },
+      );
+      expect(errorOf(await ask(p, rpc('pm_getPaymasterData', safeCalls)))?.code).toBe(-32602);
+      expect(pimlico.calls).toEqual([]);
+    });
+
     it('counterfactual: only the known Coinbase factory', async () => {
       const p = await paymasterQuote();
       chain.code.delete(wallet.toLowerCase());
@@ -842,6 +925,34 @@ describe('Pimlico paymaster proxy', () => {
     });
   });
 
+  it('a replacement keeps the later validUntil of the recorded operations (N2)', async () => {
+    const p = await paymasterQuote();
+    const op = userOp(cbBatch(p.calls));
+    resultOf(await ask(p, rpc('pm_getPaymasterData', op)));
+    // The replacement's signature expires sooner: the first one can still land until validUntil.
+    pimlico.dataResult = { paymaster: PM, paymasterData: pmData(validUntil - 600) };
+    resultOf(await ask(p, rpc('pm_getPaymasterData', { ...op, callGasLimit: toBeHex(120_000n) })));
+    const sp = await prisma.gasSponsorship.findUniqueOrThrow({
+      where: { id: p.quote.gasSponsorshipId! },
+    });
+    expect(sp.paymasterData).toMatchObject({ validUntil });
+    const end = validUntil * 1000 + PAYMASTER_VALIDITY_GRACE_MS;
+    expect(
+      await pollPaymasterOps({
+        pimlico: client(),
+        livemode: false,
+        now: () => new Date(end - 1000),
+      }),
+    ).toBe(0);
+    expect(
+      await pollPaymasterOps({
+        pimlico: client(),
+        livemode: false,
+        now: () => new Date(end + 1000),
+      }),
+    ).toBe(1);
+  });
+
   it('a released sponsorship is refused', async () => {
     const p = await paymasterQuote();
     await prisma.gasSponsorship.update({
@@ -1059,18 +1170,47 @@ describe('Pimlico paymaster proxy', () => {
         const res = await post(`/v1/checkout/paymaster/${bad}`, rpc('pm_getPaymasterData', op));
         expect(res.statusCode).toBe(401);
       }
-      // A second prepare issues a new URL: the old one stops working.
+      // The client secret does not open the paymaster URL either (it is not the credential).
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(await prisma.gasSponsorship.count({ where: { quoteId: { not: null } } })).toBe(0);
+    });
+
+    it('prepare again returns the same live URL (N6); a new quote gets its own', async () => {
+      const p = await prepared();
       const again = await app.inject({
         method: 'POST',
         url: '/v1/checkout/client/gasless/prepare',
         headers: { authorization: `Bearer ${p.s.client_secret}` },
         payload: { quote_id: p.quote.id },
       });
-      expect(again.statusCode).toBe(200);
-      expect((await post(p.path, rpc('pm_getPaymasterStubData', op))).statusCode).toBe(401);
-      // The client secret does not open the paymaster URL either (it is not the credential).
-      expect(fetchSpy).not.toHaveBeenCalled();
-      expect(await prisma.gasSponsorship.count({ where: { quoteId: { not: null } } })).toBe(0);
+      expect(again.statusCode, again.body).toBe(200);
+      expect(again.json().paymaster_url).toBe(p.body.paymaster_url);
+      const op = userOp(cbBatch(p.calls));
+      expect((await post(p.path, rpc('pm_getPaymasterStubData', op))).json().result).toBeDefined();
+      const q = await prisma.quote.findUniqueOrThrow({ where: { id: p.quote.id } });
+      expect(q.paymasterTokenHash).toBe(paymasterTokenHash(p.token));
+      expect(JSON.stringify(q)).not.toContain(p.token);
+      // A re-quote gets a different URL.
+      const newer = await quoteOn(p.s);
+      const next = await app.inject({
+        method: 'POST',
+        url: '/v1/checkout/client/gasless/prepare',
+        headers: { authorization: `Bearer ${p.s.client_secret}` },
+        payload: { quote_id: newer.quote.id },
+      });
+      expect(next.json().paymaster_url).not.toBe(p.body.paymaster_url);
+    });
+
+    it('per-IP limit, before the token is looked up (N3)', async () => {
+      const p = await prepared();
+      const key = `tendr:gasless:pm-url:ip:127.0.0.1:${Math.floor(Date.now() / 60_000)}`;
+      await getRedis().set(key, '120', 'EX', 60);
+      for (const path of [p.path, '/v1/checkout/paymaster/' + 'A'.repeat(43)]) {
+        const res = await post(path, rpc('pm_getPaymasterStubData', userOp(cbBatch(p.calls))));
+        expect(res.statusCode).toBe(200);
+        expect(res.json().error).toMatchObject({ code: -32005, data: { code: 'RATE_LIMITED' } });
+      }
+      await getRedis().del(key);
     });
 
     it("a token is bound to its quote: another quote's calls are refused", async () => {

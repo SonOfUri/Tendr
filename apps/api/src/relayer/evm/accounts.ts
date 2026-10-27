@@ -6,6 +6,7 @@ import {
   COINBASE_SMART_WALLET_IMPLEMENTATIONS,
   ERC1967_IMPLEMENTATION_SLOT,
   SAFE_4337_MODULES,
+  SAFE_FALLBACK_HANDLER_SLOT,
   SAFE_IS_MODULE_ENABLED_SELECTOR,
   SAFE_PROXY_RUNTIME_PREFIX,
   SAFE_SINGLETONS,
@@ -55,12 +56,15 @@ async function deployedFormat(
       String(await rpc.request('eth_getStorageAt', [sender, '0x0', 'latest'])),
     );
     if (!SAFE_SINGLETONS.includes(singleton)) return null;
-    for (const module of SAFE_4337_MODULES) {
-      const data = SAFE_IS_MODULE_ENABLED_SELECTOR + module.slice(2).padStart(64, '0');
-      const res = String(await rpc.request('eth_call', [{ to: sender, data }, 'latest']));
-      if (/^0x0*1$/.test(res)) return 'safe';
-    }
-    return null;
+    // The fallback handler runs validateUserOp / executeUserOp: it must be a listed 4337 module,
+    // and that same module must be enabled.
+    const handler = addressFromWord(
+      String(await rpc.request('eth_getStorageAt', [sender, SAFE_FALLBACK_HANDLER_SLOT, 'latest'])),
+    );
+    if (!SAFE_4337_MODULES.includes(handler)) return null;
+    const data = SAFE_IS_MODULE_ENABLED_SELECTOR + handler.slice(2).padStart(64, '0');
+    const res = String(await rpc.request('eth_call', [{ to: sender, data }, 'latest']));
+    return /^0x0*1$/.test(res) ? 'safe' : null;
   }
   return null;
 }

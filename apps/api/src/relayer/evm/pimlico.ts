@@ -15,8 +15,9 @@
 // `gas-fees-evm` key; nothing the shopper's money can reach is taken from the request.
 //
 // Transport (ruling T6-f): the wallet calls the URL itself, so the capability is in the URL:
-// `/v1/checkout/paymaster/:token`, a random 32-byte token issued by `gasless/prepare` for a
-// `paymaster` quote, stored only as its SHA-256, bound to that one quote (merchant, mode and
+// `/v1/checkout/paymaster/:token`, a random 32-byte token issued once per quote by
+// `gasless/prepare` for a `paymaster` quote (looked up by its SHA-256; the token itself kept only
+// as an envelope-encrypted secret so a repeated prepare returns the same URL), bound to that quote (merchant, mode and
 // session all come from the quote row). A leaked URL lets its holder ask for sponsorship of exactly
 // that quote's calls from that quote's wallet until the quote ends; it can also pin the quote with
 // an operation the shopper never signs (another operation with the same sender and nonce can
@@ -47,7 +48,7 @@ import { AppError, unauthorized } from '../../lib/errors.js';
 import { newId } from '../../lib/ids.js';
 import { log } from '../../lib/logger.js';
 import { prisma } from '../../lib/prisma.js';
-import { getSecret } from '../../secrets/secrets.js';
+import { getSecret, putSecret } from '../../secrets/secrets.js';
 import { gaslessQuote } from '../index.js';
 import { SIMULATED_GAS_USED } from '../simulated.js';
 import {
@@ -421,17 +422,41 @@ export function paymasterTokenHash(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
+/** `secrets.purpose` of a paymaster URL token. */
+export const PAYMASTER_URL_SECRET_PURPOSE = 'paymaster-url';
+
+const urlFor = (token: string) =>
+  `${env().API_BASE_URL.replace(/\/+$/, '')}${PAYMASTER_URL_PREFIX}${token}`;
+
 /**
- * A fresh paymaster URL for the quote (replacing any earlier one): 32 random bytes, stored as
- * their SHA-256. The URL is returned to the shopper once and never logged.
+ * The quote's paymaster URL: the one already issued while the quote is live (a repeated prepare
+ * must not cut off a wallet already using it), else a new one: 32 random bytes, looked up by their
+ * SHA-256 and kept only as an envelope-encrypted secret. Minted once per quote, under the quote's
+ * row lock. Never logged.
  */
 export async function issuePaymasterUrl(q: QuoteContext): Promise<string> {
-  const token = randomBytes(32).toString('base64url');
-  await q.shopper.db.quote.updateMany({
-    where: { id: q.quote.id, sessionId: q.session.id },
-    data: { paymasterTokenHash: paymasterTokenHash(token) },
+  const scope = scopeOf(q);
+  const existing = await tenantTransaction(scope, async (tx) => {
+    const rows = await tx.$queryRaw<{ ref: string | null; hash: string | null }[]>`
+      SELECT paymaster_token_ref AS ref, paymaster_token_hash AS hash FROM quotes
+      WHERE id = ${q.quote.id} AND session_id = ${q.session.id}
+        AND merchant_id = ${scope.merchantId} AND livemode = ${scope.livemode}
+      FOR UPDATE`;
+    const row = rows[0];
+    if (!row) throw quoteExpired('was replaced by a newer one');
+    if (row.ref && row.hash) return { ref: row.ref, hash: row.hash, token: null };
+    const token = randomBytes(32).toString('base64url');
+    const ref = await putSecret(token, PAYMASTER_URL_SECRET_PURPOSE, tx);
+    await tx.quote.updateMany({
+      where: { ...scope, id: q.quote.id },
+      data: { paymasterTokenHash: paymasterTokenHash(token), paymasterTokenRef: ref },
+    });
+    return { ref, hash: paymasterTokenHash(token), token };
   });
-  return `${env().API_BASE_URL.replace(/\/+$/, '')}${PAYMASTER_URL_PREFIX}${token}`;
+  if (existing.token) return urlFor(existing.token);
+  const token = await getSecret(existing.ref);
+  if (paymasterTokenHash(token) !== existing.hash) throw unavailable();
+  return urlFor(token);
 }
 
 /**
@@ -826,6 +851,8 @@ async function record(
       const previous = storedOf(existing)!;
       const replaced: StoredPaymaster = {
         ...stored,
+        // Either operation can still land until its own signature expires: give up after the later.
+        validUntil: Math.max(previous.validUntil, stored.validUntil),
         hashes: [...previous.hashes.filter((h) => h !== hash), hash],
       };
       const { count } = await tx.gasSponsorship.updateMany({
