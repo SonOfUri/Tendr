@@ -497,6 +497,12 @@ test.describe.serial('WooCommerce plugin', () => {
     try {
       const order = await buyInBlocksCheckout(admin, 'a', productId('a', PRODUCT_NGN.name));
       await expect.poll(() => orderStatus('a', order.key), { timeout: 60_000 }).toBe('processing');
+      // The thank-you page reloads itself once the order moves: let it, so the next step's
+      // navigation never races that reload.
+      await expect(admin.getByText('Waiting for payment confirmation…')).toHaveCount(0, {
+        timeout: 30_000,
+      });
+      await admin.waitForLoadState('load');
       const notes = orderNotes('a', order.id);
       expect(notes).toMatch(/Converted ₦16,000(\.00)? → \$10\.00 at 1 USD = 1,600(\.00)? NGN/);
     } finally {
