@@ -685,6 +685,12 @@ fee share, 1Click's fee and the spread.
   sponsored shopper-pays quote sends the dry EXACT_OUTPUT `minAmountIn` as EXACT_INPUT).
 - Confirm 1Click charges appFees on the output (ONECLICK_APP_FEE_BASE) before enabling live gas
   sponsorship.
+- EVM gasless relayer, before live use: the TendrForwarder is deployed at `EVM_FORWARDER_ADDRESS`
+  on each chain; `relayer-evm` holds working gas there; each allow-listed token
+  (`apps/api/src/relayer/evm/tokens.ts`) returns the listed EIP-712 `name()` / `version()` on
+  chain; `EVM_RPC_URLS` points at endpoints that accept `eth_sendRawTransaction`. Then relay one
+  EIP-3009 and one permit payment of a few cents per chain and check the watcher (not the relay)
+  marks it paid.
 
 **Live checklist (FX for non-USD stores):** the live FX provider is
 [Open Exchange Rates](https://openexchangerates.org) (`FX_PROVIDER=openexchangerates`,

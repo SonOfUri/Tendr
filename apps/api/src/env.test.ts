@@ -301,6 +301,35 @@ describe('loadEnv TENDR_SPONSOR_LOSS_CAP_USD', () => {
   });
 });
 
+describe('loadEnv EVM relayer', () => {
+  it('defaults the forwarder to the CREATE2 address and leaves fee caps unset', () => {
+    const e = loadEnv(base);
+    expect(e.EVM_FORWARDER_ADDRESS).toBe('0x19BEBC71495490A99cA6F50F107076967380cf09');
+    expect(e.EVM_MAX_FEE_GWEI_BASE).toBeUndefined();
+    expect(e.EVM_MAX_FEE_GWEI_ETH).toBeUndefined();
+    expect(loadEnv({ ...base, EVM_MAX_FEE_GWEI_ARB: ' ' }).EVM_MAX_FEE_GWEI_ARB).toBeUndefined();
+  });
+
+  it('accepts overrides and rejects junk', () => {
+    const e = loadEnv({
+      ...base,
+      EVM_FORWARDER_ADDRESS: '0x1234567890abcdef1234567890abcdef12345678',
+      EVM_MAX_FEE_GWEI_BASE: '0.5',
+      EVM_MAX_FEE_GWEI_ETH: '80',
+    });
+    expect(e.EVM_FORWARDER_ADDRESS).toBe('0x1234567890abcdef1234567890abcdef12345678');
+    expect(e.EVM_MAX_FEE_GWEI_BASE).toBe('0.5');
+    expect(e.EVM_MAX_FEE_GWEI_ETH).toBe('80');
+    expect(() => loadEnv({ ...base, EVM_FORWARDER_ADDRESS: '0x1234' })).toThrow(
+      /EVM_FORWARDER_ADDRESS/,
+    );
+    expect(() => loadEnv({ ...base, EVM_MAX_FEE_GWEI_POL: '-1' })).toThrow(/EVM_MAX_FEE_GWEI_POL/);
+    expect(() => loadEnv({ ...base, EVM_MAX_FEE_GWEI_BSC: 'lots' })).toThrow(
+      /EVM_MAX_FEE_GWEI_BSC/,
+    );
+  });
+});
+
 describe('loadEnv gas fee pricing and chain RPCs', () => {
   it('defaults the margin to 2000 bps and the Solana and Tron RPCs to public mainnet', () => {
     const e = loadEnv(base);

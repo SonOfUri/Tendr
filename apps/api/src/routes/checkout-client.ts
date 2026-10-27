@@ -23,6 +23,14 @@ import {
   RefundAddressTokenInputSchema,
 } from '../checkout/refunds.js';
 import { publicFrameOrigins } from '../checkout/checkout-settings.js';
+import {
+  GaslessOptionsInputSchema,
+  GaslessPrepareInputSchema,
+  GaslessSubmitInputSchema,
+  gaslessOptions,
+  gaslessQuote,
+  gaslessSubmission,
+} from '../relayer/index.js';
 import { requirePrincipal } from '../gateway/principal.js';
 import { notFound, unauthorized } from '../lib/errors.js';
 
@@ -77,6 +85,41 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
     await submitDeposit(ctx, tx_hash, quote_id);
     return reply.status(202).send({ submitted: true });
   });
+
+  // Gasless payments (project 5a): which methods the connected wallet can use for a token (with
+  // the fee lines), what to sign for the current quote, and the signed payload to relay. Submit
+  // checks every signed field against the quote before any gas is spent, and is limited to
+  // SUBMITS_PER_SESSION per session and SUBMITS_PER_ADDRESS_PER_HOUR per wallet.
+  app.post(`${CHECKOUT_CLIENT_PREFIX}gasless/options`, shopper, async (req) => {
+    const input = GaslessOptionsInputSchema.parse(req.body);
+    return gaslessOptions(ctxOf(req), input);
+  });
+
+  app.post(`${CHECKOUT_CLIENT_PREFIX}gasless/prepare`, shopper, async (req) => {
+    const input = GaslessPrepareInputSchema.parse(req.body);
+    const { q, relayer } = await gaslessQuote(ctxOf(req), input.quote_id);
+    return relayer.prepare(q, {
+      ...(input.method ? { method: input.method } : {}),
+      ...(input.fee_mode ? { fee_mode: input.fee_mode } : {}),
+    });
+  });
+
+  app.post(`${CHECKOUT_CLIENT_PREFIX}gasless/submit`, shopper, async (req, reply) => {
+    const input = GaslessSubmitInputSchema.parse(req.body);
+    const { q, relayer } = await gaslessQuote(ctxOf(req), input.quote_id);
+    const res = await relayer.submit(q, { signatures: input.signatures });
+    return reply.status(202).send({
+      submission_id: res.submissionId,
+      status: res.status,
+      tx_hash: res.txHash ?? null,
+    });
+  });
+
+  app.get<{ Params: { id: string } }>(
+    `${CHECKOUT_CLIENT_PREFIX}gasless/submissions/:id`,
+    shopper,
+    async (req) => gaslessSubmission(ctxOf(req), req.params.id),
+  );
 
   app.post(`${CHECKOUT_CLIENT_PREFIX}email`, shopper, async (req) => {
     const ctx = ctxOf(req);

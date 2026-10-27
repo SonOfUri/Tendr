@@ -56,6 +56,8 @@ export const INFRA_MODELS = [
   'EventNotice',
   // Connect authorization codes: only the connect flow touches them, by code hash.
   'ConnectAuthCode',
+  // The relayer's own on-chain transactions (nonce, broadcasts); only the relayer touches them.
+  'RelayerTransaction',
 ] as const;
 
 /**

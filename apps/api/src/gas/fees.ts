@@ -334,8 +334,11 @@ function nativeCost(
   }
 }
 
-/** USD of `units` of `chain`'s native coin, rounded up to the micro-dollar. */
-async function nativeUsd(chain: string, units: bigint, livemode: boolean): Promise<string> {
+/**
+ * USD of `units` of `chain`'s native coin (its smallest unit: wei, lamports, …), rounded up to the
+ * micro-dollar, at the 1Click token-list price. Throws NETWORK_FEE_UNAVAILABLE when unpriced.
+ */
+export async function nativeUsd(chain: string, units: bigint, livemode: boolean): Promise<string> {
   const symbols = NATIVE_SYMBOLS[chain] ?? [];
   const tokens = await deps.tokens(livemode);
   let coin: TokenInfo | undefined;

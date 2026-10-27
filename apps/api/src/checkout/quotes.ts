@@ -36,7 +36,8 @@ import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { toJsonDecimal } from '../lib/serialize.js';
-import { isValidAddress } from './address-format.js';
+import { gaslessToken } from '../relayer/evm/tokens.js';
+import { chainFamily, isValidAddress } from './address-format.js';
 import {
   OneClickError,
   SIMULATE_SCENARIOS,
@@ -542,6 +543,17 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
       { field: 'wallet_address' },
     );
   }
+  // EVM: only allow-listed tokens can be relayed (no fee-on-transfer or rebasing tokens).
+  const method = input.gasless_method;
+  if (
+    (method === 'eip3009' || method === 'permit') &&
+    chainFamily(origin.blockchain) === 'evm' &&
+    !gaslessToken(origin.blockchain, origin.assetId)?.methods.includes(method)
+  ) {
+    throw new AppError('VALIDATION_ERROR', `${method} is not available for this token`, 400, {
+      field: 'gasless_method',
+    });
+  }
   const planFor = (forceShopper?: NetworkFeePlan['reason']) =>
     planNetworkFee({
       livemode: ctx.livemode,
@@ -575,7 +587,9 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
       feeAccount: feeAccountFor(ctx.livemode),
       sessionExpiresAt: s.expiresAt,
     });
-    const writtenId = await storeQuote(ctx, s.id, origin, refundTo, refundType, priced, plan);
+    const writtenId = await storeQuote(ctx, s.id, origin, refundTo, refundType, priced, plan, {
+      walletAddress: walletAddress ?? null,
+    });
     if (writtenId) {
       // The row this request wrote (a concurrent quote may already have superseded it).
       const stored = await ctx.db.quote.findFirstOrThrow({ where: { id: writtenId } });
@@ -647,9 +661,10 @@ async function priceQuote(
 }
 
 /**
- * Stores the quote, superseding the session's previous one, in one transaction under the session
- * lock. A merchant-sponsored plan reserves its fee first; when the reservation is refused nothing
- * is stored (the transaction still commits, keeping `gas.budget_exhausted`) and null is returned.
+ * Stores the quote (with the wallet it was made for: the only signer the relayer accepts),
+ * superseding the session's previous one, in one transaction under the session lock. A
+ * merchant-sponsored plan reserves its fee first; when the reservation is refused nothing is
+ * stored (the transaction still commits, keeping `gas.budget_exhausted`) and null is returned.
  * Replaced quotes' reservations are released. Returns the id of the row written.
  */
 async function storeQuote(
@@ -660,6 +675,7 @@ async function storeQuote(
   refundType: QuoteRequest['refundType'],
   priced: Priced,
   plan: NetworkFeePlan,
+  extra: { walletAddress: string | null },
 ): Promise<string | null> {
   const { real, depositAddress, deadline } = priced;
   let writtenId: string | null = newId('quo');
@@ -701,7 +717,11 @@ async function storeQuote(
       }
       gasSponsorshipId = reserved.sponsorshipId;
     }
-    const fee = { ...planColumns(plan, priced.networkFeeBps), gasSponsorshipId };
+    const fee = {
+      ...planColumns(plan, priced.networkFeeBps),
+      gasSponsorshipId,
+      walletAddress: extra.walletAddress,
+    };
 
     await tx.quote.updateMany({
       where: { ...tenant, sessionId, supersededAt: null },

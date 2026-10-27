@@ -18,6 +18,7 @@ import { retryPendingScreenings } from './checkout/screening.js';
 import { sweepReturns } from './checkout/refunds.js';
 import { expireSessions, pollDeposit, scanDueDeposits } from './checkout/watcher.js';
 import { releaseStaleReservations } from './gas/quote-fee.js';
+import { pollEvmRelays } from './relayer/index.js';
 import {
   attemptDelivery,
   DELIVER_WEBHOOK_JOB,
@@ -69,6 +70,9 @@ export const EXPIRE_SESSIONS_EVERY_MS = 60_000;
 /** Releases gas-budget reservations of replaced or expired, unused quotes. */
 export const RELEASE_GAS_RESERVATIONS_JOB = 'release-gas-reservations';
 export const RELEASE_GAS_RESERVATIONS_EVERY_MS = 60_000;
+/** The EVM relayer's transactions: receipts, stuck replacements, give-ups, outcomes (live only). */
+export const POLL_EVM_RELAYS_JOB = 'poll-evm-relays';
+export const POLL_EVM_RELAYS_EVERY_MS = 15_000;
 /** Merchant webhook sends (one job per attempt, delayed for retries) and the due-retry sweep. */
 export const WEBHOOKS_QUEUE = 'tendr-webhooks';
 export const SWEEP_WEBHOOKS_EVERY_MS = 60_000;
@@ -126,6 +130,11 @@ export async function processCheckoutJob(
   if (job.name === RELEASE_GAS_RESERVATIONS_JOB) {
     const n = await releaseStaleReservations();
     if (n > 0) log('info', 'released gas reservations', { count: n });
+    return;
+  }
+  if (job.name === POLL_EVM_RELAYS_JOB) {
+    const n = await pollEvmRelays();
+    if (n > 0) log('info', 'evm relay outcomes applied', { count: n });
     return;
   }
   throw new Error(`unknown checkout job ${job.name}`);
@@ -341,6 +350,11 @@ export async function startWorker(
     RELEASE_GAS_RESERVATIONS_JOB,
     { every: RELEASE_GAS_RESERVATIONS_EVERY_MS },
     { name: RELEASE_GAS_RESERVATIONS_JOB },
+  );
+  await checkoutQueue.upsertJobScheduler(
+    POLL_EVM_RELAYS_JOB,
+    { every: POLL_EVM_RELAYS_EVERY_MS },
+    { name: POLL_EVM_RELAYS_JOB },
   );
   await checkoutQueue.upsertJobScheduler(
     SWEEP_RETURNS_JOB,

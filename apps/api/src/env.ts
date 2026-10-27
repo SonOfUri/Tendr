@@ -28,6 +28,15 @@ const codeHash = z
   }, 'must be a base58-encoded 32-byte hash')
   .optional();
 
+/** A gas price in gwei: a non-negative decimal string, never parsed as a float. */
+const evmMaxFeeGwei = z.preprocess(
+  blankAsUnset,
+  z
+    .string()
+    .regex(/^\d+(\.\d{1,9})?$/, 'must be a non-negative decimal (gwei, at most 9 decimals)')
+    .optional(),
+);
+
 const EnvSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -211,6 +220,30 @@ const EnvSchema = z
       blankAsUnset,
       z.coerce.number().int().min(0).max(10_000).default(2000),
     ),
+    /**
+     * The TendrForwarder contract (project 5a, onchain/evm) the EVM relayer calls: the same
+     * CREATE2 address on every EVM chain and in both modes. Never taken from a request.
+     */
+    EVM_FORWARDER_ADDRESS: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^0x[0-9a-fA-F]{40}$/, 'must be a 0x-prefixed 20-byte hex address')
+        .default('0x19BEBC71495490A99cA6F50F107076967380cf09'),
+    ),
+    /**
+     * Optional per-chain ceiling (gwei, decimal) on the EVM relayer's `maxFeePerGas`, for its own
+     * transactions and their replacements. Unset: no cap beyond the fee the chain asks for.
+     */
+    EVM_MAX_FEE_GWEI_ETH: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_BASE: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_ARB: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_OP: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_POL: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_BSC: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_AVAX: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_GNOSIS: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_BERA: evmMaxFeeGwei,
     /**
      * Live-mode FX rate provider for non-USD order totals. `openexchangerates` (with FX_API_KEY)
      * is the live adapter; `fixed` means no live provider, so live non-USD sessions are

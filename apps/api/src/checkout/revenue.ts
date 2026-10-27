@@ -7,9 +7,11 @@
 // Every row is in the payment's ORIGIN asset base units at the quote's price, with its USD value
 // in `amount_usd`: Tendr's fee is `fee_bps` and the gas reimbursement `network_fee_bps` of the
 // value 1Click charges `appFees` on (ONECLICK_APP_FEE_BASE: the output, or the input); the USD
-// figures are converted to units at the quote's `amount_in / amount_in_usd`. Rows with a zero amount are not written. A shopper-paid token fee
-// is not a line here: it is collected outside the swap, by the relayed transaction.
-// One row per (payment, source) (a unique index): recording twice is a no-op.
+// figures are converted to units at the quote's `amount_in / amount_in_usd`. Rows with a zero
+// amount are not written. A shopper-paid token fee is not a line here: it is collected outside the
+// swap, by the relayed transaction, and recorded per confirmed fee leg (relayer/submissions.ts,
+// `reference` = the submission id). Settlement rows have `reference = ''`: one per (payment,
+// source), so recording twice is a no-op.
 import { Prisma } from '@prisma/client';
 import type { ScopeContext } from '../db/scoped.js';
 import { assertTransaction } from '../events/record.js';
@@ -49,6 +51,12 @@ export function revenueLines(
     networkFeeUsd: Decimal | null;
     /** Who paid the network fee; null on quotes made before gasless payments. */
     networkFeePaidBy: 'merchant' | 'buyer' | null;
+    /**
+     * How the shopper paid it: `token` means Tendr collected it in the relayed transaction (a
+     * `gas_reimbursement` row per fee leg, written when the leg is confirmed), so there is no
+     * shopper-paid `network_fee` line.
+     */
+    networkFeeMode?: 'token' | 'native' | null;
   },
   appFeeBase: AppFeeBase = ONECLICK_APP_FEE_BASE,
 ): RevenueLine[] {
@@ -89,8 +97,8 @@ export function revenueLines(
       amountUsd: usd(spread),
     });
   }
-  // The shopper's own network fee; a sponsored fee is the gas reimbursement instead.
-  if (input.networkFeePaidBy !== 'merchant') {
+  // The shopper's own network fee; a sponsored fee (or a token fee leg) is a gas reimbursement.
+  if (input.networkFeePaidBy !== 'merchant' && input.networkFeeMode !== 'token') {
     const network = input.networkFeeUsd ?? new D(gasEstimateUsd(input.chain));
     lines.push({
       source: 'network_fee',
@@ -134,6 +142,7 @@ export async function recordRevenue(
     networkFeeBps: p.quote.networkFeeBps,
     networkFeeUsd: p.quote.networkFeeUsd,
     networkFeePaidBy: p.quote.networkFeePaidBy,
+    networkFeeMode: p.quote.networkFeeMode,
   });
   if (lines.length === 0) return 0;
   const { count } = await tx.revenueEntry.createMany({

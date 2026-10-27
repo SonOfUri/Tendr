@@ -41,6 +41,7 @@ import {
   type StatusResponse,
 } from './oneclick/index.js';
 import { keptSmallNetOfFee } from './return-fee.js';
+import { onQuotePaymentDetected } from '../relayer/submissions.js';
 import { recordRevenue } from './revenue.js';
 import { liveSenderResolvers } from './senders/index.js';
 import { onScreeningAllowed, screenAddress, type ScreeningOutcome } from './screening.js';
@@ -539,6 +540,9 @@ async function detect(q: QuoteRow, status: StatusResponse): Promise<Payment | nu
         type: 'payment.processing',
         payload: base,
       });
+      // Gas records follow the detected payment: a held sponsorship is charged at its estimate
+      // (also when a sponsored quote was paid by copy-address), confirmed fee legs are revenue.
+      await onQuotePaymentDetected(tx, ctx, q, p.id);
       if (s.status === 'PENDING_DEPOSIT') {
         await transitionSession(tx, ctx, s.id, 'PROCESSING', { payment_id: p.id });
       } else if (s.status === 'EXPIRED') {

@@ -148,9 +148,12 @@ export async function getPayment(db: ScopedDb, id: string) {
     db.refund.findMany({ where: { paymentId: p.id }, orderBy: { createdAt: 'asc' } }),
     db.settlementClaim.findFirst({ where: { paymentId: p.id } }),
   ]);
-  const recorded = entries.length > 0;
+  // Settlement lines only (`reference = ''`): a shopper-paid fee leg (`gas_reimbursement` with
+  // the submission as reference) is Tendr's revenue from the shopper, not a fee on the store.
+  const settled = entries.filter((e) => e.reference === '');
+  const recorded = settled.length > 0;
   const lines = recorded
-    ? entries.map((e) => ({
+    ? settled.map((e) => ({
         source: e.source,
         assetId: e.assetId,
         amount: e.amount,
@@ -166,6 +169,7 @@ export async function getPayment(db: ScopedDb, id: string) {
         networkFeeBps: p.quote.networkFeeBps,
         networkFeeUsd: p.quote.networkFeeUsd,
         networkFeePaidBy: p.quote.networkFeePaidBy,
+        networkFeeMode: p.quote.networkFeeMode,
       });
   const fees: FeeLine[] = lines.map((l) => {
     const kind = feeKindOf(l.source);
