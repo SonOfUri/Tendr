@@ -34,6 +34,7 @@ final class Tendr_Connect {
 	const MODE             = 'tendr_mode';
 	const GATEWAY_SETTINGS = 'woocommerce_tendr_settings';
 	const WEBHOOK_ROUTE    = 'tendr/v1/webhook';
+	const SITE_ID          = 'tendr_site_id';
 
 	/**
 	 * Register the admin page, the admin-post actions and the redirect allowance.
@@ -294,6 +295,8 @@ final class Tendr_Connect {
 			}
 		}
 		Tendr_Credentials::store( $issued );
+		// Made at the first Connect; order refs hash it (never the site address).
+		self::site_id();
 
 		update_option(
 			self::CONNECTION,
@@ -341,6 +344,27 @@ final class Tendr_Connect {
 		} else {
 			Tendr_Settings::flash( 'warning', __( 'Disconnected on this site. Its stored keys could not be read, so remove it under Settings → Connected sites on your tendr dashboard to revoke them.', 'tendr' ) );
 		}
+	}
+
+	/**
+	 * This site's id for order refs: 32 random hex characters, made once and kept (it survives
+	 * Disconnect and re-Connect), so a ref never depends on the site address.
+	 */
+	public static function site_id(): string {
+		$id = get_option( self::SITE_ID );
+		if ( is_string( $id ) && 1 === preg_match( '/^[0-9a-f]{32}$/', $id ) ) {
+			return $id;
+		}
+		$id = bin2hex( random_bytes( 16 ) );
+		if ( ! add_option( self::SITE_ID, $id, '', false ) ) {
+			// Another request made it first, or an unusable value is stored: keep a valid one.
+			$stored = get_option( self::SITE_ID );
+			if ( is_string( $stored ) && 1 === preg_match( '/^[0-9a-f]{32}$/', $stored ) ) {
+				return $stored;
+			}
+			update_option( self::SITE_ID, $id, false );
+		}
+		return $id;
 	}
 
 	/**

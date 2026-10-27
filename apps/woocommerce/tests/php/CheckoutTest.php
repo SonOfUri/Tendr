@@ -75,7 +75,11 @@ class CheckoutTest extends Tendr_Test_Case {
 				return self::response( $this->create_reply[0], $this->create_reply[1] );
 			}
 			$id                    = array_shift( $this->next_ids );
-			$this->sessions[ $id ] = self::view( $id, 'PENDING_DEPOSIT', '+10 minutes' );
+			$body                  = json_decode( (string) $args['body'], true );
+			$this->sessions[ $id ] = array_merge(
+				self::view( $id, 'PENDING_DEPOSIT', '+10 minutes' ),
+				self::priced( (string) $body['amount'], (string) $body['amount_currency'] )
+			);
 			return self::response(
 				201,
 				array(
@@ -126,6 +130,30 @@ class CheckoutTest extends Tendr_Test_Case {
 				),
 				$payments
 			),
+		);
+	}
+
+	/**
+	 * The amount fields of a session view created for `$amount` `$currency`: USD as is, any other
+	 * currency converted (the order's total in `original_amount`).
+	 *
+	 * @param string $amount   Amount as sent.
+	 * @param string $currency Currency as sent.
+	 */
+	private static function priced( string $amount, string $currency ): array {
+		if ( 'USD' === $currency ) {
+			return array(
+				'amount'            => $amount,
+				'amount_currency'   => 'USD',
+				'original_amount'   => null,
+				'original_currency' => null,
+			);
+		}
+		return array(
+			'amount'            => '49.01',
+			'amount_currency'   => 'USD',
+			'original_amount'   => $amount . ( str_contains( $amount, '.' ) ? '' : '.00' ),
+			'original_currency' => $currency,
 		);
 	}
 
@@ -216,7 +244,8 @@ class CheckoutTest extends Tendr_Test_Case {
 	public function test_process_payment_sends_exact_body_for_an_ngn_order_and_idempotency_key(): void {
 		$issued = self::connect_locally();
 		$order  = self::order( 'NGN', '78500.00' );
-		$ref    = 'wc_' . substr( sha1( home_url() ), 0, 12 ) . '_' . $order->get_id();
+		$ref    = 'wc_' . substr( sha1( (string) get_option( 'tendr_site_id' ) ), 0, 12 ) . '_' . $order->get_id();
+		$this->assertMatchesRegularExpression( '/^[0-9a-f]{32}$/', (string) get_option( 'tendr_site_id' ), 'a random site id, stored at Connect' );
 
 		$result = self::gateway()->process_payment( $order->get_id() );
 
@@ -432,7 +461,7 @@ class CheckoutTest extends Tendr_Test_Case {
 		$this->create_reply = null;
 		self::gateway()->process_payment( $order->get_id() );
 		$creates = $this->creates();
-		$ref     = 'wc_' . substr( sha1( home_url() ), 0, 12 ) . '_' . $order->get_id();
+		$ref     = Tendr_Gateway::external_ref( $order->get_id() );
 		$this->assertSame( $ref . '-1', $creates[0]['args']['headers']['Idempotency-Key'] );
 		$this->assertSame( $ref . '-2', $creates[1]['args']['headers']['Idempotency-Key'] );
 	}
@@ -817,5 +846,93 @@ class CheckoutTest extends Tendr_Test_Case {
 		$this->assertNull( Tendr_Gateway::order_from_external_ref( 'wc_000000000000_' . $order->get_id() ), 'another site' );
 		$this->assertNull( Tendr_Gateway::order_from_external_ref( $ref . '9' ), 'no such order' );
 		$this->assertNull( Tendr_Gateway::order_from_external_ref( 'nonsense' ) );
+	}
+
+	// ---------------------------------------------------------------- A1: the total changed.
+
+	public function test_an_open_session_for_another_total_is_cancelled_and_replaced(): void {
+		self::connect_locally();
+		$order = self::order( 'NGN', '78500.00' );
+		self::gateway()->process_payment( $order->get_id() );
+		// The merchant edits the pending order (an invoice order) after the shopper opened it.
+		$order = wc_get_order( $order->get_id() );
+		$order->set_total( '80000.00' );
+		$order->save();
+
+		$result = self::gateway()->process_payment( $order->get_id() );
+
+		$this->assertSame( 'success', $result['result'] );
+		$expires = array_values( array_filter( $this->requests, static fn( $r ) => str_ends_with( (string) wp_parse_url( $r['url'], PHP_URL_PATH ), '/' . self::SESSION_ID . '/expire' ) ) );
+		$this->assertCount( 1, $expires, 'the old session is cancelled first' );
+		$creates = $this->creates();
+		$this->assertCount( 2, $creates );
+		$this->assertSame( '80000', json_decode( $creates[1]['args']['body'], true )['amount'] );
+		$this->assertSame( self::SESSION_ID_2, wc_get_order( $order->get_id() )->get_meta( '_tendr_session_id' ) );
+	}
+
+	public function test_an_open_session_for_the_same_total_in_other_decimals_is_reused(): void {
+		self::connect_locally();
+		$order = self::order( 'USD', '49.00' );
+		self::gateway()->process_payment( $order->get_id() );
+		$this->sessions[ self::SESSION_ID ]['amount'] = '49.00';
+
+		self::gateway()->process_payment( $order->get_id() );
+
+		$this->assertCount( 1, $this->creates() );
+	}
+
+	public function test_another_total_with_a_deposit_in_flight_shows_the_stored_session(): void {
+		self::connect_locally();
+		$order = self::order( 'NGN', '78500.00' );
+		self::gateway()->process_payment( $order->get_id() );
+		$order = wc_get_order( $order->get_id() );
+		$order->set_total( '80000.00' );
+		$order->save();
+		$this->expire_reply = array( 409, self::error( 'DEPOSIT_IN_PROGRESS', 'A deposit for this session is still in progress', array( 'reason' => 'deposit_in_progress' ) ) );
+
+		$result = self::gateway()->process_payment( $order->get_id() );
+
+		$this->assertSame( 'success', $result['result'] );
+		$this->assertCount( 1, $this->creates(), 'no new session while money is on its way' );
+		$this->assertSame( self::SESSION_ID, wc_get_order( $order->get_id() )->get_meta( '_tendr_session_id' ) );
+	}
+
+	// ---------------------------------------------------------------- A2: the site address changed.
+
+	public function test_order_refs_do_not_depend_on_the_site_address(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+		$ref = wc_get_order( $order->get_id() )->get_meta( '_tendr_external_ref' );
+
+		$moved = static fn() => 'https://moved.example.org';
+		add_filter( 'home_url', $moved );
+		try {
+			$this->assertSame( $ref, Tendr_Gateway::external_ref( $order->get_id() ), 'new refs ignore the address' );
+			$this->assertSame( $order->get_id(), Tendr_Gateway::order_from_external_ref( $ref )->get_id() );
+		} finally {
+			remove_filter( 'home_url', $moved );
+		}
+	}
+
+	public function test_an_order_keeps_its_stored_ref_and_an_older_ref_still_resolves(): void {
+		self::connect_locally();
+		$order  = self::order();
+		$legacy = 'wc_' . substr( sha1( 'http://old.example.org' ), 0, 12 ) . '_' . $order->get_id();
+		$order->update_meta_data( '_tendr_external_ref', $legacy );
+		$order->save();
+
+		self::gateway()->process_payment( $order->get_id() );
+
+		$this->assertSame( $legacy, json_decode( $this->creates()[0]['args']['body'], true )['external_ref'], 'a new session keeps the order ref' );
+		$this->assertSame( $order->get_id(), Tendr_Gateway::order_from_external_ref( $legacy )->get_id() );
+		$this->assertNull( Tendr_Gateway::order_from_external_ref( Tendr_Gateway::external_ref( $order->get_id() ) ), 'only the stored ref names it' );
+	}
+
+	public function test_the_site_id_is_made_once(): void {
+		self::connect_locally();
+		$id = (string) get_option( 'tendr_site_id' );
+		self::connect_locally( 'b' );
+		$this->assertSame( $id, (string) get_option( 'tendr_site_id' ) );
 	}
 }

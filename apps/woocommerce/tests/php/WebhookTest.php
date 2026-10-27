@@ -97,7 +97,7 @@ class WebhookTest extends Tendr_Test_Case {
 		if ( empty( $opts['fee_only'] ) ) {
 			// A physical product by default: WooCommerce completes orders that need no processing.
 			$product = new WC_Product_Simple();
-			$product->set_regular_price( '24.50' );
+			$product->set_regular_price( $opts['price'] ?? '24.50' );
 			if ( ! empty( $opts['virtual'] ) ) {
 				$product->set_virtual( true );
 				$product->set_downloadable( true );
@@ -558,6 +558,51 @@ class WebhookTest extends Tendr_Test_Case {
 		$this->assertStringContainsString( '[Test]', $note );
 	}
 
+	public function test_a_payment_for_another_total_puts_the_order_on_hold_never_paid(): void {
+		$order = $this->order();
+		$this->session( $order, 'SETTLED', array( array() ) ); // $49.00, as the session was priced.
+		// The merchant edited the pending order after the shopper opened the checkout.
+		$order->set_total( '60.00' );
+		$order->save();
+
+		$this->assertSame( 200, $this->deliver( self::event( 'payment.succeeded', $order ) )->get_status() );
+
+		$order = self::fresh( $order );
+		$this->assertSame( 'on-hold', $order->get_status() );
+		$this->assertSame( '', $order->get_transaction_id() );
+		$this->assertNull( $order->get_date_paid() );
+		$this->assertStringContainsString( 'Paid $49.00 but the order total is $60.00 — check before shipping.', implode( "\n", self::notes( $order ) ) );
+
+		// The same payment again (another event) changes nothing more.
+		$count = count( self::notes( $order ) );
+		$this->deliver( self::event( 'payment.succeeded', $order ) );
+		$this->assertSame( $count, count( self::notes( self::fresh( $order ) ) ) );
+		$this->assertSame( 'on-hold', self::fresh( $order )->get_status() );
+	}
+
+	public function test_a_payment_in_another_currency_than_the_order_is_never_marked_paid(): void {
+		$order = $this->order( array( 'currency' => 'EUR' ) ); // 49.00 EUR; the session was USD 49.00.
+		$this->session( $order, 'SETTLED', array( array() ) );
+
+		$this->deliver( self::event( 'payment.succeeded', $order ) );
+
+		$this->assertSame( 'on-hold', self::fresh( $order )->get_status() );
+	}
+
+	public function test_events_still_apply_after_the_site_address_changes(): void {
+		$order = $this->order();
+		$this->session( $order, 'SETTLED', array( array() ) );
+		$event = self::event( 'payment.succeeded', $order );
+		$moved = static fn() => 'https://www.moved-shop.example';
+		add_filter( 'home_url', $moved );
+		try {
+			$this->assertSame( 200, $this->deliver( $event )->get_status() );
+		} finally {
+			remove_filter( 'home_url', $moved );
+		}
+		$this->assertSame( 'processing', self::fresh( $order )->get_status() );
+	}
+
 	public function test_a_virtual_order_is_completed(): void {
 		$order = $this->order( array( 'virtual' => true ) );
 		$this->session( $order, 'SETTLED', array( array() ) );
@@ -568,7 +613,12 @@ class WebhookTest extends Tendr_Test_Case {
 	}
 
 	public function test_the_note_carries_the_fx_line_for_a_converted_order(): void {
-		$order = $this->order( array( 'currency' => 'NGN' ) );
+		$order = $this->order(
+			array(
+				'currency' => 'NGN',
+				'price'    => '39250',
+			)
+		);
 		$this->session(
 			$order,
 			'SETTLED',

@@ -13,7 +13,8 @@
  * - `_tendr_session_url`  its hosted URL with the browser client secret (`…/pay/ses_…#cs=…`);
  * - `_tendr_mode`         'test' | 'live': the key the session was created with;
  * - `_tendr_attempt`      how many Idempotency-Keys this order has used up;
- * - `_tendr_external_ref` `wc_<site hash>_<order id>`.
+ * - `_tendr_external_ref` `wc_<site hash>_<order id>`, kept for the order's life (every later session
+ *   of the order reuses it): events are matched to the order by this stored value only.
  *
  * @package Tendr
  */
@@ -159,18 +160,35 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	// ------------------------------------------------------------------ sessions.
 
 	/**
-	 * `wc_<first 12 hex of sha1(home_url())>_<order id>`: unique per site and order.
+	 * A new order's ref: `wc_<first 12 hex of sha1(site id)>_<order id>`, unique per site and order.
+	 * The site id is random and stored once (Tendr_Connect::site_id()), so the ref never depends on
+	 * the site address: a domain move, http→https or a filtered home URL changes nothing.
 	 *
 	 * @param int $order_id Order id.
 	 */
 	public static function external_ref( int $order_id ): string {
-		return 'wc_' . substr( sha1( home_url() ), 0, 12 ) . '_' . $order_id;
+		return 'wc_' . substr( sha1( Tendr_Connect::site_id() ), 0, 12 ) . '_' . $order_id;
 	}
 
 	/**
-	 * The order an `external_ref` names, when it was made by this site and the order has a tendr
-	 * session under that ref; null otherwise. For the webhook receiver (Task 10), which must also
-	 * check the event's metadata `order_key` against the order.
+	 * The ref an order's sessions use: the one stored on the order when it has one (so every later
+	 * session of the order, and events for its earlier ones, keep naming it), else a new one.
+	 *
+	 * @param WC_Order $order Order.
+	 */
+	public static function order_ref( WC_Order $order ): string {
+		$stored = (string) $order->get_meta( self::META_EXTERNAL_REF );
+		if ( preg_match( '/^wc_[0-9a-f]{12}_([1-9][0-9]{0,19})$/', $stored, $m ) && (int) $m[1] === $order->get_id() ) {
+			return $stored;
+		}
+		return self::external_ref( $order->get_id() );
+	}
+
+	/**
+	 * The order an `external_ref` names: the order id it carries, when that order stores exactly
+	 * this ref (compared in constant time); null otherwise. The ref is never recomputed, so orders
+	 * made before a site address change still resolve. For the webhook receiver, which also checks
+	 * the session's metadata `order_key` against the order.
 	 *
 	 * @param string $external_ref External ref from a session or event.
 	 */
@@ -178,15 +196,58 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		if ( ! preg_match( '/^wc_[0-9a-f]{12}_([1-9][0-9]{0,19})$/', $external_ref, $m ) ) {
 			return null;
 		}
-		$order_id = (int) $m[1];
-		if ( self::external_ref( $order_id ) !== $external_ref ) {
+		$order = wc_get_order( (int) $m[1] );
+		if ( ! $order instanceof WC_Order ) {
 			return null;
 		}
-		$order = wc_get_order( $order_id );
-		if ( ! $order instanceof WC_Order || $order->get_meta( self::META_EXTERNAL_REF ) !== $external_ref ) {
-			return null;
+		$stored = (string) $order->get_meta( self::META_EXTERNAL_REF );
+		return ( '' !== $stored && hash_equals( $stored, $external_ref ) ) ? $order : null;
+	}
+
+	/**
+	 * The amount and currency a session was priced at, as the store gave them: the original total
+	 * when tendr converted it, else the amount itself; null when the view carries neither.
+	 *
+	 * @param array $view Session view.
+	 * @return array{0: string, 1: string}|null
+	 */
+	public static function session_total( array $view ): ?array {
+		foreach ( array( array( 'original_amount', 'original_currency' ), array( 'amount', 'amount_currency' ) ) as $pair ) {
+			$amount   = $view[ $pair[0] ] ?? null;
+			$currency = $view[ $pair[1] ] ?? null;
+			if ( is_string( $amount ) && '' !== $amount && is_string( $currency ) && '' !== $currency ) {
+				return array( $amount, strtoupper( $currency ) );
+			}
 		}
-		return $order;
+		return null;
+	}
+
+	/**
+	 * Whether a session was priced at the order's current total and currency (I1: the order may
+	 * have been edited since the session was made). Decimals are compared as values ("49.00" = "49").
+	 *
+	 * @param array    $view  Session view.
+	 * @param WC_Order $order Order.
+	 */
+	public static function same_total( array $view, WC_Order $order ): bool {
+		$priced = self::session_total( $view );
+		return null !== $priced
+			&& strtoupper( (string) $order->get_currency() ) === $priced[1]
+			&& self::decimal( $priced[0] ) === self::decimal( self::amount( $order ) );
+	}
+
+	/**
+	 * A decimal string without leading or trailing zeros ("049.10" → "49.1"), for comparing values.
+	 *
+	 * @param string $value Decimal.
+	 */
+	private static function decimal( string $value ): string {
+		$value = trim( $value );
+		if ( str_contains( $value, '.' ) ) {
+			$value = rtrim( rtrim( $value, '0' ), '.' );
+		}
+		$value = ltrim( $value, '0' );
+		return ( '' === $value || str_starts_with( $value, '.' ) ) ? '0' . $value : $value;
 	}
 
 	/**
@@ -229,7 +290,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		$body  = array(
 			'amount'          => self::amount( $order ),
 			'amount_currency' => $order->get_currency(),
-			'external_ref'    => self::external_ref( $order->get_id() ),
+			'external_ref'    => self::order_ref( $order ),
 			'success_url'     => $this->get_return_url( $order ),
 			'cancel_url'      => $order->get_checkout_payment_url(),
 			'expires_in'      => self::expires_in( get_option( 'woocommerce_hold_stock_minutes' ) ),
@@ -332,11 +393,22 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 				}
 			} else {
 				$disposition = self::disposition( $view );
-				if ( 'in_flight' === $disposition || ( 'open' === $disposition && $stored_mode === $mode ) ) {
+				if ( 'in_flight' === $disposition ) {
 					return $show_old;
 				}
-			}
-		}
+				if ( 'open' === $disposition && $stored_mode === $mode ) {
+					if ( self::same_total( $view, $order ) ) {
+						return $show_old;
+					}
+					// I1: the order was edited since this session was made. Never let the shopper
+					// pay the old amount: cancel it, then start one at the current total.
+					$closed = self::close_for_new_total( $order, $session_id, $stored_mode );
+					if ( true !== $closed ) {
+						return is_wp_error( $closed ) ? $closed : $show_old;
+					}
+				}
+			}//end if
+		}//end if
 
 		$created = $this->create_session( $order, $mode );
 		if ( is_wp_error( $created ) && '' !== $session_id && 'CONFLICT' === $created->get_error_code() ) {
@@ -344,6 +416,30 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 			return $show_old;
 		}
 		return $created;
+	}
+
+	/**
+	 * Cancel a still-open session priced at an older order total.
+	 *
+	 * @param WC_Order $order      Order.
+	 * @param string   $session_id The stored session.
+	 * @param string   $mode       Its mode.
+	 * @return true|false|WP_Error true: closed (or gone), start a new one; false: a deposit is in
+	 *                             flight or the session moved on, show it again; an error to retry.
+	 */
+	private static function close_for_new_total( WC_Order $order, string $session_id, string $mode ) {
+		$result = Tendr_Api_Client::request( 'POST', '/v1/checkout/sessions/' . rawurlencode( $session_id ) . '/expire', array(), $mode );
+		if ( is_wp_error( $result ) ) {
+			if ( self::is_not_found( $result ) ) {
+				return true;
+			}
+			if ( in_array( $result->get_error_code(), array( 'DEPOSIT_IN_PROGRESS', 'INVALID_STATE_TRANSITION' ), true ) ) {
+				return false;
+			}
+			return $result;
+		}
+		$order->add_order_note( __( 'The order total changed after its crypto checkout started: that checkout was closed and a new one started at the current total.', 'tendr' ) );
+		return true;
 	}
 
 	/**

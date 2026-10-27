@@ -68,6 +68,9 @@ final class Tendr_Order_Sync {
 	/** Seconds the session re-read may take inside a webhook request. */
 	const REREAD_TIMEOUT = 5;
 
+	/** The payment that settled for another total than the order's (I1): it never marked it paid. */
+	const META_AMOUNT_MISMATCH = '_tendr_amount_mismatch';
+
 	/** 'yes' | 'no': whether the payment that marked the order paid was a live one. */
 	const META_PAID_LIVEMODE = '_tendr_paid_livemode';
 
@@ -282,6 +285,23 @@ final class Tendr_Order_Sync {
 		$valid = (array) apply_filters( 'woocommerce_valid_order_statuses_for_payment_complete', array( 'on-hold', 'pending', 'failed', 'cancelled' ), $order );
 		if ( ! $order->has_status( array_diff( $valid, array( 'cancelled' ) ) ) ) {
 			self::note( $order, $event, __( 'A crypto payment settled for this order, but its status does not allow marking it paid.', 'tendr' ) . ' ' . $details );
+			return 'applied';
+		}
+
+		// I1: the session was priced before the order was edited (or in another currency). The money
+		// is real, but it is not this order's total: never mark it paid; a person decides.
+		if ( ! Tendr_Gateway::same_total( $view, $order ) ) {
+			if ( (string) $order->get_meta( self::META_AMOUNT_MISMATCH ) === $payment_id ) {
+				return 'noop';
+			}
+			$order->update_meta_data( self::META_AMOUNT_MISMATCH, $payment_id );
+			$text = esc_html( self::mismatch_text( $view, $order ) ) . ' ' . $details . $fx_text . self::overpaid_line( $payment );
+			if ( $order->has_status( array( 'pending', 'failed' ) ) ) {
+				$order->update_status( 'on-hold', self::prefix( $event ) . $text );
+			} else {
+				$order->save();
+				self::note( $order, $event, $text );
+			}
 			return 'applied';
 		}
 
@@ -608,6 +628,34 @@ final class Tendr_Order_Sync {
 				$currency
 			) . ( '' !== $source ? ' (' . $source . ')' : '' ) . '.'
 		);
+	}
+
+	/**
+	 * "Paid $49.00 but the order total is $60.00 — check before shipping." (plain text).
+	 *
+	 * @param array    $view  Session view.
+	 * @param WC_Order $order Order.
+	 */
+	private static function mismatch_text( array $view, WC_Order $order ): string {
+		$priced = Tendr_Gateway::session_total( $view ) ?? array( (string) ( $view['amount'] ?? '?' ), (string) ( $view['amount_currency'] ?? '' ) );
+		return sprintf(
+			/* translators: 1: amount the session asked for, 2: the order's current total. */
+			__( 'Paid %1$s but the order total is %2$s — check before shipping.', 'tendr' ),
+			self::money( $priced[0], $priced[1] ),
+			self::money( wc_format_decimal( (string) $order->get_total(), wc_get_price_decimals() ), (string) $order->get_currency() )
+		);
+	}
+
+	/**
+	 * "$49.00", "₦78,500.00", or "XYZ 12.5" for a currency WooCommerce has no symbol for.
+	 *
+	 * @param string $amount   Decimal string.
+	 * @param string $currency Currency code.
+	 */
+	public static function money( string $amount, string $currency ): string {
+		$symbol = '' === $currency ? '' : html_entity_decode( get_woocommerce_currency_symbol( $currency ), ENT_QUOTES, 'UTF-8' );
+		$prefix = ( '' !== $symbol && $symbol !== $currency ) ? $symbol : ( '' !== $currency ? $currency . ' ' : '' );
+		return $prefix . self::group( $amount );
 	}
 
 	/**

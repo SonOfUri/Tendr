@@ -11,7 +11,7 @@
 
 defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 
-foreach ( array( 'tendr_credentials', 'tendr_connection', 'tendr_mode', 'woocommerce_tendr_settings' ) as $tendr_option ) {
+foreach ( array( 'tendr_credentials', 'tendr_connection', 'tendr_mode', 'tendr_site_id', 'woocommerce_tendr_settings' ) as $tendr_option ) {
 	delete_option( $tendr_option );
 }
 
