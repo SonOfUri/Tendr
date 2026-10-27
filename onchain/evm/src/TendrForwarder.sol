@@ -31,6 +31,8 @@ interface IERC3009 {
 /// call (a Tendr relayer or anyone else) can only execute what the shopper signed.
 /// @dev Immutable: no owner, no admin, no `receive`/`fallback`, no storage except used nonces.
 /// Tokens move straight from the shopper to the signed recipients; the forwarder never holds any.
+/// Fee-on-transfer and rebasing tokens are unsupported (the deposit address would receive less than
+/// `amount`); the API's token allow-list must exclude them.
 contract TendrForwarder is EIP712 {
     using SafeERC20 for IERC20;
 
@@ -81,7 +83,10 @@ contract TendrForwarder is EIP712 {
         bytes32 s;
     }
 
-    /// @notice A payment went through this forwarder. `amount` and `fee` are what this call moved
+    /// @notice A payment went through this forwarder. NOT proof of payment: anyone can call with a
+    /// token they deployed, and a skipped EIP-3009 leg logs caller-supplied fields. Payment is
+    /// detected by the watcher; consumers must filter by allow-listed token and check transfers.
+    /// @dev `amount` and `fee` are what this call moved
     /// (a leg already executed by someone else, EIP-3009 only, counts as 0). `nonce` is the
     /// `TendrPayment` nonce, or the payment leg's EIP-3009 nonce.
     event TendrPaid(
@@ -93,8 +98,8 @@ contract TendrForwarder is EIP712 {
         bytes32 nonce
     );
 
-    /// @notice An EIP-3009 leg was skipped because its authorization was already used (front-run;
-    /// the transfer already happened to the signed destination).
+    /// @notice An EIP-3009 leg was skipped because its authorization was already used or cancelled
+    /// (front-run: the transfer already happened to the signed destination).
     event AuthorizationSkipped(address indexed token, address indexed from, bytes32 indexed nonce);
 
     error InvalidSignature();
@@ -135,7 +140,10 @@ contract TendrForwarder is EIP712 {
     function payWithPermit(Permit calldata permit, TendrPayment calldata p, bytes calldata sig)
         external
     {
-        if (permit.token != p.token || permit.owner != p.from) revert PermitMismatch();
+        // The permit is for exactly amount + fee, so nothing is left approved (spec §2.3).
+        if (permit.token != p.token || permit.owner != p.from || permit.value != p.amount + p.fee) {
+            revert PermitMismatch();
+        }
         // A front-run permit reverts here but has already set the allowance; `_pay` checks it.
         try IERC20Permit(p.token)
             .permit(

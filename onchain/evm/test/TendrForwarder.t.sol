@@ -269,6 +269,22 @@ contract TendrForwarderTest is Test {
         fwd.payWithPermit(permit, p, sig);
     }
 
+    function test_payWithPermit_revertsWhenPermitValueIsNotAmountPlusFee() public {
+        TendrForwarder.TendrPayment memory p = _payment(address(permitToken), AMOUNT, FEE, "n1");
+        bytes memory sig = _signPayment(p, shopperPk);
+
+        TendrForwarder.Permit memory tooMuch = _permit(shopperPk, AMOUNT + FEE + 1);
+        vm.expectRevert(TendrForwarder.PermitMismatch.selector);
+        fwd.payWithPermit(tooMuch, p, sig);
+
+        TendrForwarder.Permit memory tooLittle = _permit(shopperPk, AMOUNT + FEE - 1);
+        vm.expectRevert(TendrForwarder.PermitMismatch.selector);
+        fwd.payWithPermit(tooLittle, p, sig);
+
+        assertEq(permitToken.allowance(shopper, address(fwd)), 0, "permit applied");
+        assertFalse(fwd.nonceUsed(shopper, "n1"));
+    }
+
     // ------------------------------------------------------------- payWithApproval
 
     function test_payWithApproval_usdtStyleTokenWithoutReturnValue() public {
@@ -453,6 +469,103 @@ contract TendrForwarderTest is Test {
         vm.expectRevert(TendrForwarder.InvalidSignature.selector);
         fwd.payWithApproval(p, sig);
         assertEq(permitToken.balanceOf(shopper), 1_000e6);
+    }
+
+    /// The shopper signs one message; the submitter changes one signed field to any other value.
+    function testFuzz_anyChangeToASignedFieldReverts(
+        uint8 field,
+        address newAddr,
+        uint256 newUint,
+        bytes32 newNonce
+    ) public {
+        vm.prank(shopper);
+        permitToken.approve(address(fwd), type(uint256).max);
+        TendrForwarder.TendrPayment memory signed =
+            _payment(address(permitToken), AMOUNT, FEE, "signed");
+        bytes memory sig = _signPayment(signed, shopperPk);
+
+        TendrForwarder.TendrPayment memory sent =
+            _payment(address(permitToken), AMOUNT, FEE, "signed");
+        field = uint8(bound(field, 0, 6));
+        if (field == 0) {
+            vm.assume(newAddr != signed.to && newAddr != address(fwd));
+            sent.to = newAddr;
+        } else if (field == 1) {
+            sent.amount = bound(newUint, 1, 1_000e6);
+            vm.assume(sent.amount != signed.amount);
+        } else if (field == 2) {
+            sent.fee = bound(newUint, 0, 1_000e6);
+            vm.assume(sent.fee != signed.fee);
+        } else if (field == 3) {
+            vm.assume(newAddr != signed.feeTo && newAddr != address(fwd));
+            sent.feeTo = newAddr;
+        } else if (field == 4) {
+            sent.deadline = bound(newUint, block.timestamp, type(uint256).max);
+            vm.assume(sent.deadline != signed.deadline);
+        } else if (field == 5) {
+            vm.assume(newNonce != signed.nonce);
+            sent.nonce = newNonce;
+        } else {
+            vm.assume(newAddr != signed.token);
+            sent.token = newAddr;
+        }
+
+        vm.expectRevert(TendrForwarder.InvalidSignature.selector);
+        fwd.payWithApproval(sent, sig);
+        assertEq(permitToken.balanceOf(shopper), 1_000e6);
+        assertFalse(fwd.nonceUsed(shopper, "signed"));
+    }
+
+    /// Whatever amounts the shopper signs, exactly those move, to exactly the signed recipients.
+    function testFuzz_movesExactlyTheSignedAmounts(
+        address to,
+        address feeRecipient,
+        uint256 amount,
+        uint256 fee,
+        bytes32 nonce
+    ) public {
+        vm.assume(to != address(0) && to != address(fwd) && to != shopper);
+        vm.assume(feeRecipient != address(fwd) && feeRecipient != shopper);
+        amount = bound(amount, 1, 600e6);
+        fee = bound(fee, 0, 400e6);
+        if (fee != 0) vm.assume(feeRecipient != address(0) && feeRecipient != to);
+
+        TendrForwarder.TendrPayment memory p = _payment(address(permitToken), amount, fee, nonce);
+        p.to = to;
+        p.feeTo = feeRecipient;
+        vm.prank(shopper);
+        permitToken.approve(address(fwd), amount + fee);
+        uint256 toBefore = permitToken.balanceOf(to);
+        uint256 feeBefore = permitToken.balanceOf(feeRecipient);
+
+        fwd.payWithApproval(p, _signPayment(p, shopperPk));
+
+        assertEq(permitToken.balanceOf(shopper), 1_000e6 - amount - fee, "shopper delta");
+        assertEq(permitToken.balanceOf(to) - toBefore, amount, "deposit delta");
+        if (fee != 0) assertEq(permitToken.balanceOf(feeRecipient) - feeBefore, fee, "fee delta");
+        assertEq(permitToken.allowance(shopper, address(fwd)), 0, "allowance left over");
+        _assertForwarderEmpty();
+    }
+
+    function test_nonceIsNotSpentByAFailedPayment() public {
+        vm.prank(shopper);
+        usdt.approve(address(fwd), AMOUNT); // fee not covered yet
+        TendrForwarder.TendrPayment memory p = _payment(address(usdt), AMOUNT, FEE, "n1");
+        bytes memory sig = _signPayment(p, shopperPk);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TendrForwarder.InsufficientAllowance.selector, AMOUNT, AMOUNT + FEE
+            )
+        );
+        fwd.payWithApproval(p, sig);
+        assertFalse(fwd.nonceUsed(shopper, "n1"));
+
+        vm.startPrank(shopper);
+        usdt.approve(address(fwd), 0);
+        usdt.approve(address(fwd), AMOUNT + FEE);
+        vm.stopPrank();
+        fwd.payWithApproval(p, sig);
+        assertEq(usdt.balanceOf(deposit), AMOUNT);
     }
 
     function test_rejectsEther() public {

@@ -7,13 +7,18 @@ script = "script"
 out = "out"
 libs = ["lib"]
 solc_version = "0.8.37"
-evm_version = "cancun"
+# paris: no PUSH0 / MCOPY, so the same bytecode runs on every listed chain and the TVM.
+evm_version = "paris"
 optimizer = true
 optimizer_runs = 10000
 via_ir = false
 bytecode_hash = "none"
 cbor_metadata = false
 offline = false
+# SignatureVectors.t.sol reads the TypeScript-generated signature fixture.
+# OpenZeppelin 5.4 trips solc 0.8.37 deprecation warnings (`error` identifier); ours stay on.
+ignored_warnings_from = ["lib"]
+fs_permissions = [{ access = "read", path = "./test/fixtures" }]
 remappings = [
   "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
   "forge-std/=lib/forge-std/src/",
