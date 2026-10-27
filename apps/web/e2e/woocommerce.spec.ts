@@ -15,7 +15,9 @@
 //  3. An NGN store converts at checkout; the order note has the rate.
 //  4. Refund 0.50 → not refunded → approve in the dashboard → refund.sent → partially refunded.
 //  5. A and B each get only their own events.
-//  6. Re-connect A → the old key gets 401; then a logged-out guest does not see the method in the
+//  6. §6 outcomes: an underpaid checkout leaves the order Pending (never paid); an expired checkout
+//     cancels it (WooCommerce holds stock).
+//  7. Re-connect A → the old key gets 401; then a logged-out guest does not see the method in the
 //     Blocks checkout (test mode); then Disconnect → that key gets 401 too.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -306,8 +308,11 @@ async function fillBilling(page: Page): Promise<void> {
   await billing.getByLabel('ZIP Code').fill('94105');
 }
 
-/** Blocks checkout as the logged-in admin: one product, "Pay with crypto". Returns the order. */
-async function buyInBlocksCheckout(
+/**
+ * Blocks checkout as the logged-in admin up to the order-pay step (the tendr session exists, the
+ * modal opens): one product, "Pay with crypto". Returns the order.
+ */
+async function startBlocksCheckout(
   page: Page,
   site: SiteId,
   productId: string,
@@ -324,8 +329,18 @@ async function buyInBlocksCheckout(
   const id = Number(/order-pay\/(\d+)/.exec(u.pathname)![1]);
   const key = u.searchParams.get('key')!;
   expect(key).toMatch(/^wc_order_/);
-  await payInModal(page);
   return { id, key };
+}
+
+/** Blocks checkout as the logged-in admin, paid in the modal. Returns the order. */
+async function buyInBlocksCheckout(
+  page: Page,
+  site: SiteId,
+  productId: string,
+): Promise<{ id: number; key: string }> {
+  const order = await startBlocksCheckout(page, site, productId);
+  await payInModal(page);
+  return order;
 }
 
 const productId = (site: SiteId, name: string) =>
@@ -570,7 +585,52 @@ test.describe.serial('WooCommerce plugin', () => {
     expect(idsA.filter((id) => idsB.includes(id))).toEqual([]);
   });
 
-  test('6. re-connect revokes the old key; a guest never sees the method; disconnect revokes', async ({
+  test('6. an underpaid checkout keeps the order pending; an expired one cancels it', async () => {
+    // WooCommerce holds stock (its defaults), so an expired checkout cancels the order.
+    wp('a', ['option', 'update', 'woocommerce_manage_stock', 'yes']);
+    wp('a', ['option', 'update', 'woocommerce_hold_stock_minutes', '60']);
+    const events = () => Number(wpSql('a', 'SELECT COUNT(*) FROM wp_tendr_events')[0]![0]);
+
+    // Underpay: half the amount arrives. The site hears of the payment but never marks it paid;
+    // the shopper can still send the rest.
+    const before = events();
+    const under = await startBlocksCheckout(admin, 'a', productId('a', PRODUCT_USD.name));
+    await expect(admin.getByRole('dialog', { name: 'Tendr checkout' })).toBeVisible({
+      timeout: 60_000,
+    });
+    const frame = admin.frameLocator(FRAME);
+    await frame.getByPlaceholder('Search tokens or networks').fill('wNEAR');
+    await frame
+      .getByRole('button', { name: /wNEAR\s*NEAR/ })
+      .first()
+      .click();
+    await expect(frame.getByText('You send')).toBeVisible({ timeout: 60_000 });
+    await frame.getByRole('button', { name: 'Pay too little' }).click();
+    await expect(
+      frame.getByRole('heading', { name: 'You sent less than the full amount' }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect
+      .poll(events, { message: 'the site received the payment events', timeout: 60_000 })
+      .toBeGreaterThan(before);
+    expect(await orderStatus('a', under.key)).toBe('pending');
+    expect(wpPhp('a', `echo wc_get_order(${under.id})->get_transaction_id();`)).toBe('');
+
+    // Expiry: the checkout closes with no payment (the store cancels it here rather than waiting
+    // for its timeout; the same EXPIRED state) → Cancelled, its stock released.
+    const open = await startBlocksCheckout(admin, 'a', productId('a', PRODUCT_USD.name));
+    const sessionId = wpPhp('a', `echo wc_get_order(${open.id})->get_meta('_tendr_session_id');`);
+    expect(sessionId).toMatch(/^ses_/);
+    const expired = await fetch(`${API_URL}/v1/checkout/sessions/${sessionId}/expire`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${testKey('a')}`, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(expired.status).toBe(200);
+    await expect.poll(() => orderStatus('a', open.key), { timeout: 60_000 }).toBe('cancelled');
+    expect(orderNotes('a', open.id)).toContain('The crypto checkout expired without a payment.');
+  });
+
+  test('7. re-connect revokes the old key; a guest never sees the method; disconnect revokes', async ({
     browser,
   }) => {
     // The stored keys become unreadable (as after a salts change): the page asks to reconnect.
@@ -597,16 +657,21 @@ test.describe.serial('WooCommerce plugin', () => {
     await expect(guest.getByText('Pay with crypto')).toHaveCount(0);
     await guestContext.close();
 
-    // Disconnect: the key it held is revoked at once.
-    // The link asks to confirm first.
-    admin.once('dialog', (d) => void d.accept());
+    // Disconnect: the key it held is revoked at once. The button (a POST with its own nonce) asks
+    // to confirm first, naming the orders still waiting for a crypto payment (the underpaid one).
+    let confirmText = '';
+    admin.once('dialog', (d) => {
+      confirmText = d.message();
+      void d.accept();
+    });
     await admin.goto(settingsUrl('a'));
-    await admin.getByRole('link', { name: 'Disconnect' }).click();
+    await admin.getByRole('button', { name: 'Disconnect' }).click();
     await expect(
       admin.getByText("Disconnected from tendr. This site's keys are revoked."),
     ).toBeVisible();
     expect(await apiStatus('/v1/connect/status', keyA2)).toBe(401);
     expect(testKey('a')).toBe('');
+    expect(confirmText).toMatch(/\d+ orders? (is|are) waiting for a crypto payment/);
 
     // Every WP admin page and site JSON answer this run loaded was free of secret-shaped strings.
     await html.settled();

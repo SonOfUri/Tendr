@@ -37,7 +37,15 @@ The plugin does not track you and does not call any other service.
 
 = Where are my keys stored? =
 
-In the WordPress options table, encrypted (libsodium secretbox) with a key derived from your site's `AUTH_KEY` and `SECURE_AUTH_KEY` salts. They are never shown in the admin or sent to the browser. As with any WordPress plugin, someone with access to both your database and `wp-config.php` could decrypt them. If the salts change, the plugin asks you to reconnect.
+In the WordPress options table, encrypted (libsodium secretbox) with a key derived from your site's `AUTH_KEY` and `SECURE_AUTH_KEY` salts. They are never shown in the admin or sent to the browser. As with any WordPress plugin, someone with access to both your database and `wp-config.php` could decrypt them. If the salts change, the plugin asks you to reconnect. If the salts are missing, empty or still WordPress's sample phrase, the plugin refuses to connect until you set unique ones (https://api.wordpress.org/secret-key/1.1/salt/), since keys encrypted under public salts would not be protected.
+
+= What if my site address changes? =
+
+Orders keep updating: each order is matched by the reference stored on it, never by the site address. Click **Reconnect** (or Connect) on the tendr settings page after the move; the plugin hands the earlier connection's orders and refunds to the new one, so payments and refunds for orders placed before the move still reach this site.
+
+= What happens to unpaid orders when I disconnect? =
+
+tendr closes their open checkouts. A payment already on its way still lands in your tendr account, but this site is no longer told; the plugin adds a note to each order still waiting, and the Disconnect confirmation says how many there are.
 
 = What happens when I uninstall the plugin? =
 
