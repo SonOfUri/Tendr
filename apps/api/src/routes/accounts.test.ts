@@ -190,4 +190,69 @@ describe('account routes', () => {
     expect(res.statusCode, res.body).toBe(202);
     expect(res.json()).toMatchObject({ status: 'provisioning' });
   });
+
+  it('GET /v1/account/settlement: the mode payout, an open change, and the choices (USDC first)', async () => {
+    const none = await get('/v1/account/settlement', ownerLogin);
+    expect(none.statusCode, none.body).toBe(200);
+    expect(none.json()).toEqual({
+      livemode: false,
+      account_status: 'active',
+      settlement: null,
+      pending: null,
+      choices: [
+        { asset: 'nep141:usdc.fakes.testnet', symbol: 'USDC', chain: 'near', default: true },
+        { asset: 'nep141:wrap.testnet', symbol: 'wNEAR', chain: 'near', default: false },
+      ],
+    });
+
+    // An open set_settlement proposal is reported (so no second one is drafted).
+    const draft = await post('/v1/account/proposals', ownerLogin, {
+      action: {
+        set_settlement: {
+          dest_asset: 'nep141:usdc.fakes.testnet',
+          payout_mode: 'intents',
+          saved_address_id: null,
+        },
+      },
+    });
+    expect(draft.statusCode, draft.body).toBe(201);
+    const pending = await get('/v1/account/settlement', ownerLogin);
+    expect(pending.json().pending).toEqual({ id: draft.json().id, status: 'draft' });
+
+    await prisma.settlementConfig.create({
+      data: {
+        id: `stc_${randomBytes(8).toString('hex')}`,
+        merchantId,
+        livemode: false,
+        destAssetId: 'nep141:usdc.fakes.testnet',
+        destChain: 'near',
+        payoutMode: 'intents',
+        isDefault: true,
+      },
+    });
+    const set = await get('/v1/account/settlement', ownerLogin);
+    expect(set.json().settlement).toEqual({
+      asset: 'nep141:usdc.fakes.testnet',
+      symbol: 'USDC',
+      chain: 'near',
+      payout_mode: 'intents',
+    });
+
+    // Live: the live tokens, and no account yet.
+    const liveView = await get('/v1/account/settlement', ownerLogin, true);
+    expect(liveView.statusCode, liveView.body).toBe(200);
+    expect(liveView.json()).toMatchObject({
+      livemode: true,
+      account_status: null,
+      settlement: null,
+    });
+    expect(liveView.json().choices.map((c: { symbol: string }) => c.symbol)).toEqual([
+      'USDC',
+      'USDT',
+      'wNEAR',
+    ]);
+    expect(liveView.json().choices[0].asset).toBe(
+      'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+    );
+  });
 });

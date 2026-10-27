@@ -1,9 +1,11 @@
 'use client';
 
-// Payout: where a store's payments go, and the dashboard pages that change it. The plugin's
-// "Add a payout method" status item (`GET /v1/connect/status`) links here.
+// Payout: where a store's payments settle in this mode (choose it here when none is set — the
+// plugin's "payout missing" status item, `GET /v1/connect/status`, links here), and the dashboard
+// pages that move money out.
 import Link from 'next/link';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
+import { PayoutChooser } from '@/components/dashboard/PayoutChooser';
 
 export default function PayoutPage() {
   const { store, context } = useDashboard();
@@ -17,6 +19,14 @@ export default function PayoutPage() {
           Moving money out, or changing where payments settle, is a proposal your signers approve.
         </p>
       </div>
+      <section className="card">
+        <h2>Where payments settle</h2>
+        <PayoutChooser
+          key={`${context.merchantId}:${context.livemode}`}
+          store={context}
+          storeName={store.name}
+        />
+      </section>
       <section className="card">
         <h2>Set up where money goes</h2>
         <ul className="list">

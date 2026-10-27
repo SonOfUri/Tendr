@@ -73,6 +73,15 @@ export const SIM_TOKENS: readonly FixtureToken[] = [
     priceMicroUsd: usd(1),
   },
   {
+    // The testnet USDC stand-in the dashboard knows (web asset-registry), and the test-mode
+    // settlement default (accounts/settlement.ts).
+    assetId: 'nep141:usdc.fakes.testnet',
+    symbol: 'USDC',
+    blockchain: 'near',
+    decimals: 6,
+    priceMicroUsd: usd(1),
+  },
+  {
     assetId: 'nep141:wrap.testnet',
     symbol: 'wNEAR',
     blockchain: 'near',

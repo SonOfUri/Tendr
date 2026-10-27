@@ -940,9 +940,10 @@ describe('account proposals', () => {
   });
 
   it('settlement_change_is_a_proposal_not_a_patch', async () => {
-    // No route path touches settlement directly …
+    // No route writes settlement directly (the one settlement route only reads it) …
     const routes = app.printRoutes({ commonPrefix: false });
-    expect(routes).not.toMatch(/settlement/i);
+    const settlementRoutes = routes.split('\n').filter((l) => /settlement/i.test(l));
+    expect(settlementRoutes).toEqual([expect.stringContaining('/settlement (GET, HEAD)')]);
     // … no route module writes the settlement_configs mirror …
     const dir = fileURLToPath(new URL('.', import.meta.url));
     for (const f of readdirSync(dir).filter((n) => n.endsWith('.ts') && !n.endsWith('.test.ts'))) {

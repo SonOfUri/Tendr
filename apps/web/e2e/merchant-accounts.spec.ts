@@ -113,6 +113,20 @@ test.describe.serial('merchant accounts', () => {
     await expect(owner.getByRole('button', { name: 'Go live' })).toBeEnabled();
   });
 
+  test('the payout page sets where test payments settle (USDC by default), with the passkey', async () => {
+    await owner.goto('/dashboard/settings/payout');
+    await expect(owner.getByRole('radio', { name: /USDC/ })).toBeChecked();
+    await owner.getByRole('button', { name: 'Approve payout' }).click();
+    await expect(owner.getByText(/Payout set: .* test payments settle in USDC/)).toBeVisible();
+    // Once mirrored from the account, the page shows it as set.
+    await expect(async () => {
+      await owner.reload();
+      await expect(
+        owner.locator('p', { hasText: /test payments settle in USDC into its tendr account/ }),
+      ).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 30_000 });
+  });
+
   test('a saved address is approved and shows usable in 24h', async () => {
     await owner.goto('/dashboard/addresses');
     await owner.getByLabel('Network').selectOption('near');

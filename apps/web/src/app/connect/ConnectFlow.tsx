@@ -6,6 +6,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
+import { PayoutChooser } from '@/components/dashboard/PayoutChooser';
 import { RecoveryKitCreator } from '@/components/dashboard/RecoveryKitCreator';
 import {
   api,
@@ -13,6 +14,7 @@ import {
   isSignedOut,
   setStoreContext,
   type Me,
+  type StoreContext,
   type StoreSummary,
 } from '@/lib/api';
 import {
@@ -48,11 +50,19 @@ type Phase =
   | { k: 'pick' }
   | { k: 'new-store' }
   | { k: 'recovery'; store: Created }
-  | { k: 'payout'; store: Store }
+  | { k: 'payout'; store: Store; storeContext: StoreContext; isNew: boolean }
   | { k: 'approve'; store: Store }
   | { k: 'leaving' };
 
 const POLL_MS = 3000;
+
+/**
+ * Choose payout (spec §2), in test mode: for a new store, and for a picked store with none set
+ * (the step moves on by itself when the store already has one).
+ */
+function payoutPhase(store: Store, isNew: boolean): Phase {
+  return { k: 'payout', store, storeContext: { merchantId: store.id, livemode: false }, isNew };
+}
 
 /** Where a signed-in person goes next. */
 function nextPhase(me: Me): Phase {
@@ -207,7 +217,7 @@ export function ConnectFlow() {
       {phase.k === 'pick' && me && (
         <StorePicker
           stores={eligibleStores(me.stores)}
-          onPick={(store) => setPhase({ k: 'approve', store })}
+          onPick={(store) => setPhase(payoutPhase(store, false))}
           onNew={() => setPhase({ k: 'new-store' })}
         />
       )}
@@ -241,26 +251,24 @@ export function ConnectFlow() {
             storeName={phase.store.name}
             storeSlug={phase.store.slug}
             replacing={false}
-            onRegistered={() => setPhase({ k: 'payout', store: phase.store })}
+            onRegistered={() => setPhase(payoutPhase(phase.store, true))}
           />
         </>
       )}
       {phase.k === 'payout' && (
         <>
-          <p className="step-label">New store · payout</p>
+          <p className="step-label">{phase.isNew ? 'New store · payout' : 'Payout'}</p>
           <h1>Where your payments go</h1>
           <p>
-            Payments settle into {phase.store.name}’s tendr account. From there you withdraw to a
-            saved address, or change where payments settle, on your dashboard.
+            Payments settle into {phase.store.name}’s own tendr account, in the token you choose.
+            From there you withdraw to a saved address on your dashboard.
           </p>
-          <p className="muted small">
-            You can set this up any time in{' '}
-            <Link href="/dashboard/settings/payout" target="_blank" rel="noopener noreferrer">
-              Payout settings
-            </Link>
-            .
-          </p>
-          <Button onClick={() => setPhase({ k: 'approve', store: phase.store })}>Continue</Button>
+          <PayoutChooser
+            key={phase.store.id}
+            store={phase.storeContext}
+            storeName={phase.store.name}
+            onDone={() => setPhase({ k: 'approve', store: phase.store })}
+          />
         </>
       )}
       {phase.k === 'approve' && (

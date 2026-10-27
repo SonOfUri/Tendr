@@ -1,5 +1,5 @@
 // The store's merchant account: its state in the caller's mode, balances, the go-live checklist
-// and go-live itself, the recovery key, and retrying a failed provisioning.
+// and go-live itself, where payments settle, the recovery key, and retrying a failed provisioning.
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import {
@@ -11,6 +11,7 @@ import {
   registerRecoveryKey,
   retryProvisioning,
 } from '../accounts/accounts.js';
+import { settlementView } from '../accounts/settlement.js';
 import { requireDashboardUser } from '../gateway/principal.js';
 import { prisma } from '../lib/prisma.js';
 
@@ -29,6 +30,13 @@ export const accountRoutes: FastifyPluginAsync = async (app) => {
   app.get('/v1/account', { config: { auth: read } }, async (req) => {
     const p = requireDashboardUser(req);
     return accountView({ merchantId: p.merchantId, livemode: p.livemode });
+  });
+
+  // Where payments settle in this mode, an open change, and the tokens offered (USDC first).
+  // Changing it is a `set_settlement` proposal (POST /v1/account/proposals).
+  app.get('/v1/account/settlement', { config: { auth: read } }, async (req) => {
+    const p = requireDashboardUser(req);
+    return settlementView({ merchantId: p.merchantId, livemode: p.livemode });
   });
 
   app.get('/v1/account/balances', { config: { auth: read } }, async (req) => {
