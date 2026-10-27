@@ -24,7 +24,8 @@ import {
 } from '@tendr/contracts';
 import { z } from 'zod';
 import { tenantTransaction } from '../db/tenant-transaction.js';
-import { releaseReservation, reserveBudget } from '../gas/budget.js';
+import { reserveBudget } from '../gas/budget.js';
+import { releaseReplacedHold } from '../relayer/submissions.js';
 import {
   gasProvider,
   networkFeeView,
@@ -692,13 +693,14 @@ async function storeQuote(
     assertOpen({ status: row.status, expiresAt: row.expires_at }, now);
     await assertQuotable(tx, t, sessionId, now);
 
-    // Release the reservations of the quotes this one replaces (reserveBudget would release the
-    // session's reservation too, but a shopper-paid quote reserves nothing).
-    const replaced = await tx.quote.findMany({
-      where: { ...tenant, sessionId, supersededAt: null, gasSponsorshipId: { not: null } },
-      select: { gasSponsorshipId: true },
+    // Release every hold of the session's earlier quotes (current or superseded): gas a failed
+    // relay of theirs spent is Tendr's loss. A relay still in flight keeps its hold until its
+    // outcome (released at collection of another quote, or at session end).
+    const held = await tx.gasSponsorship.findMany({
+      where: { ...tenant, sessionId, reservationState: 'reserved' },
+      select: { id: true },
     });
-    for (const r of replaced) await releaseReservation(tx, r.gasSponsorshipId!);
+    for (const h of held) await releaseReplacedHold(tx, tenant, h.id, now);
 
     let gasSponsorshipId: string | null = null;
     if (plan.paidBy === 'merchant') {

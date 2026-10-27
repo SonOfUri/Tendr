@@ -14,7 +14,7 @@ import { fakeNearClient, resetNearClients } from '../../near/client.js';
 import { scopedDb } from '../../db/scoped.js';
 import { resetFeeCache, setFeeDeps } from '../../gas/fees.js';
 import { putGasPolicy } from '../../gas/policy.js';
-import { getKeyVault } from '../../keyvault/index.js';
+import { evmAddress, getKeyVault } from '../../keyvault/index.js';
 import { AppError } from '../../lib/errors.js';
 import { prisma } from '../../lib/prisma.js';
 import { getRedis } from '../../lib/redis.js';
@@ -368,5 +368,152 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
     const res = await relayer.submit(q, { signatures });
     expect(res).toMatchObject({ submissionId: sponsorshipId, status: 'submitted' });
     expect(node.sent).toHaveLength(1);
+  });
+
+  /** A new sponsored quote on the same session (a re-quote), as the pay page asks for it. */
+  async function requote(secret: string) {
+    const qr = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout/client/quote',
+      headers: { authorization: `Bearer ${secret}` },
+      payload: {
+        origin_asset: USDC_BASE,
+        wallet_address: shopper.address,
+        gasless_method: 'eip3009',
+      },
+    });
+    expect(qr.statusCode, qr.body).toBe(201);
+    return prisma.quote.findUniqueOrThrow({ where: { id: qr.json().id as string } });
+  }
+
+  describe('outcomes apply per relayer transaction (N1)', () => {
+    it("a broadcast the node refused never fails the retry, and the retry's own outcome is recorded", async () => {
+      const { q, signatures, sponsorshipId } = await sponsoredQuote();
+      node.once('eth_sendRawTransaction', () => {
+        throw new RpcRefusal(-32000, 'insufficient funds for gas * price + value');
+      });
+      await expect(relayer.submit(q, { signatures })).rejects.toMatchObject({ status: 503 });
+      const refused = await prisma.relayerTransaction.findFirstOrThrow();
+      expect(refused.status).toBe('failed');
+      expect(refused.outcomeHandledAt).not.toBeNull();
+
+      // The poller runs before the retry: nothing changes.
+      expect(await pollEvmRelays(sender)).toBe(0);
+      let sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+      expect(sp).toMatchObject({ status: 'pending', quoteId: null, reservationState: 'reserved' });
+
+      // The retry relays; its real outcome and gas are recorded.
+      const res = await relayer.submit(q, { signatures });
+      expect(res.status).toBe('submitted');
+      expect(await pollEvmRelays(sender)).toBe(0);
+      node.mine(res.txHash!, 1, 80_000n, [tendrPaid(q, 0n)]);
+      expect(await pollEvmRelays(sender)).toBe(1);
+      sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+      expect(sp).toMatchObject({ status: 'confirmed', txHash: res.txHash });
+      expect(sp.gasUsed!.toFixed()).toBe('80000');
+      expect(sp.relayerTxId).not.toBe(refused.id);
+    });
+
+    it("an outcome for another transaction than the submission's is ignored", async () => {
+      const { q, signatures, sponsorshipId } = await sponsoredQuote();
+      await relayer.submit(q, { signatures });
+      const { applyRelayOutcome } = await import('../submissions.js');
+      const applied = await applyRelayOutcome(sponsorshipId, {
+        status: 'failed',
+        txHash: null,
+        gasUsed: 1n,
+        costUsd: '1',
+        reason: 'x',
+        feeMoved: null,
+        relayerTxId: 'rtx_someoneelse',
+      });
+      expect(applied).toBe(false);
+      const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+      expect(sp.status).toBe('submitted');
+    });
+  });
+
+  describe('superseded holds are released when the session is paid on another quote (N2)', () => {
+    it('a re-quote after a failed relay releases the old hold with its gas as a loss, once', async () => {
+      const { s, q, signatures, sponsorshipId: oldId } = await sponsoredQuote();
+      const res = await relayer.submit(q, { signatures });
+      node.mine(res.txHash!, 0, 40_000n);
+      await pollEvmRelays(sender);
+      // The deadline passes; the shopper asks for a new quote.
+      await prisma.quote.update({
+        where: { id: q.quote.id },
+        data: { deadline: new Date(Date.now() - 1000) },
+      });
+      const fresh = await requote(s.client_secret);
+      let old = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: oldId } });
+      expect(old).toMatchObject({ reservationState: 'released', sponsor: 'tendr' });
+      expect(old.costUsd!.toFixed()).toBe('0.11');
+      const lossAt = old.lossRecognizedAt;
+      expect(lossAt).not.toBeNull();
+
+      // Paid on the new quote (copy-address): new hold settled, old untouched, loss counted once.
+      await sim.simulate(fresh.depositAddress, 'exact', { senderAddress: shopper.address });
+      await pollDeposit(fresh.depositAddress, { livemode: false });
+      const neu = await prisma.gasSponsorship.findUniqueOrThrow({
+        where: { id: fresh.gasSponsorshipId! },
+      });
+      expect(neu.reservationState).toBe('settled');
+      old = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: oldId } });
+      expect(old.lossRecognizedAt).toEqual(lossAt);
+      expect((await month()).reservedUsd.toFixed()).toBe('0');
+      expect((await month()).spentUsd.toFixed()).toBe('0.048');
+      expect(await releaseEndedSessionReservations()).toBe(0);
+    });
+
+    it('a relay in flight at re-quote keeps its hold; it is released when another quote is collected', async () => {
+      const { s, q, signatures, sponsorshipId: oldId } = await sponsoredQuote();
+      const res = await relayer.submit(q, { signatures });
+      // The watcher superseded the quote (as after a failed swap) while the relay is still pending.
+      await prisma.quote.update({
+        where: { id: q.quote.id },
+        data: { supersededAt: new Date(), deadline: new Date(Date.now() - 1000) },
+      });
+      const fresh = await requote(s.client_secret);
+      expect(
+        (await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: oldId } })).reservationState,
+      ).toBe('reserved');
+      // The old relay then reverts.
+      node.mine(res.txHash!, 0, 40_000n);
+      await pollEvmRelays(sender);
+
+      await sim.simulate(fresh.depositAddress, 'exact', { senderAddress: shopper.address });
+      await pollDeposit(fresh.depositAddress, { livemode: false });
+      const old = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: oldId } });
+      expect(old).toMatchObject({ reservationState: 'released', sponsor: 'tendr' });
+      expect(old.costUsd!.toFixed()).toBe('0.11');
+      expect(
+        (await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: fresh.gasSponsorshipId! } }))
+          .reservationState,
+      ).toBe('settled');
+      expect((await month()).reservedUsd.toFixed()).toBe('0');
+      expect((await month()).spentUsd.toFixed()).toBe('0.048');
+    });
+  });
+
+  it('fee leg front-run inside the same transaction: the Transfer to the gas-fee address counts (N3)', async () => {
+    const { q, signatures } = await sponsoredQuote('shopper');
+    const res = await relayer.submit(q, { signatures });
+    const feeTo = evmAddress((await getKeyVault().publicKey('gas-fees-evm')).raw);
+    const pad = (a: string) => '0x' + a.slice(2).toLowerCase().padStart(64, '0');
+    const transfer = {
+      address: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+      topics: [
+        '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',
+        pad(shopper.address),
+        pad(feeTo),
+      ],
+      data: '0x' + 48_000n.toString(16).padStart(64, '0'),
+    };
+    node.mine(res.txHash!, 1, 80_000n, [transfer, tendrPaid(q, 0n)]);
+    await pollEvmRelays(sender);
+    const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: res.submissionId } });
+    expect(sp).toMatchObject({ status: 'confirmed', sponsor: 'shopper' });
+    expect(sp.feeCollected!.toFixed()).toBe('48000');
+    expect(sp.lossRecognizedAt).toBeNull();
   });
 });

@@ -83,6 +83,12 @@ export interface EvmSendResult {
   broadcast: 'submitted' | 'unknown';
 }
 
+export interface ReceiptLog {
+  address: string;
+  topics: string[];
+  data: string;
+}
+
 export interface EvmOutcome {
   txId: string;
   purpose: string;
@@ -94,8 +100,8 @@ export interface EvmOutcome {
   gasUsed: bigint | null;
   effectiveGasPrice: bigint | null;
   reason: string | null;
-  /** The mined receipt's logs emitted by the called contract (`to`); [] when none. */
-  logs: { topics: string[]; data: string }[];
+  /** The mined receipt's logs (lower-case emitter address); [] when none. */
+  logs: ReceiptLog[];
 }
 
 export interface EvmSenderDeps {
@@ -322,7 +328,13 @@ export class EvmSender {
         // The node refused the transaction itself: nothing is in flight at this nonce.
         await prisma.relayerTransaction.update({
           where: { id: row.id },
-          data: { status: 'failed', lastError: err.message.slice(0, 500) },
+          // Never broadcast: nothing for the poller to report (the caller already knows), so the
+          // row is handed over at once and cannot touch a later retry.
+          data: {
+            status: 'failed',
+            lastError: err.message.slice(0, 500),
+            outcomeHandledAt: this.now(),
+          },
         });
         throw new EvmNotBroadcastError(
           `the node refused the transaction: ${err.message}`,
@@ -411,9 +423,12 @@ export class EvmSender {
           txHash: hash,
           gasUsed: r.gasUsed.toString(),
           effectiveGasPrice: r.effectiveGasPrice.toString(),
-          receiptLogs: r.logs
-            .filter((l) => l.address.toLowerCase() === row.toAddress)
-            .map((l) => ({ topics: l.topics, data: l.data })),
+          // Every log of the receipt (the forwarder's events and the token transfers it caused).
+          receiptLogs: r.logs.map((l) => ({
+            address: l.address.toLowerCase(),
+            topics: l.topics,
+            data: l.data,
+          })),
           lastError: cancelled
             ? 'gave up after the deadline (nonce freed)'
             : r.status === 1
@@ -621,9 +636,7 @@ function outcomeOf(r: Row): EvmOutcome {
     gasUsed: r.gasUsed ? BigInt(r.gasUsed.toFixed(0)) : null,
     effectiveGasPrice: r.effectiveGasPrice ? BigInt(r.effectiveGasPrice.toFixed(0)) : null,
     reason: r.lastError,
-    logs: Array.isArray(r.receiptLogs)
-      ? (r.receiptLogs as { topics: string[]; data: string }[])
-      : [],
+    logs: Array.isArray(r.receiptLogs) ? (r.receiptLogs as unknown as ReceiptLog[]) : [],
   };
 }
 

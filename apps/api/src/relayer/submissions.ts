@@ -387,6 +387,12 @@ export interface RelayOutcome {
    * receipt's `TendrPaid.fee`); null when not applicable (sponsored, or failed).
    */
   feeMoved: bigint | null;
+  /**
+   * The relayer transaction this outcome is for. It applies only to the submission currently
+   * pointing at it (`relayer_tx_id`; or, before that was recorded, a submission still claimed and
+   * in flight), never to an undone claim or a newer retry. Omitted by the simulated relayer.
+   */
+  relayerTxId?: string;
 }
 
 /**
@@ -415,6 +421,18 @@ export async function applyRelayOutcome(
       AND merchant_id = ${scope.merchantId} AND livemode = ${scope.livemode} FOR UPDATE`;
     const sp = await tx.gasSponsorship.findFirstOrThrow({ where: { ...scope, id: submissionId } });
     if (sp.status === 'confirmed' || sp.status === 'failed') return false;
+    if (outcome.relayerTxId !== undefined) {
+      const ours = sp.relayerTxId
+        ? sp.relayerTxId === outcome.relayerTxId
+        : sp.quoteId !== null && (sp.status === 'pending' || sp.status === 'submitted');
+      if (!ours) {
+        log('warn', 'relay outcome for a transaction the submission no longer points at', {
+          submissionId,
+          relayerTxId: outcome.relayerTxId,
+        });
+        return false;
+      }
+    }
     const confirmed = outcome.status === 'confirmed';
     const shopper = sp.sponsor === 'shopper';
     const feeMoved = confirmed && shopper ? (outcome.feeMoved ?? 0n) : null;
@@ -427,6 +445,7 @@ export async function applyRelayOutcome(
         ...(outcome.gasUsed !== null ? { gasUsed: outcome.gasUsed.toString() } : {}),
         ...(outcome.costUsd !== null ? { costUsd: outcome.costUsd } : {}),
         ...(feeMoved !== null ? { feeCollected: feeMoved.toString() } : {}),
+        ...(outcome.relayerTxId ? { relayerTxId: outcome.relayerTxId } : {}),
         ...(confirmed ? {} : { lastError: outcome.reason?.slice(0, 500) ?? null }),
       },
     });
@@ -523,21 +542,90 @@ export async function onPaymentCollected(
   quote: Pick<Quote, 'id' | 'gasSponsorshipId'>,
   paymentId: string,
 ): Promise<void> {
-  if (!quote.gasSponsorshipId) return;
-  const sp = await tx.gasSponsorship.findFirst({
-    where: { ...scope, id: quote.gasSponsorshipId },
-    select: { id: true, reservationState: true, estimateUsd: true },
+  const session = await tx.quote.findFirst({
+    where: { ...scope, id: quote.id },
+    select: { sessionId: true },
   });
-  if (sp?.reservationState !== 'reserved' || !sp.estimateUsd) return;
-  await settleReservation(tx, sp.id, sp.estimateUsd.toFixed());
-  await tx.gasSponsorship.updateMany({
-    where: { ...scope, id: sp.id, recoveredFromPaymentId: null },
-    data: { recoveredFromPaymentId: paymentId },
+  if (quote.gasSponsorshipId) {
+    const sp = await tx.gasSponsorship.findFirst({
+      where: { ...scope, id: quote.gasSponsorshipId },
+      select: { id: true, reservationState: true, estimateUsd: true },
+    });
+    if (sp?.reservationState === 'reserved' && sp.estimateUsd) {
+      await settleReservation(tx, sp.id, sp.estimateUsd.toFixed());
+      await tx.gasSponsorship.updateMany({
+        where: { ...scope, id: sp.id, recoveredFromPaymentId: null },
+        data: { recoveredFromPaymentId: paymentId },
+      });
+    }
+  }
+  if (!session) return;
+  // The session is paid: holds of its other (superseded) quotes will never be collected. Release
+  // them; gas their relays spent is Tendr's loss. A relay still in flight is left to the
+  // session-end sweep, which waits for its outcome.
+  const others = await tx.gasSponsorship.findMany({
+    where: {
+      ...scope,
+      sessionId: session.sessionId,
+      reservationState: 'reserved',
+      ...(quote.gasSponsorshipId ? { NOT: { id: quote.gasSponsorshipId } } : {}),
+    },
   });
+  for (const o of others) {
+    if (inFlight(o)) continue;
+    await releaseHold(tx, scope, o, new Date());
+  }
 }
 
-/** Session statuses that end without the proceeds being collected. */
-const ENDED_UNCOLLECTED = ['EXPIRED', 'REFUNDED'] as const;
+/**
+ * A re-quote replaced the quote holding `sponsorshipId`: release its hold (gas a failed relay of
+ * it spent is Tendr's loss). A relay still in flight keeps its hold for the session-end sweep.
+ */
+export async function releaseReplacedHold(
+  tx: Tx,
+  scope: Scope,
+  sponsorshipId: string,
+  now: Date,
+): Promise<void> {
+  const sp = await tx.gasSponsorship.findFirst({ where: { ...scope, id: sponsorshipId } });
+  if (!sp || sp.reservationState !== 'reserved' || inFlight(sp)) return;
+  await releaseHold(tx, scope, sp, now);
+}
+
+/** A sponsorship whose relay has not reached a final outcome. */
+function inFlight(sp: { quoteId: string | null; status: string }): boolean {
+  return sp.quoteId !== null && (sp.status === 'pending' || sp.status === 'submitted');
+}
+
+/**
+ * Releases a reservation that will never be collected; gas its relay spent becomes Tendr's loss
+ * (the actual cost, else the quoted estimate). Idempotent (release and loss both are).
+ */
+async function releaseHold(
+  tx: Tx,
+  scope: Scope,
+  sp: {
+    id: string;
+    quoteId: string | null;
+    gasUsed: Prisma.Decimal | null;
+    costUsd: Prisma.Decimal | null;
+    estimateUsd: Prisma.Decimal | null;
+  },
+  now: Date,
+): Promise<boolean> {
+  if (!(await releaseReservation(tx, sp.id))) return false;
+  const spent = sp.quoteId !== null && sp.gasUsed !== null && sp.gasUsed.gt(0);
+  const cost = sp.costUsd ?? sp.estimateUsd;
+  if (spent && cost && cost.gt(0)) await recognizeTendrLoss(tx, sp.id, cost.toFixed(), now);
+  return true;
+}
+
+/**
+ * Final session statuses. A hold still `reserved` on one of them is never collected: refunded or
+ * expired sessions collected nothing, and a settled session's collected quote was settled already
+ * (`onPaymentCollected`), so what is left belongs to a superseded quote.
+ */
+const ENDED_UNCOLLECTED = ['EXPIRED', 'REFUNDED', 'SETTLED'] as const;
 
 /**
  * Releases reservations still held by sessions that ended refunded or expired (the payment's
@@ -566,12 +654,8 @@ export async function releaseEndedSessionReservations(now: Date = new Date()): P
           AND merchant_id = ${scope.merchantId} AND livemode = ${scope.livemode} FOR UPDATE`;
         if (!ENDED_UNCOLLECTED.some((st) => st === locked[0]?.status)) return false;
         const sp = await tx.gasSponsorship.findFirstOrThrow({ where: { ...scope, id: r.id } });
-        if (sp.quoteId && (sp.status === 'pending' || sp.status === 'submitted')) return false;
-        if (!(await releaseReservation(tx, sp.id))) return false;
-        const spent = sp.quoteId !== null && sp.gasUsed !== null && sp.gasUsed.gt(0);
-        const cost = sp.costUsd ?? sp.estimateUsd;
-        if (spent && cost && cost.gt(0)) await recognizeTendrLoss(tx, sp.id, cost.toFixed(), now);
-        return true;
+        if (sp.reservationState !== 'reserved' || inFlight(sp)) return false;
+        return releaseHold(tx, scope, sp, now);
       });
       if (did) released++;
     } catch (err) {

@@ -14,8 +14,12 @@ import {
   EvmGasless,
   EvmGaslessRelayer,
   GASLESS_PAYMENT_PURPOSE,
+  evmForwarderAddress,
+  evmGasFeeAddress,
   liveEvmSender,
 } from './evm/index.js';
+import { evmTokenAddress } from './evm/tokens.js';
+import { prisma } from '../lib/prisma.js';
 import type { EvmSender } from './evm/sender.js';
 import { SimulatedRelayer } from './simulated.js';
 import { applyRelayOutcome } from './submissions.js';
@@ -76,13 +80,26 @@ export async function pollEvmRelays(sender: EvmSender = liveEvmSender()): Promis
             log('warn', 'evm relayer: cost unpriced', { txId: o.txId, err: String(err) });
           }
         }
+        let feeMoved: bigint | null = null;
+        if (o.status === 'confirmed') {
+          const sp = await prisma.gasSponsorship.findUnique({
+            where: { id: o.refId },
+            select: { feeAsset: true },
+          });
+          const token = sp?.feeAsset ? evmTokenAddress(sp.feeAsset) : null;
+          feeMoved = feeMovedFrom(o.logs, {
+            forwarder: evmForwarderAddress(),
+            ...(token ? { token, feeTo: await evmGasFeeAddress() } : {}),
+          });
+        }
         await applyRelayOutcome(o.refId, {
           status: o.status,
           txHash: o.txHash,
           gasUsed: o.gasUsed,
           costUsd,
           reason: o.reason,
-          feeMoved: o.status === 'confirmed' ? feeMovedFrom(o.logs) : null,
+          feeMoved,
+          relayerTxId: o.txId,
         });
         applied++;
       }
@@ -229,14 +246,21 @@ export async function gaslessSubmission(shopper: ShopperCtx, id: string) {
 
 const FORWARDER_EVENTS = new Interface(TENDR_FORWARDER_ABI as unknown as string);
 
+const TRANSFER_TOPIC0 = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
 /**
- * The fee a mined forwarder call moved to the gas-fee address: the sum of `TendrPaid.fee` in its
- * receipt (0 when the fee authorization was skipped, or no event: never assumed from the quote).
- * `TendrPaid` measures only Tendr's own fee here; payment detection never reads it.
+ * The fee a mined forwarder call moved to the gas-fee address: the sum of `TendrPaid.fee` emitted
+ * by the forwarder. When that is 0 (the forwarder skipped a fee authorization already used), the
+ * receipt's own `Transfer`s of the fee token to the gas-fee address count instead. Never assumed
+ * from the quote. `TendrPaid` measures only Tendr's own fee here; payment detection never reads it.
  */
-export function feeMovedFrom(logs: { topics: string[]; data: string }[]): bigint {
+export function feeMovedFrom(
+  logs: { address?: string; topics: string[]; data: string }[],
+  where: { forwarder: string; token?: string; feeTo?: string },
+): bigint {
   let fee = 0n;
   for (const l of logs) {
+    if (l.address && l.address.toLowerCase() !== where.forwarder.toLowerCase()) continue;
     let parsed: ReturnType<Interface['parseLog']>;
     try {
       parsed = FORWARDER_EVENTS.parseLog(l);
@@ -244,6 +268,18 @@ export function feeMovedFrom(logs: { topics: string[]; data: string }[]): bigint
       continue;
     }
     if (parsed?.name === 'TendrPaid') fee += parsed.args.fee as bigint;
+  }
+  if (fee > 0n || !where.token || !where.feeTo) return fee;
+  const feeTo = where.feeTo.toLowerCase();
+  for (const l of logs) {
+    if (l.address?.toLowerCase() !== where.token.toLowerCase()) continue;
+    if (l.topics[0]?.toLowerCase() !== TRANSFER_TOPIC0 || l.topics.length < 3) continue;
+    if (`0x${l.topics[2]!.slice(26)}`.toLowerCase() !== feeTo) continue;
+    try {
+      fee += BigInt(l.data);
+    } catch {
+      continue;
+    }
   }
   return fee;
 }

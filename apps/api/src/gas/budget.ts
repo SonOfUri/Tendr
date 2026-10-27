@@ -158,8 +158,15 @@ export async function reserveBudget(
     FOR UPDATE`;
   if (session.length === 0) throw new Error(`reserveBudget: session ${input.sessionId} not found`);
 
+  // A hold whose relay is still in flight is kept: its outcome (and any gas lost) is settled by
+  // the relayer's own paths (project 5a, ruling T5-c).
   const previous = await tx.gasSponsorship.findMany({
-    where: { ...scope, sessionId: input.sessionId, reservationState: 'reserved' },
+    where: {
+      ...scope,
+      sessionId: input.sessionId,
+      reservationState: 'reserved',
+      NOT: { quoteId: { not: null }, status: { in: ['pending', 'submitted'] } },
+    },
     select: { id: true },
   });
   for (const p of previous) await releaseReservation(tx, p.id);
