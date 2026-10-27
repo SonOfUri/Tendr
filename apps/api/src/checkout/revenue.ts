@@ -1,19 +1,21 @@
 // Revenue entries for a settled payment (spec §5): Tendr's fee (the 1Click `appFees` entry),
-// 1Click's fee (its fee plus the swap spread), the network fee (the shopper's estimated
-// origin-chain send fee) and the merchant's gas reimbursement.
+// 1Click's fee (its fee plus the swap spread), the network fee the shopper paid themselves (the
+// quote's estimate) and the gas reimbursement: the merchant-sponsored network fee and integrator
+// hook estimate collected from the merchant's proceeds through the same `appFees` entry (the
+// quote's `network_fee_bps`, project 5a §8.1).
 //
 // Every row is in the payment's ORIGIN asset base units at the quote's price, with its USD value
-// in `amount_usd`: Tendr's fee is `fee_bps × amount_in`; the other lines are USD figures
-// converted at the quote's `amount_in / amount_in_usd`. Rows with a zero amount are not written.
+// in `amount_usd`: Tendr's fee is `fee_bps × amount_in`, the gas reimbursement
+// `network_fee_bps × amount_in`; the other lines are USD figures converted at the quote's
+// `amount_in / amount_in_usd`. Rows with a zero amount are not written. A shopper-paid token fee
+// is not a line here: it is collected outside the swap, by the relayed transaction.
 // One row per (payment, source) (a unique index): recording twice is a no-op.
 import { Prisma } from '@prisma/client';
-import { gasPayerFromDb } from '@tendr/contracts';
 import type { ScopeContext } from '../db/scoped.js';
 import { assertTransaction } from '../events/record.js';
 import { newId } from '../lib/ids.js';
 import { notFound } from '../lib/errors.js';
 import { gasEstimateUsd } from './gas-estimates.js';
-import { gasReimbursementUsd } from './pricing.js';
 
 const D = Prisma.Decimal;
 type Decimal = Prisma.Decimal;
@@ -28,8 +30,9 @@ export interface RevenueLine {
 }
 
 /**
- * The revenue lines of a payment (pure). `amountIn` / `amountInUsd` / `amountOutUsd` are the
- * quote's; `chain` is the origin chain (the network-fee estimate).
+ * The revenue lines of a payment (pure). `amountIn` / `amountInUsd` / `amountOutUsd` and the
+ * `networkFee*` fields are the quote's; `chain` is the origin chain (the static network-fee
+ * estimate for quotes made before gasless payments).
  */
 export function revenueLines(input: {
   originAsset: string;
@@ -38,8 +41,12 @@ export function revenueLines(input: {
   amountInUsd: Decimal | null;
   amountOutUsd: Decimal | null;
   feeBps: number;
-  gasPayer: 'merchant' | 'shopper';
-  gasMaxUsd: Decimal | null;
+  /** `appFees` basis points that collected the merchant-sponsored fee (and hook estimate). */
+  networkFeeBps: number;
+  /** The quote's network fee (USD); null on quotes made before gasless payments. */
+  networkFeeUsd: Decimal | null;
+  /** Who paid the network fee; null on quotes made before gasless payments. */
+  networkFeePaidBy: 'merchant' | 'buyer' | null;
 }): RevenueLine[] {
   const { amountIn, amountInUsd } = input;
   const bps = new D(input.feeBps).div(10_000);
@@ -51,11 +58,14 @@ export function revenueLines(input: {
 
   const appFee = amountIn.mul(bps).toDecimalPlaces(0, D.ROUND_DOWN);
   const appFeeUsd = amountInUsd ? amountInUsd.mul(bps) : null;
+  const gasBps = new D(input.networkFeeBps).div(10_000);
+  const gas = amountIn.mul(gasBps).toDecimalPlaces(0, D.ROUND_DOWN);
+  const gasUsd = amountInUsd ? amountInUsd.mul(gasBps) : null;
   const lines: RevenueLine[] = [
     { source: 'app_fee', assetId: input.originAsset, amount: appFee, amountUsd: usd(appFeeUsd) },
   ];
-  if (amountInUsd && input.amountOutUsd && appFeeUsd) {
-    const spread = D.max(0, amountInUsd.minus(input.amountOutUsd).minus(appFeeUsd));
+  if (amountInUsd && input.amountOutUsd && appFeeUsd && gasUsd) {
+    const spread = D.max(0, amountInUsd.minus(input.amountOutUsd).minus(appFeeUsd).minus(gasUsd));
     lines.push({
       source: 'oneclick_fee',
       assetId: input.originAsset,
@@ -63,21 +73,21 @@ export function revenueLines(input: {
       amountUsd: usd(spread),
     });
   }
-  const network = new D(gasEstimateUsd(input.chain));
-  lines.push({
-    source: 'network_fee',
-    assetId: input.originAsset,
-    amount: usdToUnits(network),
-    amountUsd: usd(network),
-  });
-  const gas = new D(
-    gasReimbursementUsd(input.gasPayer, gasEstimateUsd(input.chain), input.gasMaxUsd),
-  );
+  // The shopper's own network fee; a sponsored fee is the gas reimbursement instead.
+  if (input.networkFeePaidBy !== 'merchant') {
+    const network = input.networkFeeUsd ?? new D(gasEstimateUsd(input.chain));
+    lines.push({
+      source: 'network_fee',
+      assetId: input.originAsset,
+      amount: usdToUnits(network),
+      amountUsd: usd(network),
+    });
+  }
   lines.push({
     source: 'gas_reimbursement',
     assetId: input.originAsset,
-    amount: usdToUnits(gas),
-    amountUsd: usd(gas),
+    amount: gas,
+    amountUsd: usd(gasUsd),
   });
   return lines.filter((l) => l.amount.gt(0));
 }
@@ -105,8 +115,9 @@ export async function recordRevenue(
     amountInUsd: p.quote.amountInUsd,
     amountOutUsd: p.quote.amountOutUsd,
     feeBps: p.session.feeBps,
-    gasPayer: gasPayerFromDb(p.session.gasSponsor),
-    gasMaxUsd: p.session.gasMaxUsd,
+    networkFeeBps: p.quote.networkFeeBps,
+    networkFeeUsd: p.quote.networkFeeUsd,
+    networkFeePaidBy: p.quote.networkFeePaidBy,
   });
   if (lines.length === 0) return 0;
   const { count } = await tx.revenueEntry.createMany({

@@ -27,6 +27,23 @@ export const FeeModeValues = ['token', 'native'] as const;
 export type FeeMode = (typeof FeeModeValues)[number];
 export const FeeModeSchema = z.enum(FeeModeValues);
 
+/**
+ * How a gasless payment is relayed (spec §2.3), a subset of the sponsorship methods: EIP-3009
+ * `transferWithAuthorization`, an EIP-2612 `permit` to the payment forwarder, a sponsored-call
+ * paymaster (EVM), Pimlico's Solana paymaster (`kora`), a NEAR meta-transaction (`meta_tx`) and
+ * the Tron forwarder (`forwarder`, approve + signed `TendrPayment`).
+ */
+export const GaslessMethodValues = [
+  'eip3009',
+  'permit',
+  'paymaster',
+  'kora',
+  'meta_tx',
+  'forwarder',
+] as const;
+export type GaslessMethod = (typeof GaslessMethodValues)[number];
+export const GaslessMethodSchema = z.enum(GaslessMethodValues);
+
 /** A sponsorship's hold on the monthly budget. Null on the record when nothing was reserved. */
 export const GasReservationStateValues = ['reserved', 'settled', 'released'] as const;
 export type GasReservationState = (typeof GasReservationStateValues)[number];
@@ -141,7 +158,10 @@ export interface GasUsageView {
  * The `network_fee` on session and payment views (spec §2.6). `paid_by: merchant` → sponsored;
  * `shopper` with `fee_mode: token` → the fee was paid in the payment token (`amount` base units
  * of `asset`); `native` → the shopper's wallet paid gas itself (Tendr collected nothing).
- * `usd` is a decimal string; `method` is the sponsorship method, when one was used.
+ * `fee_mode` is null when the merchant sponsors. `usd` is a decimal string (the quoted fee, with
+ * Tendr's margin when Tendr collects it); `method` is the gasless method, when one is used.
+ * `reason` says why the shopper pays (`shopper_choice`, `policy_disabled`, `budget`, …; null when
+ * the merchant sponsors or no wallet was connected).
  */
 export interface NetworkFeeView {
   paid_by: 'merchant' | 'shopper';
@@ -150,4 +170,5 @@ export interface NetworkFeeView {
   asset: string | null;
   usd: string;
   method: string | null;
+  reason: string | null;
 }

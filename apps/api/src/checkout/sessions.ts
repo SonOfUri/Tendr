@@ -23,6 +23,7 @@ import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
 import { transitionSession } from '../events/transitions.js';
+import { networkFeeView } from '../gas/quote-fee.js';
 import { sha256 } from '../lib/crypto.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
@@ -384,8 +385,9 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
     include: {
       payments: {
         orderBy: { createdAt: 'asc' },
-        include: { refunds: { orderBy: { createdAt: 'asc' } } },
+        include: { refunds: { orderBy: { createdAt: 'asc' } }, quote: true },
       },
+      quotes: { where: { supersededAt: null }, orderBy: { createdAt: 'desc' }, take: 1 },
     },
   });
   if (!s || !(await connectionMayAct(ctx.connectionId, ctx.merchantId, s.connectionId))) {
@@ -445,6 +447,8 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
     gas_payer: gasPayerFromDb(s.gasSponsor),
     fee_bps: s.feeBps,
     gas_max_usd: toJsonDecimal(s.gasMaxUsd),
+    /** The current quote's network fee (who pays it, how, why); null without a quote. */
+    network_fee: s.quotes[0] ? networkFeeView(s.quotes[0]) : null,
     payment_link_id: s.paymentLinkId,
     url: hostedUrl(s.id),
     expires_at: s.expiresAt.toISOString(),
@@ -462,6 +466,8 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
       kept_small_overpayment: p.keptSmallOverpayment,
       origin_tx_hash: p.originTxHash,
       sender_chain: p.senderChain,
+      /** The paid quote's network fee; null for payments quoted before gasless payments. */
+      network_fee: networkFeeView(p.quote),
       settled_at: iso(p.settledAt),
       created_at: p.createdAt.toISOString(),
       refunds: p.refunds.map((r) => ({

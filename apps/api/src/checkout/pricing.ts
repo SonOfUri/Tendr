@@ -1,5 +1,6 @@
-// Checkout quote pricing: who pays, how the 1Click quote requests are sized, gas reimbursement and
-// the minimum check. Pure functions, no I/O.
+// Checkout quote pricing: who pays, how the 1Click quote requests are sized (including a
+// merchant-sponsored network fee taken from the merchant's proceeds) and the minimum check. Pure
+// functions, no I/O.
 //
 // Money math never uses floats. Token amounts are bigint base units. USD values are parsed from
 // decimal strings exactly; where a fixed scale is needed they are micro-USD bigints (6 decimals,
@@ -156,40 +157,6 @@ export function resolvePayers(args: {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Gas reimbursement
-// ---------------------------------------------------------------------------------------------
-
-/**
- * Micro-USD the merchant reimburses for the shopper's origin-chain send: 0 when the shopper pays
- * gas, else min(estimate, cap). A null cap (session/link sets none) falls back to
- * `defaultCapUsd`, which is `CHECKOUT_GAS_MAX_USD` (default DEFAULT_GAS_MAX_USD); the
- * reimbursement is never uncapped. Rounds DOWN (it is credited to the shopper).
- */
-export function gasReimbursementMicroUsd(
-  gasPayer: GasPayer,
-  gasEstimateUsd: DecimalLike,
-  gasMaxUsd: DecimalLike | null,
-  defaultCapUsd: DecimalLike = env().CHECKOUT_GAS_MAX_USD,
-): bigint {
-  if (gasPayer === 'shopper') return 0n;
-  const estimate = toScaled(gasEstimateUsd, USD_SCALE, 'down');
-  const cap = toScaled(gasMaxUsd ?? defaultCapUsd, USD_SCALE, 'down');
-  return estimate < cap ? estimate : cap;
-}
-
-/** `gasReimbursementMicroUsd` as a USD number, for display and records. Exact to 6 decimals. */
-export function gasReimbursementUsd(
-  gasPayer: GasPayer,
-  gasEstimateUsd: DecimalLike,
-  gasMaxUsd: DecimalLike | null,
-  defaultCapUsd?: DecimalLike,
-): number {
-  return microToNumber(
-    gasReimbursementMicroUsd(gasPayer, gasEstimateUsd, gasMaxUsd, defaultCapUsd),
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
 // Deadline
 // ---------------------------------------------------------------------------------------------
 
@@ -218,11 +185,11 @@ export interface PricingInput {
   /** Tendr fee in basis points; 0 sends no `appFees`. */
   feeBps: number;
   feePayer: FeePayer;
-  gasPayer: GasPayer;
-  /** Estimated origin-chain send fee, USD. */
-  gasEstimateUsd: DecimalLike;
-  /** Per-session reimbursement cap, USD; null = `CHECKOUT_GAS_MAX_USD` (never uncapped). */
-  gasMaxUsd: DecimalLike | null;
+  /**
+   * USD taken from the merchant's proceeds for the network: a merchant-sponsored fee plus the
+   * integrator hook estimate (spec §8.1). Default 0. It never changes what the shopper sends.
+   */
+  merchantDeductionUsd?: DecimalLike;
   recipient: string;
   recipientType: QuoteRequest['recipientType'];
   refundTo: string;
@@ -242,10 +209,15 @@ export interface QuoteRequests {
   /** The real (deposit-allocating) request, sized from the dry result where needed. */
   real: (dryResult: QuoteResponse) => QuoteRequest;
   /**
-   * USD the shopper's send should be worth (order − gas reimbursement), a 6-decimal string. For
+   * USD the shopper's send should be worth (the order total), a 6-decimal string. For
    * merchant-pays quotes, pass it to `assertWithinTarget` after the real quote.
    */
   targetUsd: string;
+  /**
+   * Basis points added to Tendr's `appFees` to collect `merchantDeductionUsd` from the merchant's
+   * proceeds (0 without a deduction). Recorded as `gas_reimbursement` revenue.
+   */
+  networkFeeBps: number;
 }
 
 function tooSmall(message: string, details?: unknown): AppError {
@@ -256,10 +228,17 @@ function tooSmall(message: string, details?: unknown): AppError {
  * Builds the two-step quote.
  *
  * - Shopper pays fees: EXACT_OUTPUT for the order total in settlement base units. Tendr's appFee
- *   and 1Click's costs make the shopper's amountIn grow. If the merchant pays gas, the output is
- *   reduced by the reimbursement (so amount_in shrinks by it).
+ *   and 1Click's costs make the shopper's amountIn grow.
  * - Merchant pays fees: EXACT_INPUT sized from the dry price so the shopper's amountInUsd equals
- *   orderUsd − gas reimbursement; all fees and spread come out of the merchant's amount_out.
+ *   the order total; all fees and spread come out of the merchant's amount_out.
+ *
+ * A merchant deduction (sponsored network fee + hook estimate, spec §8.1) lowers the merchant's
+ * amount_out and never the shopper's send: it is collected as extra `appFees` basis points
+ * (`networkFeeBps`). EXACT_INPUT keeps the shopper's amount and adds the bps; EXACT_OUTPUT asks for
+ * the order minus the deduction and adds bps sized so the shopper's amountIn matches the
+ * unsponsored quote (1Click charges `appFees` on the output: in = out × (1 + bps / 10 000)).
+ * Basis points round UP (Tendr collects at least the deduction); the shopper's amountIn matches
+ * the unsponsored quote within `assertWithinTarget`'s tolerance.
  *
  * Settlement assets are USD stablecoins in the pilot, so a USD order and an order in the
  * settlement asset are both 1:1 with the settlement asset.
@@ -273,8 +252,41 @@ export function buildQuoteRequests(input: PricingInput): QuoteRequests {
     );
   }
   const deadline = quoteDeadline(input.now ?? new Date(), input.sessionExpiresAt);
+
+  // Order total in micro-USD. Rounds UP: the shopper owes the full order.
+  const orderMicro = toScaled(input.orderAmount, USD_SCALE, 'up');
+  // The deduction in micro-USD. Rounds UP: it is charged to the merchant.
+  const deductMicro = toScaled(input.merchantDeductionUsd ?? '0', USD_SCALE, 'up');
+  if (deductMicro >= orderMicro) {
+    throw tooSmall('The network fee covers the whole order', {
+      order_usd: microToNumber(orderMicro),
+      network_fee_usd: microToNumber(deductMicro),
+    });
+  }
+  const tendr = BigInt(input.feeBps) + 10_000n;
+  let networkBps = 0n;
+  if (deductMicro > 0n) {
+    if (input.feePayer === 'shopper') {
+      // Output O − D at (f + g) bps costs the same as O at f bps: g = D × (1e4 + f) / (O − D).
+      networkBps = ceilDiv(deductMicro * tendr, orderMicro - deductMicro);
+    } else {
+      // Input I at (f + g) bps yields D less than at f bps:
+      // g = D × (1e4 + f)² / (I × 1e4 − D × (1e4 + f)).
+      const den = orderMicro * 10_000n - deductMicro * tendr;
+      if (den <= 0n) throw tooSmall('The network fee covers the whole order');
+      networkBps = ceilDiv(deductMicro * tendr * tendr, den);
+    }
+  }
+  const totalBps = BigInt(input.feeBps) + networkBps;
+  if (totalBps >= 10_000n) {
+    throw tooSmall('The network fee is too large for this order', {
+      order_usd: microToNumber(orderMicro),
+      network_fee_usd: microToNumber(deductMicro),
+    });
+  }
+  const networkFeeBps = Number(networkBps);
   const appFees: AppFee[] | undefined =
-    input.feeBps > 0 ? [{ recipient: input.feeAccount, fee: input.feeBps }] : undefined;
+    totalBps > 0n ? [{ recipient: input.feeAccount, fee: Number(totalBps) }] : undefined;
 
   const base = {
     slippageTolerance: input.slippageBps ?? env().CHECKOUT_SLIPPAGE_BPS,
@@ -295,36 +307,27 @@ export function buildQuoteRequests(input: PricingInput): QuoteRequests {
     ...base,
     amount: (10n ** BigInt(input.originDecimals)).toString(),
   };
-
-  // Order total in micro-USD. Rounds UP: the shopper owes the full order.
-  const orderMicro = toScaled(input.orderAmount, USD_SCALE, 'up');
-  const gasMicro = gasReimbursementMicroUsd(input.gasPayer, input.gasEstimateUsd, input.gasMaxUsd);
-  const targetMicro = orderMicro - gasMicro;
-  if (targetMicro <= 0n) {
-    throw tooSmall('The gas reimbursement covers the whole order', {
-      order_usd: microToNumber(orderMicro),
-      gas_reimbursement_usd: microToNumber(gasMicro),
-    });
-  }
+  const targetUsd = microToDecimal(orderMicro);
 
   if (input.feePayer === 'shopper') {
-    // Order in settlement base units (rounds UP, via toBaseUnits) minus the gas reimbursement in
-    // settlement base units (rounds DOWN: it is credited to the shopper).
-    const gasBase = toScaled(microToDecimal(gasMicro), input.settlementDecimals, 'down');
-    const amount = toBaseUnits(input.orderAmount, input.settlementDecimals) - gasBase;
-    if (amount <= 0n) throw tooSmall('The gas reimbursement covers the whole order');
+    // Order in settlement base units (rounds UP, via toBaseUnits) minus the deduction in
+    // settlement base units (rounds UP: the merchant receives at least D less).
+    const deductBase = toScaled(microToDecimal(deductMicro), input.settlementDecimals, 'up');
+    const amount = toBaseUnits(input.orderAmount, input.settlementDecimals) - deductBase;
+    if (amount <= 0n) throw tooSmall('The network fee covers the whole order');
     const real: QuoteRequest = {
       dry: false,
       swapType: 'EXACT_OUTPUT',
       ...base,
       amount: amount.toString(),
     };
-    return { dry, real: () => real, targetUsd: microToDecimal(targetMicro) };
+    return { dry, real: () => real, targetUsd, networkFeeBps };
   }
 
   return {
     dry,
-    targetUsd: microToDecimal(targetMicro),
+    targetUsd,
+    networkFeeBps,
     real: (dryResult) => {
       const dryIn = parseResponseInt('amountIn', dryResult.quote.amountIn);
       const dryUsd = parseResponseDecimal('amountInUsd', dryResult.quote.amountInUsd);
@@ -334,10 +337,10 @@ export function buildQuoteRequests(input: PricingInput): QuoteRequests {
           amountInUsd: dryResult.quote.amountInUsd,
         });
       }
-      // amountIn = ceil(dryIn × target / dryUsd), with target = targetMicro / 10^6 and
+      // amountIn = ceil(dryIn × target / dryUsd), with target = orderMicro / 10^6 and
       // dryUsd = digits / 10^scale, computed exactly. Rounds UP: the shopper's send must be worth
       // at least the target.
-      const num = dryIn * targetMicro * 10n ** BigInt(dryUsd.scale);
+      const num = dryIn * orderMicro * 10n ** BigInt(dryUsd.scale);
       const den = dryUsd.digits * 10n ** BigInt(USD_SCALE);
       const amountIn = ceilDiv(num, den);
       return { dry: false, swapType: 'EXACT_INPUT', ...base, amount: amountIn.toString() };

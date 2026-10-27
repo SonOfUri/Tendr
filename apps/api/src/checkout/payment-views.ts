@@ -4,13 +4,14 @@
 // Every amount crosses the API as an integer string in the asset's base units (or a decimal USD
 // string); nothing is ever a float. Fee lines are the payment's `revenue_entries` once settled,
 // otherwise the same lines computed from its quote and session (`revenueLines`). The network fee
-// (and the gas reimbursement derived from it) is the static per-chain estimate, so it is always
-// flagged `estimated`.
+// the shopper paid themselves is an estimate, so it is flagged `estimated`; the gas reimbursement
+// is what Tendr's `appFees` collected for a sponsored fee. `network_fee` says who paid it.
 import type { Prisma } from '@prisma/client';
 import { feePayerFromDb, gasPayerFromDb, PaymentStatusSchema } from '@tendr/contracts';
 import { z } from 'zod';
 import type { ScopedDb } from '../db/scoped.js';
 import { notFound } from '../lib/errors.js';
+import { networkFeeView } from '../gas/quote-fee.js';
 import { refundView } from './review.js';
 import { revenueLines } from './revenue.js';
 
@@ -40,6 +41,13 @@ const include = {
       amountOutUsd: true,
       refundTo: true,
       refundType: true,
+      networkFeePaidBy: true,
+      networkFeeMode: true,
+      networkFeeUsd: true,
+      networkFeeAmount: true,
+      networkFeeMethod: true,
+      networkFeeReason: true,
+      networkFeeBps: true,
     },
   },
   session: {
@@ -119,8 +127,8 @@ export type FeeKind = 'tendr_fee' | 'oneclick_fee' | 'network_fee' | 'gas_reimbu
 export function feeKindOf(source: string): FeeKind {
   return Object.hasOwn(FEE_KIND, source) ? FEE_KIND[source]! : 'other';
 }
-/** Lines built on the static per-chain send-fee estimate. */
-const ESTIMATED = new Set(['network_fee', 'gas_reimbursement']);
+/** Lines built on a send-fee estimate (the shopper's own network fee). */
+const ESTIMATED = new Set(['network_fee']);
 
 export interface FeeLine {
   kind: FeeKind;
@@ -155,8 +163,9 @@ export async function getPayment(db: ScopedDb, id: string) {
         amountInUsd: p.quote.amountInUsd,
         amountOutUsd: p.quote.amountOutUsd,
         feeBps: p.session.feeBps,
-        gasPayer: gasPayerFromDb(p.session.gasSponsor),
-        gasMaxUsd: p.session.gasMaxUsd,
+        networkFeeBps: p.quote.networkFeeBps,
+        networkFeeUsd: p.quote.networkFeeUsd,
+        networkFeePaidBy: p.quote.networkFeePaidBy,
       });
   const fees: FeeLine[] = lines.map((l) => {
     const kind = feeKindOf(l.source);
@@ -173,6 +182,8 @@ export async function getPayment(db: ScopedDb, id: string) {
     fee_payer: feePayerFromDb(p.session.feePayer),
     gas_payer: gasPayerFromDb(p.session.gasSponsor),
     fee_bps: p.session.feeBps,
+    /** Who paid the network fee and how; null for payments quoted before gasless payments. */
+    network_fee: networkFeeView(p.quote),
     fees,
     fees_recorded: recorded,
     quote: {

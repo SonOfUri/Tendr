@@ -179,6 +179,39 @@ const EnvSchema = z
         }),
     ),
     /**
+     * Live-mode Solana JSON-RPC endpoint: deposit sender lookups and network-fee estimates
+     * (base fee + priority fee). Default: the public mainnet RPC.
+     */
+    SOLANA_RPC_URL: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .url()
+        .regex(/^https?:\/\//i, 'must be an http(s) URL')
+        .default('https://api.mainnet-beta.solana.com'),
+    ),
+    /**
+     * Live-mode Tron HTTP API (TronGrid-compatible): deposit sender lookups and network-fee
+     * estimates (energy price). Default: the public TronGrid endpoint.
+     */
+    TRON_RPC_URL: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .url()
+        .regex(/^https?:\/\//i, 'must be an http(s) URL')
+        .default('https://api.trongrid.io'),
+    ),
+    /**
+     * Safety margin (basis points) on a network fee Tendr quotes and collects: a shopper-paid fee
+     * in a token is `usd × (1 + margin / 10 000) ÷ token price`, and a merchant-sponsored fee is
+     * charged with the same margin. Integer 0–10 000, default 2000 (20 %).
+     */
+    GAS_FEE_MARGIN_BPS: z.preprocess(
+      blankAsUnset,
+      z.coerce.number().int().min(0).max(10_000).default(2000),
+    ),
+    /**
      * Live-mode FX rate provider for non-USD order totals. `openexchangerates` (with FX_API_KEY)
      * is the live adapter; `fixed` means no live provider, so live non-USD sessions are
      * FX_RATE_UNAVAILABLE. Live mode never uses fixed rates; test mode always does. Default:

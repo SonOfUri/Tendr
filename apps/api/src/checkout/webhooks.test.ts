@@ -892,6 +892,24 @@ describe('per-type payload keys', () => {
     expect(webhookData(payload, 'payment.succeeded')).not.toHaveProperty('status');
     expect(webhookData(payload)).not.toHaveProperty('status');
   });
+
+  it('`network_fee` is delivered on payment.succeeded only', () => {
+    const network_fee = {
+      paid_by: 'merchant',
+      fee_mode: null,
+      amount: null,
+      asset: null,
+      usd: '0.048',
+      method: 'eip3009',
+      reason: null,
+    };
+    const payload = { payment_id: 'pay_1', network_fee };
+    expect(webhookData(payload, 'payment.succeeded')).toEqual({
+      payment_id: 'pay_1',
+      network_fee,
+    });
+    expect(webhookData(payload, 'payment.detected')).toEqual({ payment_id: 'pay_1' });
+  });
 });
 
 describe('the real HTTP transport', () => {

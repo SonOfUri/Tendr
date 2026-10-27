@@ -225,6 +225,16 @@ describe('payment watcher', () => {
       overpaid_amount: null,
       kept_small_overpayment: false,
       verified_by: 'receipt',
+      // A copy-address quote: the shopper paid the network fee natively (simulated eth $1.2).
+      network_fee: {
+        paid_by: 'shopper',
+        fee_mode: 'native',
+        amount: null,
+        asset: null,
+        usd: '1.2',
+        method: null,
+        reason: null,
+      },
     });
 
     // Revenue: Tendr's fee (50 bps × amountIn), 1Click's fee + spread, the network fee.
@@ -235,7 +245,8 @@ describe('payment watcher', () => {
     expect(bySource.app_fee!.amount.toFixed()).toBe(
       ((BigInt(q.amount_in) * 50n) / 10_000n).toString(),
     );
-    expect(bySource.network_fee!.amountUsd?.toFixed()).toBe('0.5');
+    // The quote's own network-fee estimate (simulated eth), not the old static table.
+    expect(bySource.network_fee!.amountUsd?.toFixed()).toBe('1.2');
     expect(bySource.app_fee!.txHash).toBe(p.settleTx);
 
     // Polling stopped; another poll changes nothing.

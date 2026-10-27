@@ -4,8 +4,10 @@ import {
   GAS_CHAINS,
   GasPolicySchema,
   GasUsageQuerySchema,
+  GaslessMethodSchema,
   usdToMicros,
 } from './gas.js';
+import { SponsorshipMethodValues } from './enums.js';
 
 const valid = {
   enabled: true,
@@ -129,5 +131,22 @@ describe('usdToMicros', () => {
     expect(usdToMicros('1')).toBe(1_000_000n);
     expect(usdToMicros('0.000001')).toBe(1n);
     expect(usdToMicros('12.5')).toBe(12_500_000n);
+  });
+});
+
+describe('GaslessMethodSchema', () => {
+  it('is the six gasless methods, each a sponsorship method', () => {
+    expect(GaslessMethodSchema.options).toEqual([
+      'eip3009',
+      'permit',
+      'paymaster',
+      'kora',
+      'meta_tx',
+      'forwarder',
+    ]);
+    for (const m of GaslessMethodSchema.options) {
+      expect(SponsorshipMethodValues).toContain(m);
+    }
+    expect(GaslessMethodSchema.safeParse('energy').success).toBe(false);
   });
 });

@@ -2,14 +2,15 @@ import { QUOTE_TTL_MS } from '@tendr/contracts';
 import { describe, expect, it } from 'vitest';
 import { env } from '../env.js';
 import { AppError } from '../lib/errors.js';
+import { SimulatedOneClick } from './oneclick/simulated.js';
+import type { SimStore } from './oneclick/sim-store.js';
 import { OneClickError, type QuoteResponse } from './oneclick/types.js';
+import * as pricing from './pricing.js';
 import {
   assertWithinMinimum,
   assertWithinTarget,
   buildQuoteRequests,
-  DEFAULT_GAS_MAX_USD,
   DEFAULT_SLIPPAGE_BPS,
-  gasReimbursementUsd,
   quoteDeadline,
   resolvePayers,
   toBaseUnits,
@@ -31,9 +32,6 @@ function input(over: Partial<PricingInput> = {}): PricingInput {
     originDecimals: 18,
     feeBps: 50,
     feePayer: 'shopper',
-    gasPayer: 'shopper',
-    gasEstimateUsd: '0.80',
-    gasMaxUsd: '2.00',
     recipient: 'shop.tendr.testnet',
     recipientType: 'INTENTS',
     refundTo: '0x1111111111111111111111111111111111111111',
@@ -122,35 +120,10 @@ describe('toBaseUnits', () => {
   });
 });
 
-describe('gasReimbursementUsd', () => {
-  it('is zero when the shopper pays gas', () => {
-    expect(gasReimbursementUsd('shopper', '0.80', '2.00')).toBe(0);
-  });
-
-  it('is the estimate when under the cap', () => {
-    expect(gasReimbursementUsd('merchant', '0.80', '2.00')).toBe(0.8);
-  });
-
-  it('is capped by gas_max_usd', () => {
-    expect(gasReimbursementUsd('merchant', '5.25', '2.00')).toBe(2);
-    expect(gasReimbursementUsd('merchant', '5.25', '0')).toBe(0);
-  });
-
-  it('falls back to the default cap when the session/link sets none', () => {
-    expect(DEFAULT_GAS_MAX_USD).toBe(2);
-    expect(gasReimbursementUsd('merchant', '3.10', null)).toBe(2);
-    expect(gasReimbursementUsd('merchant', '1.10', null)).toBe(1.1);
-    expect(gasReimbursementUsd('merchant', '3.10', null, '0.75')).toBe(0.75);
-  });
-
-  it('takes the default cap from CHECKOUT_GAS_MAX_USD', () => {
-    const saved = env().CHECKOUT_GAS_MAX_USD;
-    env().CHECKOUT_GAS_MAX_USD = '1.25';
-    try {
-      expect(gasReimbursementUsd('merchant', '3.10', null)).toBe(1.25);
-    } finally {
-      env().CHECKOUT_GAS_MAX_USD = saved;
-    }
+describe('the old gas discount', () => {
+  it('no longer exists: pricing has no gas reimbursement', () => {
+    expect('gasReimbursementUsd' in pricing).toBe(false);
+    expect('gasReimbursementMicroUsd' in pricing).toBe(false);
   });
 });
 
@@ -210,9 +183,34 @@ describe('buildQuoteRequests', () => {
     expect(real(quote('1', '1')).amount).toBe('12345678');
   });
 
-  it('shopper pays fees, merchant pays gas: the output shrinks by the reimbursement', () => {
-    const { real } = buildQuoteRequests(input({ gasPayer: 'merchant', gasEstimateUsd: '0.80' }));
-    expect(real(quote('1', '1')).amount).toBe('24200000');
+  it('shopper pays fees, sponsored: the output shrinks by the deduction, collected by appFees', () => {
+    const { real, networkFeeBps } = buildQuoteRequests(input({ merchantDeductionUsd: '0.80' }));
+    const req = real(quote('1', '1'));
+    expect(req.amount).toBe('24200000');
+    // ceil(0.80 × (10000 + 50) / 24.20) = ceil(332.23…) = 333
+    expect(networkFeeBps).toBe(333);
+    expect(req.appFees).toEqual([{ recipient: 'fees.tendr.testnet', fee: 50 + 333 }]);
+  });
+
+  it('merchant pays fees, sponsored: same send, the deduction is collected by appFees', () => {
+    const { real, targetUsd, networkFeeBps } = buildQuoteRequests(
+      input({ feePayer: 'merchant', merchantDeductionUsd: '0.10' }),
+    );
+    expect(targetUsd).toBe('25.000000');
+    // ceil(0.10 × 10050² / (25 × 10000 − 0.10 × 10050)) = ceil(40.56…) = 41
+    expect(networkFeeBps).toBe(41);
+    const req = real(quote('1000000000000000000', '2513.27'));
+    expect(req.amount).toBe('9947200261014535'); // unchanged versus unsponsored
+    expect(req.appFees).toEqual([{ recipient: 'fees.tendr.testnet', fee: 91 }]);
+  });
+
+  it('no deduction adds no basis points', () => {
+    expect(buildQuoteRequests(input()).networkFeeBps).toBe(0);
+    expect(buildQuoteRequests(input({ merchantDeductionUsd: '0' })).networkFeeBps).toBe(0);
+    // Sponsored with no Tendr fee: appFees carries only the deduction.
+    // ceil(0.25 × 10000 / 24.75) = ceil(101.01…) = 102
+    const { real } = buildQuoteRequests(input({ feeBps: 0, merchantDeductionUsd: '0.25' }));
+    expect(real(quote('1', '1')).appFees).toEqual([{ recipient: 'fees.tendr.testnet', fee: 102 }]);
   });
 
   it('uses DEFAULT_SLIPPAGE_BPS, CHECKOUT_SLIPPAGE_BPS, or an explicit slippageBps', () => {
@@ -315,15 +313,6 @@ describe('buildQuoteRequests', () => {
     expect(details.value.startsWith('xxx')).toBe(true);
   });
 
-  it('merchant pays fees and gas: targets order − reimbursement', () => {
-    const { real } = buildQuoteRequests(
-      input({ feePayer: 'merchant', gasPayer: 'merchant', gasEstimateUsd: '1.00' }),
-    );
-    // 1 token = $2.40 → $24.00 = 10 tokens exactly.
-    const req = real(quote('1000000000000000000', '2.40'));
-    expect(req.amount).toBe('10000000000000000000');
-  });
-
   it('merchant pays: rounds the sized amountIn up', () => {
     const { real } = buildQuoteRequests(input({ feePayer: 'merchant', orderAmount: '1' }));
     // 3 base units cost $2, so $1 needs 1.5 units.
@@ -331,21 +320,14 @@ describe('buildQuoteRequests', () => {
     expect(req.amount).toBe('2'); // 1.5 → 2
   });
 
-  it('a reimbursement that eats the whole order is QUOTE_TOO_SMALL', () => {
+  it('a deduction that eats the whole order (or the fee headroom) is QUOTE_TOO_SMALL', () => {
     for (const feePayer of ['merchant', 'shopper'] as const) {
-      expectCode(
-        () =>
-          buildQuoteRequests(
-            input({
-              feePayer,
-              gasPayer: 'merchant',
-              orderAmount: '1.00',
-              gasEstimateUsd: '1.50',
-              gasMaxUsd: null,
-            }),
-          ),
-        'QUOTE_TOO_SMALL',
-      );
+      for (const merchantDeductionUsd of ['1.50', '1.00', '0.999']) {
+        expectCode(
+          () => buildQuoteRequests(input({ feePayer, orderAmount: '1.00', merchantDeductionUsd })),
+          'QUOTE_TOO_SMALL',
+        );
+      }
     }
   });
 
@@ -415,4 +397,46 @@ describe('assertWithinMinimum', () => {
     expectCode(() => assertWithinMinimum(quote('1', '4.99'), 5), 'QUOTE_TOO_SMALL');
     expect(() => assertWithinMinimum(quote('1', '5'), 5)).not.toThrow();
   });
+});
+
+describe('sponsored quotes against the 1Click simulator', () => {
+  // A store that keeps nothing: these tests read only the quote amounts.
+  const store = { create: async () => true } as unknown as SimStore;
+  const sim = new SimulatedOneClick({ store });
+  const USDC_BASE = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near';
+
+  async function priced(over: Partial<PricingInput>) {
+    const reqs = buildQuoteRequests(
+      input({
+        originAsset: USDC_BASE,
+        originDecimals: 6,
+        recipient: 'shop.tendr.testnet',
+        ...over,
+      }),
+    );
+    const res = await sim.quote(reqs.real(await sim.quote(reqs.dry)));
+    if (over.feePayer === 'merchant') assertWithinTarget(res, reqs.targetUsd);
+    return res.quote;
+  }
+
+  for (const feePayer of ['merchant', 'shopper'] as const) {
+    for (const [order, fee] of [
+      ['25.00', '0.048'],
+      ['7.50', '0.96'],
+      ['1234.56', '1'],
+    ] as const) {
+      it(`${feePayer} pays Tendr's fee, $${order} order, $${fee} sponsored: same send, merchant gets less by the fee`, async () => {
+        const plain = await priced({ feePayer, orderAmount: order });
+        const sponsored = await priced({ feePayer, orderAmount: order, merchantDeductionUsd: fee });
+        // The shopper's send is the same within the assertWithinTarget tolerance (50 bps).
+        assertWithinTarget({ correlationId: 'x', quote: sponsored }, plain.amountInUsd!);
+        // The merchant's output is lower by the fee, within the same tolerance of the fee.
+        const less = Number(plain.amountOutUsd) - Number(sponsored.amountOutUsd);
+        expect(Math.abs(less - Number(fee))).toBeLessThanOrEqual(
+          Number(order) * (pricing.DEFAULT_TARGET_TOLERANCE_BPS / 10_000),
+        );
+        expect(less).toBeGreaterThan(Number(fee) * 0.95);
+      });
+    }
+  }
 });

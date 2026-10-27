@@ -179,7 +179,7 @@ describe('dashboard payments', () => {
     for (const f of d.fees) {
       expect(f.amount).toMatch(/^\d+$/);
       expect(f.asset).toBe(ETH);
-      expect(f.estimated).toBe(f.kind === 'network_fee' || f.kind === 'gas_reimbursement');
+      expect(f.estimated).toBe(f.kind === 'network_fee');
       if (f.amount_usd !== null) expect(f.amount_usd).toMatch(/^\d+(\.\d+)?$/);
     }
     expect(d.quote.amount_in).toBe(q.amount_in);

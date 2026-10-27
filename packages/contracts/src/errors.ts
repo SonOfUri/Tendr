@@ -88,6 +88,13 @@ export const ErrorCodes = [
    * dashboard instead.
    */
   'NO_ONE_TO_NOTIFY',
+  /**
+   * A shopper-paid network fee cannot be priced in the payment token: the 1Click token list has no
+   * price for it. The "pay the fee in the token" option is unavailable for that token.
+   */
+  'FEE_TOKEN_UNPRICED',
+  /** The live network fee for a chain could not be estimated (RPC or price unavailable). */
+  'NETWORK_FEE_UNAVAILABLE',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

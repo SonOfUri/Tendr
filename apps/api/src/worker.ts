@@ -17,6 +17,7 @@ import {
 import { retryPendingScreenings } from './checkout/screening.js';
 import { sweepReturns } from './checkout/refunds.js';
 import { expireSessions, pollDeposit, scanDueDeposits } from './checkout/watcher.js';
+import { releaseStaleReservations } from './gas/quote-fee.js';
 import {
   attemptDelivery,
   DELIVER_WEBHOOK_JOB,
@@ -65,6 +66,9 @@ export const SWEEP_RETURNS_JOB = 'sweep-returns';
 export const SWEEP_RETURNS_EVERY_MS = 60_000;
 export const SCAN_DEPOSITS_EVERY_MS = 5_000;
 export const EXPIRE_SESSIONS_EVERY_MS = 60_000;
+/** Releases gas-budget reservations of replaced or expired, unused quotes. */
+export const RELEASE_GAS_RESERVATIONS_JOB = 'release-gas-reservations';
+export const RELEASE_GAS_RESERVATIONS_EVERY_MS = 60_000;
 /** Merchant webhook sends (one job per attempt, delayed for retries) and the due-retry sweep. */
 export const WEBHOOKS_QUEUE = 'tendr-webhooks';
 export const SWEEP_WEBHOOKS_EVERY_MS = 60_000;
@@ -117,6 +121,11 @@ export async function processCheckoutJob(
   if (job.name === SWEEP_RETURNS_JOB) {
     const n = await sweepReturns();
     if (n > 0) log('info', 'return sweep', { count: n });
+    return;
+  }
+  if (job.name === RELEASE_GAS_RESERVATIONS_JOB) {
+    const n = await releaseStaleReservations();
+    if (n > 0) log('info', 'released gas reservations', { count: n });
     return;
   }
   throw new Error(`unknown checkout job ${job.name}`);
@@ -327,6 +336,11 @@ export async function startWorker(
     EXPIRE_SESSIONS_JOB,
     { every: EXPIRE_SESSIONS_EVERY_MS },
     { name: EXPIRE_SESSIONS_JOB },
+  );
+  await checkoutQueue.upsertJobScheduler(
+    RELEASE_GAS_RESERVATIONS_JOB,
+    { every: RELEASE_GAS_RESERVATIONS_EVERY_MS },
+    { name: RELEASE_GAS_RESERVATIONS_JOB },
   );
   await checkoutQueue.upsertJobScheduler(
     SWEEP_RETURNS_JOB,

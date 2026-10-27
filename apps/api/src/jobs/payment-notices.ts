@@ -112,7 +112,7 @@ const FEE_LABELS: Readonly<Record<string, string>> = {
   tendr_fee: 'Tendr fee',
   oneclick_fee: '1Click fee and spread',
   network_fee: 'Network fee (estimated)',
-  gas_reimbursement: 'Network fee covered for the shopper (estimated)',
+  gas_reimbursement: 'Network fee you sponsored',
   other: 'Other fee',
 };
 
@@ -196,6 +196,13 @@ export async function onPaymentReceivedNotice(
     paidChain ? ` on ${chainName(paidChain)}` : ''
   }`;
 
+  // "Network fee: paid by you ($0.05)" (sponsored, rounded up to the cent) or "paid by the shopper".
+  const networkFee = p.network_fee
+    ? p.network_fee.paid_by === 'merchant'
+      ? `paid by you ($${new D(p.network_fee.usd).toDecimalPlaces(2, D.ROUND_UP).toFixed(2)})`
+      : 'paid by the shopper'
+    : null;
+
   const feeLines = p.fees.map((f) => {
     const label = FEE_LABELS[f.kind] ?? FEE_LABELS.other!;
     const value = f.amount_usd
@@ -217,6 +224,7 @@ export async function onPaymentReceivedNotice(
     `Order total: ${orderTotal}`,
     ...(fx ? [`Rate: ${fx.rate}${fx.source ? ` (${fx.source})` : ''}`] : []),
     `Paid with: ${paidWith}`,
+    ...(networkFee ? [`Network fee: ${networkFee}`] : []),
     '',
     'Fees:',
     ...(feeLines.length > 0 ? feeLines.map((l) => `- ${l}`) : ['- None']),
@@ -243,6 +251,7 @@ export async function onPaymentReceivedNotice(
       fx_source: fx?.source ?? '',
       fx_as_of: fx?.asOf ?? '',
       paid_with: paidWith,
+      network_fee: networkFee ?? '',
       fees: feeLines.join('\n'),
       tx_hash: tx?.hash ?? '',
       tx_url: txUrl,

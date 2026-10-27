@@ -1019,47 +1019,72 @@ model Session {
 }
 
 model Quote {
-  id                   String           @id
-  merchantId           String           @map("merchant_id")
+  id                   String              @id
+  merchantId           String              @map("merchant_id")
   livemode             Boolean
-  sessionId            String           @map("session_id")
-  originAssetId        String           @map("origin_asset_id")
-  depositAddress       String           @map("deposit_address")
-  amountIn             Decimal          @map("amount_in") @db.Decimal(78, 0)
-  amountOut            Decimal          @map("amount_out") @db.Decimal(78, 0)
-  refundTo             String           @map("refund_to")
+  sessionId            String              @map("session_id")
+  originAssetId        String              @map("origin_asset_id")
+  depositAddress       String              @map("deposit_address")
+  amountIn             Decimal             @map("amount_in") @db.Decimal(78, 0)
+  amountOut            Decimal             @map("amount_out") @db.Decimal(78, 0)
+  refundTo             String              @map("refund_to")
   deadline             DateTime
-  oneclickQuoteRef     String?          @map("oneclick_quote_ref")
+  oneclickQuoteRef     String?             @map("oneclick_quote_ref")
   /// Set when a newer quote replaced this one for the session.
-  supersededAt         DateTime?        @map("superseded_at")
-  amountInUsd          Decimal?         @map("amount_in_usd") @db.Decimal(18, 6)
+  supersededAt         DateTime?           @map("superseded_at")
+  amountInUsd          Decimal?            @map("amount_in_usd") @db.Decimal(18, 6)
   /// 1Click's USD value of `amount_out` at quote time (the shopper's fee line is in − out).
-  amountOutUsd         Decimal?         @map("amount_out_usd") @db.Decimal(18, 6)
+  amountOutUsd         Decimal?            @map("amount_out_usd") @db.Decimal(18, 6)
   /// How 1Click returns money for this quote: to `refund_to` on the origin chain (direct), or
   /// into the merchant's intents account (`INTENTS`, signer-approved return-to-sender).
-  refundType           QuoteRefundType? @map("refund_type")
+  refundType           QuoteRefundType?    @map("refund_type")
   /// The shopper reported a deposit transaction for this quote (`POST …/client/deposit`).
-  depositTxHash        String?          @map("deposit_tx_hash")
-  depositTxSubmittedAt DateTime?        @map("deposit_tx_submitted_at")
+  depositTxHash        String?             @map("deposit_tx_hash")
+  depositTxSubmittedAt DateTime?           @map("deposit_tx_submitted_at")
   /// The payment watcher: when the next 1Click status poll is due (also a running poll's claim
   /// lease). A partial index (migration payment_watcher) covers rows still being watched.
-  watchNextAt          DateTime?        @map("watch_next_at")
+  watchNextAt          DateTime?           @map("watch_next_at")
   /// Polling stopped for good (terminal payment, 24 h after creation, or a superseded quote past
   /// its deadline + 30 min with no deposit).
-  watchStoppedAt       DateTime?        @map("watch_stopped_at")
+  watchStoppedAt       DateTime?           @map("watch_stopped_at")
   /// When the last poll of this address completed (the expiry sweep waits for one after expiry).
-  watchPolledAt        DateTime?        @map("watch_polled_at")
-  createdAt            DateTime         @default(now()) @map("created_at")
+  watchPolledAt        DateTime?           @map("watch_polled_at")
+  /// Who pays the network fee (spec §2.6): `merchant` (sponsored) or `buyer` (the shopper). Null
+  /// on quotes made before gasless payments.
+  networkFeePaidBy     ResolvedGasSponsor? @map("network_fee_paid_by")
+  /// Shopper pays: in the payment token (`token`, gasless) or the chain's coin (`native`). Null
+  /// when the merchant sponsors.
+  networkFeeMode       FeeMode?            @map("network_fee_mode")
+  /// The quoted network fee (USD): with Tendr's margin when Tendr collects it (sponsored, or the
+  /// shopper's token fee); the shopper's own estimate for a native send.
+  networkFeeUsd        Decimal?            @map("network_fee_usd") @db.Decimal(18, 6)
+  /// Shopper-paid token fee: base units of the origin asset, sent on top of `amount_in`.
+  networkFeeAmount     Decimal?            @map("network_fee_amount") @db.Decimal(78, 0)
+  /// The gasless method the fee was quoted for; null for a native (copy-address or wallet) send.
+  networkFeeMethod     SponsorshipMethod?  @map("network_fee_method")
+  /// Why the shopper pays (`shopper_choice`, `budget`, …); null when the merchant sponsors.
+  networkFeeReason     String?             @map("network_fee_reason")
+  /// Basis points added to Tendr's 1Click `appFees` to collect the merchant-sponsored fee and the
+  /// integrator hook estimate from the merchant's proceeds (recorded as `gas_reimbursement`).
+  networkFeeBps        Int                 @default(0) @map("network_fee_bps")
+  /// The integrator hook call's estimated cost (USD), deducted from the merchant's proceeds.
+  hookFeeUsd           Decimal?            @map("hook_fee_usd") @db.Decimal(18, 6)
+  /// The budget reservation for a merchant-sponsored fee (released when the quote is replaced or
+  /// expires unused).
+  gasSponsorshipId     String?             @map("gas_sponsorship_id")
+  createdAt            DateTime            @default(now()) @map("created_at")
 
-  merchant Merchant  @relation(fields: [merchantId], references: [id])
-  session  Session   @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
-  payments Payment[]
+  merchant       Merchant        @relation(fields: [merchantId], references: [id])
+  session        Session         @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  gasSponsorship GasSponsorship? @relation(fields: [gasSponsorshipId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  payments       Payment[]
 
   // Lets payments pin their quote to the same session (payments FK below).
   @@unique([id, sessionId, merchantId, livemode])
   @@unique([livemode, depositAddress])
   @@index([merchantId])
   @@index([sessionId])
+  @@index([gasSponsorshipId])
   @@map("quotes")
 }
 
@@ -1309,7 +1334,10 @@ model GasSponsorship {
   merchant             Merchant @relation(fields: [merchantId], references: [id])
   session              Session  @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   recoveredFromPayment Payment? @relation(fields: [recoveredFromPaymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  quotes               Quote[]
 
+  // Lets quotes pin their reservation to the same merchant and mode (quotes FK).
+  @@unique([id, merchantId, livemode])
   @@index([merchantId])
   @@index([sessionId])
   @@index([livemode, lossRecognizedAt])

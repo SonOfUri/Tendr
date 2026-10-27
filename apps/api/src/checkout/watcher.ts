@@ -24,6 +24,7 @@ import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
 import { transitionPayment, transitionSession } from '../events/transitions.js';
+import { networkFeeView } from '../gas/quote-fee.js';
 import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
@@ -1394,6 +1395,7 @@ async function settle(
           verified_by: v.verifiedBy,
           overpaid_amount: overpaid ? refunded.toString() : null,
           kept_small_overpayment: keptSmall,
+          network_fee: networkFeeView(q),
         },
       });
       return 'settled';

@@ -301,6 +301,33 @@ describe('loadEnv TENDR_SPONSOR_LOSS_CAP_USD', () => {
   });
 });
 
+describe('loadEnv gas fee pricing and chain RPCs', () => {
+  it('defaults the margin to 2000 bps and the Solana and Tron RPCs to public mainnet', () => {
+    const e = loadEnv(base);
+    expect(e.GAS_FEE_MARGIN_BPS).toBe(2000);
+    expect(e.SOLANA_RPC_URL).toBe('https://api.mainnet-beta.solana.com');
+    expect(e.TRON_RPC_URL).toBe('https://api.trongrid.io');
+    expect(loadEnv({ ...base, GAS_FEE_MARGIN_BPS: ' ' }).GAS_FEE_MARGIN_BPS).toBe(2000);
+  });
+
+  it('accepts overrides and rejects junk', () => {
+    const e = loadEnv({
+      ...base,
+      GAS_FEE_MARGIN_BPS: '500',
+      SOLANA_RPC_URL: 'https://sol.example/rpc',
+      TRON_RPC_URL: 'https://tron.example',
+    });
+    expect(e.GAS_FEE_MARGIN_BPS).toBe(500);
+    expect(e.SOLANA_RPC_URL).toBe('https://sol.example/rpc');
+    expect(e.TRON_RPC_URL).toBe('https://tron.example');
+    expect(() => loadEnv({ ...base, GAS_FEE_MARGIN_BPS: '-1' })).toThrow(/GAS_FEE_MARGIN_BPS/);
+    expect(() => loadEnv({ ...base, GAS_FEE_MARGIN_BPS: '1.5' })).toThrow(/GAS_FEE_MARGIN_BPS/);
+    expect(() => loadEnv({ ...base, GAS_FEE_MARGIN_BPS: '10001' })).toThrow(/GAS_FEE_MARGIN_BPS/);
+    expect(() => loadEnv({ ...base, SOLANA_RPC_URL: 'not a url' })).toThrow(/SOLANA_RPC_URL/);
+    expect(() => loadEnv({ ...base, TRON_RPC_URL: 'ftp://x' })).toThrow(/TRON_RPC_URL/);
+  });
+});
+
 describe('loadEnv checkout pricing', () => {
   it('defaults slippage to 100 bps and the gas cap to $2', () => {
     const e = loadEnv(base);

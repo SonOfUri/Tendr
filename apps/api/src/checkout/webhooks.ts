@@ -120,6 +120,8 @@ const GAS_BUDGET_KEYS = [
   'remaining_usd',
 ] as const;
 const TYPE_DATA_KEYS: Readonly<Partial<Record<string, readonly string[]>>> = {
+  /** Who paid the network fee and how (`NetworkFeeView`; null for older quotes). */
+  'payment.succeeded': ['network_fee'],
   'refund.cancelled': ['status'],
   'refund.failed': ['status'],
   'gas.budget_low': GAS_BUDGET_KEYS,
