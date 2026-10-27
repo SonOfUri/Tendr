@@ -36,7 +36,8 @@ import {
 } from './fx.js';
 import { depositInFlight } from './in-flight.js';
 import { resolvePayers } from './pricing.js';
-import { tokenInfo } from './tokens.js';
+import { publicReviewReason } from './refunds.js';
+import { assetLabel, tokenInfo, type AssetLabel } from './tokens.js';
 import { connectionMayAct } from './webhooks.js';
 
 /**
@@ -391,6 +392,16 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
     throw notFound('Session not found');
   }
 
+  // C6: the settlement asset and each refund's asset, as symbol + decimals (best effort, cached).
+  const labels = new Map<string, AssetLabel | null>();
+  for (const assetId of [
+    s.destAsset,
+    ...s.payments.flatMap((p) => p.refunds.map((r) => r.assetId)),
+  ]) {
+    if (!labels.has(assetId)) labels.set(assetId, await assetLabel(s.livemode, assetId));
+  }
+  const label = (assetId: string) => labels.get(assetId) ?? null;
+
   let settledOut = 0n;
   let refundCount = 0;
   for (const p of s.payments) {
@@ -422,6 +433,8 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
         ? { rate: s.fxRate.toFixed(), source: s.fxSource, as_of: s.fxAsOf.toISOString() }
         : null,
     settlement_asset: s.destAsset,
+    settlement_asset_symbol: label(s.destAsset)?.symbol ?? null,
+    settlement_asset_decimals: label(s.destAsset)?.decimals ?? null,
     settlement_chain: s.destChain,
     external_ref: s.externalRef,
     customer_email: s.customerEmail,
@@ -456,10 +469,13 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
         reason: r.reason,
         status: r.status,
         asset_id: r.assetId,
+        asset_symbol: label(r.assetId)?.symbol ?? null,
+        asset_decimals: label(r.assetId)?.decimals ?? null,
         amount: toJsonDecimal(r.amount),
         destination: r.destination,
         destination_chain: r.destinationChain,
         needs_address: r.needsAddress,
+        review_reason: publicReviewReason(r.reviewReason),
         refund_tx_hash: r.refundTxHash,
         created_at: r.createdAt.toISOString(),
       })),

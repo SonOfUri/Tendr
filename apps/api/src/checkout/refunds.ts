@@ -100,6 +100,16 @@ export const REVIEW = {
   storeCancelled: 'store_cancelled',
 } as const;
 
+const PUBLIC_REVIEW_REASONS: ReadonlySet<string> = new Set(Object.values(REVIEW));
+
+/**
+ * A refund's review reason as store-facing views show it (C6): only the known reasons above (the
+ * allowlist); anything else is null, so an internal marker never leaks to a store or its site.
+ */
+export function publicReviewReason(reason: string | null): string | null {
+  return reason !== null && PUBLIC_REVIEW_REASONS.has(reason) ? reason : null;
+}
+
 // ─── dependencies ────────────────────────────────────────────────────────────
 
 export interface RefundDeps {

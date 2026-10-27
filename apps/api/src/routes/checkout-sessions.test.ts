@@ -793,4 +793,62 @@ describe('checkout session routes', () => {
     const { external_ref: _omit, ...noRef } = body();
     expect((await create(noRef)).statusCode).toBe(400);
   });
+
+  it('C6: the view names the settlement asset and each refund’s asset and review reason', async () => {
+    const id = (await create(body())).json().id;
+    const quote = await createRow('Quote', merchant.id, false, { sessionId: id });
+    const pay = await createRow('Payment', merchant.id, false, {
+      sessionId: id,
+      quoteId: quote.id,
+      status: 'SETTLED',
+    });
+    await createRow('Refund', merchant.id, false, {
+      paymentId: pay.id,
+      reason: 'merchant',
+      assetId: 'nep141:usdc.test',
+      amount: '1250000',
+      reviewReason: 'needs_swap_route',
+      externalRef: 'wc_refund_1_1',
+      requestedAmountUsd: '1.25',
+    });
+    await createRow('Refund', merchant.id, false, {
+      paymentId: pay.id,
+      reason: 'merchant',
+      assetId: 'nep141:unknown.test',
+      amount: '1',
+      reviewReason: 'something_internal',
+      externalRef: 'wc_refund_1_2',
+      requestedAmountUsd: '0.01',
+    });
+    const view = (await get(id)).json();
+    expect(view.settlement_asset).toBe('nep141:usdc.test');
+    expect(view.settlement_asset_symbol).toBe('USDC');
+    expect(view.settlement_asset_decimals).toBe(6);
+    const [known, unknown] = view.payments[0].refunds;
+    expect(known).toMatchObject({
+      asset_id: 'nep141:usdc.test',
+      asset_symbol: 'USDC',
+      asset_decimals: 6,
+      amount: '1250000',
+      review_reason: 'needs_swap_route',
+    });
+    // An asset the token list does not name, and a reason outside the public list, are null.
+    expect(unknown).toMatchObject({
+      asset_symbol: null,
+      asset_decimals: null,
+      review_reason: null,
+    });
+  });
+
+  it('C6: a token-list outage never fails the read; the labels are null', async () => {
+    const id = (await create(body())).json().id;
+    resetTokenCache();
+    vi.spyOn(simulatedOneClick(), 'tokens').mockRejectedValue(new Error('down'));
+    const res = await get(id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      settlement_asset_symbol: null,
+      settlement_asset_decimals: null,
+    });
+  });
 });

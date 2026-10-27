@@ -39,6 +39,7 @@ import {
   isClosedMerchantRefund,
   lockPayment,
   lockRefund,
+  publicReviewReason,
   REFUND_CANCELLED,
   refundPayload,
   refundRef,
@@ -46,6 +47,7 @@ import {
   settledUsdOf,
 } from './refunds.js';
 import { grossUpForReturnFee, usdPerUnit } from './return-fee.js';
+import { assetLabel } from './tokens.js';
 import { connectionMayAct } from './webhooks.js';
 
 type Tx = Prisma.TransactionClient;
@@ -204,13 +206,21 @@ async function paymentFor(ctx: ScopeContext, input: MerchantRefundInput): Promis
 // ─── the request ─────────────────────────────────────────────────────────────
 
 /** What the route returns for a merchant refund. */
-export function merchantRefundView(r: Refund) {
+export async function merchantRefundView(r: Refund) {
+  // C6: what the refund returns — the asset in base units with its symbol and decimals (best
+  // effort) — and why it waits for a person, from the public allowlist only.
+  const label = await assetLabel(r.livemode, r.assetId);
   return {
     id: r.id,
     status: merchantRefundStatus(r),
     amount_usd: (r.requestedAmountUsd ?? D(0)).toFixed(2),
     refund_external_ref: r.externalRef,
     payment_id: r.paymentId,
+    asset_id: r.assetId,
+    asset_symbol: label?.symbol ?? null,
+    asset_decimals: label?.decimals ?? null,
+    amount: r.amount.toFixed(),
+    review_reason: publicReviewReason(r.reviewReason),
     created: Math.floor(r.createdAt.getTime() / 1000),
   };
 }

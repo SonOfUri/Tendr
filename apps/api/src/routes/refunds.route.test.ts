@@ -193,6 +193,12 @@ describe('POST /v1/refunds', () => {
       status: 'pending',
       amount_usd: '10.00',
       refund_external_ref: 'wc-101',
+      // C6: the asset the refund returns, in base units with its label, and no review reason.
+      asset_id: USDC_ETH,
+      asset_symbol: 'USDC',
+      asset_decimals: 6,
+      amount: (usdc('10.00') + FEE_UNITS).toString(),
+      review_reason: null,
     });
     expect(typeof body.created).toBe('number');
     const [r] = await refundsOf(p.id);
@@ -313,6 +319,7 @@ describe('POST /v1/refunds', () => {
     const res = await refund({ payment: p.id, amount: '10.00', external_ref: 's' });
     expect(res.statusCode, res.body).toBe(201);
     expect(res.json().status).toBe('review');
+    expect(res.json().review_reason).toBe('sanctions');
     const [r] = await refundsOf(p.id);
     expect(r).toMatchObject({ reviewReason: 'sanctions', proposalId: null });
     expect(await prisma.accountProposal.count()).toBe(0);

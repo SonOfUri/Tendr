@@ -56,6 +56,22 @@ export async function tokenInfo(livemode: boolean, assetId: string): Promise<Tok
   return token;
 }
 
+/** An asset's display label for store-facing views. */
+export type AssetLabel = { symbol: string; decimals: number };
+
+/**
+ * Best effort, for read views (C6): the asset's symbol and decimals from the cached token list, or
+ * null when the provider is down or does not list it. Never throws, so a read never fails on it.
+ */
+export async function assetLabel(livemode: boolean, assetId: string): Promise<AssetLabel | null> {
+  try {
+    const t = (await tokenList(livemode)).get(assetId);
+    return t ? { symbol: t.symbol, decimals: t.decimals } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Drops the cache (tests). */
 export function resetTokenCache(): void {
   cache.clear();

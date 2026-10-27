@@ -26,7 +26,7 @@ export const refundRoutes: FastifyPluginAsync = async (app) => {
     const ctx = ctxOf(req);
     const input = MerchantRefundInputSchema.parse(req.body);
     const { refund, created } = await requestMerchantRefund(ctx, input);
-    return reply.status(created ? 201 : 200).send(merchantRefundView(refund));
+    return reply.status(created ? 201 : 200).send(await merchantRefundView(refund));
   });
 
   app.post<{ Params: { id: string } }>(
