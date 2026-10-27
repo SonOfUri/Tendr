@@ -3,7 +3,7 @@
 //   `connection_id`) reads the policy, usage and records but cannot change the policy (403).
 // - A dashboard user reads with `account:read`; changing the policy needs `settings:manage` and
 //   step-up (the policy decides how much of the store's money Tendr may spend on gas).
-// - The sponsorship list needs `payments:read` of an API key.
+// - Changing the policy needs `sessions:write` of an API key; the sponsorship list `payments:read`.
 // - Publishable keys and session clients are refused by the gateway.
 //
 // The auth config admits both principal kinds, so the dashboard permission and step-up checks are
@@ -24,6 +24,12 @@ import { check, denied } from './merchant-settings.js';
 
 const storeOrKey = { principals: ['dashboard_user' as const, 'secret_key' as const] };
 const records = { ...storeOrKey, scope: 'payments:read' as const };
+/**
+ * Changing the policy spends the store's money, so an API key needs a write scope. No settings
+ * scope exists (checkout settings take connection keys only), so this is `sessions:write`, which
+ * every full key has and read-only keys lack. Checked by the gateway for keys only.
+ */
+const change = { ...storeOrKey, scope: 'sessions:write' as const };
 
 type Caller = { merchantId: string; livemode: boolean };
 
@@ -71,7 +77,7 @@ export const gasRoutes: FastifyPluginAsync = async (app) => {
     return getGasPolicy(c.merchantId, c.livemode);
   });
 
-  app.put('/v1/gas-policy', { config: { auth: storeOrKey } }, async (req) => {
+  app.put('/v1/gas-policy', { config: { auth: change } }, async (req) => {
     const c = writer(req);
     return putGasPolicy(c, req.body);
   });

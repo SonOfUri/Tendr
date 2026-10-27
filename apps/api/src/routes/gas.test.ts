@@ -108,6 +108,24 @@ describe('gas policy routes', () => {
     expect(await prisma.gasPolicy.count()).toBe(0);
   });
 
+  it('PUT needs the sessions:write scope of a secret key; reads do not', async () => {
+    const { raw } = await createApiKey(merchant.id, {
+      livemode: false,
+      scopes: ['sessions:read', 'payments:read'],
+    });
+    expect((await byKey('GET', '/v1/gas-policy', raw)).statusCode).toBe(200);
+    const put = await byKey('PUT', '/v1/gas-policy', raw, { enabled: true });
+    expect(put.statusCode, put.body).toBe(403);
+    expect(await prisma.gasPolicy.count()).toBe(0);
+  });
+
+  it('a connection key lists the gas sponsorships', async () => {
+    const raw = await connectionKey();
+    const res = await byKey('GET', '/v1/gas-sponsorships', raw);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ gas_sponsorships: [] });
+  });
+
   it('a publishable key is refused', async () => {
     const { raw } = await createApiKey(merchant.id, { livemode: false, kind: 'publishable' });
     for (const [method, url] of [

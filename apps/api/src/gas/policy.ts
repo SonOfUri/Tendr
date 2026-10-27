@@ -23,8 +23,15 @@ import { newId } from '../lib/ids.js';
 /** Internal audit event (never a webhook): who changed the policy, before and after. */
 export const GAS_POLICY_UPDATED = 'gas_policy.updated';
 
-/** Who changes a policy: a dashboard user, or a secret key the store made (never a connection). */
-export type GasPolicyActor = { by: 'user'; userId: string } | { by: 'api_key'; apiKeyId: string };
+/**
+ * Who changes a policy: a dashboard user or a secret key the store made (`putGasPolicy`). A
+ * connection key never edits the policy, but switching the default gas payer to the merchant from
+ * one creates the default policy (`ensureDefaultGasPolicy`), audited under that connection.
+ */
+export type GasPolicyActor =
+  | { by: 'user'; userId: string }
+  | { by: 'api_key'; apiKeyId: string }
+  | { by: 'connection'; connectionId: string };
 export type GasPolicyCtx = ScopeContext & { actor: GasPolicyActor };
 
 /** The calendar month (UTC) of `at`, `YYYY-MM`. */
@@ -99,6 +106,49 @@ export async function putGasPolicy(ctx: GasPolicyCtx, input: unknown): Promise<G
     });
     return view(after, ctx.livemode);
   });
+}
+
+/**
+ * Ruling R1-3 (spec §8.4): when the store switches its default gas payer to the merchant, the
+ * caller's mode gets the ENABLED default policy if it has none (insert, ON CONFLICT DO NOTHING:
+ * an existing policy, disabled or not, is left as it is), audited as `gas_policy.updated`.
+ * Runs inside the caller's transaction (`tenantTransaction` with the same `ctx`).
+ */
+export async function ensureDefaultGasPolicy(
+  tx: Prisma.TransactionClient,
+  ctx: ScopeContext,
+  actor: GasPolicyActor,
+): Promise<boolean> {
+  const p: GasPolicy = {
+    ...DEFAULT_GAS_POLICY,
+    chains: [...DEFAULT_GAS_POLICY.chains],
+    enabled: true,
+  };
+  const { count } = await tx.gasPolicy.createMany({
+    data: [
+      {
+        id: newId('gpol'),
+        merchantId: ctx.merchantId,
+        livemode: ctx.livemode,
+        enabled: true,
+        perPaymentCapUsd: p.per_payment_cap_usd,
+        monthlyBudgetUsd: p.monthly_budget_usd,
+        minOrderUsd: p.min_order_usd,
+        chains: p.chains,
+        tokens: p.tokens,
+        firstTimeOnly: p.first_time_only,
+      },
+    ],
+    skipDuplicates: true,
+  });
+  if (count === 0) return false;
+  await recordEvent(tx, ctx, {
+    aggregateType: 'merchant',
+    aggregateId: ctx.merchantId,
+    type: GAS_POLICY_UPDATED,
+    payload: { actor, before: policyOf(null), after: p },
+  });
+  return true;
 }
 
 /** The month's budget use in one mode; zeros when nothing was sponsored that month. */

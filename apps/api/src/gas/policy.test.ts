@@ -1,5 +1,6 @@
 import { DEFAULT_GAS_POLICY } from '@tendr/contracts';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { updateCheckoutSettings } from '../checkout/checkout-settings.js';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { createMerchant, createRow, resetDb } from '../test/helpers.js';
@@ -126,5 +127,63 @@ describe('gas policy', () => {
   it('currentMonth is the UTC calendar month', () => {
     expect(currentMonth(new Date('2026-10-31T23:59:59Z'))).toBe('2026-10');
     expect(currentMonth(new Date('2026-11-01T00:00:00Z'))).toBe('2026-11');
+  });
+});
+
+describe('switching the default gas payer to the merchant (ruling R1-3)', () => {
+  const settingsActor = { by: 'connection' as const, connectionId: 'con_x' };
+
+  beforeEach(async () => {
+    await resetDb();
+  });
+
+  it('creates the enabled default policy for the mode when it has none, and audits it', async () => {
+    const m = await createMerchant({ defaultGasPayer: 'buyer' });
+    await updateCheckoutSettings({ merchantId: m.id, livemode: true }, settingsActor, {
+      default_gas_payer: 'merchant',
+    });
+    expect(await getGasPolicy(m.id, true)).toMatchObject({
+      ...DEFAULT_GAS_POLICY,
+      livemode: true,
+      enabled: true,
+    });
+    expect(await prisma.gasPolicy.count({ where: { merchantId: m.id, livemode: false } })).toBe(0);
+    const audit = await prisma.event.findMany({
+      where: { merchantId: m.id, type: 'gas_policy.updated' },
+    });
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ livemode: true });
+    expect(audit[0]!.payload).toMatchObject({
+      actor: settingsActor,
+      before: { enabled: false },
+      after: { enabled: true },
+    });
+  });
+
+  it('leaves an existing (disabled) policy untouched', async () => {
+    const m = await createMerchant({ defaultGasPayer: 'buyer' });
+    const own = await createRow('GasPolicy', m.id, false, { enabled: false });
+    await updateCheckoutSettings(
+      { merchantId: m.id, livemode: false },
+      { by: 'user', userId: 'per_x' },
+      { default_gas_payer: 'merchant' },
+    );
+    const rows = await prisma.gasPolicy.findMany({ where: { merchantId: m.id } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: own.id, enabled: false, updatedAt: own.updatedAt });
+    expect(
+      await prisma.event.count({ where: { merchantId: m.id, type: 'gas_policy.updated' } }),
+    ).toBe(0);
+  });
+
+  it('creates nothing when the shopper pays', async () => {
+    const m = await createMerchant({ defaultGasPayer: 'merchant' });
+    await updateCheckoutSettings({ merchantId: m.id, livemode: false }, settingsActor, {
+      default_gas_payer: 'shopper',
+    });
+    await updateCheckoutSettings({ merchantId: m.id, livemode: false }, settingsActor, {
+      default_fee_payer: 'shopper',
+    });
+    expect(await prisma.gasPolicy.count()).toBe(0);
   });
 });
