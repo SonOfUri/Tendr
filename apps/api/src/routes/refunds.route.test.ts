@@ -358,6 +358,34 @@ describe('POST /v1/refunds', () => {
     expect(bad.json().error.code).toBe('UNSUPPORTED_CURRENCY');
   });
 
+  it('C11: "refund the rest" in NGN after several partials is clamped to what is left, and its replay is the same refund', async () => {
+    const { p } = await settled({ amount: '78500.00', amount_currency: 'NGN' });
+    // Three partials of 0.16 NGN ($0.0001 each) each round up to $0.01: $48.98 is left of $49.01.
+    for (const ref of ['q1', 'q2', 'q3']) {
+      const r = await refund({ payment: p.id, amount: '0.16', currency: 'NGN', external_ref: ref });
+      expect(r.json().amount_usd).toBe('0.01');
+    }
+    // The rest, 78,499.52 NGN, converts to $49.00: two cents over what is left (the partials'
+    // rounding), so it is clamped, never refused.
+    const rest = { payment: p.id, amount: '78499.52', currency: 'NGN', external_ref: 'q4' };
+    const b = await refund(rest);
+    expect(b.statusCode, b.body).toBe(201);
+    expect(b.json().amount_usd).toBe('48.98');
+    const again = await refund(rest);
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json().id).toBe(b.json().id);
+    // Still never more than the partials' rounding allows ($49.07 against $49.00 left).
+    const { p: p2 } = await settled({ amount: '78500.00', amount_currency: 'NGN' });
+    await refund({ payment: p2.id, amount: '0.16', currency: 'NGN', external_ref: 'r1' });
+    const over = await refund({
+      payment: p2.id,
+      amount: '78600.00',
+      currency: 'NGN',
+      external_ref: 'r2',
+    });
+    expect(over.statusCode).toBe(409);
+  });
+
   it('a full refund in NGN after partials equals exactly the remaining amount', async () => {
     const { p } = await settled({ amount: '78500.00', amount_currency: 'NGN' });
     // 0.16 NGN = $0.0001 → rounded up to $0.01; the rest (78,499.84 NGN = $49.0005) also rounds

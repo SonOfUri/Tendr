@@ -268,7 +268,10 @@ export async function requestMerchantRefund(
       externalRef: input.external_ref,
     },
   });
-  if (known) return { refund: sameOrConflict(known, asked), created: false };
+  if (known) {
+    const tolerance = await roundingTolerance(prisma, ctx, p0.id, known.createdAt);
+    return { refund: sameOrConflict(known, asked, tolerance), created: false };
+  }
   if (!REFUNDABLE.has(p0.status)) throw notRefundable(p0.status);
 
   const q = await prisma.quote.findFirstOrThrow({ where: { id: p0.quoteId, ...tenantOf(ctx) } });
@@ -295,15 +298,19 @@ export async function requestMerchantRefund(
         externalRef: input.external_ref,
       },
     });
-    if (existing) return { refund: sameOrConflict(existing, asked), created: false };
+    if (existing) {
+      const tolerance = await roundingTolerance(tx, ctx, p.id, existing.createdAt);
+      return { refund: sameOrConflict(existing, asked, tolerance), created: false };
+    }
     if (!REFUNDABLE.has(p.status)) throw notRefundable(p.status);
-    // A refund in the original currency is converted rounding up to the cent, so "refund the
-    // rest" can overshoot what is left by a cent. That overshoot — and only for a converted
-    // request — is clamped, so a full refund in the original currency equals exactly what is
-    // left. Anything more is refused like any other excess.
+    // A refund in the original currency is converted rounding up to the cent, and so was each
+    // earlier one, so "refund the rest" can overshoot what is left by a cent for itself plus one
+    // per earlier refund (C11). That overshoot — and only for a converted request — is clamped,
+    // so a full refund in the original currency equals exactly what is left. Anything more is
+    // refused like any other excess.
     let usd = asked.usd;
     if (asked.converted && usd.gt(remaining) && remaining.gt(0)) {
-      if (usd.sub(remaining).lte(ROUNDING_TOLERANCE)) usd = remaining;
+      if (usd.sub(remaining).lte(await roundingTolerance(tx, ctx, p.id, null))) usd = remaining;
     }
     if (usd.gt(remaining)) {
       throw exceeds('The amount is more than what is left to refund on this payment', {
@@ -338,24 +345,51 @@ export async function requestMerchantRefund(
   return { refund: r, created: true };
 }
 
+/** The rounding up of one conversion from the original currency to USD. */
+const ONE_CENT = D('0.01');
+
 /**
  * The most an amount converted from the original currency may overshoot what is left and still
- * be clamped to it: one cent, the rounding up of this conversion. Never applied to USD requests.
+ * be clamped to it (C11): one cent for this conversion's rounding up, plus one per merchant
+ * refund of the payment requested before it (`before`; null = all of them, for a new request) —
+ * each rounded up when it was converted, so the cents left over add up. Counted over every
+ * merchant row, closed ones too, so the answer for a stored row never changes over time (the
+ * replay check and the clamp agree). Never applied to USD requests; the clamp never goes past
+ * what is left, so a larger tolerance only decides "clamp" vs "refuse".
  */
-const ROUNDING_TOLERANCE = D('0.01');
+async function roundingTolerance(
+  db: Tx | typeof prisma,
+  ctx: ScopeContext,
+  paymentId: string,
+  before: Date | null,
+): Promise<Dec> {
+  const earlier = await db.refund.count({
+    where: {
+      paymentId,
+      ...tenantOf(ctx),
+      reason: 'merchant',
+      ...(before ? { createdAt: { lt: before } } : {}),
+    },
+  });
+  return ONE_CENT.mul(earlier + 1);
+}
 
 /**
  * The same `external_ref` again: the existing refund when the amount is the same (for an amount
- * in the original currency, the same up to the one-cent clamp it may have had), else 409
- * CONFLICT. The answer depends only on the row and the request, so the pre-lock and the locked
- * checks always agree.
+ * in the original currency, the same up to the rounding clamp it may have had: `tolerance`, from
+ * `roundingTolerance` for the rows before it), else 409 CONFLICT. The answer depends only on the
+ * stored rows and the request, so the pre-lock and the locked checks always agree.
  */
-function sameOrConflict(existing: Refund, asked: { usd: Dec; converted: boolean }): Refund {
+function sameOrConflict(
+  existing: Refund,
+  asked: { usd: Dec; converted: boolean },
+  tolerance: Dec,
+): Refund {
   const had = existing.requestedAmountUsd;
   const same =
     !!had &&
     (had.equals(asked.usd) ||
-      (asked.converted && asked.usd.gt(had) && asked.usd.sub(had).lte(ROUNDING_TOLERANCE)));
+      (asked.converted && asked.usd.gt(had) && asked.usd.sub(had).lte(tolerance)));
   if (same) return existing;
   throw conflict('This external_ref was already used for a refund of another amount', {
     refund_id: existing.id,
