@@ -897,6 +897,77 @@ describe('shopper checkout routes', () => {
       expect(await prisma.gasSponsorship.count()).toBe(0);
     });
 
+    it('a disabled policy reports its own reason even when the fee is over the 100 bps cap', async () => {
+      await sponsoring({ enabled: false });
+      const s = await newSession({ amount: '3.00' });
+      const res = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      expect((await merchantSession(s.id)).network_fee).toMatchObject({
+        paid_by: 'shopper',
+        reason: 'policy_disabled',
+      });
+    });
+
+    it('sponsored, shopper pays Tendr fee: a merchant output below target requotes, then 409', async () => {
+      await sponsoring();
+      const original = sim.quote.bind(sim);
+      let lowLeft = 1;
+      const spy = vi.spyOn(sim, 'quote').mockImplementation(async (req) => {
+        const res = await original(req);
+        if (!req.dry && lowLeft > 0) {
+          lowLeft--;
+          return { ...res, quote: { ...res.quote, amountOutUsd: '20' } };
+        }
+        return res;
+      });
+      const s = await newSession({ fee_payer: 'shopper' });
+      const ok = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(ok.statusCode, ok.body).toBe(201);
+      expect(spy).toHaveBeenCalledTimes(4); // dry, real (output too low), dry, real
+
+      lowLeft = 2;
+      spy.mockClear();
+      const moved = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(moved.statusCode, moved.body).toBe(409);
+      expect(moved.json().error.code).toBe('QUOTE_PRICE_MOVED');
+      // Nothing new was reserved for the refused quote: the first quote's hold stands.
+      expect(await prisma.gasSponsorship.count({ where: { reservationState: 'reserved' } })).toBe(
+        1,
+      );
+    });
+
+    it('integrator hook: deducted from proceeds; refused when it alone is over the cap', async () => {
+      const s = await newSession();
+      await prisma.session.update({
+        where: { id: s.id },
+        data: { delivery: 'HOOK', destChain: 'base' },
+      });
+      const res = await call('POST', 'quote', s.client_secret, { origin_asset: USDC_BASE });
+      expect(res.statusCode, res.body).toBe(201);
+      const row = await prisma.quote.findFirstOrThrow({ where: { sessionId: s.id } });
+      expect(row.hookFeeUsd!.toFixed()).toBe('0.048'); // simulated base $0.04 + 20 %
+      expect(row.networkFeeBps).toBeGreaterThan(0);
+
+      // On eth the simulated hook ($1.44) is over 1 % of the $25 order.
+      const big = await newSession();
+      await prisma.session.update({
+        where: { id: big.id },
+        data: { delivery: 'HOOK', destChain: 'eth' },
+      });
+      const refused = await call('POST', 'quote', big.client_secret, { origin_asset: USDC_BASE });
+      expect(refused.statusCode, refused.body).toBe(400);
+      expect(refused.json().error.code).toBe('QUOTE_TOO_SMALL');
+    });
+
     it('sponsorship above 100 bps of the order: the shopper pays (per_payment_cap)', async () => {
       await sponsoring();
       // $0.048 is 1.6 % of a $3 order.

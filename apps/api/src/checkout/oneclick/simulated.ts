@@ -196,6 +196,12 @@ export interface SimulatedOneClickOptions {
   store?: SimStore;
   /** What `appFees` are charged on; defaults to ONECLICK_APP_FEE_BASE (tests try the other). */
   appFeeBase?: AppFeeBase;
+  /**
+   * EXACT_OUTPUT quotes carry the slippage buffer: `amountIn` = what the swap needs ×
+   * (1 + slippageTolerance), `minAmountIn` = what it needs (the excess is refunded). Off by
+   * default (`minAmountIn` = `amountIn`); tests turn it on to model that 1Click semantics.
+   */
+  exactOutputSlippageBuffer?: boolean;
 }
 
 export class SimulatedOneClick implements OneClickProvider {
@@ -204,9 +210,11 @@ export class SimulatedOneClick implements OneClickProvider {
   private readonly intentsContract: () => string;
   private readonly store: SimStore;
   private readonly appFeeBase: AppFeeBase;
+  private readonly exactOutputSlippageBuffer: boolean;
 
   constructor(opts: SimulatedOneClickOptions = {}) {
     this.appFeeBase = opts.appFeeBase ?? ONECLICK_APP_FEE_BASE;
+    this.exactOutputSlippageBuffer = opts.exactOutputSlippageBuffer ?? false;
     this.now = opts.now ?? (() => new Date());
     this.near = opts.near ?? (() => nearClient(false));
     const intents = opts.intentsContract;
@@ -249,6 +257,7 @@ export class SimulatedOneClick implements OneClickProvider {
 
     const amount = BigInt(req.amount);
     let amountIn: bigint, amountOut: bigint, inUsd: bigint, outUsd: bigint;
+    let minAmountIn: bigint | null = null;
     // Fees on the output: in = out × (1e4 + bps) / 1e4. On the input: out = in × (1e4 − bps) / 1e4.
     const onOutput = this.appFeeBase === 'output';
     if (!onOutput && feeBps >= 10_000n) {
@@ -261,6 +270,12 @@ export class SimulatedOneClick implements OneClickProvider {
         ? ceilDiv(outUsd * (10_000n + feeBps), 10_000n)
         : ceilDiv(outUsd * 10_000n, 10_000n - feeBps);
       amountIn = ceilDiv(inUsd * pow10(origin.decimals), origin.priceMicroUsd);
+      if (this.exactOutputSlippageBuffer) {
+        minAmountIn = amountIn;
+        const slip = BigInt(req.slippageTolerance);
+        amountIn = ceilDiv(amountIn * (10_000n + slip), 10_000n);
+        inUsd = ceilDiv(inUsd * (10_000n + slip), 10_000n);
+      }
     } else {
       amountIn = amount;
       inUsd = (amountIn * origin.priceMicroUsd) / pow10(origin.decimals);
@@ -299,7 +314,7 @@ export class SimulatedOneClick implements OneClickProvider {
         amountInUsd: formatUsd(inUsd),
         amountOut: amountOut.toString(),
         amountOutUsd: formatUsd(outUsd),
-        minAmountIn: amountIn.toString(),
+        minAmountIn: (minAmountIn ?? amountIn).toString(),
         deadline: deadline.toISOString(),
         timeWhenInactive: deadline.toISOString(),
       },

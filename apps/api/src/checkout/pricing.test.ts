@@ -7,6 +7,7 @@ import type { SimStore } from './oneclick/sim-store.js';
 import { OneClickError, type QuoteResponse } from './oneclick/types.js';
 import * as pricing from './pricing.js';
 import {
+  assertOutputWithinTarget,
   assertWithinMinimum,
   assertWithinTarget,
   buildQuoteRequests,
@@ -198,6 +199,21 @@ describe('buildQuoteRequests', () => {
     expect(() => real(quote('0', '1'))).toThrow(OneClickError);
   });
 
+  it('shopper pays fees, sponsored: sizes the send from the dry minAmountIn when present', () => {
+    const { real, expectedOutUsd } = buildQuoteRequests(input({ merchantDeductionUsd: '0.80' }));
+    const dry = quote('10160600000000000', '25.40');
+    dry.quote.minAmountIn = '10060000000000000';
+    expect(real(dry).amount).toBe('10060000000000000');
+    // The merchant should receive the order minus the deduction.
+    expect(expectedOutUsd).toBe('24.200000');
+    // Unsponsored and merchant-pays quotes have no output target.
+    expect(buildQuoteRequests(input()).expectedOutUsd).toBeNull();
+    expect(
+      buildQuoteRequests(input({ feePayer: 'merchant', merchantDeductionUsd: '0.80' }))
+        .expectedOutUsd,
+    ).toBeNull();
+  });
+
   it('the input-charged model sizes the bps on the input', () => {
     // shopper: ceil(0.80 × (10000 − 50) / 25) = 319; merchant: ceil(0.80 × 10000 / 25) = 320
     expect(buildQuoteRequests(input({ merchantDeductionUsd: '0.80' }), 'input').networkFeeBps).toBe(
@@ -367,6 +383,22 @@ describe('buildQuoteRequests', () => {
   });
 });
 
+describe('assertOutputWithinTarget', () => {
+  it('passes at or above the expected output less the tolerance', () => {
+    expect(() => assertOutputWithinTarget(quote('1', '25', '24.20'), '24.2')).not.toThrow();
+    expect(() => assertOutputWithinTarget(quote('1', '25', '30'), '24.2')).not.toThrow();
+    // −50 bps of 24.20 = 24.079
+    expect(() => assertOutputWithinTarget(quote('1', '25', '24.079'), '24.2')).not.toThrow();
+  });
+
+  it('throws QUOTE_PRICE_MOVED below it', () => {
+    expectCode(
+      () => assertOutputWithinTarget(quote('1', '25', '24.078'), '24.2'),
+      'QUOTE_PRICE_MOVED',
+    );
+  });
+});
+
 describe('assertWithinTarget', () => {
   it('passes within the tolerance either side', () => {
     expect(() => assertWithinTarget(quote('1', '25.00'), '25')).not.toThrow();
@@ -422,6 +454,22 @@ describe('sponsored quotes against the 1Click simulator', () => {
   const store = { create: async () => true } as unknown as SimStore;
   const USDC_BASE = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near';
 
+  it('EXACT_OUTPUT with a slippage buffer: the sponsored send is the effective cost, never more', async () => {
+    const sim = new SimulatedOneClick({ store, exactOutputSlippageBuffer: true });
+    const inp = (over: Partial<PricingInput>) =>
+      input({ originAsset: USDC_BASE, originDecimals: 6, orderAmount: '1000.00', ...over });
+    // The unsponsored shopper sends amountIn and gets the excess over minAmountIn back.
+    const plainReqs = buildQuoteRequests(inp({}));
+    const plain = (await sim.quote(plainReqs.real(await sim.quote(plainReqs.dry)))).quote;
+    expect(BigInt(plain.minAmountIn!)).toBeLessThan(BigInt(plain.amountIn));
+    const reqs = buildQuoteRequests(inp({ merchantDeductionUsd: '0.048' }));
+    const sponsored = await sim.quote(reqs.real(await sim.quote(reqs.dry)));
+    expect(BigInt(sponsored.quote.amountIn)).toBeLessThanOrEqual(BigInt(plain.minAmountIn!));
+    expect(sponsored.quote.amountIn).toBe(plain.minAmountIn);
+    // And the merchant still gets the order minus about the fee.
+    expect(() => assertOutputWithinTarget(sponsored, reqs.expectedOutUsd!)).not.toThrow();
+  });
+
   for (const appFeeBase of ['output', 'input'] as const) {
     const sim = new SimulatedOneClick({ store, appFeeBase });
 
@@ -437,6 +485,7 @@ describe('sponsored quotes against the 1Click simulator', () => {
       );
       const res = await sim.quote(reqs.real(await sim.quote(reqs.dry)));
       if (over.feePayer === 'merchant') assertWithinTarget(res, reqs.targetUsd);
+      if (reqs.expectedOutUsd) assertOutputWithinTarget(res, reqs.expectedOutUsd);
       return res.quote;
     }
 

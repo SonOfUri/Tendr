@@ -76,6 +76,15 @@ export interface PlanInput {
   now?: Date;
 }
 
+/** Whether `usd` is more than MAX_SPONSORED_ORDER_BPS of the session's order. */
+function overOrderCap(input: PlanInput, usd: string): boolean {
+  return new Prisma.Decimal(usd).mul(10_000).gt(input.session.amount.mul(MAX_SPONSORED_ORDER_BPS));
+}
+
+function addUsd(a: string, b: string): string {
+  return new Prisma.Decimal(a).plus(b).toFixed();
+}
+
 /** Who submits (and pays gas for) a gasless method on a chain. */
 export function gasProvider(chain: string, method: GaslessMethod): string {
   if (method === 'paymaster' || method === 'kora') return 'pimlico';
@@ -117,6 +126,15 @@ async function hookEstimate(input: PlanInput): Promise<string> {
 export async function planNetworkFee(input: PlanInput): Promise<NetworkFeePlan> {
   const chain = input.origin.blockchain;
   const hookUsd = await hookEstimate(input);
+  if (overOrderCap(input, hookUsd)) {
+    // The hook is always called, so its cost cannot fall back to anyone else: refuse the quote.
+    throw new AppError(
+      'QUOTE_TOO_SMALL',
+      'This order is too small to cover the integrator hook call',
+      400,
+      { hook_fee_usd: hookUsd, max_bps_of_order: MAX_SPONSORED_ORDER_BPS },
+    );
+  }
   const native = async (reason: NetworkFeeReason | null): Promise<NetworkFeePlan> => ({
     paidBy: 'shopper',
     feeMode: 'native',
@@ -146,15 +164,8 @@ export async function planNetworkFee(input: PlanInput): Promise<NetworkFeePlan> 
     throw err;
   }
   const feeUsd = withFeeMargin(raw);
-  // Sponsorship is collected as whole appFees bps whose charging base is still unconfirmed
-  // (ONECLICK_APP_FEE_BASE): it is capped at MAX_SPONSORED_ORDER_BPS of the order.
-  const overCap = new Prisma.Decimal(feeUsd)
-    .plus(hookUsd)
-    .mul(10_000)
-    .gt(input.session.amount.mul(MAX_SPONSORED_ORDER_BPS));
-  const forced = input.forceShopper ?? (overCap ? 'per_payment_cap' : undefined);
-  const decision = forced
-    ? { paidBy: 'shopper' as const, reason: forced }
+  let decision: { paidBy: GasPayer; reason: NetworkFeeReason | null } = input.forceShopper
+    ? { paidBy: 'shopper', reason: input.forceShopper }
     : await decideSponsor({
         merchantId: input.merchantId,
         livemode: input.livemode,
@@ -169,6 +180,12 @@ export async function planNetworkFee(input: PlanInput): Promise<NetworkFeePlan> 
         gasMaxUsd: input.session.gasMaxUsd ? input.session.gasMaxUsd.toFixed() : null,
         ...(input.now ? { now: input.now } : {}),
       });
+  // After the policy's own reasons: sponsorship is collected as whole appFees bps whose charging
+  // base is still unconfirmed (ONECLICK_APP_FEE_BASE), so fee + hook is capped at
+  // MAX_SPONSORED_ORDER_BPS of the order.
+  if (decision.paidBy === 'merchant' && overOrderCap(input, addUsd(feeUsd, hookUsd))) {
+    decision = { paidBy: 'shopper', reason: 'per_payment_cap' };
+  }
   if (decision.paidBy === 'merchant') {
     return {
       paidBy: 'merchant',
@@ -243,7 +260,8 @@ type FeeColumns = {
 
 /**
  * The most a merchant may sponsor (network fee + integrator hook estimate), in basis points of the
- * order. Above it the shopper pays (`per_payment_cap`).
+ * order. Above it the shopper pays (`per_payment_cap`); an integrator hook estimate alone above it
+ * refuses the quote (QUOTE_TOO_SMALL), since the hook is always called.
  */
 export const MAX_SPONSORED_ORDER_BPS = 100;
 

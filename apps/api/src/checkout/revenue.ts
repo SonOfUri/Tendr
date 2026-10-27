@@ -61,12 +61,15 @@ export function revenueLines(
   const usd = (v: Decimal | null) => (v ? v.toDecimalPlaces(6, D.ROUND_HALF_UP) : null);
 
   // The value `appFees` are charged on, in origin units and in USD.
+  // A row missing the USD values the output base needs falls back to the input (never drops the
+  // fee row).
+  const onOutput = appFeeBase === 'output' && input.amountOutUsd && amountInUsd?.gt(0);
   const feeBaseUnits = appFeeBaseValue(
-    { input: amountIn, output: input.amountOutUsd ? usdToUnits(input.amountOutUsd) : new D(0) },
+    { input: amountIn, output: onOutput ? usdToUnits(input.amountOutUsd!) : amountIn },
     appFeeBase,
   );
   const feeBaseUsd = appFeeBaseValue(
-    { input: amountInUsd, output: input.amountOutUsd },
+    { input: amountInUsd, output: onOutput ? input.amountOutUsd : amountInUsd },
     appFeeBase,
   );
   const appFee = feeBaseUnits.mul(bps).toDecimalPlaces(0, D.ROUND_DOWN);

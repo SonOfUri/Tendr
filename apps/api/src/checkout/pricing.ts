@@ -222,6 +222,11 @@ export interface QuoteRequests {
    * proceeds (0 without a deduction). Recorded as `gas_reimbursement` revenue.
    */
   networkFeeBps: number;
+  /**
+   * Sponsored shopper-pays-fees quotes only: the USD the merchant should receive (the order minus
+   * the deduction), for `assertOutputWithinTarget` after the real quote; null otherwise.
+   */
+  expectedOutUsd: string | null;
 }
 
 function tooSmall(message: string, details?: unknown): AppError {
@@ -242,8 +247,10 @@ function tooSmall(message: string, details?: unknown): AppError {
  * - Merchant pays fees: the shopper's amountIn is sized exactly as without D (same dry price,
  *   same target); only the bps grow.
  * - Shopper pays fees: the dry quote is the UNSPONSORED EXACT_OUTPUT quote of the order (Tendr's
- *   fee only); the real quote is EXACT_INPUT for exactly its amountIn with the extra bps. The
- *   shopper's send equals the unsponsored quote's to the base unit, whatever 1Click's own fee.
+ *   fee only); the real quote is EXACT_INPUT for exactly its effective input (`minAmountIn`, or
+ *   `amountIn` without one) with the extra bps. The shopper's send equals what the unsponsored
+ *   shopper effectively pays (after any slippage-excess refund) to the base unit, whatever
+ *   1Click's own fee. The merchant's output is checked with `assertOutputWithinTarget`.
  *
  * The bps are whole numbers, rounded UP: Tendr collects at least D. That over-collects from the
  * merchant by less than 1 bps of the charging base (e.g. under $0.10 on a $1000 order). The
@@ -322,7 +329,7 @@ export function buildQuoteRequests(
         ...base,
         amount: orderBase.toString(),
       };
-      return { dry, real: () => real, targetUsd, networkFeeBps };
+      return { dry, real: () => real, targetUsd, networkFeeBps, expectedOutUsd: null };
     }
     // Sponsored: price the unsponsored quote, then send exactly its amountIn with the extra bps.
     const dry: QuoteRequest = {
@@ -335,11 +342,16 @@ export function buildQuoteRequests(
       dry,
       targetUsd,
       networkFeeBps,
+      expectedOutUsd: microToDecimal(orderMicro - deductMicro),
       real: (dryResult) => {
-        const amountIn = parseResponseInt('amountIn', dryResult.quote.amountIn);
+        // What the unsponsored shopper effectively pays: `minAmountIn` when 1Click gives one (an
+        // EXACT_OUTPUT `amountIn` may carry a slippage buffer that is refunded), else `amountIn`.
+        const effective = dryResult.quote.minAmountIn ?? dryResult.quote.amountIn;
+        const amountIn = parseResponseInt('minAmountIn', effective);
         if (amountIn <= 0n) {
           throw new OneClickError('Dry quote has no usable amountIn', null, 'BAD_RESPONSE', {
             amountIn: dryResult.quote.amountIn,
+            minAmountIn: dryResult.quote.minAmountIn,
           });
         }
         return { dry: false, swapType: 'EXACT_INPUT', ...base, amount: amountIn.toString() };
@@ -357,6 +369,7 @@ export function buildQuoteRequests(
     dry,
     targetUsd,
     networkFeeBps,
+    expectedOutUsd: null,
     real: (dryResult) => {
       const dryIn = parseResponseInt('amountIn', dryResult.quote.amountIn);
       const dryUsd = parseResponseDecimal('amountInUsd', dryResult.quote.amountInUsd);
@@ -430,6 +443,31 @@ export function assertWithinMinimum(quote: QuoteResponse, minUsd: number = MIN_Q
       min_usd: minUsd,
       amount_in_usd: quote.quote.amountInUsd,
       amount_out_usd: quote.quote.amountOutUsd,
+    });
+  }
+}
+
+/**
+ * Post-check for the sponsored shopper-pays-fees (EXACT_INPUT) real quote: the merchant's
+ * `amountOutUsd` must be at least `expectedOutUsd` (order − deduction) less `toleranceBps`. A price
+ * move between the dry and the real quote must not silently cut the merchant's proceeds; the
+ * caller requotes. Throws QUOTE_PRICE_MOVED (409).
+ */
+export function assertOutputWithinTarget(
+  realResult: QuoteResponse,
+  expectedOutUsd: DecimalLike,
+  toleranceBps: number = DEFAULT_TARGET_TOLERANCE_BPS,
+): void {
+  const expected = parseExact(expectedOutUsd);
+  const actual = parseResponseDecimal('amountOutUsd', realResult.quote.amountOutUsd);
+  // actual ≥ expected × (1 − tol), at a common scale.
+  const e = expected.digits * 10n ** BigInt(actual.scale);
+  const a = actual.digits * 10n ** BigInt(expected.scale);
+  if (a * 10_000n < e * BigInt(10_000 - toleranceBps)) {
+    throw new AppError('QUOTE_PRICE_MOVED', 'The price moved; request a new quote', 409, {
+      expected_out_usd: toPlainString(expectedOutUsd),
+      amount_out_usd: realResult.quote.amountOutUsd,
+      tolerance_bps: toleranceBps,
     });
   }
 }

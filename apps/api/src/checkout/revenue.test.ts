@@ -58,4 +58,10 @@ describe('revenueLines', () => {
     const legacy = bySource(revenueLines(base));
     expect(legacy.network_fee!.amountUsd!.toFixed()).toBe('0.5');
   });
+
+  it('a row without USD values still records the app fee (on amount_in)', () => {
+    const l = bySource(revenueLines({ ...base, amountInUsd: null, amountOutUsd: null }));
+    expect(l.app_fee!.amount.toFixed()).toBe('125000'); // 50 bps × 25 USDC
+    expect(l.app_fee!.amountUsd).toBeNull();
+  });
 });

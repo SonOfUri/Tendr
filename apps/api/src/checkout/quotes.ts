@@ -47,7 +47,12 @@ import {
   type QuoteResponse,
   type StatusResponse,
 } from './oneclick/index.js';
-import { assertWithinMinimum, assertWithinTarget, buildQuoteRequests } from './pricing.js';
+import {
+  assertOutputWithinTarget,
+  assertWithinMinimum,
+  assertWithinTarget,
+  buildQuoteRequests,
+} from './pricing.js';
 import { emailWaitingReturns, shopperRefunds } from './refunds.js';
 import { screenAddress } from './screening.js';
 import type { CheckoutCtx } from './sessions.js';
@@ -594,7 +599,10 @@ interface Priced {
   deadline: Date;
 }
 
-/** Dry → real quote (pricing.ts), the merchant-pays retry on QUOTE_PRICE_MOVED, the minimum. */
+/**
+ * Dry → real quote (pricing.ts), the QUOTE_PRICE_MOVED retry (merchant-pays send target, or the
+ * sponsored shopper-pays merchant output), the minimum.
+ */
 async function priceQuote(
   provider: ReturnType<typeof providerFor>,
   pricing: Parameters<typeof buildQuoteRequests>[0],
@@ -610,6 +618,7 @@ async function priceQuote(
       const req = reqs.real(dry);
       const res = await provider.quote(req);
       if (pricing.feePayer === 'merchant') assertWithinTarget(res, reqs.targetUsd);
+      if (reqs.expectedOutUsd) assertOutputWithinTarget(res, reqs.expectedOutUsd);
       real = res;
       realReq = req;
     } catch (err) {

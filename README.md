@@ -681,6 +681,8 @@ fee share, 1Click's fee and the spread.
   opens in a popup, the payment goes through, and the frame shows the result.
 - Pay in wNEAR from a NEAR wallet that holds only NEAR. The checkout wraps the shortfall first.
 - Pay Tron USDT through TronLink.
+- Confirm 1Click's EXACT_OUTPUT `amountIn` / `minAmountIn` and excess-refund semantics (a
+  sponsored shopper-pays quote sends the dry EXACT_OUTPUT `minAmountIn` as EXACT_INPUT).
 - Confirm 1Click charges appFees on the output (ONECLICK_APP_FEE_BASE) before enabling live gas
   sponsorship.
 
