@@ -470,8 +470,12 @@ const SANITY_BAND = [1n, 3n, 2n] as const;
 const CANDIDATE_BAND = [19n, 21n, 20n] as const;
 /** A candidate outside the band becomes the new reference after this long… */
 export const FX_CANDIDATE_MIN_AGE_MS = 10 * 60_000;
-/** …and at least this many separate fetches within ±5% of it. */
+/** …and at least this many separate fetches within ±5% of it… */
 export const FX_CANDIDATE_MIN_FETCHES = 3;
+/** …each counted only this long after the last counted one (a burst counts once). */
+export const FX_CANDIDATE_MIN_GAP_MS = 60_000;
+/** A candidate not seen again for this long is forgotten: the next out-of-band rate starts over. */
+export const FX_CANDIDATE_IDLE_MS = 15 * 60_000;
 
 /** The live sanity band: `next` is within 50% of `last` in either direction, exactly. */
 export function withinSanityBand(next: string, last: string): boolean {
@@ -482,21 +486,53 @@ interface Candidate {
   rate: string;
   firstSeen: string;
   fetches: number;
+  /** When a fetch last counted towards `fetches` (C10). */
+  lastCounted: string;
+  /** When a fetch within ±5% last saw it (C10). */
+  lastSeen: string;
 }
 
-async function readCandidate(redis: Redis, key: string): Promise<Candidate | null> {
+function parseCandidate(text: string | null): Candidate | null {
+  if (!text) return null;
   try {
-    const text = await redis.get(key);
-    if (!text) return null;
     const v = JSON.parse(text) as Partial<Candidate>;
     if (!validRate(v.rate) || typeof v.firstSeen !== 'string' || typeof v.fetches !== 'number') {
       return null;
     }
-    return { rate: v.rate, firstSeen: v.firstSeen, fetches: v.fetches };
+    // A candidate written before C10 counts from its first sighting.
+    return {
+      rate: v.rate,
+      firstSeen: v.firstSeen,
+      fetches: v.fetches,
+      lastCounted: typeof v.lastCounted === 'string' ? v.lastCounted : v.firstSeen,
+      lastSeen: typeof v.lastSeen === 'string' ? v.lastSeen : v.firstSeen,
+    };
   } catch {
     return null;
   }
 }
+
+/**
+ * Compare-and-set of the sanity-band state (C10): applies the decision only while the last good
+ * rate and the candidate are exactly as this process read them; returns 0 when another process
+ * changed either first (the caller re-reads and decides again).
+ * KEYS: last good, candidate. ARGV: expected last, expected candidate ('' = none), action
+ * ('accept' | 'candidate'), value, ttl seconds.
+ */
+const SANITY_CAS = `
+local last = redis.call('GET', KEYS[1]) or ''
+local cand = redis.call('GET', KEYS[2]) or ''
+if last ~= ARGV[1] or cand ~= ARGV[2] then return 0 end
+if ARGV[3] == 'accept' then
+  redis.call('DEL', KEYS[2])
+  redis.call('SET', KEYS[1], ARGV[4], 'EX', ARGV[5])
+else
+  redis.call('SET', KEYS[2], ARGV[4], 'EX', ARGV[5])
+end
+return 1`;
+
+/** Compare-and-set rounds before giving up (the rate is then refused this once). */
+const SANITY_CAS_ROUNDS = 5;
 
 /**
  * Live mode: the sanity band against the last good rate (kept 7 days).
@@ -506,12 +542,17 @@ async function readCandidate(redis: Redis, key: string): Promise<Candidate | nul
  *   also clears any pending candidate (the market came back to the old band).
  * - A rate outside the band is refused (FX_RATE_UNAVAILABLE, ops log) and recorded as a
  *   candidate (rate, first-seen time, fetch count). Later fetches within ±5% of the candidate
- *   count towards it; once it has been seen for at least 10 minutes across at least 3 separate
- *   fetches, the rate is accepted as the new last good rate (a real devaluation is refused for at
- *   most ~10 minutes, never locked out). A fetch outside ±5% of the candidate (and outside the
- *   old band) restarts the candidate from that rate, so a rate that flips around never qualifies.
+ *   count towards it — one per minute at most (`FX_CANDIDATE_MIN_GAP_MS`), so a burst of
+ *   requests counts once; once it has been seen for at least 10 minutes across at least 3
+ *   counted fetches, the rate is accepted as the new last good rate (a real devaluation is
+ *   refused for at most ~10 minutes, never locked out). A fetch outside ±5% of the candidate (and
+ *   outside the old band), or one after the candidate went unseen for 15 minutes
+ *   (`FX_CANDIDATE_IDLE_MS`), restarts the candidate from that rate, so a rate that flips around
+ *   or comes back much later never qualifies on an old clock.
  *
- * Times use the caller's `now`. Redis down: fails open (no reference to compare to).
+ * Each decision is written with a compare-and-set (`SANITY_CAS`), so concurrent checks in several
+ * processes never lose a count or a new reference. Times use the caller's `now`. Redis down:
+ * fails open (no reference to compare to).
  */
 async function checkSanityBand(
   redis: Redis,
@@ -521,53 +562,87 @@ async function checkSanityBand(
 ): Promise<void> {
   const key = fxLastGoodKey(provider.id, rate.currency);
   const candKey = fxCandidateKey(provider.id, rate.currency);
-  let last: string | null = null;
-  try {
-    last = await redis.get(key);
-  } catch {
-    last = null;
-  }
-  if (last && validRate(last) && !withinSanityBand(rate.rate, last)) {
-    const cand = await readCandidate(redis, candKey);
-    const continues = cand !== null && withinRatio(rate.rate, cand.rate, CANDIDATE_BAND);
-    const next: Candidate = continues
-      ? { ...cand, fetches: cand.fetches + 1 }
-      : { rate: rate.rate, firstSeen: now.toISOString(), fetches: 1 };
-    const seenMs = now.getTime() - new Date(next.firstSeen).getTime();
-    if (seenMs >= FX_CANDIDATE_MIN_AGE_MS && next.fetches >= FX_CANDIDATE_MIN_FETCHES) {
-      log('warn', 'fx rate accepted after a sustained move outside the sanity band', {
-        provider: provider.id,
-        currency: rate.currency,
-        rate: rate.rate,
-        previous_last_good: last,
-        candidate_first_seen: next.firstSeen,
-        fetches: next.fetches,
-      });
-      // Falls through: becomes the new last good rate and the candidate is cleared.
-    } else {
-      try {
-        await redis.set(candKey, JSON.stringify(next), 'EX', FX_LAST_GOOD_TTL_S);
-      } catch (err) {
-        log('warn', 'fx candidate write failed', { err: String(err) });
+  for (let round = 0; round < SANITY_CAS_ROUNDS; round++) {
+    let last: string | null;
+    let candText: string | null;
+    try {
+      last = await redis.get(key);
+      candText = await redis.get(candKey);
+    } catch {
+      return; // fails open: no reference to compare to
+    }
+    let action: 'accept' | 'candidate' = 'accept';
+    let value = rate.rate;
+    let refused = false;
+    if (last && validRate(last) && !withinSanityBand(rate.rate, last)) {
+      let cand = parseCandidate(candText);
+      if (cand && now.getTime() - new Date(cand.lastSeen).getTime() > FX_CANDIDATE_IDLE_MS) {
+        cand = null; // forgotten: starts over
       }
-      log('warn', 'fx rate outside the sanity band', {
-        provider: provider.id,
-        currency: rate.currency,
-        rate: rate.rate,
-        last_good: last,
-        candidate_rate: next.rate,
-        candidate_first_seen: next.firstSeen,
-        fetches: next.fetches,
-      });
-      throw fxUnavailable(rate.currency);
+      const at = now.toISOString();
+      let next: Candidate;
+      if (cand !== null && withinRatio(rate.rate, cand.rate, CANDIDATE_BAND)) {
+        const counts =
+          now.getTime() - new Date(cand.lastCounted).getTime() >= FX_CANDIDATE_MIN_GAP_MS;
+        next = counts
+          ? { ...cand, fetches: cand.fetches + 1, lastCounted: at, lastSeen: at }
+          : { ...cand, lastSeen: at };
+      } else {
+        next = { rate: rate.rate, firstSeen: at, fetches: 1, lastCounted: at, lastSeen: at };
+      }
+      const seenMs = now.getTime() - new Date(next.firstSeen).getTime();
+      if (seenMs >= FX_CANDIDATE_MIN_AGE_MS && next.fetches >= FX_CANDIDATE_MIN_FETCHES) {
+        log('warn', 'fx rate accepted after a sustained move outside the sanity band', {
+          provider: provider.id,
+          currency: rate.currency,
+          rate: rate.rate,
+          previous_last_good: last,
+          candidate_first_seen: next.firstSeen,
+          fetches: next.fetches,
+        });
+        // Becomes the new last good rate and the candidate is cleared.
+      } else {
+        action = 'candidate';
+        value = JSON.stringify(next);
+        refused = true;
+        log('warn', 'fx rate outside the sanity band', {
+          provider: provider.id,
+          currency: rate.currency,
+          rate: rate.rate,
+          last_good: last,
+          candidate_rate: next.rate,
+          candidate_first_seen: next.firstSeen,
+          fetches: next.fetches,
+        });
+      }
+    }
+    let applied: unknown;
+    try {
+      applied = await redis.eval(
+        SANITY_CAS,
+        2,
+        key,
+        candKey,
+        last ?? '',
+        candText ?? '',
+        action,
+        value,
+        String(FX_LAST_GOOD_TTL_S),
+      );
+    } catch (err) {
+      log('warn', 'fx sanity-band write failed', { err: String(err) });
+      applied = 1; // fails open as a read failure would; a refusal still stands
+    }
+    if (applied === 1) {
+      if (refused) throw fxUnavailable(rate.currency);
+      return;
     }
   }
-  try {
-    await redis.del(candKey);
-    await redis.set(key, rate.rate, 'EX', FX_LAST_GOOD_TTL_S);
-  } catch (err) {
-    log('warn', 'fx last-good write failed', { err: String(err) });
-  }
+  log('warn', 'fx sanity band kept changing under this check; rate refused once', {
+    provider: provider.id,
+    currency: rate.currency,
+  });
+  throw fxUnavailable(rate.currency);
 }
 
 async function readCache(redis: Redis, key: string, currency: string): Promise<FxRate | null> {

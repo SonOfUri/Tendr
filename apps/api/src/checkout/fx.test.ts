@@ -13,7 +13,9 @@ import {
   TEST_FX_SOURCE,
   fixedFxProvider,
   FX_CANDIDATE_MIN_AGE_MS,
+  FX_CANDIDATE_IDLE_MS,
   FX_CANDIDATE_MIN_FETCHES,
+  FX_CANDIDATE_MIN_GAP_MS,
   fxCacheKey,
   fxCandidateKey,
   fxLastGoodKey,
@@ -412,6 +414,54 @@ describe('getUsdRate', () => {
         expect(await candidate()).toMatchObject({ rate: r, fetches: 1 });
       }
       expect(await redis.get(fxLastGoodKey('stub', 'NGN'))).toBe('1600');
+    });
+
+    it('C10: a fetch within 60 s of the last counted one does not count', async () => {
+      expect(FX_CANDIDATE_MIN_GAP_MS).toBe(60_000);
+      expect((await fetchAt(0, '1600')).ok).toBe(true);
+      expect((await fetchAt(1, '3000')).ok).toBe(false); // counted: 1
+      expect((await fetchAt(1.25, '3000')).ok).toBe(false); // too close: still 1
+      expect((await fetchAt(1.5, '3000')).ok).toBe(false); // too close: still 1
+      expect(await candidate()).toMatchObject({ fetches: 1 });
+      expect((await fetchAt(11, '3000')).ok).toBe(false); // counted: 2 (10 min, but 2 fetches)
+      expect(await fetchAt(12, '3000')).toEqual({ ok: true, rate: '3000' }); // counted: 3
+    });
+
+    it('C10: a candidate not seen for 15 minutes starts over', async () => {
+      expect(FX_CANDIDATE_IDLE_MS).toBe(15 * MIN);
+      expect((await fetchAt(0, '1600')).ok).toBe(true);
+      expect((await fetchAt(1, '3000')).ok).toBe(false);
+      expect((await fetchAt(4, '3000')).ok).toBe(false);
+      // 16 minutes without a sighting: the old clock and count are gone.
+      expect((await fetchAt(20, '3000')).ok).toBe(false);
+      const c = await candidate();
+      expect(c).toMatchObject({ rate: '3000', fetches: 1 });
+      expect(new Date(c!.firstSeen).getTime()).toBe(now.getTime() + 20 * MIN);
+    });
+
+    it('C10: a concurrent update of the candidate is never lost (compare-and-set)', async () => {
+      expect((await fetchAt(0, '1600')).ok).toBe(true);
+      expect((await fetchAt(1, '3000')).ok).toBe(false);
+      // Another process counts a fetch between this process's read and its write.
+      const key = fxCandidateKey('stub', 'NGN');
+      const realGet = redis.get.bind(redis);
+      let raced = false;
+      const spy = vi.spyOn(redis, 'get').mockImplementation((async (k: string) => {
+        const v = await realGet(k);
+        if (k === key && !raced && v) {
+          raced = true;
+          const other = { ...JSON.parse(v), fetches: 5 };
+          await redis.set(key, JSON.stringify(other));
+        }
+        return v;
+      }) as typeof redis.get);
+      try {
+        expect((await fetchAt(3, '3000')).ok).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(raced).toBe(true);
+      expect(await candidate()).toMatchObject({ fetches: 6 });
     });
 
     it('does not apply in test mode', async () => {
