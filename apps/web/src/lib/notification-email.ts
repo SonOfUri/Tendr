@@ -21,3 +21,30 @@ export function notificationEmailStatus(s: {
       : null,
   };
 }
+
+/** The verify page's heading and message for a link that did not work. */
+export function verifyCopy(kind: 'invalid' | 'error'): { heading: string; message: string | null } {
+  return kind === 'invalid'
+    ? {
+        heading: 'This link can’t be used',
+        message: 'This link is invalid, already used, expired, or replaced by a newer one.',
+      }
+    : { heading: 'We couldn’t confirm your email', message: null };
+}
+
+/**
+ * A form's values after the server's copy changed from `before` to `after` (C13: another form on
+ * the page saved): a field the person edited keeps their value; an untouched one follows the
+ * server.
+ */
+export function keepUnsavedEdits<T extends Record<string, unknown>>(
+  form: T,
+  before: T,
+  after: T,
+): T {
+  const out = { ...after };
+  for (const k of Object.keys(form) as (keyof T)[]) {
+    if (form[k] !== before[k]) out[k] = form[k];
+  }
+  return out;
+}

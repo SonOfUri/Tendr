@@ -6,6 +6,8 @@ import {
   cancelRedirect,
   checkedRedirect,
   clearConnectParams,
+  clearWaitingOnPageHide,
+  connectNextStep,
   CONNECT_STORAGE_KEY,
   domainsUsedByConnections,
   eligibleStores,
@@ -14,7 +16,9 @@ import {
   parseConnectParams,
   saveConnectParams,
   siteLabel,
+  siteUrlProblem,
   takeConnectWaiting,
+  waitingNextStep,
   type ConnectParams,
 } from './connect';
 
@@ -238,5 +242,67 @@ describe('domainsUsedByConnections', () => {
         [site('con_1', 'https://shop.example.com/store')],
       ),
     ).toEqual([]);
+  });
+});
+
+describe('C13: the site address follows the API rules', () => {
+  const site = (site_url: string, return_url = `${site_url}/wp-admin/admin.php?page=x`) =>
+    parseConnectParams(query({ site_url, return_url }));
+
+  it('needs https, except http on localhost outside production', () => {
+    expect(site('https://shop.example.com').ok).toBe(true);
+    expect(site('http://shop.example.com').ok).toBe(false);
+    for (const local of ['http://localhost:8892', 'http://127.0.0.1:8080', 'http://[::1]:8000']) {
+      expect(siteUrlProblem(local, false), local).toBeNull();
+      expect(siteUrlProblem(local, true), local).not.toBeNull();
+    }
+    expect(siteUrlProblem('https://shop.example.com/shop', true)).toBeNull();
+  });
+
+  it('refuses a site address with a query, credentials or a fragment', () => {
+    expect(site('https://shop.example.com/?lang=fr', 'https://shop.example.com/r').ok).toBe(false);
+    expect(siteUrlProblem('https://shop.example.com/?lang=fr', true)).not.toBeNull();
+    expect(siteUrlProblem('https://u:p@shop.example.com', true)).not.toBeNull();
+    expect(siteUrlProblem('https://shop.example.com/#x', true)).not.toBeNull();
+  });
+});
+
+describe('C13: where the popup goes next', () => {
+  const me = (over: Partial<{ passkeys: unknown[]; stores: { role: string }[] }> = {}) => ({
+    passkeys: [{ id: 'pk' }],
+    stores: [{ role: 'owner' }],
+    ...over,
+  });
+
+  it('asks for a passkey, then a store, then the picker', () => {
+    expect(connectNextStep(me({ passkeys: [] }))).toBe('passkey');
+    expect(connectNextStep(me({ stores: [] }))).toBe('new-store');
+    expect(connectNextStep(me())).toBe('pick');
+  });
+
+  it('a person with stores but none they own or administer is asked to create one', () => {
+    expect(connectNextStep(me({ stores: [{ role: 'viewer' }, { role: 'developer' }] }))).toBe(
+      'new-store',
+    );
+  });
+
+  it('while waiting for the email link, a session moves on even without a passkey yet', () => {
+    // Signed in from the email tab, passkey not made there: this window asks for it.
+    expect(waitingNextStep('email-sent', me({ passkeys: [] }))).toBe('passkey');
+    expect(waitingNextStep('email-sent', me())).toBe('pick');
+    // On the passkey screen it moves on only once a passkey exists.
+    expect(waitingNextStep('passkey', me({ passkeys: [] }))).toBeNull();
+    expect(waitingNextStep('passkey', me())).toBe('pick');
+    expect(waitingNextStep('email-sent', null)).toBeNull();
+  });
+
+  it('the waiting flag is cleared when the popup goes away', () => {
+    const shared = memoryStorage();
+    const target = new EventTarget();
+    markConnectWaiting(shared);
+    const stop = clearWaitingOnPageHide(target, shared);
+    target.dispatchEvent(new Event('pagehide'));
+    expect(takeConnectWaiting(shared)).toBe(false);
+    stop();
   });
 });

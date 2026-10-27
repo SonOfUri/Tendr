@@ -12,11 +12,13 @@ import { api, errorMessage, type StoreContext } from '@/lib/api';
 import {
   afterApproval,
   defaultChoice,
+  payoutAttempt,
   payoutStep,
   settlementAction,
+  type OwnDraft,
   type SettlementView,
 } from '@/lib/payout';
-import { approveProposal, draftProposal } from '@/lib/proposals';
+import { approveProposal, cancelProposal, draftProposal } from '@/lib/proposals';
 
 const POLL_MS = 3000;
 
@@ -38,6 +40,8 @@ export function PayoutChooser({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome>(null);
+  // A draft an earlier attempt made whose passkey prompt failed: approved on the retry (C14).
+  const [ownDraft, setOwnDraft] = useState<OwnDraft | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -73,8 +77,20 @@ export function PayoutChooser({
     setBusy(true);
     setError(null);
     try {
-      const draft = await draftProposal(settlementAction(chosen), store);
-      const p = await approveProposal(draft.id, store);
+      const attempt = payoutAttempt(ownDraft, chosen);
+      let id: string;
+      if (attempt.k === 'reuse') {
+        id = attempt.id;
+      } else {
+        if (attempt.k === 'replace') {
+          await cancelProposal({ id: attempt.cancel, status: 'draft' }, store);
+          setOwnDraft(null);
+        }
+        id = (await draftProposal(settlementAction(chosen), store)).id;
+        setOwnDraft({ id, asset: chosen });
+      }
+      const p = await approveProposal(id, store);
+      setOwnDraft(null);
       const next = afterApproval(p.status);
       if (next === 'failed') {
         setError('The payout change did not go through. Try again.');
@@ -157,6 +173,17 @@ export function PayoutChooser({
           be taken until it does.
         </Alert>
         {onDone ? next : <Link href={`/dashboard/approvals/${view.pending!.id}`}>Open it</Link>}
+      </>
+    );
+  }
+  if (step === 'not-live') {
+    return (
+      <>
+        <Alert tone="info">
+          Available after you go live: {storeName} has no live account yet. Set where live payments
+          settle once it is live.
+        </Alert>
+        {onDone ? next : <Link href="/dashboard">Go live</Link>}
       </>
     );
   }

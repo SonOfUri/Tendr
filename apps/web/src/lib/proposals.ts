@@ -25,18 +25,27 @@ export async function approveProposal(id: string, store?: StoreContext): Promise
  * Cancels `p`. A draft is dropped without a passkey (its requester or any signer); a pending or
  * timelocked proposal needs a signer's passkey over a `cancel` challenge.
  */
-export async function cancelProposal(p: Pick<Proposal, 'id' | 'status'>): Promise<Proposal> {
+export async function cancelProposal(
+  p: Pick<Proposal, 'id' | 'status'>,
+  store?: StoreContext,
+): Promise<Proposal> {
   if (p.status === 'draft') {
-    return api<Proposal>(`/v1/account/proposals/${p.id}/cancel`, { method: 'POST', json: {} });
+    return api<Proposal>(`/v1/account/proposals/${p.id}/cancel`, {
+      method: 'POST',
+      json: {},
+      store,
+    });
   }
   const ch = await api<SignerChallenge>(`/v1/account/proposals/${p.id}/challenge`, {
     method: 'POST',
     json: { intent: 'cancel' },
+    store,
   });
   const response = await signChallenge(ch.challengeB64u, ch.allowCredentials);
   return api<Proposal>(`/v1/account/proposals/${p.id}/cancel`, {
     method: 'POST',
     json: { response },
+    store,
   });
 }
 

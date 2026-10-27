@@ -1,14 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MAX_CHECKOUT_DOMAINS, type ConnectedSite } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import { api } from '@/lib/api';
 import { domainsUsedByConnections } from '@/lib/connect';
-import { notificationEmailStatus } from '@/lib/notification-email';
+import { keepUnsavedEdits, notificationEmailStatus } from '@/lib/notification-email';
 import { CHECKOUT_DEFAULTS_SCOPE_NOTE, type CheckoutSettings } from '@/lib/payments';
 import { withStepUp } from '@/lib/webauthn';
 
@@ -32,11 +32,25 @@ export default function CheckoutSettingsPage() {
   const [confirmedRemoval, setConfirmedRemoval] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
+  // The server copy the form was last filled from. When the notification form below saves, the
+  // server copy changes under this form: keep what the person typed here (C13).
+  const shown = useRef<{ domains: string; feePayer: Payer; gasPayer: Payer } | null>(null);
   useEffect(() => {
     if (!settings.data) return;
-    setDomains(settings.data.checkout_domains.join('\n'));
-    setFeePayer(settings.data.default_fee_payer);
-    setGasPayer(settings.data.default_gas_payer);
+    const server = {
+      domains: settings.data.checkout_domains.join('\n'),
+      feePayer: settings.data.default_fee_payer,
+      gasPayer: settings.data.default_gas_payer,
+    };
+    const next = shown.current
+      ? keepUnsavedEdits({ domains, feePayer, gasPayer }, shown.current, server)
+      : server;
+    shown.current = server;
+    setDomains(next.domains);
+    setFeePayer(next.feePayer);
+    setGasPayer(next.gasPayer);
+    // Only when the server copy changes; the form's own values are read, not watched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.data]);
 
   if (!store || !context) return null;
@@ -78,6 +92,8 @@ export default function CheckoutSettingsPage() {
       }),
     );
     if (res) {
+      // This form's own save: show exactly what the server kept.
+      shown.current = null;
       settings.setData(res);
       setConfirmedRemoval(null);
       setSaved(true);

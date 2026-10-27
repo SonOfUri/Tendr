@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   afterApproval,
   defaultChoice,
+  payoutAttempt,
   payoutStep,
   settlementAction,
   type SettlementView,
@@ -41,6 +42,25 @@ describe('choose payout', () => {
   it('waits for the account while it is being created', () => {
     expect(payoutStep(view({ account_status: 'provisioning' }))).toBe('account-pending');
     expect(payoutStep(view({ account_status: null }))).toBe('account-pending');
+  });
+
+  it('C14: a live account that does not exist yet waits for going live, never spins', () => {
+    expect(payoutStep(view({ livemode: true, account_status: null }))).toBe('not-live');
+    expect(payoutStep(view({ livemode: true, account_status: 'provisioning' }))).toBe(
+      'account-pending',
+    );
+  });
+
+  it('C14: a retry after a failed passkey approves the draft it made, never a second one', () => {
+    expect(payoutAttempt(null, 'usdc')).toEqual({ k: 'draft' });
+    expect(payoutAttempt({ id: 'prop_1', asset: 'usdc' }, 'usdc')).toEqual({
+      k: 'reuse',
+      id: 'prop_1',
+    });
+    expect(payoutAttempt({ id: 'prop_1', asset: 'usdc' }, 'wnear')).toEqual({
+      k: 'replace',
+      cancel: 'prop_1',
+    });
     expect(payoutStep(view({ account_status: 'failed' }))).toBe('account-failed');
   });
 

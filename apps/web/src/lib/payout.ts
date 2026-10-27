@@ -22,13 +22,16 @@ export interface SettlementView {
   choices: SettlementChoice[];
 }
 
-export type PayoutStep = 'set' | 'waiting' | 'account-pending' | 'account-failed' | 'choose';
+export type PayoutStep =
+  'set' | 'waiting' | 'not-live' | 'account-pending' | 'account-failed' | 'choose';
 
 /** What to show for a store's payout. */
 export function payoutStep(v: SettlementView): PayoutStep {
   if (v.settlement) return 'set';
   if (v.pending) return 'waiting';
   if (v.account_status === 'failed') return 'account-failed';
+  // C14: live mode before going live has no account at all; nothing is being created.
+  if (v.account_status === null && v.livemode) return 'not-live';
   if (v.account_status !== 'active') return 'account-pending';
   return 'choose';
 }
@@ -48,4 +51,22 @@ export function afterApproval(status: ProposalStatus): 'done' | 'needs-signers' 
   if (status === 'executed' || status === 'executing') return 'done';
   if (status === 'pending' || status === 'timelocked' || status === 'draft') return 'needs-signers';
   return 'failed';
+}
+
+/** A `set_settlement` draft this screen made and has not approved yet (its passkey prompt failed). */
+export interface OwnDraft {
+  id: string;
+  asset: string;
+}
+
+/**
+ * What "Approve payout" does (C14): approve the draft an earlier, failed attempt left for the
+ * same token; replace it (drop the draft, draft anew) for another token; else draft one.
+ */
+export function payoutAttempt(
+  own: OwnDraft | null,
+  asset: string,
+): { k: 'draft' } | { k: 'reuse'; id: string } | { k: 'replace'; cancel: string } {
+  if (!own) return { k: 'draft' };
+  return own.asset === asset ? { k: 'reuse', id: own.id } : { k: 'replace', cancel: own.id };
 }

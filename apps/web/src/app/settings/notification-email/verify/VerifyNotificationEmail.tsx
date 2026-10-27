@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Spinner } from '@tendr/ui';
 import { api, ApiError, errorMessage } from '@/lib/api';
+import { verifyCopy } from '@/lib/notification-email';
 
 type State =
   | { k: 'working' }
@@ -64,14 +65,11 @@ export function VerifyNotificationEmail() {
       </div>
     );
   }
+  const copy = verifyCopy(state.k);
   return (
     <div className="card">
-      <h1>{state.k === 'invalid' ? 'This link has expired' : 'We couldn’t confirm your email'}</h1>
-      <Alert tone="danger">
-        {state.k === 'invalid'
-          ? 'This link is invalid, already used, expired, or replaced by a newer one.'
-          : state.message}
-      </Alert>
+      <h1>{copy.heading}</h1>
+      <Alert tone="danger">{state.k === 'invalid' ? copy.message : state.message}</Alert>
       <p className="muted">
         Ask for a new link from <Link href={SETTINGS}>Checkout settings</Link> (or from your site’s
         tendr plugin settings).

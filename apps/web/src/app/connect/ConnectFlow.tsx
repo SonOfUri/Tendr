@@ -25,6 +25,8 @@ import {
   checkedRedirect,
   clearConnectParams,
   clearConnectWaiting,
+  clearWaitingOnPageHide,
+  connectNextStep,
   eligibleStores,
   hasConnectParams,
   loadConnectParams,
@@ -33,6 +35,7 @@ import {
   saveConnectParams,
   siteLabel,
   siteOrigin,
+  waitingNextStep,
   type ConnectParams,
 } from '@/lib/connect';
 import { previewSlug } from '@/lib/navigation';
@@ -64,11 +67,9 @@ function payoutPhase(store: Store, isNew: boolean): Phase {
   return { k: 'payout', store, storeContext: { merchantId: store.id, livemode: false }, isNew };
 }
 
-/** Where a signed-in person goes next. */
+/** Where a signed-in person goes next (lib/connect.ts `connectNextStep`). */
 function nextPhase(me: Me): Phase {
-  if (me.passkeys.length === 0) return { k: 'passkey' };
-  if (me.stores.length === 0) return { k: 'new-store' };
-  return { k: 'pick' };
+  return { k: connectNextStep(me) };
 }
 
 export function ConnectFlow() {
@@ -120,17 +121,23 @@ export function ConnectFlow() {
   }, [loadMe]);
 
   // While the person confirms their email (or makes their passkey) in the tab the email link
-  // opened, this window checks for the session and carries on by itself.
-  const waiting = phase.k === 'email-sent' || phase.k === 'passkey';
+  // opened, this window checks for the session and carries on by itself: from "check your inbox"
+  // as soon as there is a session (to the passkey screen if none was made there), from the
+  // passkey screen once there is a passkey.
+  const waiting = phase.k === 'email-sent' || phase.k === 'passkey' ? phase.k : null;
   useEffect(() => {
     if (!waiting) return;
     const t = setInterval(() => {
       void loadMe(true).then((m) => {
-        if (m && m.passkeys.length > 0) setPhase(nextPhase(m));
+        const next = waitingNextStep(waiting, m);
+        if (next) setPhase({ k: next });
       });
     }, POLL_MS);
     return () => clearInterval(t);
   }, [waiting, loadMe]);
+
+  // The flag that sends an email-link tab back here goes once this window does.
+  useEffect(() => clearWaitingOnPageHide(), []);
 
   function cancel() {
     if (!params) return;
@@ -415,48 +422,53 @@ function StorePicker({
 }) {
   const [chosen, setChosen] = useState<string>(stores[0]?.id ?? '');
   const store = stores.find((s) => s.id === chosen);
+  if (stores.length === 0) {
+    return (
+      <>
+        <h1>Create a store</h1>
+        <p className="muted">
+          You are not an owner or admin of any store, so you can’t connect a site to one. Create a
+          store for this site, or ask an owner to make you an admin.
+        </p>
+        <Button onClick={onNew}>Create a store</Button>
+      </>
+    );
+  }
   return (
     <>
       <h1>Choose a store</h1>
-      {stores.length === 0 ? (
-        <p className="muted">
-          You are not an owner or admin of any store, so you can’t connect a site to one. Create a
-          new store, or ask an owner to make you an admin.
-        </p>
-      ) : (
-        <form
-          className="form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (store) onPick(store);
-          }}
-        >
-          <ul className="choices">
-            {stores.map((s) => (
-              <li key={s.id}>
-                <label>
-                  <input
-                    type="radio"
-                    name="store"
-                    value={s.id}
-                    checked={chosen === s.id}
-                    onChange={() => setChosen(s.id)}
-                  />
-                  <span className="grow">
-                    <strong>{s.name}</strong>{' '}
-                    <span className="muted small">
-                      {s.slug} · {s.role}
-                    </span>
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (store) onPick(store);
+        }}
+      >
+        <ul className="choices">
+          {stores.map((s) => (
+            <li key={s.id}>
+              <label>
+                <input
+                  type="radio"
+                  name="store"
+                  value={s.id}
+                  checked={chosen === s.id}
+                  onChange={() => setChosen(s.id)}
+                />
+                <span className="grow">
+                  <strong>{s.name}</strong>{' '}
+                  <span className="muted small">
+                    {s.slug} · {s.role}
                   </span>
-                </label>
-              </li>
-            ))}
-          </ul>
-          <Button type="submit" disabled={!store}>
-            Continue
-          </Button>
-        </form>
-      )}
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+        <Button type="submit" disabled={!store}>
+          Continue
+        </Button>
+      </form>
       <Button variant="secondary" onClick={onNew}>
         Create a new store
       </Button>

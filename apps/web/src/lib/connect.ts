@@ -51,6 +51,31 @@ function plainHttpUrl(raw: string): URL | null {
   return u;
 }
 
+/** Hosts a development site may use over http (as the API's local-host list). */
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * Why a site address would be refused by the API (`siteOriginOf`), or null: https (http only on
+ * localhost, 127.0.0.1 or [::1] outside production), no credentials, query or fragment. Checked
+ * here too, so a bad link fails before sign-in and Cancel never sends the popup somewhere the API
+ * would not.
+ */
+export function siteUrlProblem(raw: string, production: boolean): string | null {
+  let u: URL;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    return 'The site address is not a valid web address.';
+  }
+  if (u.username || u.password) return 'The site address must not carry a user name.';
+  if (u.search || u.hash || raw.includes('#') || raw.includes('?')) {
+    return 'The site address must not carry a query or a fragment.';
+  }
+  if (u.protocol === 'https:') return null;
+  if (u.protocol === 'http:' && !production && LOCAL_HOSTS.has(u.hostname)) return null;
+  return 'The site address must use https://.';
+}
+
 /** Whether the query carries any connect parameter (a fresh start from the plugin). */
 export function hasConnectParams(q: URLSearchParams): boolean {
   return FIELDS.some((f) => q.has(f));
@@ -73,6 +98,8 @@ export function parseConnectParams(q: URLSearchParams): ParseResult {
   }
   const site = plainHttpUrl(parsed.data.site_url);
   if (!site) return fail('The site address is not a valid web address.');
+  const problem = siteUrlProblem(parsed.data.site_url, process.env.NODE_ENV === 'production');
+  if (problem) return fail(problem);
   const ret = plainHttpUrl(parsed.data.return_url);
   if (!ret || ret.origin !== site.origin) {
     return fail('The return address is not on your site. Start again from your site.');
@@ -158,6 +185,47 @@ export function clearConnectWaiting(storage: Storage | null = defaultStorage('lo
   } catch {
     // Nothing to clear.
   }
+}
+
+/**
+ * Clears the waiting flag when the popup goes away (closed, or navigated off), so an email link
+ * opened later does not send its tab back to a window that is gone. Returns the unsubscribe.
+ */
+export function clearWaitingOnPageHide(
+  target: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> = globalThis,
+  storage: Storage | null = defaultStorage('local'),
+): () => void {
+  const onHide = () => clearConnectWaiting(storage);
+  target.addEventListener('pagehide', onHide);
+  return () => target.removeEventListener('pagehide', onHide);
+}
+
+/** A signed-in person, as far as the next step needs. */
+type Who = { passkeys: readonly unknown[]; stores: readonly { role: string }[] };
+
+/**
+ * Where a signed-in person goes next: a passkey first; then a store they own or administer to
+ * pick, or a new one when they have none they may connect (C13: never an empty picker).
+ */
+export function connectNextStep(me: Who): 'passkey' | 'new-store' | 'pick' {
+  if (me.passkeys.length === 0) return 'passkey';
+  const eligible = me.stores.filter((s) => s.role === 'owner' || s.role === 'admin');
+  return eligible.length === 0 ? 'new-store' : 'pick';
+}
+
+/**
+ * While the popup waits for the other tab (C13): on the "check your inbox" screen any session
+ * moves it on (to the passkey screen when none was made in the other tab); on the passkey screen
+ * only a passkey does. Null: keep waiting.
+ */
+export function waitingNextStep(
+  screen: 'email-sent' | 'passkey',
+  me: Who | null,
+): 'passkey' | 'new-store' | 'pick' | null {
+  if (!me) return null;
+  const next = connectNextStep(me);
+  if (screen === 'passkey' && next === 'passkey') return null;
+  return next;
 }
 
 /** The stores a person may connect a site to: those they own or administer. */
