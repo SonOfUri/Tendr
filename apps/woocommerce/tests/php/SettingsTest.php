@@ -35,6 +35,29 @@ class SettingsTest extends Tendr_Test_Case {
 		$this->assertStringContainsString( 'Test mode', $html );
 		$this->assertStringContainsString( 'action=tendr_disconnect', $html );
 		$this->assertStringNotContainsString( 'data-tendr-connect=', $html );
+		// C2: Disconnect posts the form with its own nonce; no GET link can disconnect.
+		$this->assertMatchesRegularExpression( '/<button[^>]*formmethod="post"[^>]*action=tendr_disconnect[^>]*data-tendr-disconnect/', $html );
+		$this->assertStringContainsString( 'name="tendr_disconnect_nonce"', $html );
+		$this->assertStringNotContainsString( '_wpnonce', $html );
+	}
+
+	public function test_a_site_wide_notice_says_test_mode_to_store_managers(): void {
+		self::connect_locally();
+		$this->assertSame( '', Tendr_Settings::admin_notices_html(), 'guests see nothing' );
+		$customer = self::factory()->user->create( array( 'role' => 'customer' ) );
+		wp_set_current_user( $customer );
+		$this->assertSame( '', Tendr_Settings::admin_notices_html(), 'customers see nothing' );
+
+		$this->login_admin();
+		$html = Tendr_Settings::admin_notices_html();
+		$this->assertStringContainsString( 'tendr is in test mode', $html );
+		$this->assertStringContainsString( esc_url( Tendr_Settings::url() ), $html );
+
+		update_option( 'tendr_mode', 'live' );
+		$this->assertSame( '', Tendr_Settings::admin_notices_html(), 'live mode' );
+		update_option( 'tendr_mode', 'test' );
+		delete_option( 'tendr_connection' );
+		$this->assertSame( '', Tendr_Settings::admin_notices_html(), 'not connected' );
 	}
 
 	public function test_secrets_never_appear_in_settings_page_html(): void {

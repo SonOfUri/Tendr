@@ -91,6 +91,20 @@ final class Tendr_Connect {
 	 * The callback page's load hook: handle the return and print the bare popup page.
 	 */
 	public static function handle_callback_request(): void {
+		$html = self::callback_page_for_request();
+		nocache_headers();
+		header( 'Content-Type: text/html; charset=utf-8' );
+		header( 'Referrer-Policy: no-referrer' );
+		echo $html; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in render_callback_page().
+		exit;
+	}
+
+	/**
+	 * The callback request: handle the return from tendr (its `state`, `code`, `error` query
+	 * arguments), flash the result for the settings page the popup reloads, and return the popup
+	 * page's HTML.
+	 */
+	public static function callback_page_for_request(): string {
 		$params = array();
 		foreach ( array( 'state', 'code', 'error' ) as $name ) {
 			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- the single-use state, bound to this admin, is the CSRF check.
@@ -105,31 +119,47 @@ final class Tendr_Connect {
 			'connected' => 'success',
 			'cancelled' => 'info',
 		);
-		Tendr_Settings::flash( $type[ $result['status'] ] ?? 'error', $result['message'] );
-		nocache_headers();
-		header( 'Content-Type: text/html; charset=utf-8' );
-		header( 'Referrer-Policy: no-referrer' );
-		echo self::render_callback_page( $result ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in render_callback_page().
+		if ( isset( $result['notice'] ) ) {
+			Tendr_Settings::flash( 'warning', $result['message'] . ' ' . $result['notice'] );
+		} else {
+			Tendr_Settings::flash( $type[ $result['status'] ] ?? 'error', $result['message'] );
+		}
+		return self::render_callback_page( $result );
+	}
+
+	/**
+	 * Disconnect from the settings page (a POST of the settings form, never a link).
+	 */
+	public static function handle_disconnect_request(): void {
+		if ( ! self::disconnect_from_request() ) {
+			wp_die( esc_html__( 'You are not allowed to do that.', 'tendr' ), 403 );
+		}
+		wp_safe_redirect( Tendr_Settings::url() );
 		exit;
 	}
 
 	/**
-	 * Disconnect from the settings page.
+	 * Disconnect when the request is a POST carrying the `tendr_disconnect` nonce from a store
+	 * manager. Returns whether it did.
 	 */
-	public static function handle_disconnect_request(): void {
-		$nonce = isset( $_GET['_wpnonce'] ) ? sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ) : '';
-		if ( ! wp_verify_nonce( $nonce, 'tendr_disconnect' ) || ! current_user_can( 'manage_woocommerce' ) ) {
-			wp_die( esc_html__( 'You are not allowed to do that.', 'tendr' ), 403 );
+	public static function disconnect_from_request(): bool {
+		$method = isset( $_SERVER['REQUEST_METHOD'] ) ? strtoupper( sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) ) : '';
+		$nonce  = isset( $_POST['tendr_disconnect_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['tendr_disconnect_nonce'] ) ) : '';
+		if ( 'POST' !== $method || ! wp_verify_nonce( $nonce, 'tendr_disconnect' ) || ! current_user_can( 'manage_woocommerce' ) ) {
+			return false;
 		}
 		self::disconnect();
-		wp_safe_redirect( Tendr_Settings::url() );
-		exit;
+		return true;
 	}
 
 	/**
 	 * Why Connect cannot run on this site, or null when it can. Capabilities are checked separately.
 	 */
 	public static function blocker(): ?WP_Error {
+		$salts = Tendr_Credentials::site_salt_problem();
+		if ( null !== $salts ) {
+			return new WP_Error( 'tendr_salts', Tendr_Credentials::salt_message( $salts ) );
+		}
 		$home = untrailingslashit( home_url() );
 		if ( self::origin_of( admin_url() ) !== self::origin_of( $home ) ) {
 			return new WP_Error(
@@ -252,6 +282,23 @@ final class Tendr_Connect {
 		if ( '' === $code || strlen( $code ) > 200 ) {
 			return self::result( 'error', __( 'Connection failed. Close this window and click Connect again.', 'tendr' ) );
 		}
+		// C1: never take credentials this site cannot keep secret (the code is left unredeemed).
+		$salts = Tendr_Credentials::site_salt_problem();
+		if ( null !== $salts ) {
+			return self::result( 'error', Tendr_Credentials::salt_message( $salts ) );
+		}
+
+		// A3: the connection this site holds now, kept until the new one is stored, then handed over.
+		$previous = self::is_connected() ? self::connection() : null;
+		$old_keys = array();
+		if ( null !== $previous ) {
+			foreach ( Tendr_Credentials::MODES as $mode ) {
+				$held = Tendr_Credentials::get( $mode );
+				if ( null !== $held ) {
+					$old_keys[ $mode ] = $held['secret_key'];
+				}
+			}
+		}
 
 		$issued = Tendr_Api_Client::request_public(
 			'POST',
@@ -276,7 +323,43 @@ final class Tendr_Connect {
 		}
 
 		/* translators: %s: the tendr store name. */
-		return self::result( 'connected', sprintf( __( 'Connected to %s', 'tendr' ), $issued['store']['name'] ) );
+		$result = self::result( 'connected', sprintf( __( 'Connected to %s', 'tendr' ), $issued['store']['name'] ) );
+		if ( null !== $previous && $previous['id'] !== $issued['connection_id'] && ! self::replace_previous( $old_keys, (string) $issued['connection_id'] ) ) {
+			$result['notice'] = __( 'tendr could not move this site\'s earlier connection to the new one, so payments and refunds for orders placed before you reconnected may not update here. Check those orders on your tendr dashboard.', 'tendr' );
+		}
+		return $result;
+	}
+
+	/**
+	 * A3: after a re-connect (for example at a new site address, which tendr treats as a new
+	 * site), hand the previous connection's orders to the new one: `POST /v1/connect/replace`
+	 * authenticated with the previous connection's key. tendr then revokes it, sends webhooks for
+	 * its orders here, and lets this connection refund them. 401 means there was nothing left to
+	 * hand over (tendr already replaced it on a same-address re-connect, or it was removed). The
+	 * old keys exist only in memory here and are forgotten after.
+	 *
+	 * @param array<string, string> $old_keys  The previous connection's secret keys by mode.
+	 * @param string                $successor The new connection id.
+	 * @return bool Whether the hand-over is done (or was not needed).
+	 */
+	private static function replace_previous( array $old_keys, string $successor ): bool {
+		$done = array() === $old_keys;
+		foreach ( $old_keys as $mode => $key ) {
+			$result = Tendr_Api_Client::request_with_key( 'POST', '/v1/connect/replace', array( 'successor_connection_id' => $successor ), $key );
+			if ( ! is_wp_error( $result ) || 401 === (int) ( $result->get_error_data()['status'] ?? 0 ) ) {
+				$done = true;
+				break;
+			}
+		}
+		foreach ( array_keys( $old_keys ) as $mode ) {
+			if ( function_exists( 'sodium_memzero' ) ) {
+				sodium_memzero( $old_keys[ $mode ] );
+			}
+		}
+		if ( ! $done && function_exists( 'wc_get_logger' ) ) {
+			wc_get_logger()->warning( 'tendr re-connect: the previous connection could not be handed to the new one.', array( 'source' => 'tendr' ) );
+		}
+		return $done;
 	}
 
 	/**
@@ -337,6 +420,12 @@ final class Tendr_Connect {
 		update_option( self::MODE, 'test' );
 		self::set_gateway_enabled( false );
 
+		// A4: tendr cancels their open checkouts; a deposit already on its way still lands, but its
+		// outcome can no longer reach this site. Say so on each order still waiting.
+		foreach ( self::open_orders() as $order ) {
+			$order->add_order_note( __( 'tendr disconnected — a payment for this order will not be reported here; check the tendr dashboard.', 'tendr' ) );
+		}
+
 		if ( 'revoked' === $api ) {
 			Tendr_Settings::flash( 'success', __( 'Disconnected from tendr. This site\'s keys are revoked.', 'tendr' ) );
 		} elseif ( 'failed' === $api ) {
@@ -365,6 +454,42 @@ final class Tendr_Connect {
 			update_option( self::SITE_ID, $id, false );
 		}
 		return $id;
+	}
+
+	/**
+	 * Pending tendr orders that have a crypto checkout (a session), oldest first: the orders a
+	 * Disconnect leaves without payment updates.
+	 *
+	 * @param int $limit At most this many.
+	 * @return WC_Order[]
+	 */
+	public static function open_orders( int $limit = 500 ): array {
+		if ( ! function_exists( 'wc_get_orders' ) ) {
+			return array();
+		}
+		$orders = wc_get_orders(
+			array(
+				'status'         => array( 'pending' ),
+				'payment_method' => 'tendr',
+				'limit'          => $limit,
+				'orderby'        => 'date',
+				'order'          => 'ASC',
+			)
+		);
+		// Filtered here, not by a meta query: the legacy (posts) order store does not support one.
+		return array_values(
+			array_filter(
+				is_array( $orders ) ? $orders : array(),
+				static fn( $o ) => $o instanceof WC_Order && '' !== (string) $o->get_meta( '_tendr_session_id' )
+			)
+		);
+	}
+
+	/**
+	 * How many orders open_orders() finds (for the Disconnect confirmation).
+	 */
+	public static function open_order_count(): int {
+		return count( self::open_orders() );
 	}
 
 	/**

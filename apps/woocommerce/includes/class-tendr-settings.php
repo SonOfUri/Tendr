@@ -32,6 +32,38 @@ final class Tendr_Settings {
 		add_action( 'admin_enqueue_scripts', array( self::class, 'enqueue' ) );
 		add_action( 'admin_post_tendr_set_mode', array( self::class, 'handle_mode_request' ) );
 		add_action( 'admin_post_tendr_save_settings', array( self::class, 'handle_settings_request' ) );
+		add_action( 'admin_notices', array( self::class, 'print_admin_notices' ) );
+	}
+
+	/**
+	 * `admin_notices`: see admin_notices_html().
+	 */
+	public static function print_admin_notices(): void {
+		echo self::admin_notices_html(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in admin_notices_html().
+	}
+
+	/**
+	 * Site-wide notices for store managers (`manage_woocommerce`):
+	 * - "tendr is in test mode" while connected in test mode (B2): only managers see the payment
+	 *   method then, and payments are simulated;
+	 * - the WordPress security keys cannot protect tendr's keys (C1): Connect is refused until
+	 *   they are fixed.
+	 */
+	public static function admin_notices_html(): string {
+		if ( ! current_user_can( 'manage_woocommerce' ) ) {
+			return '';
+		}
+		$html  = '';
+		$salts = Tendr_Credentials::site_salt_problem();
+		if ( null !== $salts ) {
+			$html .= '<div class="notice notice-error"><p>' . esc_html( Tendr_Credentials::salt_message( $salts ) ) . '</p></div>';
+		}
+		if ( Tendr_Connect::is_connected() && 'test' === Tendr_Connect::mode() ) {
+			$html .= '<div class="notice notice-warning tendr-test-mode"><p><strong>' . esc_html__( 'tendr is in test mode.', 'tendr' ) . '</strong> '
+				. esc_html__( 'Crypto payments are simulated and only store managers see the payment method.', 'tendr' )
+				. ' <a href="' . esc_url( self::url() ) . '">' . esc_html__( 'Go live in the tendr settings', 'tendr' ) . '</a></p></div>';
+		}
+		return $html;
 	}
 
 	// ------------------------------------------------------------------ mode and go live.
@@ -423,8 +455,7 @@ final class Tendr_Settings {
 			'tendr-admin-connect',
 			'tendrConnect',
 			array(
-				'cancelled' => __( 'Connection cancelled', 'tendr' ),
-				'confirm'   => __( 'Disconnect this site from tendr? Its keys are revoked and it stops taking crypto payments.', 'tendr' ),
+				'confirm' => __( 'Disconnect this site from tendr? Its keys are revoked and it stops taking crypto payments.', 'tendr' ),
 			)
 		);
 	}
@@ -495,11 +526,10 @@ final class Tendr_Settings {
 	 * @param array $connection Public connection details.
 	 */
 	private static function connected( array $connection ): string {
-		$dashboard  = Tendr_Plugin::checkout_base() . '/dashboard';
-		$disconnect = wp_nonce_url( admin_url( 'admin-post.php?action=tendr_disconnect' ), 'tendr_disconnect' );
-		$live       = 'live' === Tendr_Connect::mode();
-		$mode       = $live ? __( 'Live mode', 'tendr' ) : __( 'Test mode', 'tendr' );
-		$post       = admin_url( 'admin-post.php' );
+		$dashboard = Tendr_Plugin::checkout_base() . '/dashboard';
+		$live      = 'live' === Tendr_Connect::mode();
+		$mode      = $live ? __( 'Live mode', 'tendr' ) : __( 'Test mode', 'tendr' );
+		$post      = admin_url( 'admin-post.php' );
 
 		// Every control posts WooCommerce's settings form to its own admin-post action
 		// (formaction), each with its own nonce: this page is inside WooCommerce's <form>.
@@ -531,9 +561,31 @@ final class Tendr_Settings {
 		$html .= '<p>'
 			. '<a class="button" href="' . esc_url( $dashboard ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Open tendr dashboard', 'tendr' ) . '</a> '
 			. '<a class="button" href="' . esc_url( $dashboard . '/review' ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Review queue', 'tendr' ) . '</a> '
-			. '<a class="button button-link-delete" data-tendr-disconnect href="' . esc_url( $disconnect ) . '">' . esc_html__( 'Disconnect', 'tendr' ) . '</a>'
+			. wp_nonce_field( 'tendr_disconnect', 'tendr_disconnect_nonce', false, false )
+			. '<button type="submit" class="button button-link-delete" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', 'tendr_disconnect', $post ) ) . '" data-tendr-disconnect="' . esc_attr( self::disconnect_confirmation() ) . '">' . esc_html__( 'Disconnect', 'tendr' ) . '</button>'
 			. '</p>';
 		return $html;
+	}
+
+	/**
+	 * The Disconnect confirmation, naming the orders still waiting for a crypto payment (A4).
+	 */
+	private static function disconnect_confirmation(): string {
+		$text  = __( 'Disconnect this site from tendr? Its keys are revoked and it stops taking crypto payments.', 'tendr' );
+		$count = Tendr_Connect::open_order_count();
+		if ( $count > 0 ) {
+			$text .= ' ' . sprintf(
+				/* translators: %d: number of orders. */
+				_n(
+					'%d order is waiting for a crypto payment. tendr closes its checkout, and a payment already on its way will not be reported on the order here: check it on your tendr dashboard.',
+					'%d orders are waiting for a crypto payment. tendr closes their checkouts, and a payment already on its way will not be reported on the order here: check them on your tendr dashboard.',
+					$count,
+					'tendr'
+				),
+				$count
+			);
+		}
+		return $text;
 	}
 
 	/**

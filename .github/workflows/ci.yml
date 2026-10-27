@@ -175,6 +175,12 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install
         run: npm ci
+      - name: Cache wp-env downloads
+        # WordPress and WooCommerce zips (pinned in .wp-env.tests.json).
+        uses: actions/cache@v4
+        with:
+          path: ~/.wp-env
+          key: wp-env-tests-${{ hashFiles('apps/woocommerce/.wp-env.tests.json', 'package-lock.json') }}
       - name: Start wp-env (tests)
         run: npm run env:start:tests --workspace=@tendr/woocommerce
       - name: PHPUnit

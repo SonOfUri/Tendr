@@ -40,6 +40,20 @@ final class Tendr_Api_Client {
 	}
 
 	/**
+	 * Call the API with a given secret key (the OLD connection's key, held in memory only while a
+	 * re-connect hands the old connection's orders over).
+	 *
+	 * @param string $method     HTTP method.
+	 * @param string $path       Path below the API base.
+	 * @param array  $body       JSON body.
+	 * @param string $secret_key The key.
+	 * @return array|WP_Error
+	 */
+	public static function request_with_key( string $method, string $path, array $body, string $secret_key ) {
+		return self::send( $method, $path, $body, array( 'Authorization' => 'Bearer ' . $secret_key ) );
+	}
+
+	/**
 	 * Call an unauthenticated endpoint (`POST /v1/connect/token`).
 	 *
 	 * @param string $method  HTTP method.
