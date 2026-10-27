@@ -37,6 +37,7 @@ import {
 import { depositInFlight } from './in-flight.js';
 import { resolvePayers } from './pricing.js';
 import { tokenInfo } from './tokens.js';
+import { connectionMayAct } from './webhooks.js';
 
 /**
  * The tenant (merchant + mode) plus its scoped client: the request's principal and `req.db`.
@@ -371,7 +372,11 @@ export async function createSession(
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
 
-/** The full store-side view of a session: its settings, payments with their refunds, and totals. */
+/**
+ * The full store-side view of a session: its settings, payments with their refunds, and totals.
+ * A connection key sees only its own connection's (or a replaced predecessor's) sessions (B1);
+ * any other session is NOT_FOUND.
+ */
 export async function sessionView(ctx: CheckoutCtx, id: string) {
   const s = await ctx.db.session.findFirst({
     where: { id },
@@ -382,7 +387,9 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
       },
     },
   });
-  if (!s) throw notFound('Session not found');
+  if (!s || !(await connectionMayAct(ctx.connectionId, ctx.merchantId, s.connectionId))) {
+    throw notFound('Session not found');
+  }
 
   let settledOut = 0n;
   let refundCount = 0;
@@ -495,9 +502,19 @@ export async function expireSession(ctx: CheckoutCtx, id: string): Promise<Sessi
     const tenant = { merchantId: t.merchantId, livemode: t.livemode };
     const s = await tx.session.findFirst({
       where: { id, ...tenant },
-      select: { id: true, merchantId: true, livemode: true, expiresAt: true, externalRef: true },
+      select: {
+        id: true,
+        merchantId: true,
+        livemode: true,
+        expiresAt: true,
+        externalRef: true,
+        connectionId: true,
+      },
     });
-    if (!s) throw notFound('Session not found');
+    // B1: a connection key cancels only its own connection's (or a predecessor's) sessions.
+    if (!s || !(await connectionMayAct(ctx.connectionId, t.merchantId, s.connectionId))) {
+      throw notFound('Session not found');
+    }
     await lockSession(tx, id);
     const cur = await tx.session.findFirstOrThrow({
       where: { id, ...tenant },
@@ -511,6 +528,43 @@ export async function expireSession(ctx: CheckoutCtx, id: string): Promise<Sessi
     await expireInTx(tx, t, id, s.externalRef, 'canceled');
   });
   return sessionView(ctx, id);
+}
+
+/**
+ * A4: when a connection goes away with no successor (a site Disconnect, a dashboard removal, the
+ * sweeper), its open sessions — and those of the connections it replaced — would stay payable
+ * while their outcome can no longer reach the site. Each `PENDING_DEPOSIT` one with no deposit in
+ * flight is cancelled (`canceled`, `checkout.session.expired`) in the caller's transaction; one
+ * with a deposit in flight is left to finish (it is counted, for the caller to report).
+ */
+export async function expireConnectionSessions(
+  tx: Prisma.TransactionClient,
+  merchantId: string,
+  connectionIds: string[],
+  now = new Date(),
+): Promise<{ expired: number; inFlight: number }> {
+  const out = { expired: 0, inFlight: 0 };
+  if (connectionIds.length === 0) return out;
+  const open = await tx.session.findMany({
+    where: { merchantId, connectionId: { in: connectionIds }, status: 'PENDING_DEPOSIT' },
+    select: { id: true, merchantId: true, livemode: true, expiresAt: true, externalRef: true },
+    orderBy: { id: 'asc' },
+  });
+  for (const s of open) {
+    await lockSession(tx, s.id);
+    const cur = await tx.session.findFirst({
+      where: { id: s.id, merchantId, livemode: s.livemode },
+      select: { status: true },
+    });
+    if (cur?.status !== 'PENDING_DEPOSIT') continue;
+    if (await depositInFlight(tx, s, now)) {
+      out.inFlight += 1;
+      continue;
+    }
+    await expireInTx(tx, { merchantId, livemode: s.livemode }, s.id, s.externalRef, 'canceled');
+    out.expired += 1;
+  }
+  return out;
 }
 
 /**

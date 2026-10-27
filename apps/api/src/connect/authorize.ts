@@ -10,11 +10,13 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import {
   CONNECT_CODE_TTL_MS,
+  ConnectReplaceRequestSchema,
   ConnectTokenRequestSchema,
   ConnectTokenResponseSchema,
   type ConnectAuthorizeRequest,
   type ConnectBlockingCode,
   type ConnectedSite,
+  type ConnectReplaceResponse,
   type ConnectStatusResponse,
   type ConnectTokenResponse,
 } from '@tendr/contracts';
@@ -22,6 +24,7 @@ import { goLiveStatus, signerPasskeyCount } from '../accounts/accounts.js';
 import { readinessFor, type CheckoutCtx } from '../checkout/sessions.js';
 import { repointUndeliveredDeliveries } from '../checkout/webhooks.js';
 import { env } from '../env.js';
+import { recordEvent } from '../events/record.js';
 import { sha256 } from '../lib/crypto.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
@@ -252,12 +255,9 @@ export async function redeem(body: unknown): Promise<ConnectTokenResponse> {
 
 /**
  * Re-connect (spec §2.9, ruling W5): once a new connection for a site is redeemed, the store's
- * other live connections for the same site (origin + path) are revoked as a Disconnect from the
- * site would (`'site'`: the domain stays). When one of them owned the domain (`added_domain`),
- * ownership passes to the new connection, so a later dashboard removal can still take it away.
- * Runs in the redeem transaction, holding the store lock, so an approval that is never redeemed
- * never breaks a working site. Each replaced connection records `replaced_by_id` → the new one
- * (ruling W8), so webhooks for its earlier orders follow the site to its new endpoints.
+ * other live connections for the same site (origin + path) are replaced by it
+ * (`applyReplacement`). Runs in the redeem transaction, holding the store lock, so an approval
+ * that is never redeemed never breaks a working site.
  */
 async function replacePreviousConnections(
   tx: Tx,
@@ -273,26 +273,117 @@ async function replacePreviousConnections(
       revokedAt: null,
       id: { not: connectionId },
     },
-    select: { id: true, siteUrl: true, addedDomain: true },
+    select: { id: true, siteUrl: true },
   });
-  let ownedDomain = fresh.addedDomain;
   for (const peer of peers) {
     if (siteKey(peer.siteUrl) !== site) continue; // another subdirectory site on that origin
-    await revokeConnection(tx, peer.id, 'site');
-    // Ruling W8: the old connection's sessions now deliver to this connection's endpoints.
-    await tx.connection.update({ where: { id: peer.id }, data: { replacedById: connectionId } });
-    // Ruling W9: its undelivered webhooks go to this connection's endpoints, each event once.
-    await repointUndeliveredDeliveries(tx, peer.id, connectionId);
-    await dropHeldCredentials(tx, peer.id); // an older approval never redeemed
-    if (peer.addedDomain && !ownedDomain) {
-      ownedDomain = peer.addedDomain;
-      await tx.connection.update({ where: { id: peer.id }, data: { addedDomain: null } });
-      await tx.connection.update({
-        where: { id: connectionId },
-        data: { addedDomain: ownedDomain },
-      });
-    }
+    await applyReplacement(tx, merchantId, peer.id, connectionId);
   }
+}
+
+/** Audit event (never a webhook): a connection handed its site's orders to its successor. */
+export const CONNECTION_REPLACED = 'connection.replaced';
+
+/**
+ * `oldId` is replaced by `successorId` (W5/W8/W9), in the caller's transaction (store locked):
+ * - revoked as a Disconnect from the site would (`'site'`: the domain stays), but as a replacement,
+ *   so its open sessions stay payable — they now report to the successor;
+ * - `replaced_by_id` → the successor (W8), so webhooks for its earlier orders follow the site and
+ *   the successor may read, cancel and refund them;
+ * - its undelivered webhooks go to the successor's endpoints, each event once (W9);
+ * - credentials of an older approval never redeemed are dropped;
+ * - when it owned the domain (`added_domain`) and the successor owns none, ownership passes on, so
+ *   a later dashboard removal can still take it away.
+ */
+async function applyReplacement(
+  tx: Tx,
+  merchantId: string,
+  oldId: string,
+  successorId: string,
+): Promise<void> {
+  const old = await tx.connection.findUniqueOrThrow({
+    where: { id: oldId },
+    select: { addedDomain: true },
+  });
+  await revokeConnection(tx, oldId, 'site', { replacement: true });
+  await tx.connection.update({ where: { id: oldId }, data: { replacedById: successorId } });
+  const repointed = await repointUndeliveredDeliveries(tx, oldId, successorId);
+  await dropHeldCredentials(tx, oldId);
+  const successor = await tx.connection.findUniqueOrThrow({
+    where: { id: successorId },
+    select: { addedDomain: true },
+  });
+  if (old.addedDomain && !successor.addedDomain) {
+    await tx.connection.update({ where: { id: oldId }, data: { addedDomain: null } });
+    await tx.connection.update({
+      where: { id: successorId },
+      data: { addedDomain: old.addedDomain },
+    });
+  }
+  for (const livemode of [false, true]) {
+    await recordEvent(
+      tx,
+      { merchantId, livemode },
+      {
+        aggregateType: 'connection',
+        aggregateId: oldId,
+        type: CONNECTION_REPLACED,
+        payload: {
+          connection_id: oldId,
+          replaced_by: successorId,
+          moved_deliveries: repointed.moved,
+          superseded_deliveries: repointed.superseded,
+        },
+      },
+    );
+  }
+}
+
+const replaceRefused = (message: string) => new AppError('CONFLICT', message, 409);
+
+/**
+ * `POST /v1/connect/replace` (A3, spec §2.9): a site that re-connected at a new address (a domain
+ * move, http→https, a subdirectory change) proves the old connection with its key and hands it to
+ * the new one. The successor must be another live, redeemed connection of the same store, created
+ * after the old one, and not itself replaced. Unknown or another store's → NOT_FOUND; otherwise
+ * refused → CONFLICT. The old connection is live (its key authenticated this call), so a second
+ * replace with the same key is already 401.
+ */
+export async function replaceConnection(
+  ctx: { merchantId: string; connectionId: string },
+  input: unknown,
+): Promise<ConnectReplaceResponse> {
+  const { successor_connection_id: successorId } = ConnectReplaceRequestSchema.parse(input);
+  const oldId = ctx.connectionId;
+  await prisma.$transaction(async (tx) => {
+    // Lock order as everywhere: the store, then the connections (by id).
+    await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${ctx.merchantId} FOR UPDATE`;
+    await tx.$queryRaw`
+      SELECT id FROM connections WHERE id IN (${oldId}, ${successorId}) ORDER BY id FOR UPDATE`;
+    const successor = await tx.connection.findFirst({
+      where: { id: successorId, merchantId: ctx.merchantId },
+    });
+    if (!successor) throw notFound('Connection not found');
+    if (successorId === oldId) throw replaceRefused('A connection cannot replace itself');
+    const old = await tx.connection.findFirstOrThrow({
+      where: { id: oldId, merchantId: ctx.merchantId },
+    });
+    if (old.revokedAt !== null || old.replacedById !== null) {
+      throw replaceRefused('This connection was already disconnected or replaced');
+    }
+    if (successor.revokedAt !== null || successor.replacedById !== null) {
+      throw replaceRefused('The new connection is no longer active');
+    }
+    if (successor.redeemedAt === null) {
+      throw replaceRefused('The new connection has not finished connecting');
+    }
+    if (successor.createdAt <= old.createdAt) {
+      throw replaceRefused('The new connection must be newer than the one it replaces');
+    }
+    await applyReplacement(tx, ctx.merchantId, oldId, successorId);
+  });
+  log('info', 'connection replaced', { connectionId: oldId, replacedBy: successorId });
+  return { connection_id: oldId, replaced_by: successorId };
 }
 
 // ─── status ──────────────────────────────────────────────────────────────────

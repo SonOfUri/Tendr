@@ -116,6 +116,23 @@ export const ConnectStatusResponseSchema = z.object({
 });
 export type ConnectStatusResponse = z.infer<typeof ConnectStatusResponseSchema>;
 
+/**
+ * `POST /v1/connect/replace` body, authenticated with the OLD connection's key: the site re-connected
+ * at a new address and hands its earlier orders to the new connection (spec §2.9). The successor
+ * must be a live, redeemed connection of the same store created after the old one.
+ */
+export const ConnectReplaceRequestSchema = z
+  .object({ successor_connection_id: z.string().min(1).max(64) })
+  .strict();
+export type ConnectReplaceRequest = z.infer<typeof ConnectReplaceRequestSchema>;
+
+/** `POST /v1/connect/replace` response. */
+export const ConnectReplaceResponseSchema = z.object({
+  connection_id: z.string(),
+  replaced_by: z.string(),
+});
+export type ConnectReplaceResponse = z.infer<typeof ConnectReplaceResponseSchema>;
+
 /** One row of the dashboard's Connected sites (`GET /v1/connections`). */
 export const ConnectedSiteSchema = z.object({
   id: z.string(),

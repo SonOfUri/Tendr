@@ -20,7 +20,9 @@ import {
   type Scope,
 } from '@tendr/contracts';
 import { normalizeCheckoutDomain } from '../checkout/checkout-settings.js';
+import { expireConnectionSessions } from '../checkout/sessions.js';
 import {
+  MAX_REPLACEMENT_HOPS,
   newWebhookSecret,
   strictHostPolicy,
   validateEndpointUrl,
@@ -28,6 +30,7 @@ import {
 } from '../checkout/webhooks.js';
 import { assertTransaction, recordEvent } from '../events/record.js';
 import { generateApiKey } from '../lib/crypto.js';
+import { log } from '../lib/logger.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { LOCAL_DEV_HOSTS } from '../lib/local-hosts.js';
@@ -256,6 +259,11 @@ export async function createConnection(
  * Either way this connection's `added_domain` is cleared, so the rule runs once. A dashboard
  * removal of a connection the site already disconnected still applies it.
  *
+ * A4: unless it is a re-connect replacement (`opts.replacement`, whose successor takes over the
+ * sessions), revoking a live connection cancels its open sessions and those of the connections it
+ * replaced (`expireConnectionSessions`): none of their payments could reach the site any more. A
+ * session with a deposit in flight is left to finish; the counts go in the audit event and the log.
+ *
  * Idempotent. Must run in the caller's transaction; the caller has checked that the connection
  * belongs to its store.
  */
@@ -263,7 +271,8 @@ export async function revokeConnection(
   tx: Tx,
   connectionId: string,
   by: 'site' | 'dashboard' | 'expired',
-): Promise<void> {
+  opts: { replacement?: boolean } = {},
+): Promise<{ expiredSessions: number; sessionsInFlight: number }> {
   assertTransaction(tx);
   const found = await tx.connection.findUnique({
     where: { id: connectionId },
@@ -294,6 +303,21 @@ export async function revokeConnection(
     await cancelPendingForConnection(tx, merchantId, connectionId);
   }
 
+  let sessions = { expired: 0, inFlight: 0 };
+  if (revoking && !opts.replacement) {
+    const chain = await withPredecessors(tx, merchantId, connectionId);
+    sessions = await expireConnectionSessions(tx, merchantId, chain);
+    if (sessions.expired > 0 || sessions.inFlight > 0) {
+      log('info', 'connection revoked with open sessions', {
+        connectionId,
+        by,
+        expired: sessions.expired,
+        inFlight: sessions.inFlight,
+      });
+    }
+  }
+  const result = { expiredSessions: sessions.expired, sessionsInFlight: sessions.inFlight };
+
   let removedDomain: string | null = null;
   let domainOwner: string | null = null;
   const domain = connection.addedDomain;
@@ -319,7 +343,7 @@ export async function revokeConnection(
     }
   }
 
-  if (!revoking && removedDomain === null && domainOwner === null) return; // nothing changed
+  if (!revoking && removedDomain === null && domainOwner === null) return result; // no change
   for (const livemode of [false, true]) {
     await recordEvent(
       tx,
@@ -333,8 +357,29 @@ export async function revokeConnection(
           by,
           removed_domain: removedDomain,
           domain_owner: domainOwner,
+          expired_sessions: result.expiredSessions,
+          sessions_in_flight: result.sessionsInFlight,
         },
       },
     );
   }
+  return result;
+}
+
+/**
+ * The connection plus every connection it replaced, directly or through earlier re-connects
+ * (the `replaced_by_id` chain read backwards, at most MAX_REPLACEMENT_HOPS deep).
+ */
+async function withPredecessors(tx: Tx, merchantId: string, connectionId: string) {
+  const all = [connectionId];
+  let frontier = [connectionId];
+  for (let hop = 0; hop < MAX_REPLACEMENT_HOPS && frontier.length > 0; hop++) {
+    const prev = await tx.connection.findMany({
+      where: { merchantId, replacedById: { in: frontier }, id: { notIn: all } },
+      select: { id: true },
+    });
+    frontier = prev.map((c) => c.id);
+    all.push(...frontier);
+  }
+  return all;
 }

@@ -1067,4 +1067,274 @@ describe('connect routes', () => {
       expect(await prisma.secret.count({ where: { purpose: 'connect_credentials' } })).toBe(0);
     }
   });
+
+  // ─── replace after a site address change (A3) ───────────────────────────────
+
+  const NEW_SITE = 'https://new-shop.example.com';
+
+  /** A full connect of another site address of the same store. */
+  async function connectAt(site: string, who = admin, merchantId = merchant.id) {
+    const { verifier, challenge } = pkce();
+    const res = await authorize(
+      who,
+      authorizeBody(challenge, {
+        site_url: site,
+        return_url: `${site}/wp-json/tendr/v1/connect/return`,
+      }),
+      merchantId,
+    );
+    expect(res.statusCode).toBe(200);
+    const code = new URL(res.json().redirect as string).searchParams.get('code')!;
+    const red = await token({ code, code_verifier: verifier, site_url: site });
+    expect(red.statusCode).toBe(200);
+    return ConnectTokenResponseSchema.parse(red.json());
+  }
+
+  const replace = (key: string, successor: unknown) =>
+    app.inject({
+      method: 'POST',
+      url: '/v1/connect/replace',
+      headers: { authorization: `Bearer ${key}` },
+      payload: { successor_connection_id: successor },
+    });
+
+  const refundWith = (key: string, paymentId: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/v1/refunds',
+      headers: { authorization: `Bearer ${key}` },
+      payload: {
+        payment: paymentId,
+        amount: '1.00',
+        currency: 'USD',
+        reason: 'test',
+        external_ref: `wc_refund_${paymentId}`,
+      },
+    });
+
+  it('A3: re-connect at a new address, replace with the old key → old events reach the new site, the new site may refund old payments, the old key is 401', async () => {
+    const a = await connect();
+    const paymentId = await paymentOn(a.connection_id);
+    const b = await connectAt(NEW_SITE);
+    // Before the replace: a different site, so nothing of A's reaches B.
+    expect((await status(a.test.secret_key)).statusCode).toBe(200);
+    expect((await refundWith(b.test.secret_key, paymentId)).statusCode).toBe(404);
+
+    const res = await replace(a.live.secret_key, b.connection_id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ connection_id: a.connection_id, replaced_by: b.connection_id });
+
+    for (const key of [a.test.secret_key, a.live.secret_key]) {
+      expect((await status(key)).statusCode).toBe(401);
+    }
+    const oldC = await prisma.connection.findUniqueOrThrow({ where: { id: a.connection_id } });
+    expect(oldC.revokedAt).not.toBeNull();
+    expect(oldC.replacedById).toBe(b.connection_id);
+    expect((await endpointsOf(a.connection_id)).every((e) => !e.active)).toBe(true);
+    expect((await status(b.test.secret_key)).statusCode).toBe(200);
+
+    const ev = await succeededFor(paymentId);
+    expect(await fanOutEvent(ev)).toBe(1);
+    const [bTest] = await prisma.webhookEndpoint.findMany({
+      where: { connectionId: b.connection_id, livemode: false },
+    });
+    expect(await recipients(ev.id)).toEqual([bTest!.id]);
+
+    // The payment is still in flight, so it is not refundable — but it is B's now (not 404).
+    const r = await refundWith(b.test.secret_key, paymentId);
+    expect(r.statusCode).not.toBe(404);
+    expect(r.json().error.code).toBe('PAYMENT_NOT_REFUNDABLE');
+
+    const audit = await prisma.event.findMany({
+      where: { aggregateId: a.connection_id, type: 'connection.replaced' },
+    });
+    expect(audit).toHaveLength(2);
+    expect(audit[0]!.payload).toMatchObject({
+      connection_id: a.connection_id,
+      replaced_by: b.connection_id,
+    });
+  });
+
+  it('A3: replace re-points the old site’s undelivered webhooks to the new site and keeps its sessions open', async () => {
+    setWebhookTransport(async () => ({ status: 503 }));
+    const a = await connect();
+    const paymentId = await paymentOn(a.connection_id);
+    const open = (await createRow('Session', merchant.id, false, { connectionId: a.connection_id }))
+      .id as string;
+    const ev = await succeededFor(paymentId);
+    await fanOutEvent(ev);
+    const row = await prisma.webhookDelivery.findFirstOrThrow({ where: { eventId: ev.id } });
+    const b = await connectAt(NEW_SITE);
+    expect((await replace(a.test.secret_key, b.connection_id)).statusCode).toBe(200);
+    const [bTest] = await prisma.webhookEndpoint.findMany({
+      where: { connectionId: b.connection_id, livemode: false },
+    });
+    const moved = await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: row.id } });
+    expect(moved.endpointId).toBe(bTest!.id);
+    expect((await prisma.session.findUniqueOrThrow({ where: { id: open } })).status).toBe(
+      'PENDING_DEPOSIT',
+    );
+  });
+
+  it('A3: replace refuses a bad successor and leaves the old connection working', async () => {
+    const a = await connect();
+    const other = await createMerchant({ name: 'Other' });
+    const otherAdmin = await member(other.id, 'admin');
+    const foreign = await connectAt(NEW_SITE, otherAdmin, other.id);
+
+    expect((await replace(a.test.secret_key, 'con_unknown')).statusCode).toBe(404);
+    expect((await replace(a.test.secret_key, foreign.connection_id)).statusCode).toBe(404);
+    expect((await replace(a.test.secret_key, a.connection_id)).statusCode).toBe(409);
+    expect((await replace(a.test.secret_key, '')).statusCode).toBe(400);
+
+    // A successor older than the connection it replaces is refused.
+    const older = await connectAt('https://older.example.com');
+    await prisma.connection.update({
+      where: { id: older.connection_id },
+      data: { createdAt: new Date(Date.now() - 3_600_000) },
+    });
+    expect((await replace(a.test.secret_key, older.connection_id)).statusCode).toBe(409);
+
+    // A revoked successor is refused.
+    const gone = await connectAt('https://gone.example.com');
+    await app.inject({
+      method: 'POST',
+      url: '/v1/connect/disconnect',
+      headers: { authorization: `Bearer ${gone.test.secret_key}` },
+    });
+    expect((await replace(a.test.secret_key, gone.connection_id)).statusCode).toBe(409);
+
+    // An un-redeemed successor is refused.
+    await approve();
+    const pending = await prisma.connection.findFirstOrThrow({
+      where: { merchantId: merchant.id, redeemedAt: null, revokedAt: null },
+    });
+    expect((await replace(a.test.secret_key, pending.id)).statusCode).toBe(409);
+
+    // A hand-made key has no connection to replace.
+    const plain = await createApiKey(merchant.id, { livemode: false });
+    expect((await replace(plain.raw, a.connection_id)).statusCode).toBe(403);
+
+    expect((await status(a.test.secret_key)).statusCode).toBe(200);
+    const c = await prisma.connection.findUniqueOrThrow({ where: { id: a.connection_id } });
+    expect(c).toMatchObject({ revokedAt: null, replacedById: null });
+  });
+
+  it('A3: a connection replaced once cannot be replaced again (its key is 401)', async () => {
+    const a = await connect();
+    const b = await connectAt(NEW_SITE);
+    const c = await connectAt('https://third.example.com');
+    expect((await replace(a.test.secret_key, b.connection_id)).statusCode).toBe(200);
+    expect((await replace(a.test.secret_key, c.connection_id)).statusCode).toBe(401);
+  });
+
+  // ─── revoke expires open sessions (A4) ──────────────────────────────────────
+
+  async function openSessionOn(connectionId: string | null, livemode = false) {
+    return (await createRow('Session', merchant.id, livemode, { connectionId })).id as string;
+  }
+
+  const sessionState = async (id: string) =>
+    prisma.session.findUniqueOrThrow({
+      where: { id },
+      select: { status: true, expiredReason: true },
+    });
+
+  it('A4: disconnect expires the connection’s open sessions (both modes) unless a deposit is in flight', async () => {
+    const a = await connect();
+    const openTest = await openSessionOn(a.connection_id);
+    const openLive = await openSessionOn(a.connection_id, true);
+    const inFlight = (await createRow('Payment', merchant.id, false)).sessionId as string;
+    await prisma.session.update({
+      where: { id: inFlight },
+      data: { connectionId: a.connection_id },
+    });
+    const handMade = await openSessionOn(null);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/connect/disconnect',
+      headers: { authorization: `Bearer ${a.test.secret_key}` },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(await sessionState(openTest)).toEqual({ status: 'EXPIRED', expiredReason: 'canceled' });
+    expect(await sessionState(openLive)).toEqual({ status: 'EXPIRED', expiredReason: 'canceled' });
+    expect((await sessionState(inFlight)).status).toBe('PENDING_DEPOSIT');
+    expect((await sessionState(handMade)).status).toBe('PENDING_DEPOSIT');
+    const expired = await prisma.event.findMany({
+      where: { type: 'checkout.session.expired', aggregateId: { in: [openTest, openLive] } },
+    });
+    expect(expired).toHaveLength(2);
+    const revoked = await prisma.event.findFirstOrThrow({
+      where: { aggregateId: a.connection_id, type: 'connection.revoked', livemode: false },
+    });
+    expect(revoked.payload).toMatchObject({ expired_sessions: 2, sessions_in_flight: 1 });
+  });
+
+  it('A4: a dashboard removal expires open sessions, including those of a replaced predecessor', async () => {
+    const a = await connect();
+    const old = await openSessionOn(a.connection_id);
+    const b = await connect(); // re-connect: A replaced by B; A's session stays open
+    expect((await sessionState(old)).status).toBe('PENDING_DEPOSIT');
+    const mine = await openSessionOn(b.connection_id);
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/v1/connections/${b.connection_id}`,
+      headers: dashHeaders(admin, { merchantId: merchant.id }),
+    });
+    expect(res.statusCode).toBe(200);
+    for (const id of [old, mine]) expect((await sessionState(id)).status).toBe('EXPIRED');
+  });
+
+  it('A4: removing an already replaced connection never touches its successor’s sessions', async () => {
+    const a = await connect();
+    const old = await openSessionOn(a.connection_id);
+    await connect(); // A replaced
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/v1/connections/${a.connection_id}`,
+      headers: dashHeaders(admin, { merchantId: merchant.id }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect((await sessionState(old)).status).toBe('PENDING_DEPOSIT');
+  });
+
+  // ─── sessions are scoped to their connection (B1) ───────────────────────────
+
+  it('B1: a connection key reads and expires only its own (or its predecessors’) sessions', async () => {
+    const a = await connect();
+    const aSession = await openSessionOn(a.connection_id);
+    const blog = await connectAt(`${SITE}/blog`);
+    const blogSession = await openSessionOn(blog.connection_id);
+    const handMadeSession = await openSessionOn(null);
+    const plain = await createApiKey(merchant.id, { livemode: false });
+
+    const get = (key: string, id: string) =>
+      app.inject({
+        method: 'GET',
+        url: `/v1/checkout/sessions/${id}`,
+        headers: { authorization: `Bearer ${key}` },
+      });
+    const expire = (key: string, id: string) =>
+      app.inject({
+        method: 'POST',
+        url: `/v1/checkout/sessions/${id}/expire`,
+        headers: { authorization: `Bearer ${key}` },
+      });
+
+    expect((await get(a.test.secret_key, aSession)).statusCode).toBe(200);
+    expect((await get(a.test.secret_key, blogSession)).statusCode).toBe(404);
+    expect((await get(a.test.secret_key, handMadeSession)).statusCode).toBe(404);
+    expect((await expire(a.test.secret_key, blogSession)).statusCode).toBe(404);
+    expect((await sessionState(blogSession)).status).toBe('PENDING_DEPOSIT');
+    // A hand-made key keeps acting on any session of its store.
+    expect((await get(plain.raw, blogSession)).statusCode).toBe(200);
+    expect((await get(plain.raw, aSession)).statusCode).toBe(200);
+
+    // After a re-connect the successor speaks for the predecessor's sessions.
+    const a2 = await connect();
+    expect((await get(a2.test.secret_key, aSession)).statusCode).toBe(200);
+    expect((await expire(a2.test.secret_key, aSession)).statusCode).toBe(200);
+    expect((await get(a2.test.secret_key, blogSession)).statusCode).toBe(404);
+  });
 });

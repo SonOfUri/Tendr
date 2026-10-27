@@ -463,6 +463,23 @@ export async function liveConnectionId(
 }
 
 /**
+ * Whether a key bound to `keyConnectionId` may act on (read, expire, refund) a session created by
+ * `sessionConnectionId`: a hand-made key (no connection) acts on any session of its store; a
+ * connection key only on its own connection's sessions or those of a connection it replaced (the
+ * `replaced_by_id` chain, followed by `liveConnectionId`). Callers answer "no" as NOT_FOUND.
+ */
+export async function connectionMayAct(
+  keyConnectionId: string | null | undefined,
+  merchantId: string,
+  sessionConnectionId: string | null,
+): Promise<boolean> {
+  if (!keyConnectionId) return true;
+  if (sessionConnectionId === null) return false;
+  if (sessionConnectionId === keyConnectionId) return true;
+  return (await liveConnectionId(sessionConnectionId, merchantId)) === keyConnectionId;
+}
+
+/**
  * The live connection for the event's session, resolved from the event's subject (its
  * aggregate), never from its payload: a session; a payment → its session; a refund → its payment
  * → its session. The session's connection is then followed through re-connects

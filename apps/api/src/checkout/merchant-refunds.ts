@@ -46,7 +46,7 @@ import {
   settledUsdOf,
 } from './refunds.js';
 import { grossUpForReturnFee, usdPerUnit } from './return-fee.js';
-import { liveConnectionId } from './webhooks.js';
+import { connectionMayAct } from './webhooks.js';
 
 type Tx = Prisma.TransactionClient;
 type Dec = Prisma.Decimal;
@@ -175,11 +175,8 @@ async function refundableRemaining(
  * followed by `liveConnectionId`). A hand-made key (no connection) refunds any payment of its
  * store. Anything else is NOT_FOUND, exactly like an unknown payment.
  */
-async function mayRefund(ctx: MerchantRefundCtx, sessionConnectionId: string | null) {
-  if (ctx.connectionId === null) return true;
-  if (sessionConnectionId === null) return false;
-  if (sessionConnectionId === ctx.connectionId) return true;
-  return (await liveConnectionId(sessionConnectionId, ctx.merchantId)) === ctx.connectionId;
+function mayRefund(ctx: MerchantRefundCtx, sessionConnectionId: string | null) {
+  return connectionMayAct(ctx.connectionId, ctx.merchantId, sessionConnectionId);
 }
 
 async function paymentFor(ctx: ScopeContext, input: MerchantRefundInput): Promise<Payment> {

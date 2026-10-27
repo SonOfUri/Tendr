@@ -3,8 +3,10 @@
 //   passkey (step-up). Creates the connection and a single-use code; the response is the redirect.
 // - `POST /v1/connect/token` — public, server to server, 10 / minute / IP. Code + PKCE verifier +
 //   site → the connection's credentials, once. Every failure is the same INVALID_GRANT.
-// - `GET /v1/connect/status`, `POST /v1/connect/disconnect` — a connection key only (ruling W1: a
-//   `secret_key` whose api key row has `connection_id`; any other secret key is 403).
+// - `GET /v1/connect/status`, `POST /v1/connect/disconnect`, `POST /v1/connect/replace` — a
+//   connection key only (ruling W1: a `secret_key` whose api key row has `connection_id`; any other
+//   secret key is 403). `replace` is called with the OLD connection's key after a re-connect at a
+//   new site address (A3).
 // - `GET /v1/connections`, `DELETE /v1/connections/:id` — the dashboard's Connected sites
 //   (`settings:manage`; removing needs step-up).
 import { ConnectAuthorizeRequestSchema } from '@tendr/contracts';
@@ -18,6 +20,7 @@ import {
   listConnections,
   redeem,
   removeConnection,
+  replaceConnection,
 } from '../connect/authorize.js';
 import { requireDashboardUser, requirePrincipal } from '../gateway/principal.js';
 import { AppError, forbidden, unauthorized } from '../lib/errors.js';
@@ -106,6 +109,11 @@ export const connectRoutes: FastifyPluginAsync<ConnectRouteOptions> = async (app
     await disconnect(connectionCtx(req).connectionId);
     return reply.status(204).send();
   });
+
+  // A3: the site re-connected at a new address; its OLD connection key hands its orders over.
+  app.post('/v1/connect/replace', { config: { auth: connectionKey } }, async (req) =>
+    replaceConnection(connectionCtx(req), req.body),
+  );
 
   app.get('/v1/connections', { config: { auth: manage } }, async (req) => ({
     connections: await listConnections(requireDashboardUser(req).merchantId),
