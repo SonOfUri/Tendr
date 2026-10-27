@@ -50,8 +50,8 @@ export function DemoPlayground() {
   const [cartPricing, setCartPricing] = useState<CartPricing | null>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
 
-  const demo = DEMOS.find((d) => d.slug === slug) ?? DEMOS[0];
-  const brand = brands[slug];
+  const demo = DEMOS.find((d) => d.slug === slug) ?? DEMOS[0]!;
+  const brand = brands[slug]!;
   const flowStage: DemoFlowStage = settledHint
     ? 'settled'
     : checkout || opening

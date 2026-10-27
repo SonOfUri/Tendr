@@ -64,7 +64,16 @@
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**", "public/v1/tendr.js"],
-      "env": ["TENDR_CHECKOUT_BASE_URL", "CHECKOUT_BASE_URL"]
+      "env": [
+        "TENDR_CHECKOUT_BASE_URL",
+        "CHECKOUT_BASE_URL",
+        "TENDR_SECRET_KEY_TEST",
+        "API_BASE_URL",
+        "WEB_URL",
+        "NEXT_PUBLIC_API_BASE_URL",
+        "NEXT_PUBLIC_REOWN_PROJECT_ID",
+        "NEXT_PUBLIC_WEBAUTHN_RP_ID"
+      ]
     },
     "dev": {
       "cache": false,

@@ -2,6 +2,5 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "installCommand": "cd ../.. && npm install",
-  "buildCommand": "cd ../.. && npx turbo run build --filter=@tendr/web",
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- . ../../packages ../../package-lock.json ../../package.json ../../turbo.json"
+  "buildCommand": "cd ../.. && npx turbo run build --filter=@tendr/web"
 }
