@@ -440,6 +440,24 @@ export function isClosedMerchantRefund(r: {
 }
 
 /**
+ * A merchant refund as the store sees it: `pending` while it is (or is about to be) a proposal
+ * awaiting the signers; `review` when it needs a person first (sanctions, swap route, no sender,
+ * waiting for the shopper's address); `sent` once executed; `cancelled` once its proposal ended
+ * without executing (or the store cancelled it).
+ */
+export function merchantRefundStatus(r: {
+  reason: string;
+  status: string;
+  reviewReason: string | null;
+  needsAddress: boolean;
+}): 'pending' | 'review' | 'sent' | 'cancelled' {
+  if (r.status === 'confirmed') return 'sent';
+  if (isClosedMerchantRefund(r)) return 'cancelled';
+  if (r.reviewReason !== null || r.needsAddress || r.status === 'failed') return 'review';
+  return 'pending';
+}
+
+/**
  * Whether a return is still open: pending, submitted, or failed into the review queue (a blocked
  * destination, a cancelled proposal, …) — anything but sent, kept small, or a closed merchant
  * refund. The review queue and `keepSmall` share this rule (C41).

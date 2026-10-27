@@ -39,6 +39,7 @@ import {
   isClosedMerchantRefund,
   lockPayment,
   lockRefund,
+  merchantRefundStatus,
   publicReviewReason,
   REFUND_CANCELLED,
   refundPayload,
@@ -48,6 +49,8 @@ import {
 } from './refunds.js';
 import { grossUpForReturnFee, usdPerUnit } from './return-fee.js';
 import { assetLabel } from './tokens.js';
+
+export { merchantRefundStatus };
 import { connectionMayAct } from './webhooks.js';
 
 type Tx = Prisma.TransactionClient;
@@ -223,18 +226,6 @@ export async function merchantRefundView(r: Refund) {
     review_reason: publicReviewReason(r.reviewReason),
     created: Math.floor(r.createdAt.getTime() / 1000),
   };
-}
-
-/**
- * `pending` while it is (or is about to be) a proposal awaiting the signers; `review` when it
- * needs a person first (sanctions, swap route, no sender, waiting for the shopper's address);
- * `sent` once executed; `cancelled` once its proposal ended without executing.
- */
-export function merchantRefundStatus(r: Refund): 'pending' | 'review' | 'sent' | 'cancelled' {
-  if (r.status === 'confirmed') return 'sent';
-  if (isClosedMerchantRefund(r)) return 'cancelled';
-  if (r.reviewReason !== null || r.needsAddress || r.status === 'failed') return 'review';
-  return 'pending';
 }
 
 /**

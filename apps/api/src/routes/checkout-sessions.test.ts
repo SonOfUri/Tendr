@@ -831,6 +831,8 @@ describe('checkout session routes', () => {
       asset_decimals: 6,
       amount: '1250000',
       review_reason: 'needs_swap_route',
+      refund_external_ref: 'wc_refund_1_1',
+      merchant_status: 'review',
     });
     // An asset the token list does not name, and a reason outside the public list, are null.
     expect(unknown).toMatchObject({

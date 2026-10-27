@@ -36,7 +36,7 @@ import {
 } from './fx.js';
 import { depositInFlight } from './in-flight.js';
 import { resolvePayers } from './pricing.js';
-import { publicReviewReason } from './refunds.js';
+import { merchantRefundStatus, publicReviewReason } from './refunds.js';
 import { assetLabel, tokenInfo, type AssetLabel } from './tokens.js';
 import { connectionMayAct } from './webhooks.js';
 
@@ -476,6 +476,10 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
         destination_chain: r.destinationChain,
         needs_address: r.needsAddress,
         review_reason: publicReviewReason(r.reviewReason),
+        // A store refund's own reference and its state as the store sees it (C5); null for the
+        // automatic returns (overpaid, underpaid, late, …).
+        refund_external_ref: r.reason === 'merchant' ? r.externalRef : null,
+        merchant_status: r.reason === 'merchant' ? merchantRefundStatus(r) : null,
         refund_tx_hash: r.refundTxHash,
         created_at: r.createdAt.toISOString(),
       })),
