@@ -43,7 +43,9 @@ export type IdPrefix =
   | 'ntc' // event_notices (signer notice emails sent per event)
   | 'con' // connections (sites linked through Connect)
   | 'cac' // connect_auth_codes
-  | 'rtx'; // relayer_transactions (the relayer's own on-chain transactions)
+  | 'rtx' // relayer_transactions (the relayer's own on-chain transactions)
+  | 'tap' // tron_approvals (gasless Tron: the shopper's relayed approve)
+  | 'tdl'; // tron_delegations (gas-tron's just-in-time energy / bandwidth delegations)
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${ulid()}`;

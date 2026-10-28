@@ -77,6 +77,11 @@ export interface PreparePayload {
   fee_amount: string;
   to_sign: { kind: string; typed_data: unknown }[];
   /**
+   * Tron (`forwarder`) is two steps: `approve` (sign the exact-amount approve transaction and
+   * send it back), then, once it is confirmed, `payment` (sign the TIP-712 TendrPayment).
+   */
+  step?: 'approve' | 'payment';
+  /**
    * `paymaster` only: the exact calls the smart wallet batches (`wallet_sendCalls`), and the URL to
    * pass as its `paymasterService` capability (bound to this quote; never log it).
    */
@@ -87,12 +92,15 @@ export interface PreparePayload {
 /**
  * The shopper's signatures, keyed by `to_sign[].kind`, each with the message it signed (EVM); or,
  * for Solana, the transaction the wallet signed (base64 wire bytes); or, for NEAR, the signed
- * delegate action (base64 borsh `SignedDelegate`). Exactly one of the three.
+ * delegate action (base64 borsh `SignedDelegate`); or, for Tron's first step, the signed approve.
+ * Exactly one of these.
  */
 export interface SignedPayload {
   signatures: Record<string, { message: Record<string, unknown>; signature: string }>;
   transaction?: string;
   signedDelegate?: string;
+  /** Tron step 1: the prepared approve as the wallet signed it (raw data hex + 65-byte sig hex). */
+  tronApprove?: { rawDataHex: string; signature: string };
 }
 
 export interface SubmitResult {
@@ -100,6 +108,8 @@ export interface SubmitResult {
   submissionId: string;
   txHash?: string;
   status: SubmissionStatus;
+  /** Tron: which of the two steps this submission is (its id is a `tap_` approval for `approve`). */
+  step?: 'approve' | 'payment';
 }
 
 export interface GaslessRelayer {

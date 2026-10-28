@@ -1433,6 +1433,94 @@ model RelayerTransaction {
   @@map("relayer_transactions")
 }
 
+/// A gasless Tron payment's first step (project 5a, spec §2.3 Tron; rulings T9-b … T9-e): the
+/// shopper's signed exact-amount `approve(forwarder, amount + fee)` for one quote, which Tendr
+/// verifies, funds with just-in-time `gas-tron` delegations (`tron_delegations`) and broadcasts.
+/// The relayer's own record (infra): ids of the merchant, session and quote are kept for lookups.
+model TronApproval {
+  id              String           @id
+  merchantId      String           @map("merchant_id")
+  livemode        Boolean
+  sessionId       String           @map("session_id")
+  quoteId         String           @map("quote_id")
+  /// The shopper (base58): the approve's owner and the delegations' receiver.
+  wallet          String
+  /// sha256 of the signed raw data (hex); stored before anything is broadcast.
+  txId            String           @map("tx_id")
+  /// The signed `Transaction` (protobuf, hex): re-broadcast as is until it lands or cannot.
+  signedTx        String           @map("signed_tx")
+  expiration      DateTime
+  /// pending: delegations in flight, approve not sent yet; submitted: approve sent.
+  status          ExternalTxStatus @default(pending)
+  broadcastAt     DateTime?        @map("broadcast_at")
+  /// First look that found the approve unknown with the solidified head past its expiration.
+  expiredSeenAt   DateTime?        @map("expired_seen_at")
+  /// Energy the approve took from the shopper's own and delegated energy (its receipt).
+  energyUsed      BigInt?          @map("energy_used")
+  /// Value (sun) of the `gas-tron` resources this approval used: its delegations' transactions
+  /// and the delegated energy the approve consumed (see relayer/tron-energy.ts, cost model).
+  costSun         BigInt?          @map("cost_sun")
+  /// Where `cost_sun` is counted: the payment submission (`gas_sponsorships.id`) whose cost
+  /// includes it, or a `sponsor = tendr` row of its own. Null until counted.
+  costBookedTo    String?          @map("cost_booked_to")
+  /// The `TendrPayment` issued for this approval (step 2): its deadline. The nonce is the quote's.
+  paymentDeadline DateTime?        @map("payment_deadline")
+  lastError       String?          @map("last_error")
+  /// Final: the approve's outcome is known, every delegation is reclaimed, the cost is counted.
+  closedAt        DateTime?        @map("closed_at")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  delegations TronDelegation[]
+
+  @@index([wallet, createdAt])
+  @@index([quoteId])
+  @@index([sessionId])
+  @@index([livemode, status, updatedAt])
+  @@map("tron_approvals")
+}
+
+/// One just-in-time delegation of `gas-tron`'s energy or bandwidth to a shopper, for one approve
+/// (ruling T9-d): recorded before it is broadcast, reclaimed with `undelegateResource` once the
+/// approve's outcome is known or ten minutes after it was delegated. The reclaim job resumes from
+/// these rows (idempotent across restarts).
+model TronDelegation {
+  id                   String    @id
+  approvalId           String    @map("approval_id")
+  livemode             Boolean
+  /// `energy` | `bandwidth`.
+  resource             String
+  receiver             String
+  /// TRX (sun) whose resource is lent, and the resource units it gave when delegated.
+  balanceSun           BigInt    @map("balance_sun")
+  units                BigInt
+  /// `delegating` → `delegated` → `reclaiming` → `reclaimed`; `failed` when it never took effect.
+  status               String
+  delegateTxId         String    @map("delegate_tx_id")
+  delegateTx           String    @map("delegate_tx")
+  delegateExpiration   DateTime  @map("delegate_expiration")
+  delegatedAt          DateTime? @map("delegated_at")
+  /// sun the delegate / undelegate transactions burned (their receipts).
+  delegateFeeSun       BigInt?   @map("delegate_fee_sun")
+  undelegateTxId       String?   @map("undelegate_tx_id")
+  undelegateTx         String?   @map("undelegate_tx")
+  undelegateExpiration DateTime? @map("undelegate_expiration")
+  undelegateFeeSun     BigInt?   @map("undelegate_fee_sun")
+  /// First look that found the current transaction unknown past its expiration (solidified).
+  expiredSeenAt        DateTime? @map("expired_seen_at")
+  reclaimedAt          DateTime? @map("reclaimed_at")
+  lastError            String?   @map("last_error")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  approval TronApproval @relation(fields: [approvalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([approvalId])
+  @@index([livemode, status, updatedAt])
+  @@index([receiver, status])
+  @@map("tron_delegations")
+}
+
 model ScreeningResult {
   id         String            @id
   merchantId String            @map("merchant_id")

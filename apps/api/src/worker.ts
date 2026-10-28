@@ -22,6 +22,7 @@ import { pollEvmRelays } from './relayer/index.js';
 import { pollPaymasterOps } from './relayer/evm/pimlico.js';
 import { pollNearMetaRelays } from './relayer/near-meta.js';
 import { pollSolanaRelays } from './relayer/solana.js';
+import { pollTronRelays } from './relayer/tron.js';
 import { releaseEndedSessionReservations } from './relayer/submissions.js';
 import {
   attemptDelivery,
@@ -168,6 +169,16 @@ export async function processCheckoutJob(
       if (n > 0) log('info', 'near relay outcomes applied', { count: n });
     } catch (err) {
       failed ??= err;
+    }
+    // Tron: gas-tron's just-in-time delegations (sent approves, reclaims) and payWithApproval
+    // outcomes (from TRON_RPC_URL). Only while the Tron forwarder is configured.
+    if (env().TRON_FORWARDER_ADDRESS) {
+      try {
+        const t = await pollTronRelays();
+        if (t > 0) log('info', 'tron relay outcomes applied', { count: t });
+      } catch (err) {
+        failed ??= err;
+      }
     }
     if (failed) throw failed;
     return;

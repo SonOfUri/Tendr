@@ -162,6 +162,21 @@ export const SIM_TOKENS: readonly FixtureToken[] = [
     decimals: 6,
     priceMicroUsd: usd(1),
   },
+  {
+    assetId: 'nep141:tron.omft.near',
+    symbol: 'TRX',
+    blockchain: 'tron',
+    decimals: 6,
+    priceMicroUsd: usd(0.25),
+  },
+  {
+    // USDT on Tron (contract TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t).
+    assetId: 'nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near',
+    symbol: 'USDT',
+    blockchain: 'tron',
+    decimals: 6,
+    priceMicroUsd: usd(1),
+  },
 ];
 
 const EVM_CHAINS = new Set(['eth', 'base', 'arb', 'op', 'pol', 'bsc', 'avax', 'gnosis', 'bera']);
@@ -182,6 +197,13 @@ export function simulatedOriginTxHash(depositAddress: string, n: number): string
 /** Deterministic sender of simulated deposits to an address (EVM-shaped). */
 export function simulatedSenderAddress(depositAddress: string): string {
   return `0x${hex(`sim-sender:${depositAddress}`, 20)}`;
+}
+
+/** 20 bytes → base58check Tron address (`0x41` prefix). */
+function tronAddressFrom(body: Uint8Array): string {
+  const payload = Buffer.concat([Buffer.from([0x41]), Buffer.from(body)]);
+  const check = createHash('sha256').update(createHash('sha256').update(payload).digest()).digest();
+  return bs58.encode(Buffer.concat([payload, check.subarray(0, 4)]));
 }
 
 const ceilDiv = (a: bigint, b: bigint): bigint => (a + b - 1n) / b;
@@ -301,7 +323,10 @@ export class SimulatedOneClick implements OneClickProvider {
         : origin.blockchain === 'sol'
           ? // A Solana address (base58 of 32 bytes), so token accounts can be derived from it.
             bs58.encode(sha256(`sim-deposit:${fingerprint}`))
-          : hex(`sim-deposit:${fingerprint}`, 32);
+          : origin.blockchain === 'tron'
+            ? // A base58check Tron address (`T…`), as a real Tron deposit address is.
+              tronAddressFrom(sha256(`sim-deposit:${fingerprint}`).subarray(0, 20))
+            : hex(`sim-deposit:${fingerprint}`, 32);
     // The address is a hash of the request, so an identical request gets the same address; it
     // keeps whatever state its deposit already reached.
     if (depositAddress) {

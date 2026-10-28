@@ -382,6 +382,18 @@ describe('loadEnv gas fee pricing and chain RPCs', () => {
     expect(() => loadEnv({ ...base, SOLANA_RPC_URL: 'not a url' })).toThrow(/SOLANA_RPC_URL/);
     expect(() => loadEnv({ ...base, TRON_RPC_URL: 'ftp://x' })).toThrow(/TRON_RPC_URL/);
   });
+
+  it('has no Tron forwarder by default and accepts only a base58 Tron address', () => {
+    expect(loadEnv(base).TRON_FORWARDER_ADDRESS).toBeUndefined();
+    expect(
+      loadEnv({ ...base, TRON_FORWARDER_ADDRESS: ' ' }).TRON_FORWARDER_ADDRESS,
+    ).toBeUndefined();
+    const t = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+    expect(loadEnv({ ...base, TRON_FORWARDER_ADDRESS: t }).TRON_FORWARDER_ADDRESS).toBe(t);
+    expect(() =>
+      loadEnv({ ...base, TRON_FORWARDER_ADDRESS: '0x19BEBC71495490A99cA6F50F107076967380cf09' }),
+    ).toThrow(/TRON_FORWARDER_ADDRESS/);
+  });
 });
 
 describe('loadEnv checkout pricing', () => {

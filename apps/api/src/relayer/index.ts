@@ -24,6 +24,7 @@ import type { EvmSender } from './evm/sender.js';
 import { NearMetaGasless } from './near-meta.js';
 import { SimulatedRelayer } from './simulated.js';
 import { SolanaGasless } from './solana.js';
+import { TronGasless } from './tron.js';
 import { applyRelayOutcome } from './submissions.js';
 import type {
   ChainFamily,
@@ -45,10 +46,9 @@ export function familyOf(chain: string): ChainFamily | null {
 const relayers = new Map<string, GaslessRelayer>();
 
 /**
- * The gasless relayer for a chain family and mode; null for a family without one yet (Tron
- * arrives in a later task: its wallets get no gasless option meanwhile). Test mode always gets the
- * simulated relayer (Solana's and NEAR's simulate inside `SolanaGasless` / `NearMetaGasless`: no
- * Pimlico, no RPC).
+ * The gasless relayer for a chain family and mode. Test mode always gets the simulated relayer
+ * (Solana's, NEAR's and Tron's simulate inside `SolanaGasless` / `NearMetaGasless` /
+ * `TronGasless`: no Pimlico, no RPC).
  */
 export function relayerFor(family: ChainFamily, livemode: boolean): GaslessRelayer | null {
   const key = `${family}:${livemode}`;
@@ -62,6 +62,7 @@ export function relayerFor(family: ChainFamily, livemode: boolean): GaslessRelay
   }
   if (family === 'solana') r = new SolanaGasless(livemode);
   if (family === 'near') r = new NearMetaGasless(livemode);
+  if (family === 'tron') r = new TronGasless(livemode);
   if (r) relayers.set(key, r);
   return r;
 }
@@ -169,12 +170,28 @@ export const GaslessSubmitInputSchema = z
       .max(1700)
       .regex(/^[A-Za-z0-9+/]+={0,2}$/, 'must be a base64 signed delegate action')
       .optional(),
+    /**
+     * Tron step 1: the prepared approve transaction as the wallet signed it (`raw_data_hex` exactly
+     * as prepared, and its one 65-byte signature, hex). Tendr broadcasts it.
+     */
+    tron_approve: z
+      .object({
+        raw_data_hex: z
+          .string()
+          .max(1000)
+          .regex(/^([0-9a-fA-F]{2})+$/, 'must be hex'),
+        signature: z.string().regex(/^(0x)?[0-9a-fA-F]{130}$/, 'must be a 65-byte hex signature'),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine(
     (v) =>
-      [v.signatures, v.transaction, v.signed_delegate].filter((x) => x !== undefined).length === 1,
-    { message: 'send exactly one of signatures, transaction or signed_delegate' },
+      [v.signatures, v.transaction, v.signed_delegate, v.tron_approve].filter(
+        (x) => x !== undefined,
+      ).length === 1,
+    { message: 'send exactly one of signatures, transaction, signed_delegate or tron_approve' },
   );
 
 async function loadSession(shopper: ShopperCtx) {
@@ -258,8 +275,21 @@ export async function gaslessQuote(
   };
 }
 
-/** A submission of this session (status and hash), or 404. */
+/** A submission of this session (status and hash), or 404. Tron approvals (`tap_`) included. */
 export async function gaslessSubmission(shopper: ShopperCtx, id: string) {
+  if (id.startsWith('tap_')) {
+    const a = await prisma.tronApproval.findFirst({
+      where: {
+        id,
+        sessionId: shopper.sessionId,
+        merchantId: shopper.merchantId,
+        livemode: shopper.livemode,
+      },
+      select: { id: true, status: true, txId: true, quoteId: true },
+    });
+    if (!a) throw notFound('Submission not found');
+    return { id: a.id, quote_id: a.quoteId, status: a.status, tx_hash: a.txId, step: 'approve' };
+  }
   const row = await shopper.db.gasSponsorship.findFirst({
     where: { id, sessionId: shopper.sessionId, quoteId: { not: null } },
     select: { id: true, status: true, txHash: true, quoteId: true },

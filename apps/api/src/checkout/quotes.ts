@@ -40,6 +40,7 @@ import { toJsonDecimal } from '../lib/serialize.js';
 import { gaslessToken } from '../relayer/evm/tokens.js';
 import { nearGaslessToken } from '../relayer/near-meta.js';
 import { solanaGaslessToken } from '../relayer/solana-tx.js';
+import { tronGaslessToken } from '../relayer/tron.js';
 import { chainFamily, isValidAddress } from './address-format.js';
 import {
   OneClickError,
@@ -572,6 +573,16 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
     method === 'meta_tx' &&
     chainFamily(origin.blockchain) === 'near' &&
     !nearGaslessToken(origin.assetId)
+  ) {
+    throw new AppError('VALIDATION_ERROR', `${method} is not available for this token`, 400, {
+      field: 'gasless_method',
+    });
+  }
+  // Tron: USDT-TRC20 only, through the forwarder (never TRX, never another TRC-20).
+  if (
+    method === 'forwarder' &&
+    chainFamily(origin.blockchain) === 'tron' &&
+    !tronGaslessToken(origin.assetId)
   ) {
     throw new AppError('VALIDATION_ERROR', `${method} is not available for this token`, 400, {
       field: 'gasless_method',

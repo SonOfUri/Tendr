@@ -128,11 +128,20 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
       signatures: input.signatures ?? {},
       ...(input.transaction !== undefined ? { transaction: input.transaction } : {}),
       ...(input.signed_delegate !== undefined ? { signedDelegate: input.signed_delegate } : {}),
+      ...(input.tron_approve !== undefined
+        ? {
+            tronApprove: {
+              rawDataHex: input.tron_approve.raw_data_hex,
+              signature: input.tron_approve.signature,
+            },
+          }
+        : {}),
     });
     return reply.status(202).send({
       submission_id: res.submissionId,
       status: res.status,
       tx_hash: res.txHash ?? null,
+      ...(res.step ? { step: res.step } : {}),
     });
   });
 

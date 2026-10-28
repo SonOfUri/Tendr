@@ -58,6 +58,9 @@ export const INFRA_MODELS = [
   'ConnectAuthCode',
   // The relayer's own on-chain transactions (nonce, broadcasts); only the relayer touches them.
   'RelayerTransaction',
+  // Gasless Tron approvals and gas-tron's just-in-time delegations; only the relayer touches them.
+  'TronApproval',
+  'TronDelegation',
 ] as const;
 
 /**

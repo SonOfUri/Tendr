@@ -114,4 +114,7 @@ version,uint256 chainId,address verifyingContract)` struct. `chainId` is the
   The shopper's own `approve` is covered by just-in-time energy delegation
   (spec §2.3), not by this contract.
 - Tron has no CREATE2-at-the-same-address guarantee across EVM chains; the Tron
-  forwarder has its own address, configured separately.
+  forwarder has its own address, configured separately: the API reads it from
+  `TRON_FORWARDER_ADDRESS` (base58 `T…`, no default; Tron gasless stays off until it
+  is set). The API side is `apps/api/src/relayer/tron.ts` (the two signing steps,
+  the `payWithApproval` relay) and `tron-energy.ts` (just-in-time delegation).

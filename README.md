@@ -752,6 +752,31 @@ fee share, 1Click's fee and the spread.
   real approval times against it. Then pay a few cents of USDC and USDT from Meteor and Intear, merchant-sponsored and
   shopper-paid, and check the watcher marks it paid, the poll job records the NEAR burnt, and the
   fee lands in `gas-fees-near`.
+- Tron gasless (approve + TendrPayment through the forwarder, `gas-tron`), before live use: deploy
+  the forwarder on Tron (see `onchain/evm/README.md` § Tron; external review first) and set
+  `TRON_FORWARDER_ADDRESS` (no default: Tron gasless is off until it is set). Confirm
+  `apps/api/src/relayer/tron.ts` `TRON_GASLESS_TOKENS` against the 1Click token list: USDT
+  `nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near` ↔ contract
+  `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`, 6 decimals. Confirm on Nile, then mainnet: USDT's
+  `approve` overwrites a non-zero allowance (no zero-first rule; a re-approve after an abandoned
+  quote relies on it) and `transferFrom` returns `true`; the approve's energy estimate
+  (`triggerconstantcontract`) is ≤ 100 000; a delegation with `lock = false` can be undelegated at
+  once (the energy job reclaims as soon as the approve's outcome is final, at most 10 minutes
+  after it was made); undelegating after the shopper used delegated energy moves that usage to
+  `gas-tron` (the cost model counts it). Stake TRX on `gas-tron` for energy (it lends up to
+  ~50 000 TRX of staked energy per approve and pays `payWithApproval`, fee limit 100 TRX) and for
+  bandwidth (its own delegate / undelegate / payWithApproval transactions; burned TRX is recorded
+  as cost). Confirm TronLink (and any other wallet offered) signs the prepared approve exactly as
+  given (`trx.sign` on `transaction`, whose `raw_data` JSON must re-serialise to `raw_data_hex`)
+  and signs the TIP-712 `TendrPayment` with the forwarder domain (chain id 728126428, the
+  forwarder's 20-byte hex address) so that the forwarder recovers the shopper. `TRON_RPC_URL`
+  must serve `wallet/getnowblock`, `walletsolidity/getnowblock`, `getaccount`,
+  `getaccountresource`, `getcandelegatedmaxsize`, `getdelegatedresourcev2`,
+  `triggerconstantcontract`, `getchainparameters`, `broadcasthex` and
+  `wallet[solidity]/gettransactioninfobyid` (with receipts and logs). Then pay a few cents of USDT
+  from TronLink, merchant-sponsored and shopper-paid, and check: one delegation and one reclaim per
+  approve in `tron_delegations`, the watcher marks the payment paid, the poll job records the
+  cost, and the fee lands at the `gas-fees-tron` address.
 
 **Live checklist (FX for non-USD stores):** the live FX provider is
 [Open Exchange Rates](https://openexchangerates.org) (`FX_PROVIDER=openexchangerates`,

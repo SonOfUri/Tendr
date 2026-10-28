@@ -212,6 +212,18 @@ const EnvSchema = z
         .default('https://api.trongrid.io'),
     ),
     /**
+     * The TendrForwarder deployed on Tron (base58 `T…`), whose `payWithApproval` `gas-tron` calls
+     * for gasless USDT payments (ruling T9-a). No default: gasless Tron is unavailable while it is
+     * unset (the contract is not deployed yet). Never taken from a request.
+     */
+    TRON_FORWARDER_ADDRESS: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^T[1-9A-HJ-NP-Za-km-z]{33}$/, 'must be a base58 Tron address (T…)')
+        .optional(),
+    ),
+    /**
      * Safety margin (basis points) on a network fee Tendr quotes and collects: a shopper-paid fee
      * in a token is `usd × (1 + margin / 10 000) ÷ token price`, and a merchant-sponsored fee is
      * charged with the same margin. Integer 0–10 000, default 2000 (20 %).
