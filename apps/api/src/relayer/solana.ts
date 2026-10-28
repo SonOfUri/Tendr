@@ -106,6 +106,16 @@ export const SOLANA_BLOCKHASH_MAX_AGE_MS = 60_000;
  * before any broadcast) and its blockhash is past use.
  */
 export const SOLANA_STALE_PENDING_MS = 3 * 60_000;
+/**
+ * A recorded but still `pending` submission (its submit stopped after recording) is taken over by
+ * the poller only this long after its last change, so it never races a submit still sending.
+ */
+export const SOLANA_RECORDED_PENDING_MS = 30_000;
+/**
+ * "Never landed" needs two looks at least this far apart (one poll interval), both finding the
+ * blockhash invalid at the finalized root and the signature unknown.
+ */
+export const SOLANA_EXPIRY_CONFIRM_MS = 15_000;
 /** How long the paymaster's fee payer address is reused at prepare. */
 const PAYER_CACHE_MS = 10 * 60_000;
 /** Test mode: the compute-unit price the simulated transaction sets. */
@@ -198,6 +208,8 @@ interface StoredKora {
   signature: string;
   /** The fully signed transaction (base64): re-sent as is until it lands or expires. */
   transaction: string;
+  /** When the poller first found the blockhash expired and the signature unknown (ms). */
+  expiredSeenAt?: number;
 }
 
 const StoredKoraSchema = z.object({
@@ -206,6 +218,7 @@ const StoredKoraSchema = z.object({
   feePayer: z.string(),
   signature: z.string(),
   transaction: z.string(),
+  expiredSeenAt: z.number().finite().optional(),
 });
 
 function storedKora(v: Prisma.JsonValue | null): StoredKora | null {
@@ -230,19 +243,31 @@ export interface SolanaGaslessDeps {
   record?: typeof recordSigned;
 }
 
-/** Writes the signed transaction and its id on the claimed (`pending`) submission. */
+/** The claim was undone meanwhile (e.g. by the poller): this transaction is never sent. */
+export class ClaimLost extends Error {
+  constructor() {
+    super('the submission is no longer claimed for this quote');
+    this.name = 'ClaimLost';
+  }
+}
+
+/**
+ * Writes the signed transaction and its id on the submission, only while it is still `pending`
+ * and claimed for `quoteId`; throws ClaimLost otherwise.
+ */
 async function recordSigned(
   scope: { merchantId: string; livemode: boolean },
   id: string,
+  quoteId: string,
   stored: StoredKora,
 ): Promise<void> {
   const { count } = await tenantTransaction(scope, (tx) =>
     tx.gasSponsorship.updateMany({
-      where: { ...scope, id, status: 'pending' },
+      where: { ...scope, id, quoteId, status: 'pending' },
       data: { txHash: stored.signature, paymasterData: stored as unknown as Prisma.InputJsonValue },
     }),
   );
-  if (count !== 1) throw new Error('submission no longer pending');
+  if (count !== 1) throw new ClaimLost();
 }
 
 const scopeOf = (q: QuoteContext) => ({
@@ -548,8 +573,16 @@ export class SolanaGasless implements GaslessRelayer {
     };
     const scope = scopeOf(q);
     try {
-      await (this.deps.record ?? recordSigned)(scope, id, stored);
+      await (this.deps.record ?? recordSigned)(scope, id, q.quote.id, stored);
     } catch (err) {
+      if (err instanceof ClaimLost) {
+        log('warn', 'solana gasless: claim lost before the broadcast', { submissionId: id });
+        throw new AppError(
+          'QUOTE_EXPIRED',
+          'This payment attempt was abandoned; request a new quote',
+          409,
+        );
+      }
       // Never broadcast a transaction whose id is not recorded.
       log('warn', 'solana gasless: could not record the transaction', {
         submissionId: id,
@@ -560,8 +593,12 @@ export class SolanaGasless implements GaslessRelayer {
     try {
       await this.rpc.sendTransaction(signedTx);
     } catch (err) {
-      if (err instanceof SolanaRpcError && err.preflightRefused) {
-        // The node refused it in preflight and did not forward it.
+      if (
+        err instanceof SolanaRpcError &&
+        err.preflightRefused &&
+        !(await this.signatureSeen(signature))
+      ) {
+        // The node refused it in preflight and did not forward it; nothing knows its id.
         log('warn', 'solana gasless: preflight refused the transaction', {
           submissionId: id,
           reason: err.message,
@@ -575,6 +612,15 @@ export class SolanaGasless implements GaslessRelayer {
       });
     }
     return { txHash: signature };
+  }
+
+  /** Whether the chain knows `signature` (an unreadable answer counts as known: never undo). */
+  private async signatureSeen(signature: string): Promise<boolean> {
+    try {
+      return (await this.rpc.signatureStatus(signature)) !== null;
+    } catch {
+      return true;
+    }
   }
 
   /** Test mode: the transaction "lands" at once and the deposit reaches the simulated 1Click. */
@@ -685,7 +731,8 @@ export async function pollSolanaRelays(
         continue;
       }
       if (row.status === 'pending') {
-        // Stored but the submit stopped before marking it: it may have been sent.
+        // Recorded, not marked: a submit still sending, or one that stopped (it may have sent).
+        if (now.getTime() - row.updatedAt.getTime() < SOLANA_RECORDED_PENDING_MS) continue;
         await markSent(scope, row.id, row.quote, stored.signature, now);
       }
       if (await applyOutcome(rpc, row, stored, now)) applied++;
@@ -755,12 +802,23 @@ async function applyOutcome(
       } catch (err) {
         log('warn', 'solana gasless: re-send failed', { sponsorshipId: row.id, err: String(err) });
       }
-      await touch(row.id, now);
+      const { expiredSeenAt: _cleared, ...rest } = stored;
+      await touch(row.id, now, stored.expiredSeenAt !== undefined ? rest : undefined);
       return false;
     }
-    // Expired: anything that could still land is visible by now.
+    // Expired at the finalized root: anything that could still land is visible by now.
     status = await rpc.signatureStatus(signature);
     if (!status) {
+      // Only on a second look, a poll interval later (load-balanced nodes may disagree).
+      const first = stored.expiredSeenAt;
+      if (first === undefined || now.getTime() - first < SOLANA_EXPIRY_CONFIRM_MS) {
+        await touch(
+          row.id,
+          now,
+          first === undefined ? { ...stored, expiredSeenAt: now.getTime() } : undefined,
+        );
+        return false;
+      }
       return applyRelayOutcome(
         row.id,
         {
@@ -824,11 +882,17 @@ async function applyOutcome(
   return did;
 }
 
-/** Marks a row checked (the next pass visits rows not checked for longest first). */
-async function touch(id: string, now: Date): Promise<void> {
+/**
+ * Marks a row checked (the next pass visits rows not checked for longest first), optionally with
+ * its updated Kora record.
+ */
+async function touch(id: string, now: Date, stored?: StoredKora): Promise<void> {
   await prisma.gasSponsorship.updateMany({
     where: { id, status: { in: ['pending', 'submitted'] } },
-    data: { updatedAt: now },
+    data: {
+      updatedAt: now,
+      ...(stored ? { paymasterData: stored as unknown as Prisma.InputJsonValue } : {}),
+    },
   });
 }
 

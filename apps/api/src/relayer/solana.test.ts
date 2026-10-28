@@ -26,6 +26,8 @@ import {
   KoraClient,
   SIMULATED_KORA_PAYER,
   SOLANA_BLOCKHASH_MAX_AGE_MS,
+  SOLANA_EXPIRY_CONFIRM_MS,
+  SOLANA_RECORDED_PENDING_MS,
   SOLANA_STALE_PENDING_MS,
   SolanaGasless,
   SolanaRpc,
@@ -115,7 +117,11 @@ class FakeSolana {
   existing = new Set<string>();
   statuses = new Map<string, unknown>();
   txs = new Map<string, unknown>();
+  /** Blockhash validity at the finalized root. */
   validBlockhash = true;
+  /** Blockhash validity at `processed` (a node ahead of the root). */
+  processedValid = true;
+  blockhashCommitments: string[] = [];
   /** `sendTransaction`: a JSON-RPC error to answer with, or `throw` (no answer). */
   sendError: { code: number; message: string } | 'throw' | null = null;
   /** A method answered with an unexpected shape. */
@@ -164,7 +170,13 @@ class FakeSolana {
     } else if (body.method === 'getTransaction') {
       result = this.txs.get(p[0] as string) ?? null;
     } else if (body.method === 'isBlockhashValid') {
-      result = { context: { slot: 1 }, value: this.validBlockhash };
+      const commitment = (p[1] as { commitment?: string } | undefined)?.commitment;
+      this.blockhashCommitments.push(commitment ?? '');
+      // A node ahead of the finalized root may already call it invalid at `processed`.
+      result = {
+        context: { slot: 1 },
+        value: commitment === 'finalized' ? this.validBlockhash : this.processedValid,
+      };
     }
     return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
   }) as typeof fetch;
@@ -769,6 +781,62 @@ describe('Solana gasless payments (Kora)', () => {
     });
   });
 
+  describe('send errors that do not prove nothing was sent (N2)', () => {
+    it('"already processed" in preflight: submitted with its id, never undone', async () => {
+      const p = await koraQuote();
+      const { signed } = await preparedAndSigned(p);
+      chain.sendError = {
+        code: -32002,
+        message: 'Transaction simulation failed: This transaction has already been processed',
+      };
+      const res = await submit(p, signed);
+      expect(res).toMatchObject({ status: 'submitted', txHash: txIdOf(signed) });
+      expect(await rowOf(res.submissionId)).toMatchObject({ quoteId: p.quote.id });
+    });
+
+    it('a preflight refusal whose signature the chain knows: submitted, never undone', async () => {
+      const p = await koraQuote();
+      const { signed } = await preparedAndSigned(p);
+      chain.statuses.set(txIdOf(signed), { slot: 3, err: null, confirmationStatus: 'processed' });
+      chain.sendError = { code: -32002, message: 'Transaction simulation failed: no funds' };
+      const res = await submit(p, signed);
+      expect(res).toMatchObject({ status: 'submitted', txHash: txIdOf(signed) });
+      expect(chain.calls).toContain('getSignatureStatuses');
+    });
+  });
+
+  it('a claim undone while the submit was signing: never broadcast, re-quote (N3)', async () => {
+    const p = await koraQuote();
+    const { signed } = await preparedAndSigned(p);
+    // The poller's stale-claim undo lands between the claim and the record (Kora signing).
+    const signing = kora.fetch;
+    const racing = (async (url: string | URL, init?: RequestInit) => {
+      const res = await signing(url, init);
+      const body = JSON.parse(String(init?.body)) as { method: string };
+      if (body.method === 'signTransaction') {
+        await prisma.gasSponsorship.update({
+          where: { id: p.quote.gasSponsorshipId! },
+          data: { quoteId: null, signerAddress: null },
+        });
+      }
+      return res;
+    }) as typeof fetch;
+    const relayer3 = new SolanaGasless(true, {
+      kora: new KoraClient({ fetch: racing }),
+      rpc: new SolanaRpc('http://sol.test', chain.fetch),
+      now: () => new Date(clock),
+    });
+    expect(
+      await refusal(relayer3.submit(p.q, { signatures: {}, transaction: signed })),
+    ).toMatchObject({ code: 'QUOTE_EXPIRED', status: 409 });
+    expect(chain.sent).toEqual([]);
+    expect(await rowOf(p.quote.gasSponsorshipId!)).toMatchObject({
+      quoteId: null,
+      txHash: null,
+      paymasterData: null,
+    });
+  });
+
   it('broadcast outcome unknown: submitted with its known id, re-sent, no second transaction until it cannot land', async () => {
     const p = await koraQuote('shopper');
     const first = await preparedAndSigned(p);
@@ -789,13 +857,27 @@ describe('Solana gasless payments (Kora)', () => {
     expect(chain.sent).toEqual([payerSigned(first.signed), payerSigned(first.signed)]);
     expect((await rowOf(res.submissionId)).status).toBe('submitted');
 
-    // Expired and never seen: failed (no gas); only now can the quote be prepared again.
+    // A node ahead calls the blockhash invalid at `processed`: that never ends it (finalized only).
+    chain.processedValid = false;
+    expect(await pollAt(Date.now())).toBe(0);
+    expect(chain.sent).toHaveLength(3);
+    expect(chain.blockhashCommitments.every((c) => c === 'finalized')).toBe(true);
+
+    // Expired at the finalized root and never seen: only a second look a poll interval later fails
+    // it (no gas); until then the quote stays locked.
     chain.validBlockhash = false;
-    expect(await pollAt(Date.now())).toBe(1);
+    const t0 = Date.now();
+    expect(await pollAt(t0)).toBe(0);
+    expect((await rowOf(res.submissionId)).status).toBe('submitted');
+    expect(await refusal(relayer.prepare(p.q, {}))).toMatchObject({ code: 'CONFLICT' });
+    expect(await pollAt(t0 + SOLANA_EXPIRY_CONFIRM_MS - 1000)).toBe(0);
+    expect((await rowOf(res.submissionId)).status).toBe('submitted');
+    expect(await pollAt(t0 + SOLANA_EXPIRY_CONFIRM_MS)).toBe(1);
     expect(await rowOf(res.submissionId)).toMatchObject({ status: 'failed', sponsor: 'shopper' });
     expect((await rowOf(res.submissionId)).lossRecognizedAt).toBeNull();
     kora.blockhash = rand32();
     chain.validBlockhash = true;
+    chain.processedValid = true;
     const second = await preparedAndSigned(p);
     const again = await submit(p, second.signed);
     expect(again.submissionId).not.toBe(res.submissionId);
@@ -832,7 +914,10 @@ describe('Solana gasless payments (Kora)', () => {
         data: { status: 'pending' },
       });
       await prisma.quote.update({ where: { id: p.quote.id }, data: { depositTxHash: null } });
-      await pollAt(Date.now());
+      // Within the age gate it may be a submit still sending: left alone.
+      await pollAt(Date.now() + SOLANA_RECORDED_PENDING_MS - 5_000);
+      expect((await rowOf(p.quote.gasSponsorshipId!)).status).toBe('pending');
+      await pollAt(Date.now() + SOLANA_RECORDED_PENDING_MS + 1_000);
       expect(await rowOf(p.quote.gasSponsorshipId!)).toMatchObject({
         status: 'submitted',
         txHash: id,
@@ -1012,7 +1097,10 @@ describe('Solana gasless payments (Kora)', () => {
       const { signed } = await preparedAndSigned(p);
       await submit(p, signed);
       chain.validBlockhash = false;
-      expect(await poll()).toBe(1);
+      const t0 = Date.now();
+      expect(await pollAt(t0)).toBe(0);
+      // The second look, a poll interval later, fails it.
+      expect(await pollAt(t0 + SOLANA_EXPIRY_CONFIRM_MS)).toBe(1);
       const sp = await prisma.gasSponsorship.findUniqueOrThrow({
         where: { id: p.quote.gasSponsorshipId! },
       });

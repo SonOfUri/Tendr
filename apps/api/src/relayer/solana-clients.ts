@@ -154,10 +154,12 @@ export class SolanaRpcError extends Error {
 
   /**
    * `sendTransaction`'s preflight refused the transaction (simulation failed, -32002, or a
-   * signature failed verification, -32003): the node did not forward it.
+   * signature failed verification, -32003): the node did not forward it. Not when the reason is
+   * that it was already processed (a gateway retry after the first send got through).
    */
   get preflightRefused(): boolean {
-    return this.code === -32002 || this.code === -32003;
+    if (this.code !== -32002 && this.code !== -32003) return false;
+    return !/already (been )?processed|AlreadyProcessed/i.test(this.message);
   }
 }
 
@@ -233,9 +235,12 @@ export class SolanaRpc {
     return raw === null ? null : TransactionSchema.parse(raw);
   }
 
-  /** Whether the blockhash can still land a transaction (the most recent view). */
+  /**
+   * Whether the blockhash is still valid at the finalized root: once it is not, no fork can still
+   * include a transaction using it.
+   */
   async isBlockhashValid(blockhash: string): Promise<boolean> {
-    const r = (await this.call('isBlockhashValid', [blockhash, { commitment: 'processed' }])) as {
+    const r = (await this.call('isBlockhashValid', [blockhash, { commitment: 'finalized' }])) as {
       value?: unknown;
     } | null;
     if (typeof r?.value !== 'boolean') throw new Error('unexpected isBlockhashValid result');
