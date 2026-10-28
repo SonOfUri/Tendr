@@ -8745,7 +8745,7 @@
                         <nav name="Navigation" class="framer-C2U2Y framer-79TMY framer-JRvCS framer-jKTnJ framer-IrBwo framer-1is6x80 framer-v-1is6x80" data-border="true" data-framer-name="Desktop" data-highlight="true" style="--border-bottom-width:1px;--border-color:var(--token-bdcd5add-4d55-4d64-bedd-a5b4a92cf17a);--border-left-width:1px;--border-right-width:1px;--border-style:solid;--border-top-width:1px;backdrop-filter:blur(15px);background-color:var(--token-c09ce9b8-590c-4a30-ba29-e9a519cbe629);-webkit-backdrop-filter:blur(15px);border-bottom-left-radius:28px;border-bottom-right-radius:28px;border-top-left-radius:28px;border-top-right-radius:28px;box-shadow:0px 16px 40px -20px rgba(20, 20, 20, 0.28), inset 0px 1px 0px 0px rgba(255, 255, 255, 0.8)">
                             <div class="framer-evwvoe" data-framer-name="Bar">
                                 <!--$-->
-                                <a class="framer-40pjl0 framer-15wpiuy" data-framer-name="Home Link" href="./" data-framer-page-link-current="true">
+                                <a class="framer-40pjl0 framer-15wpiuy" data-framer-name="Home Link" href="https://demo.usetendr.tech" data-framer-page-link-current="true">
                                     <div class="framer-1m2qsdh-container" data-framer-name="Logo" name="Logo">
                                         <div name="Logo" class="framer-ILeSG framer-7ducl2 framer-v-7ducl2" data-framer-name="Mark" data-highlight="true" tabindex="0">
                                             <div class="framer-7xceey" data-framer-name="Circle" style="background-color:var(--token-466e4a58-6ec1-449a-bca9-bc6fd3683eeb);border-bottom-left-radius:100px;border-bottom-right-radius:100px;border-top-left-radius:100px;border-top-right-radius:100px"><svg data-framer-name="Icon" class="framer-AXXHl framer-1vpri0n" role="presentation" viewBox="0 0 24 24" style="--1m6trwb:0;--21h8s6:var(--token-ad88ec39-610d-4049-b505-52d900326a21);--pgex8v:3.5"><use href="#2942266250"/></svg></div>
@@ -11968,6 +11968,111 @@
     <!-- Start of bodyEnd -->
 
     <!-- End of bodyEnd -->
+
+<script id="tendr-demo-links">
+(function () {
+  var DEMO = "https://demo.usetendr.tech";
+
+  function isExplore(el) {
+    var t = (el.textContent || "").replace(/\s+/g, " ").trim();
+    return /^Explore the Demo$/i.test(t) || t === "Explore the Demo Explore the Demo";
+  }
+
+  function wireExplore(root) {
+    var nodes = (root || document).querySelectorAll("a, button, [data-framer-name], div, p, span");
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (!isExplore(el)) continue;
+      // Prefer the nearest clickable ancestor
+      var target = el.closest("a,button,[role='button'],[data-framer-name='Secondary'],[data-framer-name='Secondary CTA']") || el;
+      if (target.tagName === "A") {
+        target.setAttribute("href", DEMO);
+        target.setAttribute("target", "_self");
+      }
+      if (target.dataset.tendrDemoWired === "1") continue;
+      target.dataset.tendrDemoWired = "1";
+      target.style.cursor = "pointer";
+      target.addEventListener(
+        "click",
+        function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.location.href = DEMO;
+        },
+        true
+      );
+    }
+  }
+
+  function ensureNavDemo() {
+    if (document.querySelector('[data-tendr-nav-demo="1"]')) return;
+    var product =
+      document.querySelector('[data-framer-name="Product"][name="Product"]') ||
+      document.querySelector('a[name="Product"]');
+    if (!product) return;
+    var host = product.closest(".framer-jcujca-container") || product.parentElement;
+    if (!host || !host.parentElement) return;
+
+    var wrap = document.createElement("div");
+    wrap.className = host.className;
+    wrap.setAttribute("data-framer-name", "Demo");
+    wrap.setAttribute("name", "Demo");
+    wrap.setAttribute("data-tendr-nav-demo", "1");
+
+    var a = document.createElement("a");
+    a.name = "Demo";
+    a.href = DEMO;
+    a.className = product.className || host.querySelector("a")?.className || "";
+    a.setAttribute("data-framer-name", "Default");
+    a.style.cssText =
+      "background-color:transparent;border-radius:100px;padding:8px 14px;text-decoration:none;display:inline-flex;align-items:center;";
+
+    var label = document.createElement("span");
+    label.textContent = "Demo";
+    label.style.cssText = "font: inherit; color: inherit; font-weight: 600;";
+    a.appendChild(label);
+    wrap.appendChild(a);
+    host.parentElement.insertBefore(wrap, host.nextSibling);
+  }
+
+  function ensureMobileDemo() {
+    if (document.querySelector('[data-tendr-mobile-demo="1"]')) return;
+    var drawer = document.querySelector('[data-framer-name="Drawer"]');
+    if (!drawer) return;
+    var a = document.createElement("a");
+    a.href = DEMO;
+    a.textContent = "Demo";
+    a.setAttribute("data-tendr-mobile-demo", "1");
+    a.style.cssText =
+      "display:block;padding:14px 18px;margin:6px 10px;border-radius:16px;text-decoration:none;font-weight:600;color:inherit;";
+    drawer.insertBefore(a, drawer.firstChild);
+  }
+
+  function run() {
+    try {
+      document.title = "Tendr — One checkout. Every way to pay.";
+      wireExplore(document);
+      ensureNavDemo();
+      ensureMobileDemo();
+    } catch (e) {}
+  }
+
+  run();
+  document.addEventListener("DOMContentLoaded", run);
+  window.addEventListener("load", function () {
+    run();
+    setTimeout(run, 250);
+    setTimeout(run, 1000);
+    setTimeout(run, 2500);
+  });
+
+  var obs = new MutationObserver(function () {
+    run();
+  });
+  obs.observe(document.documentElement, { childList: true, subtree: true });
+})();
+</script>
+
 </body>
 
 </html>
