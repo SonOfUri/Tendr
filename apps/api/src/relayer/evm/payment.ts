@@ -19,6 +19,9 @@ import {
   FORWARDER_DOMAIN_VERSION,
   TENDR_FORWARDER_ABI,
   TENDR_PAYMENT_TYPES,
+  TEST_PAYMENT_DOMAIN_NAME,
+  TEST_PAYMENT_DOMAIN_VERSION,
+  TEST_VERIFYING_CONTRACT,
 } from '@tendr/contracts';
 import { Interface, Signature, getAddress, id as keccakUtf8, verifyTypedData } from 'ethers';
 import { AppError } from '../../lib/errors.js';
@@ -43,6 +46,11 @@ export interface EvmPaymentContext {
   deadline: Date;
   /** The token's EIP-2612 nonce for `wallet` (permit only). */
   permitNonce?: bigint;
+  /**
+   * Test mode (ruling T10-f): every message is signed on the test domain at the code-less
+   * sentinel (`@tendr/contracts` gasless-test.ts), so no real token or forwarder accepts it.
+   */
+  testMode?: boolean;
 }
 
 export type SignKind = 'payment' | 'fee' | 'permit' | 'tendr_payment';
@@ -115,7 +123,18 @@ export function requiredKinds(ctx: Pick<EvmPaymentContext, 'method' | 'fee'>): S
   return ['permit', 'tendr_payment'];
 }
 
+/** The test-mode domain for every message (3009, permit, TendrPayment). */
+function testDomain(ctx: EvmPaymentContext) {
+  return {
+    name: TEST_PAYMENT_DOMAIN_NAME,
+    version: TEST_PAYMENT_DOMAIN_VERSION,
+    chainId: ctx.chainId,
+    verifyingContract: TEST_VERIFYING_CONTRACT,
+  };
+}
+
 function tokenDomain(ctx: EvmPaymentContext) {
+  if (ctx.testMode) return testDomain(ctx);
   return {
     name: ctx.token.domain.name,
     version: ctx.token.domain.version,
@@ -172,12 +191,14 @@ export function buildToSign(ctx: EvmPaymentContext): ToSign[] {
   out.push({
     kind: 'tendr_payment',
     typed_data: {
-      domain: {
-        name: FORWARDER_DOMAIN_NAME,
-        version: FORWARDER_DOMAIN_VERSION,
-        chainId: ctx.chainId,
-        verifyingContract: getAddress(ctx.forwarder),
-      },
+      domain: ctx.testMode
+        ? testDomain(ctx)
+        : {
+            name: FORWARDER_DOMAIN_NAME,
+            version: FORWARDER_DOMAIN_VERSION,
+            chainId: ctx.chainId,
+            verifyingContract: getAddress(ctx.forwarder),
+          },
       types: { EIP712Domain: DOMAIN_TYPE, ...TENDR_PAYMENT_TYPES },
       primaryType: 'TendrPayment',
       message: {

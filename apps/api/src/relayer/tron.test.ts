@@ -5,7 +5,12 @@
 // Tron call at all.
 import { secp256k1 } from '@noble/curves/secp256k1';
 import type { Merchant } from '@prisma/client';
-import { TENDR_PAYMENT_TYPES } from '@tendr/contracts';
+import {
+  TENDR_PAYMENT_TYPES,
+  TEST_PAYMENT_DOMAIN_NAME,
+  TEST_TRON_REF_BLOCK,
+  TEST_VERIFYING_CONTRACT,
+} from '@tendr/contracts';
 import { Wallet } from 'ethers';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,7 +55,7 @@ import {
   pollTronRelays,
   resetTronRelayer,
 } from './tron.js';
-import { sendApprove } from './tron-energy.js';
+import { sendApprove, tronGasFeeAddress } from './tron-energy.js';
 
 const sim1click = isolatedSimStore();
 const USDC = 'nep141:usdc.test'; // settlement asset (NEAR intents)
@@ -295,7 +300,11 @@ class FakeTron implements TronApi {
 }
 
 interface ApproveTd {
-  transaction: { txID: string; raw_data_hex: string };
+  transaction: {
+    txID: string;
+    raw_data_hex: string;
+    raw_data: { ref_block_bytes: string; ref_block_hash: string };
+  };
   owner: string;
   token: string;
   spender: string;
@@ -885,6 +894,19 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
         { mutate: (r) => ({ ...r, ref: { bytes: Uint8Array.from([1, 2]), hash: r.ref.hash } }) },
       ],
       ['tron_approve.signature', { key: secp256k1.utils.randomPrivateKey() }],
+      // Live never accepts the test-mode TaPoS reference (ruling T10-f).
+      [
+        'tron_approve.ref_block',
+        {
+          mutate: (r) => ({
+            ...r,
+            ref: {
+              bytes: Uint8Array.from(Buffer.from(TEST_TRON_REF_BLOCK.bytes, 'hex')),
+              hash: Uint8Array.from(Buffer.from(TEST_TRON_REF_BLOCK.hash, 'hex')),
+            },
+          }),
+        },
+      ],
     ];
     for (const [field, over] of cases) {
       // Each case is a fresh attempt (the session's attempt limit counts every one).
@@ -1247,6 +1269,8 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
         wallet_address: WALLET,
       });
       expect(opts.statusCode, opts.body).toBe(200);
+      // Ruling T10-g: the chain's gas-fee account, in its own address form.
+      expect(opts.json().fee_recipient).toBe(await tronGasFeeAddress());
       expect(opts.json().options).toEqual([
         { method: 'forwarder', paid_by: 'merchant', reason: null, fee_modes: [], token_fee: null },
       ]);
@@ -1261,6 +1285,8 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
       expect(prep.statusCode, prep.body).toBe(200);
       expect(prep.json().step).toBe('approve');
       const td = prep.json().to_sign[0].typed_data as ApproveTd;
+      expect(td.transaction.raw_data.ref_block_bytes).toBe(TEST_TRON_REF_BLOCK.bytes);
+      expect(td.transaction.raw_data.ref_block_hash).toBe(TEST_TRON_REF_BLOCK.hash);
       const bad = await call('POST', 'gasless/submit', s.client_secret, {
         quote_id: quote.id,
         tron_approve: {
@@ -1292,7 +1318,13 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
       expect(prep2.statusCode, prep2.body).toBe(200);
       expect(prep2.json().step).toBe('payment');
       const ptd = prep2.json().to_sign[0].typed_data as PaymentTd;
-      expect(ptd.domain.chainId).toBe(TRON_CHAIN_IDS.test);
+      // Test mode signs only test markers (ruling T10-f): the test domain at the sentinel.
+      expect(ptd.domain).toEqual({
+        name: TEST_PAYMENT_DOMAIN_NAME,
+        version: '1',
+        chainId: TRON_CHAIN_IDS.test,
+        verifyingContract: TEST_VERIFYING_CONTRACT,
+      });
       const sub2 = await call('POST', 'gasless/submit', s.client_secret, {
         quote_id: quote.id,
         signatures: {

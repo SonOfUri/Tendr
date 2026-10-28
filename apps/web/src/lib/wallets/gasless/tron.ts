@@ -10,6 +10,10 @@ import {
   FORWARDER_DOMAIN_NAME,
   FORWARDER_DOMAIN_VERSION,
   TENDR_PAYMENT_TYPES,
+  TEST_PAYMENT_DOMAIN_NAME,
+  TEST_PAYMENT_DOMAIN_VERSION,
+  TEST_TRON_REF_BLOCK,
+  TEST_VERIFYING_CONTRACT,
 } from '@tendr/contracts';
 import { base58Decode } from '@/lib/base58';
 import { WalletError, toWalletError } from '../errors';
@@ -17,6 +21,7 @@ import type { PayTarget } from '../index';
 import { checkShape } from './evm';
 import {
   deadlineSeconds,
+  gaslessNonce,
   mismatch,
   uintOf,
   type GaslessExpectation,
@@ -111,11 +116,16 @@ function fieldMap(
   return m;
 }
 
-/** The approve transaction's raw bytes must be exactly one `approve(forwarder, amount + fee)`. */
+/**
+ * The approve transaction's raw bytes must be exactly one `approve(forwarder, amount + fee)`, and
+ * the `raw_data` JSON the wallet may display must say the same (m3). Test mode: the TaPoS
+ * reference is the test one no block ever had (ruling T10-f); live never uses it.
+ */
 export function checkApproveRaw(
   rawHex: string,
-  e: Pick<GaslessExpectation, 'wallet' | 'amount' | 'fee' | 'deadline' | 'target'>,
+  e: Pick<GaslessExpectation, 'wallet' | 'amount' | 'fee' | 'deadline' | 'target' | 'livemode'>,
   forwarder: string,
+  rawData?: unknown,
 ): void {
   if (typeof rawHex !== 'string' || !HEX.test(rawHex) || rawHex.length > 1000) {
     throw mismatch('approve.raw_data_hex');
@@ -156,6 +166,44 @@ export function checkApproveRaw(
   const feeLimit = raw.get(18)?.[0];
   if (typeof feeLimit !== 'bigint' || feeLimit < 1n || feeLimit > MAX_APPROVE_FEE_LIMIT_SUN) {
     throw mismatch('approve.fee_limit');
+  }
+  const refBytes = hexOf(raw.get(1)?.[0]);
+  const refHash = hexOf(raw.get(4)?.[0]);
+  const testRef = refBytes === TEST_TRON_REF_BLOCK.bytes && refHash === TEST_TRON_REF_BLOCK.hash;
+  if (testRef === e.livemode) throw mismatch('approve.ref_block');
+  if (rawData === undefined) return;
+  // What the wallet shows must be what it signs.
+  const j = rawData as {
+    contract?: {
+      type?: unknown;
+      parameter?: { value?: Record<string, unknown> };
+    }[];
+    ref_block_bytes?: unknown;
+    ref_block_hash?: unknown;
+    expiration?: unknown;
+    fee_limit?: unknown;
+    timestamp?: unknown;
+  } | null;
+  const v = j?.contract?.[0]?.parameter?.value;
+  const low = (x: unknown) => (typeof x === 'string' ? x.toLowerCase() : null);
+  const num = (x: unknown) =>
+    typeof x === 'number' && Number.isSafeInteger(x) ? BigInt(x) : undefined;
+  if (
+    !j ||
+    j.contract?.length !== 1 ||
+    j.contract[0]!.type !== 'TriggerSmartContract' ||
+    !v ||
+    low(v.data) !== hexOf(t.get(4)?.[0]) ||
+    low(v.owner_address) !== hexOf(t.get(1)?.[0]) ||
+    low(v.contract_address) !== hexOf(t.get(2)?.[0]) ||
+    (v.call_value !== undefined && v.call_value !== 0) ||
+    low(j.ref_block_bytes) !== refBytes ||
+    low(j.ref_block_hash) !== refHash ||
+    num(j.expiration) !== expiration ||
+    num(j.fee_limit) !== feeLimit ||
+    num(j.timestamp) !== raw.get(14)?.[0]
+  ) {
+    throw mismatch('approve.raw_data');
   }
 }
 
@@ -198,7 +246,7 @@ export function createTronGasless(target: PayTarget, deps: TronGaslessDeps): Gas
     if (!tx || typeof tx.raw_data_hex !== 'string' || typeof tx.txID !== 'string') {
       throw mismatch('approve.transaction');
     }
-    checkApproveRaw(tx.raw_data_hex, e, forwarder);
+    checkApproveRaw(tx.raw_data_hex, e, forwarder, tx.raw_data);
     // What the wallet signs is this id: it must be the hash of exactly those bytes.
     if (tx.txID.toLowerCase() !== toHex(sha256(fromHex(tx.raw_data_hex)))) {
       throw mismatch('approve.txID');
@@ -235,12 +283,20 @@ export function createTronGasless(target: PayTarget, deps: TronGaslessDeps): Gas
       p.to_sign[0]!.typed_data,
       'TendrPayment',
       TENDR_PAYMENT_TYPES.TendrPayment,
-      {
-        name: FORWARDER_DOMAIN_NAME,
-        version: FORWARDER_DOMAIN_VERSION,
-        chainId: e.livemode ? TRON_CHAIN_IDS.live : TRON_CHAIN_IDS.test,
-        verifyingContract: tronToEvm(forwarder, 'forwarder'),
-      },
+      e.livemode
+        ? {
+            name: FORWARDER_DOMAIN_NAME,
+            version: FORWARDER_DOMAIN_VERSION,
+            chainId: TRON_CHAIN_IDS.live,
+            verifyingContract: tronToEvm(forwarder, 'forwarder'),
+          }
+        : {
+            // Ruling T10-f: the test domain at the code-less sentinel.
+            name: TEST_PAYMENT_DOMAIN_NAME,
+            version: TEST_PAYMENT_DOMAIN_VERSION,
+            chainId: TRON_CHAIN_IDS.test,
+            verifyingContract: TEST_VERIFYING_CONTRACT,
+          },
     );
     const m = td.message as Record<string, string>;
     const same = (v: string, address: string, field: string) =>
@@ -252,6 +308,19 @@ export function createTronGasless(target: PayTarget, deps: TronGaslessDeps): Gas
     if (uintOf(m.fee, `${kind}.fee`) !== e.fee) throw mismatch(`${kind}.fee`);
     if (same(m.feeTo!, e.depositAddress, 'deposit') || same(m.feeTo!, e.wallet, 'signer')) {
       throw mismatch(`${kind}.feeTo`);
+    }
+    // Ruling T10-g: exactly Tendr's gas-fee account (whenever known; required with a fee).
+    if (e.fee > 0n || e.feeRecipient !== null) {
+      let want: string | null = null;
+      try {
+        want = e.feeRecipient ? tronToEvm(e.feeRecipient, 'fee_recipient') : null;
+      } catch {
+        want = null;
+      }
+      if (!want || m.feeTo!.toLowerCase() !== want.toLowerCase()) throw mismatch(`${kind}.feeTo`);
+    }
+    if (String(m.nonce).toLowerCase() !== gaslessNonce(e.quoteId, 'tendr_payment')) {
+      throw mismatch(`${kind}.nonce`);
     }
     const dl = uintOf(m.deadline, `${kind}.deadline`);
     if (dl === 0n || dl > deadlineSeconds(e.deadline)) throw mismatch(`${kind}.deadline`);

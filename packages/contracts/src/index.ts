@@ -8,3 +8,4 @@ export * from './checkout.js';
 export * from './connect.js';
 export * from './gas.js';
 export * from './forwarder.js';
+export * from './gasless-test.js';

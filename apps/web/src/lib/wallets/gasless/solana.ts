@@ -18,12 +18,15 @@ import {
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from '@solana/spl-token';
+import { TEST_SOLANA_BLOCKHASH } from '@tendr/contracts';
 import { base64ToBytes, bytesToBase64 } from '@/lib/base58';
 import { WalletError, toWalletError } from '../errors';
 import type { PayTarget } from '../index';
 import {
   GaslessExpiredError,
+  assertFeeRecipient,
   mismatch,
+  type GaslessExpectation,
   uintOf,
   type GaslessMethod,
   type GaslessSigner,
@@ -73,7 +76,10 @@ interface KoraTypedData {
 export function checkKoraTransaction(
   typed: unknown,
   target: PayTarget,
-  e: { wallet: string; depositAddress: string; amount: bigint; fee: bigint },
+  e: Pick<
+    GaslessExpectation,
+    'wallet' | 'depositAddress' | 'amount' | 'fee' | 'livemode' | 'feeRecipient' | 'target'
+  >,
 ): VersionedTransaction {
   const td = typed as KoraTypedData | null;
   if (!td || typeof td.transaction !== 'string') throw mismatch('transaction');
@@ -92,6 +98,10 @@ export function checkKoraTransaction(
   }
   const msg = tx.message;
   if (msg.version !== 0 || msg.addressTableLookups.length > 0) throw mismatch('transaction');
+  // Ruling T10-f: test mode signs only a blockhash no cluster ever produced; live never does.
+  if ((msg.recentBlockhash === TEST_SOLANA_BLOCKHASH) === e.livemode) {
+    throw mismatch('transaction.blockhash');
+  }
   const keys = msg.staticAccountKeys;
   if (
     msg.header.numRequiredSignatures !== 2 ||
@@ -109,6 +119,11 @@ export function checkKoraTransaction(
       : undefined;
     feeOwner = pk(leg?.to, 'fee');
     if (feeOwner.equals(deposit) || feeOwner.equals(wallet)) throw mismatch('fee');
+    // Ruling T10-g: exactly Tendr's gas-fee account, and the list agrees with the transaction.
+    assertFeeRecipient(e as GaslessExpectation, leg?.to, 'fee');
+    if (leg?.token_account !== getAssociatedTokenAddressSync(mint, feeOwner, true).toBase58()) {
+      throw mismatch('fee');
+    }
   }
   const ata = (owner: PublicKey) => getAssociatedTokenAddressSync(mint, owner, true);
   const walletAta = ata(wallet);

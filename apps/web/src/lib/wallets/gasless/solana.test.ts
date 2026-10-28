@@ -44,6 +44,7 @@ function expectation(fee: bigint): GaslessExpectation {
     fee,
     deadline: DEADLINE,
     livemode: true,
+    feeRecipient: feeOwner.toBase58(),
   };
 }
 
@@ -66,10 +67,11 @@ function prepared(
   ixs: TransactionInstruction[] = instructions(fee),
   over: Record<string, unknown> = {},
   feePayer: PublicKey = payer,
+  blockhash: string = Keypair.generate().publicKey.toBase58(),
 ): PreparePayload {
   const msg = new TransactionMessage({
     payerKey: feePayer,
-    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    recentBlockhash: blockhash,
     instructions: ixs,
   }).compileToV0Message();
   const tx = new VersionedTransaction(msg);
@@ -250,5 +252,38 @@ describe('Solana gasless (Kora)', () => {
   it('refuses a wallet that changed the transaction while signing', async () => {
     const { s } = signer({ tamper: true });
     expect(await refused(s.sign(prepared(0n), expectation(0n)))).toBe('signed_transaction');
+  });
+});
+
+describe('Solana gasless: test mode and the fee recipient (T10-f, T10-g)', () => {
+  const TEST_BLOCKHASH = '9xWa63eegkSG738oa3REXzSizpErkLYybriuY4GkpdtU';
+
+  it('test mode signs only the test blockhash; live refuses it', async () => {
+    const { s, signTransaction } = signer();
+    const test = prepared(0n, instructions(0n), {}, payer, TEST_BLOCKHASH);
+    await expect(s.sign(test, { ...expectation(0n), livemode: false })).resolves.toMatchObject({
+      kind: 'submit',
+    });
+    expect(await refused(s.sign(prepared(0n), { ...expectation(0n), livemode: false }))).toBe(
+      'transaction.blockhash',
+    );
+    expect(await refused(s.sign(test, expectation(0n)))).toBe('transaction.blockhash');
+    expect(signTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('the fee goes exactly to the gas-fee account', async () => {
+    const { s, signTransaction } = signer();
+    expect(
+      await refused(
+        s.sign(prepared(96_000n), {
+          ...expectation(96_000n),
+          feeRecipient: Keypair.generate().publicKey.toBase58(),
+        }),
+      ),
+    ).toBe('fee');
+    expect(
+      await refused(s.sign(prepared(96_000n), { ...expectation(96_000n), feeRecipient: null })),
+    ).toBe('fee');
+    expect(signTransaction).not.toHaveBeenCalled();
   });
 });

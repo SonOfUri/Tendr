@@ -60,6 +60,7 @@ const expectation = (fee: bigint): GaslessExpectation => ({
   fee,
   deadline: DEADLINE,
   livemode: true,
+  feeRecipient: FEE_TO,
 });
 
 function signer(supported = true) {
@@ -157,11 +158,44 @@ describe('NEAR gasless (delegate actions)', () => {
       'actions[0]',
     ],
     ['no TTL', 0n, () => prepared(0n, undefined, { block_height_ttl: 0 }), 'block_height_ttl'],
+    [
+      'a TTL far past the deadline',
+      0n,
+      () => prepared(0n, undefined, { block_height_ttl: 100_000 }),
+      'block_height_ttl',
+    ],
+    [
+      'the fee to anyone else',
+      96_000n,
+      () => prepared(96_000n, [transfer(DEPOSIT, '25000000'), transfer('c'.repeat(64), '96000')]),
+      'actions[1]',
+    ],
+    [
+      'the test-mode receiver in live mode',
+      0n,
+      () => prepared(0n, undefined, { receiver_id: 'tendr-test-payment.test.invalid' }),
+      'receiver_id',
+    ],
   ])('refuses %s before the wallet is asked', async (_n, fee, make, field) => {
     const { s, signDelegate } = signer();
     const err = await s.sign(make(), expectation(fee)).catch((x: unknown) => x);
     expect(err).toBeInstanceOf(GaslessMismatchError);
     expect((err as GaslessMismatchError).field).toBe(field);
     expect(signDelegate).not.toHaveBeenCalled();
+  });
+});
+
+describe('NEAR gasless: test mode (T10-f)', () => {
+  const test = { ...expectation(0n), livemode: false };
+
+  it('delegates only to the test receiver, which cannot exist', async () => {
+    const { s, signDelegate } = signer();
+    await s.sign(prepared(0n, undefined, { receiver_id: 'tendr-test-payment.test.invalid' }), test);
+    expect(signDelegate).toHaveBeenCalledWith(
+      expect.objectContaining({ receiverId: 'tendr-test-payment.test.invalid' }),
+    );
+    const err = await s.sign(prepared(0n), test).catch((x: unknown) => x);
+    expect((err as GaslessMismatchError).field).toBe('receiver_id');
+    expect(signDelegate).toHaveBeenCalledTimes(1);
   });
 });

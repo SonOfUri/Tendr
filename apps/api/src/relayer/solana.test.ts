@@ -3,6 +3,7 @@
 // 1Click simulator), and the test-mode flow end to end through the routes (no HTTP at all).
 import { ed25519 } from '@noble/curves/ed25519';
 import type { Merchant } from '@prisma/client';
+import { TEST_SOLANA_BLOCKHASH } from '@tendr/contracts';
 import bs58 from 'bs58';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,6 +33,7 @@ import {
   SolanaGasless,
   SolanaRpc,
   pollSolanaRelays,
+  solanaGasFeeAddress,
 } from './solana.js';
 import {
   associatedTokenAccount,
@@ -626,6 +628,17 @@ describe('Solana gasless payments (Kora)', () => {
     expect(kora.count('signTransaction')).toBe(0);
   });
 
+  it('live never accepts the test-mode blockhash (ruling T10-f)', async () => {
+    kora.blockhash = TEST_SOLANA_BLOCKHASH;
+    const p = await koraQuote();
+    const { signed } = await preparedAndSigned(p);
+    expect(await refusal(submit(p, signed))).toMatchObject({
+      code: 'GASLESS_PAYLOAD_MISMATCH',
+      details: { field: 'transaction.blockhash' },
+    });
+    expect(kora.count('signTransaction')).toBe(0);
+  });
+
   it('native SOL is never routed here, and unlisted tokens get no kora quote', async () => {
     const s = await newSession();
     const opts = await call('POST', 'gasless/options', s.client_secret, {
@@ -1122,6 +1135,8 @@ describe('Solana gasless payments (Kora)', () => {
         wallet_address: wallet,
       });
       expect(opts.statusCode, opts.body).toBe(200);
+      // Ruling T10-g: the chain's gas-fee account, in its own address form.
+      expect(opts.json().fee_recipient).toBe(await solanaGasFeeAddress());
       expect(opts.json().options).toEqual([
         { method: 'kora', paid_by: 'merchant', reason: null, fee_modes: [], token_fee: null },
       ]);
@@ -1174,6 +1189,8 @@ describe('Solana gasless payments (Kora)', () => {
       });
       const quote = qr.json();
       const prep = await call('POST', 'gasless/prepare', s.client_secret, { quote_id: quote.id });
+      // Test mode signs only a blockhash no cluster ever produced (ruling T10-f).
+      expect(prep.json().to_sign[0].typed_data.blockhash).toBe(TEST_SOLANA_BLOCKHASH);
       const row = await prisma.quote.findUniqueOrThrow({ where: { id: quote.id } });
       const built = await buildPaymentTransaction(
         {

@@ -135,6 +135,8 @@ export type GaslessPayStep =
   | { kind: 'sign_again' }
   /** The payload did not match the quote: nothing was signed (or relayed). */
   | { kind: 'mismatch' }
+  /** The API refused the signed payload as not matching the quote: nothing was relayed. */
+  | { kind: 'refused_signed' }
   /** The relay failed or was refused: nothing moved. */
   | { kind: 'relay_failed'; reason: string | null }
   | { kind: 'retry' }
@@ -159,7 +161,8 @@ function apiStep(err: unknown): GaslessPayStep {
     case 'GASLESS_EXPIRED':
       return { kind: 'sign_again' };
     case 'GASLESS_PAYLOAD_MISMATCH':
-      return { kind: 'mismatch' };
+      // Tendr refused what the wallet signed (m5): nothing was relayed.
+      return { kind: 'refused_signed' };
     case 'GASLESS_SUBMIT_FAILED': {
       const reason = (err.details as { reason?: unknown } | undefined)?.reason;
       return { kind: 'relay_failed', reason: typeof reason === 'string' ? reason : null };

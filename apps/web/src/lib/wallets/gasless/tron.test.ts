@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { base58Encode } from '@/lib/base58';
 import { payTargetFor } from '../index';
 import { createTronGasless, tronAddressHex } from './tron';
-import { GaslessMismatchError, type GaslessExpectation, type PreparePayload } from './index';
+import {
+  GaslessMismatchError,
+  gaslessNonce,
+  type GaslessExpectation,
+  type PreparePayload,
+} from './index';
 
 const USDT = 'nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near';
 const target = payTargetFor(USDT)!;
@@ -60,7 +65,10 @@ function raw(opts: {
   feeLimit?: number;
   callValue?: bigint;
   extraContract?: boolean;
-}) {
+  test?: boolean;
+}): { bytes: Uint8Array; json: Record<string, unknown> } {
+  const ref = opts.test ? unhex('7e57') : new Uint8Array([0xab, 0xcd]);
+  const refHash = opts.test ? unhex('7e577e577e577e57') : new Uint8Array(8).fill(7);
   const trigger = [
     ...fieldBytes(1, unhex(tronAddressHex(opts.owner ?? WALLET))),
     ...fieldBytes(2, unhex(tronAddressHex(opts.contract ?? TOKEN))),
@@ -72,21 +80,44 @@ function raw(opts: {
     ...fieldBytes(2, trigger),
   ];
   const contract = [...fieldVarint(1, 31n), ...fieldBytes(2, any)];
-  return new Uint8Array([
-    ...fieldBytes(1, [0xab, 0xcd]),
-    ...fieldBytes(4, new Array<number>(8).fill(7)),
+  const bytes = new Uint8Array([
+    ...fieldBytes(1, ref),
+    ...fieldBytes(4, refHash),
     ...fieldVarint(8, BigInt(opts.expiration ?? DEADLINE_MS)),
     ...fieldBytes(11, contract),
     ...(opts.extraContract ? fieldBytes(11, contract) : []),
     ...fieldVarint(14, 1_700_000_000_000n),
     ...fieldVarint(18, BigInt(opts.feeLimit ?? 30_000_000)),
   ]);
+  // The TronGrid JSON the API sends beside the bytes (what a wallet may display).
+  const json = {
+    contract: [
+      {
+        parameter: {
+          value: {
+            data: opts.data ?? approveData(FORWARDER, 25_096_000n),
+            owner_address: tronAddressHex(opts.owner ?? WALLET),
+            contract_address: tronAddressHex(opts.contract ?? TOKEN),
+          },
+          type_url: 'type.googleapis.com/protocol.TriggerSmartContract',
+        },
+        type: 'TriggerSmartContract',
+      },
+    ],
+    ref_block_bytes: hex(ref),
+    ref_block_hash: hex(refHash),
+    expiration: opts.expiration ?? DEADLINE_MS,
+    fee_limit: opts.feeLimit ?? 30_000_000,
+    timestamp: 1_700_000_000_000,
+  };
+  return { bytes, json };
 }
 
 function approvePayload(
-  bytes: Uint8Array = raw({}),
+  built: { bytes: Uint8Array; json: Record<string, unknown> } = raw({}),
   over: Record<string, unknown> = {},
 ): PreparePayload {
+  const bytes = built.bytes;
   return {
     quote_id: 'quo_1',
     method: 'forwarder',
@@ -103,7 +134,7 @@ function approvePayload(
         typed_data: {
           transaction: {
             txID: hex(sha256(bytes)),
-            raw_data: {},
+            raw_data: built.json,
             raw_data_hex: hex(bytes),
             visible: false,
           },
@@ -165,7 +196,7 @@ function paymentPayload(
             fee: '96000',
             feeTo: evmHex(FEE_TO),
             deadline: String(DEADLINE_MS / 1000),
-            nonce: '0x' + '05'.repeat(32),
+            nonce: gaslessNonce('quo_1', 'tendr_payment'),
             ...over,
           },
         },
@@ -184,6 +215,7 @@ const expectation: GaslessExpectation = {
   fee: 96_000n,
   deadline: DEADLINE,
   livemode: true,
+  feeRecipient: FEE_TO,
 };
 const SIG = 'ab'.repeat(65);
 
@@ -321,10 +353,64 @@ describe('Tron gasless (approve + TendrPayment)', () => {
     expect(signTypedData).not.toHaveBeenCalled();
   });
 
-  it('test mode signs for Nile', async () => {
-    const { s } = signer();
-    await expect(
-      s.sign(paymentPayload({}, { chainId: 3448148188 }), { ...expectation, livemode: false }),
-    ).resolves.toMatchObject({ kind: 'submit' });
+  it('the fee goes exactly to the gas-fee account (T10-g); the nonce is the quote one (m6)', async () => {
+    const { s, signTypedData } = signer();
+    expect(await refused(s.sign(paymentPayload({ feeTo: evmHex(FORWARDER) }), expectation))).toBe(
+      'tendr_payment.feeTo',
+    );
+    expect(await refused(s.sign(paymentPayload(), { ...expectation, feeRecipient: null }))).toBe(
+      'tendr_payment.feeTo',
+    );
+    expect(
+      await refused(s.sign(paymentPayload({ nonce: '0x' + '05'.repeat(32) }), expectation)),
+    ).toBe('tendr_payment.nonce');
+    expect(signTypedData).not.toHaveBeenCalled();
+  });
+
+  it('what the wallet may display (raw_data) must match the signed bytes (m3)', async () => {
+    const { s, sign } = signer();
+    const p = approvePayload();
+    const td = p.to_sign[0]!.typed_data as {
+      transaction: { raw_data: { contract: { parameter: { value: Record<string, string> } }[] } };
+    };
+    td.transaction.raw_data.contract[0]!.parameter.value.data = approveData(FORWARDER, 1n);
+    expect(await refused(s.sign(p, expectation))).toBe('approve.raw_data');
+    expect(sign).not.toHaveBeenCalled();
+  });
+
+  describe('test mode (ruling T10-f)', () => {
+    const test = { ...expectation, livemode: false };
+    const testDomain = {
+      name: 'Tendr test payment',
+      version: '1',
+      chainId: 3448148188,
+      verifyingContract: '0x7E57000000000000000000000000000000007E57',
+    };
+
+    it('the approve carries the test TaPoS reference; live refuses it, test refuses a real one', async () => {
+      const { s, sign } = signer();
+      await expect(s.sign(approvePayload(raw({ test: true })), test)).resolves.toMatchObject({
+        kind: 'submit',
+      });
+      expect(await refused(s.sign(approvePayload(), test))).toBe('approve.ref_block');
+      expect(await refused(s.sign(approvePayload(raw({ test: true })), expectation))).toBe(
+        'approve.ref_block',
+      );
+      expect(sign).toHaveBeenCalledTimes(1);
+    });
+
+    it('the TendrPayment is on the test domain at the sentinel; the real one is refused', async () => {
+      const { s, signTypedData } = signer();
+      await expect(s.sign(paymentPayload({}, testDomain), test)).resolves.toMatchObject({
+        kind: 'submit',
+      });
+      expect(await refused(s.sign(paymentPayload({}, { chainId: 3448148188 }), test))).toBe(
+        'tendr_payment.domain',
+      );
+      expect(await refused(s.sign(paymentPayload({}, testDomain), expectation))).toBe(
+        'tendr_payment.domain',
+      );
+      expect(signTypedData).toHaveBeenCalledTimes(1);
+    });
   });
 });

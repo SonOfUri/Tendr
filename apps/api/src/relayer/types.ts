@@ -49,6 +49,13 @@ export interface GaslessOptions {
   family: ChainFamily | null;
   /** The chain's coin (for "Pay the fee in {coin}" and "You'll need {coin} for the network fee"). */
   native_symbol: string | null;
+  /**
+   * Tendr's gas-fee account on this chain (ruling T10-g), in the chain's own address form: EVM
+   * `gas-fees-evm`, Solana the `gas-fees-solana` owner (not its token account), Tron
+   * `gas-fees-tron` (base58), NEAR the `gas-fees-near` implicit account. The pay page checks every
+   * fee leg goes exactly here. Null when no gasless option is offered.
+   */
+  fee_recipient: string | null;
   /** Best first. Empty: no gasless method for this wallet + chain + token. */
   options: GaslessOption[];
 }

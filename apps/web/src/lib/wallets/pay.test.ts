@@ -148,6 +148,7 @@ const expect3009: GaslessExpectation = {
   fee: 0n,
   deadline: EVM_QUOTE.deadline,
   livemode: true,
+  feeRecipient: '0x3333333333333333333333333333333333333333',
 };
 const PREPARED: PreparePayload = {
   quote_id: 'quo_1',
@@ -362,6 +363,7 @@ describe('runGaslessPay', () => {
     ['PROVIDER_UNAVAILABLE', 503, { kind: 'retry' }],
     ['NETWORK_ERROR', 0, { kind: 'retry' }],
     ['RATE_LIMITED', 429, { kind: 'rate_limited' }],
+    ['GASLESS_PAYLOAD_MISMATCH', 409, { kind: 'refused_signed' }],
   ])('%s from the API → %o', async (code, status, want) => {
     const atPrepare = gaslessApi({
       prepare: async () => {

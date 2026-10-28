@@ -1,4 +1,8 @@
-import { TENDR_FORWARDER_ABI } from '@tendr/contracts';
+import {
+  TENDR_FORWARDER_ABI,
+  TEST_PAYMENT_DOMAIN_NAME,
+  TEST_VERIFYING_CONTRACT,
+} from '@tendr/contracts';
 import { Interface, Wallet } from 'ethers';
 import { describe, expect, it } from 'vitest';
 import {
@@ -194,6 +198,35 @@ describe('EVM gasless payloads', () => {
       const bad = structuredClone(good);
       bad.permit!.message.value = String(25_198_001);
       refused(() => verifySigned(c, bad), 'permit.value');
+    });
+  });
+
+  describe('test mode (ruling T10-f): nothing signed is usable on a real chain', () => {
+    const TEST_DOMAIN = {
+      name: TEST_PAYMENT_DOMAIN_NAME,
+      version: '1',
+      chainId: 8453,
+      verifyingContract: TEST_VERIFYING_CONTRACT,
+    };
+    const refused = (fn: () => unknown, field: string) =>
+      expect(fn).toThrow(
+        expect.objectContaining({ code: 'GASLESS_PAYLOAD_MISMATCH', details: { field } }),
+      );
+
+    it('every message (3009, permit, TendrPayment) uses the test domain at the sentinel', () => {
+      for (const method of ['eip3009', 'permit'] as const) {
+        for (const item of buildToSign(ctx({ method, testMode: true }))) {
+          expect(item.typed_data.domain).toEqual(TEST_DOMAIN);
+        }
+      }
+    });
+
+    it('a signature over the real domain is refused in test mode, and a test one in live mode', async () => {
+      const live = await sign(buildToSign(ctx()));
+      refused(() => verifySigned(ctx({ testMode: true }), live), 'payment.signer');
+      const test = await sign(buildToSign(ctx({ testMode: true })));
+      expect(() => verifySigned(ctx({ testMode: true }), test)).not.toThrow();
+      refused(() => verifySigned(ctx(), test), 'payment.signer');
     });
   });
 });

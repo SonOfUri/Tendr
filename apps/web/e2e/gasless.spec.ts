@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { expect, test, type Page, type Request } from '@playwright/test';
 import { Wallet, type TypedDataField } from 'ethers';
+import { formatUnits } from '../src/lib/checkout/format';
 import { blockExternal } from './support/network';
 import { API_URL, E2E_CODE_HASH } from './support/urls';
 
@@ -66,10 +67,11 @@ async function storeAndSession(gasPayer: 'merchant' | 'shopper') {
   return { store, session: s.body as { id: string; url: string; client_secret: string } };
 }
 
-/** Injects the test wallet; returns how many typed-data signatures it gave. */
+/** Injects the test wallet; returns how many typed-data signatures it gave, and their domains. */
 async function injectWallet(page: Page, opts: { balanceWei?: bigint } = {}) {
   const wallet = Wallet.createRandom();
   let signatures = 0;
+  const domains: Record<string, unknown>[] = [];
   await page.exposeFunction('__e2eSignTypedData', async (json: string) => {
     signatures++;
     const td = JSON.parse(json) as {
@@ -77,6 +79,7 @@ async function injectWallet(page: Page, opts: { balanceWei?: bigint } = {}) {
       types: Record<string, TypedDataField[]>;
       message: Record<string, unknown>;
     };
+    domains.push(td.domain);
     const { EIP712Domain: _domain, ...types } = td.types;
     return wallet.signTypedData(td.domain, types, td.message);
   });
@@ -110,7 +113,7 @@ async function injectWallet(page: Page, opts: { balanceWei?: bigint } = {}) {
     },
     { address: wallet.address, balance: '0x' + (opts.balanceWei ?? 0n).toString(16) },
   );
-  return { wallet, signatures: () => signatures };
+  return { wallet, signatures: () => signatures, domains: () => domains };
 }
 
 /** Requests the page made to the API, by path suffix. */
@@ -155,6 +158,8 @@ test.describe('gasless wallet payments (test mode, simulated relayer)', () => {
       gasless_method: 'eip3009',
     });
     await expect(page.getByText('You pay the network fee from your wallet')).toBeVisible();
+    // The signing step says it is a test payment (ruling T10-f).
+    await expect(page.getByText(/Test mode: your wallet signs a test payment/)).toBeVisible();
 
     await payButton(page).click();
     await expect(page.getByRole('heading', { name: /Payment complete/ })).toBeVisible({
@@ -162,6 +167,16 @@ test.describe('gasless wallet payments (test mode, simulated relayer)', () => {
     });
     expect(w.signatures()).toBe(1);
     expect(requests('/gasless/submit')).toHaveLength(1);
+    // What the wallet signed can never be executed on a real chain: the test domain at the
+    // code-less sentinel, never USDC's own domain.
+    expect(w.domains()).toEqual([
+      {
+        name: 'Tendr test payment',
+        version: '1',
+        chainId: 8453,
+        verifyingContract: '0x7E57000000000000000000000000000000007E57',
+      },
+    ]);
   });
 
   test('shopper pays in the token: the "+… USDC" fee line, two signatures, paid', async ({
@@ -182,6 +197,11 @@ test.describe('gasless wallet payments (test mode, simulated relayer)', () => {
       gasless_method: 'eip3009',
       fee_mode: 'token',
     });
+    // The pay button shows the total: the payment plus the fee (I1).
+    const quote = await api('/v1/checkout/client/session', 'GET', session.client_secret);
+    const q = quote.body.quote as { amount_in: string; fee_amount: string };
+    const total = formatUnits(BigInt(q.amount_in) + BigInt(q.fee_amount), 6);
+    await expect(payButton(page)).toHaveText(`Pay ${total} USDC`);
 
     await payButton(page).click();
     await expect(page.getByRole('heading', { name: /Payment complete/ })).toBeVisible({
@@ -215,6 +235,19 @@ test.describe('gasless wallet payments (test mode, simulated relayer)', () => {
     });
     expect(requests('/gasless/prepare')).toHaveLength(0);
     expect(w.signatures()).toBe(0);
+  });
+
+  test('a wallet holding twice the coin fee starts on "Pay the fee in ETH"', async ({ page }) => {
+    const { session } = await storeAndSession('shopper');
+    const requests = recordRequests(page);
+    await injectWallet(page, { balanceWei: 10n ** 19n });
+    await page.goto(session.url);
+    await chooseUsdcAndConnect(page);
+    await expect(page.getByRole('radio', { name: 'Pay the fee in ETH' })).toBeChecked();
+    expect(JSON.parse(requests('/quote').at(-1)!.postData()!)).toMatchObject({
+      gasless_method: 'eip3009',
+      fee_mode: 'native',
+    });
   });
 
   test('a prepared payment that does not match the quote is never signed or relayed', async ({

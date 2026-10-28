@@ -53,6 +53,10 @@ import {
   FORWARDER_DOMAIN_NAME,
   FORWARDER_DOMAIN_VERSION,
   TENDR_PAYMENT_TYPES,
+  TEST_PAYMENT_DOMAIN_NAME,
+  TEST_PAYMENT_DOMAIN_VERSION,
+  TEST_TRON_REF_BLOCK,
+  TEST_VERIFYING_CONTRACT,
 } from '@tendr/contracts';
 import { Signature, verifyTypedData } from 'ethers';
 import { z } from 'zod';
@@ -247,11 +251,14 @@ async function wasIssued(quoteId: string, ref: RefBlock): Promise<boolean> {
 }
 
 /** Test mode's head block: one per 3 s, a deterministic id (no RPC). */
-function simulatedBlockId(now: Date): string {
-  const n = BigInt(Math.floor(now.getTime() / 3000));
-  const h = createHash('sha256').update(`tendr:simulated-tron-block:${n}`).digest('hex');
-  return n.toString(16).padStart(16, '0') + h.slice(16);
-}
+/** The test-mode TaPoS reference (`@tendr/contracts` gasless-test.ts). */
+const TEST_REF: RefBlock = {
+  bytes: Uint8Array.from(Buffer.from(TEST_TRON_REF_BLOCK.bytes, 'hex')),
+  hash: Uint8Array.from(Buffer.from(TEST_TRON_REF_BLOCK.hash, 'hex')),
+};
+const isTestRef = (r: RefBlock) =>
+  Buffer.from(r.bytes).equals(Buffer.from(TEST_REF.bytes)) &&
+  Buffer.from(r.hash).equals(Buffer.from(TEST_REF.hash));
 
 // ---------------------------------------------------------------------------------------------
 // The payment
@@ -529,16 +536,14 @@ export class TronGasless implements GaslessRelayer {
     const blocker = await walletBlockedBy(prisma, p.wallet, q.quote.id, now, q.shopper.livemode);
     if (blocker) throw inProgress({ reason: 'tron_approval_in_progress' });
     // Prepare never spends: reads only.
-    let blockId: string;
+    // Test mode: a TaPoS reference no block ever had, so no node accepts it (ruling T10-f).
+    let ref = TEST_REF;
     if (this.live) {
       if (!(await this.read('getaccount', () => this.api.accountExists(p.wallet)))) {
         throw notActivated();
       }
-      blockId = (await this.read('getnowblock', () => this.api.nowBlock(false))).id;
-    } else {
-      blockId = simulatedBlockId(now);
+      ref = refBlockOf((await this.read('getnowblock', () => this.api.nowBlock(false))).id);
     }
-    const ref = refBlockOf(blockId);
     const untilDeadline = q.quote.deadline.getTime() - now.getTime();
     await recordIssuedRef(q.quote.id, ref, Math.ceil(untilDeadline / 1000) + 3600);
     const raw: TronRaw = {
@@ -609,6 +614,15 @@ export class TronGasless implements GaslessRelayer {
   }
 
   private domain(p: TronPayment) {
+    // Test mode signs on the test domain at the code-less sentinel (ruling T10-f).
+    if (!this.live) {
+      return {
+        name: TEST_PAYMENT_DOMAIN_NAME,
+        version: TEST_PAYMENT_DOMAIN_VERSION,
+        chainId: this.chainId(),
+        verifyingContract: TEST_VERIFYING_CONTRACT,
+      };
+    }
     return {
       name: FORWARDER_DOMAIN_NAME,
       version: FORWARDER_DOMAIN_VERSION,
@@ -708,6 +722,7 @@ export class TronGasless implements GaslessRelayer {
       throw mismatch('tron_approve.expiration');
     }
     if (raw.expiration < BigInt(this.now().getTime() + TRON_MIN_APPROVE_WINDOW_MS)) throw expired();
+    if (isTestRef(raw.ref) === this.live) throw mismatch('tron_approve.ref_block');
     if (!(await wasIssued(q.quote.id, raw.ref))) throw mismatch('tron_approve.ref_block');
     const txId = txIdOf(bytes);
     const signature = Uint8Array.from(Buffer.from(sigHex, 'hex'));

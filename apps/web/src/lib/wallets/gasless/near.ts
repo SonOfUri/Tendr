@@ -6,11 +6,20 @@
 // normally.
 import { WalletError, toWalletError } from '../errors';
 import type { PayTarget } from '../index';
-import { mismatch, uintOf, type GaslessMethod, type GaslessSigner } from './index';
+import { TEST_NEAR_RECEIVER } from '@tendr/contracts';
+import {
+  assertFeeRecipient,
+  mismatch,
+  uintOf,
+  type GaslessMethod,
+  type GaslessSigner,
+} from './index';
 
 export const NEAR_DELEGATE_KIND = 'near_delegate_action';
 const TGAS = 1_000_000_000_000n;
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+/** The API's signing slack (relayer/near-meta.ts NEAR_SIGNING_SLACK_BLOCKS). */
+const NEAR_SIGNING_SLACK_BLOCKS = 150;
 
 export interface NearFunctionCallAction {
   type: 'FunctionCall';
@@ -83,7 +92,9 @@ export function createNearGasless(target: PayTarget, deps: NearGaslessDeps): Gas
       } | null;
       if (!td) throw mismatch('typed_data');
       if (td.sender_id !== e.wallet) throw mismatch('sender_id');
-      if (td.receiver_id !== target.contract) throw mismatch('receiver_id');
+      // Ruling T10-f: test mode delegates to an account that cannot exist; live to the token.
+      const receiver = e.livemode ? target.contract! : TEST_NEAR_RECEIVER;
+      if (td.receiver_id !== receiver) throw mismatch('receiver_id');
       const actions = td.actions;
       if (!Array.isArray(actions) || actions.length !== (e.fee > 0n ? 2 : 1)) {
         throw mismatch('actions');
@@ -94,16 +105,21 @@ export function createNearGasless(target: PayTarget, deps: NearGaslessDeps): Gas
         if (typeof to !== 'string' || to === e.depositAddress || to === e.wallet) {
           throw mismatch('actions[1]');
         }
+        // Ruling T10-g: exactly Tendr's gas-fee account.
+        assertFeeRecipient(e, to, 'actions[1]');
         checkTransfer(actions[1], to, e.fee, 'actions[1]');
       }
+      // At most the blocks left until the quote deadline (≥ 1 per second) plus the API's slack.
       const ttl = td.block_height_ttl;
-      if (typeof ttl !== 'number' || !Number.isSafeInteger(ttl) || ttl <= 0 || ttl > 100_000) {
+      const maxTtl =
+        Math.ceil((Date.parse(e.deadline) - Date.now()) / 1000) + NEAR_SIGNING_SLACK_BLOCKS;
+      if (typeof ttl !== 'number' || !Number.isSafeInteger(ttl) || ttl <= 0 || ttl > maxTtl) {
         throw mismatch('block_height_ttl');
       }
       let signed: unknown;
       try {
         signed = await signDelegate({
-          receiverId: target.contract!,
+          receiverId: receiver,
           actions: actions as NearFunctionCallAction[],
           blockHeightTtl: ttl,
         });

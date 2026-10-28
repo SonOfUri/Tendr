@@ -469,6 +469,8 @@ export async function preparePaymaster(
 ): Promise<PreparePayload> {
   assertRelayable(q, new Date());
   if (q.quote.networkFeeMethod !== 'paymaster') throw gaslessNotAvailable();
+  // Test mode never issues a paymaster URL (ruling T10-f).
+  if (!paymasterFor(q.shopper.livemode).available) throw gaslessNotAvailable();
   if (input.method && input.method !== 'paymaster') {
     throw new AppError('GASLESS_PAYLOAD_MISMATCH', 'The quote is for another method', 409, {
       field: 'method',
@@ -618,6 +620,12 @@ export interface PaymasterDeps {
   /** Pimlico sponsorship policy (default: PIMLICO_SPONSORSHIP_POLICY_ID). */
   policyId?: () => string | undefined;
   now?: () => Date;
+  /**
+   * Tests only: a test-mode proxy answers with simulated paymaster data. The default test-mode
+   * proxy refuses everything (ruling T10-f): with EIP-5792 the shopper's own smart wallet sends a
+   * real UserOperation moving real tokens, so test mode never offers the paymaster at all.
+   */
+  simulate?: boolean;
 }
 
 export class PaymasterProxy {
@@ -626,6 +634,11 @@ export class PaymasterProxy {
     private readonly live: boolean,
     private readonly deps: PaymasterDeps = {},
   ) {}
+
+  /** Whether this proxy sponsors anything: live, or a test proxy built to simulate. */
+  get available(): boolean {
+    return this.live || this.deps.simulate === true;
+  }
 
   private get pimlico(): PimlicoClient {
     return this.deps.pimlico ?? defaultPimlico();
@@ -655,6 +668,7 @@ export class PaymasterProxy {
       });
     }
     try {
+      if (!this.available) throw gaslessNotAvailable();
       const params = envelope.data.params ?? [];
       const result =
         method === 'pm_getPaymasterStubData'

@@ -1068,7 +1068,38 @@ describe('Pimlico paymaster proxy', () => {
     });
   });
 
-  describe('per-quote paymaster URL (ruling T6-f, test mode)', () => {
+  it('test mode never offers the paymaster: options omit it, prepare and the URL refuse (T10-f)', async () => {
+    const p = await paymasterQuote();
+    const opts = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout/client/gasless/options',
+      headers: { authorization: `Bearer ${p.s.client_secret}` },
+      payload: { origin_asset: USDC_BASE, wallet_address: wallet },
+    });
+    expect(opts.statusCode, opts.body).toBe(200);
+    expect(opts.json().options.map((o: { method: string }) => o.method)).not.toContain('paymaster');
+    const prep = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout/client/gasless/prepare',
+      headers: { authorization: `Bearer ${p.s.client_secret}` },
+      payload: { quote_id: p.quote.id },
+    });
+    expect(prep.statusCode).toBe(409);
+    expect(prep.json().error.code).toBe('GASLESS_NOT_AVAILABLE');
+    // Even a test-mode quote reaching the proxy is refused, nothing simulated or recorded.
+    const res = await new PaymasterProxy(false).handle(
+      p.ctx,
+      rpc('pm_getPaymasterStubData', userOp('0x')),
+      p.quote.id,
+    );
+    expect(res).toMatchObject({ error: { data: { code: 'GASLESS_NOT_AVAILABLE' } } });
+  });
+
+  describe('per-quote paymaster URL (ruling T6-f; test mode with a simulating test proxy)', () => {
+    // Production test mode refuses the paymaster (above); these tests drive the URL machinery
+    // through a proxy built to simulate.
+    beforeEach(() => setPaymaster(false, new PaymasterProxy(false, { simulate: true })));
+
     async function prepared(gasPayer?: 'shopper') {
       const p = await paymasterQuote(gasPayer);
       const res = await app.inject({

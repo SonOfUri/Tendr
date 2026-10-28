@@ -41,6 +41,7 @@
 //
 // Test mode never calls a NEAR RPC: a simulated block height, the same checks (bar the
 // account/key lookups), and the payment "lands" at once.
+import { TEST_NEAR_RECEIVER } from '@tendr/contracts';
 import { createHash } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import { ed25519 } from '@noble/curves/ed25519';
@@ -219,6 +220,11 @@ const simulatedHeight = (now: Date) => BigInt(Math.floor(now.getTime() / NEAR_AS
 export interface NearPayment {
   wallet: string;
   contract: string;
+  /**
+   * The delegate action's receiver: the token contract live; in test mode an account that cannot
+   * exist (`TEST_NEAR_RECEIVER`, ruling T10-f), so a test-mode signature never executes.
+   */
+  receiver?: string;
   depositAddress: string;
   amount: bigint;
   feeAccount: string | null;
@@ -242,7 +248,7 @@ function canonicalArgs(to: string, amount: bigint): string[] {
 /** Throws GASLESS_PAYLOAD_MISMATCH (`details.field`) unless `sd` is exactly the payment. */
 export function checkDelegate(p: NearPayment, sd: DecodedSignedDelegate): void {
   if (sd.senderId !== p.wallet) throw mismatch('signed_delegate.sender_id');
-  if (sd.receiverId !== p.contract) throw mismatch('signed_delegate.receiver_id');
+  if (sd.receiverId !== (p.receiver ?? p.contract)) throw mismatch('signed_delegate.receiver_id');
   const want = legs(p);
   if (sd.actions.length !== want.length) throw mismatch('signed_delegate.actions');
   want.forEach((leg, i) => {
@@ -465,6 +471,7 @@ export class NearMetaGasless implements GaslessRelayer {
     return {
       wallet,
       contract: token.contract,
+      receiver: this.live ? token.contract : TEST_NEAR_RECEIVER,
       depositAddress: q.quote.depositAddress,
       amount: BigInt(q.quote.amountIn.toFixed(0)),
       feeAccount: shopperFee ? await nearGasFeeAccount() : null,
@@ -538,7 +545,7 @@ export class NearMetaGasless implements GaslessRelayer {
           typed_data: {
             /** The delegate action the wallet signs (e.g. wallet-selector `signDelegateActions`). */
             sender_id: p.wallet,
-            receiver_id: p.contract,
+            receiver_id: p.receiver ?? p.contract,
             actions: legList.map((l) => ({
               type: 'FunctionCall',
               params: {

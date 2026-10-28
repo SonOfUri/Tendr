@@ -75,6 +75,8 @@ export class EvmGasless {
     if (!token) return [];
     const out: GaslessOption[] = [];
     for (const method of token.methods) {
+      // Test mode never offers the paymaster: the smart wallet would send a real operation.
+      if (method === 'paymaster' && !this.livemode) continue;
       const plan = await planNetworkFee({
         livemode: c.shopper.livemode,
         merchantId: c.shopper.merchantId,
@@ -146,6 +148,7 @@ export class EvmGasless {
       feeTo: await evmGasFeeAddress(),
       forwarder: evmForwarderAddress(),
       deadline: q.quote.deadline,
+      testMode: !this.livemode,
     };
     if (method === 'permit') ctx.permitNonce = await this.permitNonce(chain, token.address, wallet);
     return ctx;

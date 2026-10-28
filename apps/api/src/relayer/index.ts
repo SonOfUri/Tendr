@@ -21,10 +21,11 @@ import {
 import { evmTokenAddress } from './evm/tokens.js';
 import { prisma } from '../lib/prisma.js';
 import type { EvmSender } from './evm/sender.js';
-import { NearMetaGasless } from './near-meta.js';
+import { NearMetaGasless, nearGasFeeAccount } from './near-meta.js';
 import { SimulatedRelayer } from './simulated.js';
-import { SolanaGasless } from './solana.js';
+import { SolanaGasless, solanaGasFeeAddress } from './solana.js';
 import { TronGasless } from './tron.js';
+import { tronGasFeeAddress } from './tron-energy.js';
 import { applyRelayOutcome } from './submissions.js';
 import type {
   ChainFamily,
@@ -231,12 +232,28 @@ export async function gaslessOptions(
       break;
     }
   }
+  const options = relayer && !isNativeToken(origin) ? await relayer.options(c) : [];
   return {
     chain: origin.blockchain,
     family,
     native_symbol: native,
-    options: relayer && !isNativeToken(origin) ? await relayer.options(c) : [],
+    fee_recipient: family && options.length > 0 ? await gasFeeRecipient(family) : null,
+    options,
   };
+}
+
+/** Tendr's gas-fee account for a family (the address every shopper-paid fee leg goes to). */
+export function gasFeeRecipient(family: ChainFamily): Promise<string> {
+  switch (family) {
+    case 'evm':
+      return evmGasFeeAddress();
+    case 'solana':
+      return solanaGasFeeAddress();
+    case 'tron':
+      return tronGasFeeAddress();
+    case 'near':
+      return nearGasFeeAccount();
+  }
 }
 
 /**

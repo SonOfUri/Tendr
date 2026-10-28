@@ -36,7 +36,8 @@
 // Native SOL is never routed here (its sender pays its own fee). Test mode never calls Pimlico or
 // a Solana RPC: a simulated fee payer and blockhash, the same checks, and the transaction is
 // "landed" at once.
-import { createHash, randomBytes } from 'node:crypto';
+import { TEST_SOLANA_BLOCKHASH } from '@tendr/contracts';
+import { createHash } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import bs58 from 'bs58';
 import { z } from 'zod';
@@ -440,7 +441,9 @@ export class SolanaGasless implements GaslessRelayer {
       const price = await (this.deps.priorityFee ?? solanaComputeUnitPrice)();
       cuPrice = price > SOLANA_MAX_CU_PRICE ? SOLANA_MAX_CU_PRICE : price;
     } else {
-      blockhash = bs58.encode(randomBytes(32));
+      // Ruling T10-f: a blockhash no cluster ever produced, so a test-mode signature can never
+      // land on a real chain.
+      blockhash = TEST_SOLANA_BLOCKHASH;
       // No RPC in test mode: a fresh deposit address has no token account; the fee's has one.
       exists = feeAccount ? [false, true] : [false];
       cuPrice = SIMULATED_CU_PRICE;
@@ -510,6 +513,9 @@ export class SolanaGasless implements GaslessRelayer {
     await this.assertUnderLossCap(q);
     const blockhash = transactionBlockhash(signed.transaction);
     if (!blockhash) throw mismatch('transaction');
+    // Test mode signs only the test blockhash; live never accepts it (ruling T10-f).
+    if ((blockhash === TEST_SOLANA_BLOCKHASH) === this.live)
+      throw mismatch('transaction.blockhash');
     const issued = await blockhashIssued(q.quote.id, blockhash);
     if (!issued || this.now().getTime() - issued.at > SOLANA_BLOCKHASH_MAX_AGE_MS) {
       throw expired();

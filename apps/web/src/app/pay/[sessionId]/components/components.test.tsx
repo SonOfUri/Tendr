@@ -384,8 +384,19 @@ describe('NetworkFee (Global Constraints copy)', () => {
   });
 
   it('the shopper only ever sees "not sponsored"-style reasons, never budget wording', () => {
-    const html = render({ networkFee: fee({ reason: 'not_sponsored' }) });
-    expect(html).not.toMatch(/budget|cap|loss/i);
+    // Even a merchant-side reason leaking through the API is never rendered (m2).
+    for (const reason of ['budget_exhausted', 'per_payment_cap', 'loss_cap', 'not_sponsored']) {
+      for (const choice of [
+        null,
+        { mode: 'token' as const, tokenFeeAmount: '96000', onChoose() {} },
+      ]) {
+        const html = render({ networkFee: fee({ reason }), choice });
+        expect(html).not.toMatch(/budget|cap|loss|sponsor/i);
+      }
+      expect(
+        render({ networkFee: fee({ reason, paid_by: 'merchant', fee_mode: null }) }),
+      ).not.toMatch(/budget|cap|loss/i);
+    }
   });
 
   it('the choice appears only when the shopper pays and both ways exist', () => {

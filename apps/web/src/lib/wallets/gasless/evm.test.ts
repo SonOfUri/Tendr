@@ -4,7 +4,12 @@ import type { Eip1193 } from '../evm';
 import { encodeErc20Transfer } from '../evm';
 import { payTargetFor } from '../index';
 import { createEvmGasless } from './evm';
-import { GaslessMismatchError, type GaslessExpectation, type PreparePayload } from './index';
+import {
+  GaslessMismatchError,
+  gaslessNonce,
+  type GaslessExpectation,
+  type PreparePayload,
+} from './index';
 
 const USDC_BASE = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near';
 const TOKEN = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
@@ -12,6 +17,8 @@ const WALLET = '0x1111111111111111111111111111111111111111';
 const DEPOSIT = '0x2222222222222222222222222222222222222222';
 const FEE_TO = '0x3333333333333333333333333333333333333333';
 const FORWARDER = '0x19BEBC71495490A99cA6F50F107076967380cf09';
+const OTHER = '0x4444444444444444444444444444444444444444';
+const SENTINEL = '0x7E57000000000000000000000000000000007E57';
 const DEADLINE = '2026-10-28T12:12:00.000Z';
 const DEADLINE_S = String(Date.parse(DEADLINE) / 1000);
 const PREFIX = 'https://api.tendr.test/v1/checkout/paymaster/';
@@ -44,6 +51,7 @@ function expectation(fee: bigint, method: GaslessExpectation['method'] = 'eip300
     fee,
     deadline: DEADLINE,
     livemode: true,
+    feeRecipient: FEE_TO,
   } satisfies GaslessExpectation;
 }
 
@@ -62,7 +70,7 @@ function auth(kind: 'payment' | 'fee', to: string, value: string) {
         value,
         validAfter: '0',
         validBefore: DEADLINE_S,
-        nonce: '0x' + (kind === 'payment' ? '01' : '02').repeat(32),
+        nonce: gaslessNonce('quo_1', kind),
       },
     },
   };
@@ -145,7 +153,7 @@ function preparedPermit(fee: bigint): PreparePayload {
             fee: fee.toString(),
             feeTo: FEE_TO,
             deadline: DEADLINE_S,
-            nonce: '0x' + '03'.repeat(32),
+            nonce: gaslessNonce('quo_1', 'tendr_payment'),
           },
         },
       },
@@ -323,6 +331,17 @@ describe('EVM gasless: EIP-3009', () => {
     ['another fee', 96_000n, (p) => (msg(p, 1).value = '96001'), 'fee.value'],
     ['the fee to the deposit address', 96_000n, (p) => (msg(p, 1).to = DEPOSIT), 'fee.to'],
     ['the fee back to the wallet', 96_000n, (p) => (msg(p, 1).to = WALLET), 'fee.to'],
+    // Ruling T10-g: the fee goes exactly to Tendr's gas-fee account.
+    ['the fee to anyone else', 96_000n, (p) => (msg(p, 1).to = OTHER), 'fee.to'],
+    // m6: one nonce per quote and leg.
+    ['a fresh nonce', 0n, (p) => (msg(p, 0).nonce = '0x' + '01'.repeat(32)), 'payment.nonce'],
+    // Ruling T10-f: live never signs the test-mode domain.
+    [
+      'the test-mode domain in live mode',
+      0n,
+      (p) => (dom(p, 0).name = 'Tendr test payment'),
+      'payment.domain',
+    ],
     [
       'a different primary type',
       0n,
@@ -364,6 +383,8 @@ describe('EVM gasless: permit + TendrPayment', () => {
     ['another destination', (p) => (m(p, 1).to = FEE_TO), 'tendr_payment.to'],
     ['another fee', (p) => (m(p, 1).fee = '1'), 'tendr_payment.fee'],
     ['the fee to the deposit address', (p) => (m(p, 1).feeTo = DEPOSIT), 'tendr_payment.feeTo'],
+    ['the fee to anyone else', (p) => (m(p, 1).feeTo = OTHER), 'tendr_payment.feeTo'],
+    ['a fresh nonce', (p) => (m(p, 1).nonce = '0x' + '03'.repeat(32)), 'tendr_payment.nonce'],
     ['another token', (p) => (m(p, 1).token = FEE_TO), 'tendr_payment.token'],
     [
       'another forwarder domain',
@@ -432,5 +453,72 @@ describe('EVM gasless: EIP-5792 paymaster', () => {
     const { signer, calls } = wallet({ caps });
     expect(await refused(signer.sign(p, expectation(0n, 'paymaster')))).toBe(field);
     expect(signed(calls)).toEqual([]);
+  });
+});
+
+describe('EVM gasless: test mode (ruling T10-f)', () => {
+  const testDomain = {
+    name: 'Tendr test payment',
+    version: '1',
+    chainId: 8453,
+    verifyingContract: SENTINEL,
+  };
+  const testMode = (fee: bigint, method: GaslessExpectation['method'] = 'eip3009') => ({
+    ...expectation(fee, method),
+    livemode: false,
+  });
+  const onTestDomain = (p: PreparePayload) => {
+    for (const t of p.to_sign) (t.typed_data as { domain: unknown }).domain = { ...testDomain };
+    return p;
+  };
+
+  it('signs only the test domain at the code-less sentinel (3009 and permit)', async () => {
+    const { signer, calls } = wallet();
+    await signer.sign(onTestDomain(prepared3009(96_000n)), testMode(96_000n));
+    await signer.sign(onTestDomain(preparedPermit(96_000n)), testMode(96_000n, 'permit'));
+    expect(signed(calls)).toHaveLength(4);
+  });
+
+  it('refuses a real-chain payload in test mode, before the wallet is asked', async () => {
+    const { signer, calls } = wallet();
+    expect(await refused(signer.sign(prepared3009(0n), testMode(0n)))).toBe('payment.domain');
+    expect(await refused(signer.sign(preparedPermit(0n), testMode(0n, 'permit')))).toBe(
+      'permit.domain',
+    );
+    expect(signed(calls)).toEqual([]);
+  });
+
+  it('refuses the test domain in live mode', async () => {
+    const { signer, calls } = wallet();
+    expect(await refused(signer.sign(onTestDomain(prepared3009(0n)), expectation(0n)))).toBe(
+      'payment.domain',
+    );
+    expect(signed(calls)).toEqual([]);
+  });
+
+  it('never uses the paymaster in test mode', async () => {
+    const { signer, calls } = wallet({
+      caps: { '0x2105': { paymasterService: { supported: true } } },
+    });
+    expect(await refused(signer.sign(preparedPaymaster(0n), testMode(0n, 'paymaster')))).toBe(
+      'method',
+    );
+    expect(signed(calls)).toEqual([]);
+  });
+
+  it('the paymaster fee transfer goes exactly to the fee recipient', async () => {
+    const { signer } = wallet({ caps: { '0x2105': { paymasterService: { supported: true } } } });
+    const p = preparedPaymaster(96_000n);
+    p.calls![1]!.data = encodeErc20Transfer(OTHER, 96_000n);
+    expect(await refused(signer.sign(p, expectation(96_000n, 'paymaster')))).toBe('calls.1');
+  });
+
+  it('a shopper-paid fee with no known recipient is refused', async () => {
+    const { signer } = wallet();
+    expect(
+      await refused(
+        signer.sign(prepared3009(96_000n), { ...expectation(96_000n), feeRecipient: null }),
+      ),
+    ).toBe('fee.to');
   });
 });

@@ -2,6 +2,7 @@
 // against a scripted NEAR JSON-RPC node (never a real one) on test-mode sessions (quotes from the
 // 1Click simulator), and the test-mode flow end to end through the routes (no RPC at all).
 import { ed25519 } from '@noble/curves/ed25519';
+import { TEST_NEAR_RECEIVER } from '@tendr/contracts';
 import type { Merchant } from '@prisma/client';
 import bs58 from 'bs58';
 import type { FastifyInstance } from 'fastify';
@@ -45,6 +46,7 @@ import {
   NearMetaGasless,
   pollNearMetaRelays,
   resetNearMetaRelayer,
+  nearGasFeeAccount,
 } from './near-meta.js';
 
 const sim1click = isolatedSimStore();
@@ -653,6 +655,12 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
         () => ({ receiverId: 'evil.near' }),
         'signed_delegate.receiver_id',
       ],
+      // Live never accepts the test-mode receiver (ruling T10-f).
+      [
+        'the test-mode receiver',
+        () => ({ receiverId: TEST_NEAR_RECEIVER }),
+        'signed_delegate.receiver_id',
+      ],
       ['another sender', () => ({ senderId: 'other.near' }), 'signed_delegate.sender_id'],
       [
         'an extra action',
@@ -1229,6 +1237,8 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
         wallet_address: WALLET,
       });
       expect(opts.statusCode, opts.body).toBe(200);
+      // Ruling T10-g: the chain's gas-fee account, in its own address form.
+      expect(opts.json().fee_recipient).toBe(await nearGasFeeAccount());
       expect(opts.json().options).toEqual([
         { method: 'meta_tx', paid_by: 'merchant', reason: null, fee_modes: [], token_fee: null },
       ]);
@@ -1242,14 +1252,17 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
       const prep = await call('POST', 'gasless/prepare', s.client_secret, { quote_id: quote.id });
       expect(prep.statusCode, prep.body).toBe(200);
       const td = prep.json().to_sign[0].typed_data as TypedData;
-      expect(td.receiver_id).toBe(CONTRACT);
-      // A tampered delegate is refused in test mode too.
-      const bad = await call('POST', 'gasless/submit', s.client_secret, {
-        quote_id: quote.id,
-        signed_delegate: signDelegate(td, { receiverId: 'evil.near' }),
-      });
-      expect(bad.statusCode, bad.body).toBe(409);
-      expect(bad.json().error.code).toBe('GASLESS_PAYLOAD_MISMATCH');
+      // Test mode signs a delegate to an account that cannot exist (ruling T10-f).
+      expect(td.receiver_id).toBe(TEST_NEAR_RECEIVER);
+      // A tampered delegate is refused in test mode too, and so is one to the real contract.
+      for (const receiverId of ['evil.near', CONTRACT]) {
+        const bad = await call('POST', 'gasless/submit', s.client_secret, {
+          quote_id: quote.id,
+          signed_delegate: signDelegate(td, { receiverId }),
+        });
+        expect(bad.statusCode, bad.body).toBe(409);
+        expect(bad.json().error.code).toBe('GASLESS_PAYLOAD_MISMATCH');
+      }
       const sub = await call('POST', 'gasless/submit', s.client_secret, {
         quote_id: quote.id,
         signed_delegate: signDelegate(td),

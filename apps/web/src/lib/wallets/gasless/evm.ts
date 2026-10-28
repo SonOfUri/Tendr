@@ -5,6 +5,9 @@
 // and the paymaster URL's origin are pinned in the page's config, never taken from the payload.
 // A wallet is never asked to delegate itself (EIP-7702) and no allowance outlives the payment.
 import {
+  TEST_PAYMENT_DOMAIN_NAME,
+  TEST_PAYMENT_DOMAIN_VERSION,
+  TEST_VERIFYING_CONTRACT,
   FORWARDER_DOMAIN_NAME,
   FORWARDER_DOMAIN_VERSION,
   TENDR_PAYMENT_TYPES,
@@ -14,7 +17,9 @@ import { WalletError, afterSignError, toWalletError } from '../errors';
 import { encodeErc20Transfer, ensureEvmChain, type Eip1193 } from '../evm';
 import type { PayTarget } from '../index';
 import {
+  assertFeeRecipient,
   deadlineSeconds,
+  gaslessNonce,
   mismatch,
   uintOf,
   type GaslessExpectation,
@@ -86,7 +91,14 @@ export function checkShape(
   raw: unknown,
   primary: string,
   fields: Field[],
-  domain: { name?: string; version?: string; chainId: number; verifyingContract: string },
+  domain: {
+    name?: string;
+    version?: string;
+    chainId: number;
+    verifyingContract: string;
+    /** A name the domain must not have (live: the test-mode domain). */
+    notName?: string;
+  },
 ): TypedData {
   const td = raw as TypedData | null;
   if (!td || typeof td !== 'object') throw mismatch(kind);
@@ -106,6 +118,7 @@ export function checkShape(
     typeof d.version !== 'string' ||
     (domain.name !== undefined && d.name !== domain.name) ||
     (domain.version !== undefined && d.version !== domain.version) ||
+    (domain.notName !== undefined && d.name === domain.notName) ||
     String(d.chainId) !== String(domain.chainId) ||
     !sameAddr(d.verifyingContract, domain.verifyingContract)
   ) {
@@ -143,7 +156,11 @@ const expectKinds = (p: PreparePayload, kinds: string[]) => {
   }
 };
 
-/** A fee recipient: never the deposit address, the shopper's own wallet or the zero address. */
+/**
+ * A fee recipient: exactly Tendr's gas-fee account (ruling T10-g), and never the deposit address,
+ * the shopper's own wallet or the zero address. A sponsored payload's `feeTo` (fee 0) is checked
+ * whenever the recipient is known.
+ */
 function checkFeeTo(kind: string, field: string, v: unknown, e: GaslessExpectation) {
   if (
     typeof v !== 'string' ||
@@ -153,6 +170,33 @@ function checkFeeTo(kind: string, field: string, v: unknown, e: GaslessExpectati
   ) {
     throw mismatch(`${kind}.${field}`);
   }
+  if (e.fee > 0n || e.feeRecipient !== null) assertFeeRecipient(e, v, `${kind}.${field}`);
+}
+
+/**
+ * The domains a payload must use (ruling T10-f): live, the token's own and the forwarder's, never
+ * the test name; test mode, the test domain at the code-less sentinel for every message.
+ */
+function domainsFor(e: GaslessExpectation, forwarder: string) {
+  const chainId = e.target.chainId!;
+  if (!e.livemode) {
+    const test = {
+      name: TEST_PAYMENT_DOMAIN_NAME,
+      version: TEST_PAYMENT_DOMAIN_VERSION,
+      chainId,
+      verifyingContract: TEST_VERIFYING_CONTRACT,
+    };
+    return { token: test, forwarder: test };
+  }
+  return {
+    token: { chainId, verifyingContract: e.target.contract!, notName: TEST_PAYMENT_DOMAIN_NAME },
+    forwarder: {
+      name: FORWARDER_DOMAIN_NAME,
+      version: FORWARDER_DOMAIN_VERSION,
+      chainId,
+      verifyingContract: forwarder,
+    },
+  };
 }
 
 /**
@@ -172,7 +216,8 @@ export function checkEvmTypedData(
     if (s === 0n || s > latest) throw mismatch(`${kind}.${field}`);
     return s;
   };
-  const tokenDomain = { chainId, verifyingContract: token };
+  const domains = domainsFor(e, forwarder);
+  const tokenDomain = domains.token;
 
   if (e.method === 'eip3009') {
     const kinds = e.fee > 0n ? ['payment', 'fee'] : ['payment'];
@@ -195,6 +240,10 @@ export function checkEvmTypedData(
         if (uintOf(m.value, 'fee.value') !== e.fee) throw mismatch('fee.value');
       }
       if (uintOf(m.validAfter, `${kind}.validAfter`) !== 0n) throw mismatch(`${kind}.validAfter`);
+      // One nonce per quote and leg: a re-sign can never make a second executable authorization.
+      if (String(m.nonce).toLowerCase() !== gaslessNonce(e.quoteId, kind as 'payment' | 'fee')) {
+        throw mismatch(`${kind}.nonce`);
+      }
       notLater(kind, 'validBefore', m.validBefore);
       return { kind, typed_data: td };
     });
@@ -230,12 +279,7 @@ export function checkEvmTypedData(
       p.to_sign[1]!.typed_data,
       'TendrPayment',
       TENDR_PAYMENT_TYPES.TendrPayment,
-      {
-        name: FORWARDER_DOMAIN_NAME,
-        version: FORWARDER_DOMAIN_VERSION,
-        chainId,
-        verifyingContract: forwarder,
-      },
+      domains.forwarder,
     );
     const m = pay.message;
     if (!sameAddr(m.token, token)) throw mismatch('tendr_payment.token');
@@ -246,6 +290,9 @@ export function checkEvmTypedData(
     if (uintOf(m.fee, 'tendr_payment.fee') !== e.fee) throw mismatch('tendr_payment.fee');
     checkFeeTo('tendr_payment', 'feeTo', m.feeTo, e);
     notLater('tendr_payment', 'deadline', m.deadline);
+    if (String(m.nonce).toLowerCase() !== gaslessNonce(e.quoteId, 'tendr_payment')) {
+      throw mismatch('tendr_payment.nonce');
+    }
     return [
       { kind: 'permit', typed_data: permit },
       { kind: 'tendr_payment', typed_data: pay },
@@ -260,6 +307,8 @@ export function checkPaymasterCalls(
   e: GaslessExpectation,
   paymasterUrlPrefix: string,
 ): void {
+  // Test mode never uses the paymaster: the smart wallet would send a real operation (T10-f).
+  if (!e.livemode) throw mismatch('method');
   const token = e.target.contract!;
   const calls = p.calls;
   const want = [encodeErc20Transfer(e.depositAddress, e.amount)];

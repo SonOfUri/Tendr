@@ -16,6 +16,8 @@ import {
   gaslessMethodOf,
   nativeFeeUnits,
   pickOption,
+  quoteFee,
+  resolveFeeRecipient,
   unavailableReason,
   type FeeMode,
   type GaslessOption,
@@ -36,6 +38,8 @@ interface GaslessPlan {
   /** Why a method the wallet could use is not offered to this account. */
   unavailable: string | null;
   defaultMode: FeeMode;
+  /** Tendr's fee account here (API value checked against the pinned config, T10-g). */
+  feeRecipient: string | null;
 }
 
 /** The quote fields for a plan: the method, and the fee choice when the shopper pays. */
@@ -200,14 +204,24 @@ export function WalletPanel({
       nativeSymbol: gasless?.nativeToken?.symbol ?? null,
       unavailable: null,
       defaultMode: 'token',
+      feeRecipient: null,
     };
     if (!adapter.gasless || !gasless || gaslessOff.current) return base;
     try {
-      const [opts, methods] = await Promise.all([
+      const [opts, all] = await Promise.all([
         gasless.api.gaslessOptions({ origin_asset: quote.origin_asset, wallet_address: a }),
         adapter.gasless.methods().catch(() => []),
       ]);
-      const option = pickOption(opts.options, methods);
+      // Test mode never uses the paymaster: the smart wallet would send a real operation (T10-f).
+      const methods = livemode ? all : all.filter((m) => m !== 'paymaster');
+      // Every fee leg must go to Tendr's fee account: the API's, matching the pinned one.
+      const feeRecipient = resolveFeeRecipient(
+        opts.fee_recipient,
+        publicEnv.gasFeeRecipients[route.target.blockchain],
+        route.chainFamily,
+        livemode,
+      );
+      const option = feeRecipient ? pickOption(opts.options, methods) : null;
       let defaultMode: FeeMode = 'token';
       if (feeChoiceAvailable(option)) {
         // Preselect the coin only when the wallet holds at least twice its fee.
@@ -222,6 +236,7 @@ export function WalletPanel({
         nativeSymbol: opts.native_symbol ?? base.nativeSymbol,
         unavailable: option ? null : unavailableReason(opts.options, methods),
         defaultMode,
+        feeRecipient,
       };
     } catch {
       // Options unavailable: the wallet sends normally, and the page says it needs the coin.
@@ -262,7 +277,10 @@ export function WalletPanel({
   async function payGasless(adapter: WalletAdapter, a: string) {
     let expect;
     try {
-      expect = expectationFor(quote, route.target, a, livemode);
+      expect = expectationFor(quote, route.target, a, {
+        livemode,
+        feeRecipient: planRef.current?.address === a ? planRef.current.feeRecipient : null,
+      });
     } catch {
       setMessage(MISMATCH_COPY);
       return;
@@ -289,6 +307,8 @@ export function WalletPanel({
             `Paying without ${plan?.nativeSymbol ?? 'the network’s coin'} isn't available right now.`,
           );
         } else {
+          // The sponsorship may have changed (released, re-decided): ask the options again (m8).
+          planRef.current = null;
           setMessage("Your price ran out, so we've updated it. Check the amount, then pay.");
         }
         await quoteForWallet(adapter, a);
@@ -298,6 +318,11 @@ export function WalletPanel({
         break;
       case 'mismatch':
         setMessage(MISMATCH_COPY);
+        break;
+      case 'refused_signed':
+        setMessage(
+          "Your signed payment didn't match this price, so it wasn't sent. Try again or pay by sending manually.",
+        );
         break;
       case 'relay_failed':
         setMessage(
@@ -408,13 +433,18 @@ export function WalletPanel({
 
   const gaslessQuote = gasless !== undefined && gaslessMethodOf(quote) !== null;
   // A token fee is sent on top of the payment: the button shows the total.
+  // One fee for the line, the button and the signature (I1); an inconsistent quote is not paid.
+  const fee = (() => {
+    if (!gaslessQuote) return 0n;
+    try {
+      return quoteFee(quote);
+    } catch {
+      return null;
+    }
+  })();
   const total = (() => {
     try {
-      const fee =
-        gaslessQuote && quote.network_fee?.fee_mode === 'token' && quote.fee_amount
-          ? BigInt(quote.fee_amount)
-          : 0n;
-      return BigInt(quote.amount_in) + fee;
+      return BigInt(quote.amount_in) + (fee ?? 0n);
     } catch {
       return quote.amount_in;
     }
@@ -422,16 +452,18 @@ export function WalletPanel({
   const amount = formatUnits(total, token.decimals);
   const busy =
     phase === 'loading' || phase === 'connecting' || phase === 'quoting' || phase === 'sending';
-  const payable = canPay({
-    family: route.chainFamily,
-    address,
-    quote,
-    now: Date.now(),
-    livemode,
-    paymentSent: blocked !== null,
-    busy,
-    gasless: gaslessQuote,
-  });
+  const payable =
+    fee !== null &&
+    canPay({
+      family: route.chainFamily,
+      address,
+      quote,
+      now: Date.now(),
+      livemode,
+      paymentSent: blocked !== null,
+      busy,
+      gasless: gaslessQuote,
+    });
   const quoteIsForWallet = sameAddress(route.chainFamily, address, quote.refund_address);
   const choiceShown = showFeeChoice(plan?.option ?? null, quote.network_fee);
 
@@ -489,7 +521,7 @@ export function WalletPanel({
               Get a price for this wallet
             </button>
           ) : null}
-          {gasless && quoteIsForWallet && phase !== 'quoting' ? (
+          {gasless && quoteIsForWallet ? (
             <NetworkFee
               networkFee={quote.network_fee}
               merchantName={gasless.merchantName}
@@ -499,7 +531,13 @@ export function WalletPanel({
               choice={
                 choiceShown
                   ? {
-                      mode: quote.network_fee?.fee_mode === 'native' ? 'native' : 'token',
+                      // While the new price loads, the shopper's pick shows at once (m7).
+                      mode:
+                        phase === 'quoting'
+                          ? feeMode
+                          : quote.network_fee?.fee_mode === 'native'
+                            ? 'native'
+                            : 'token',
                       tokenFeeAmount: plan?.option?.token_fee?.amount ?? null,
                       onChoose: (m) =>
                         adapterRef.current && void quoteForWallet(adapterRef.current, address, m),
@@ -529,8 +567,14 @@ export function WalletPanel({
                     : `Pay ${amount ?? ''} ${token.symbol}`}
               </button>
               {!livemode ? (
-                <p className="muted small">
-                  Test mode: your wallet signs, but nothing is sent on chain.
+                <p className="pay-test-label small" role="note">
+                  <strong>Test mode</strong>: your wallet signs a test payment that no network
+                  accepts. Nothing is sent.
+                </p>
+              ) : null}
+              {fee === null ? (
+                <p className="pay-error" role="alert">
+                  {MISMATCH_COPY}
                 </p>
               ) : null}
             </>

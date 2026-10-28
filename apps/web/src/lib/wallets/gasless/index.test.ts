@@ -10,6 +10,8 @@ import {
   gaslessMethodOf,
   nativeFeeUnits,
   pickOption,
+  quoteFee,
+  resolveFeeRecipient,
   unavailableReason,
   type GaslessOption,
   type PreparePayload,
@@ -41,8 +43,15 @@ const QUOTE = {
   amount_in: '25000000',
   deadline: '2026-10-28T12:12:00.000Z',
   fee_amount: '96000',
-  network_fee: { method: 'eip3009', fee_mode: 'token' as const },
+  network_fee: {
+    method: 'eip3009',
+    fee_mode: 'token' as const,
+    paid_by: 'shopper' as const,
+    amount: '96000',
+  },
 };
+const FEE_TO = '0x3333333333333333333333333333333333333333';
+const opts = { livemode: true, feeRecipient: FEE_TO };
 
 function prepared(over: Partial<PreparePayload> = {}): PreparePayload {
   return {
@@ -114,8 +123,9 @@ describe('method choice', () => {
 
 describe('the quote → what may be signed', () => {
   it('a gasless quote binds the method, amounts and deadline; a native one is not gasless', () => {
-    const e = expectationFor(QUOTE, target, WALLET, true)!;
+    const e = expectationFor(QUOTE, target, WALLET, opts)!;
     expect(e).toMatchObject({ method: 'eip3009', amount: 25_000_000n, fee: 96_000n });
+    expect(e.feeRecipient).toBe(FEE_TO);
     expect(gaslessMethodOf({ network_fee: { method: 'eip3009', fee_mode: 'native' } })).toBeNull();
     expect(gaslessMethodOf({ network_fee: { method: 'native', fee_mode: 'native' } })).toBeNull();
     expect(gaslessMethodOf({ network_fee: null })).toBeNull();
@@ -123,12 +133,12 @@ describe('the quote → what may be signed', () => {
       'paymaster',
     );
     expect(
-      expectationFor({ ...QUOTE, fee_amount: null, network_fee: null }, target, WALLET, true),
+      expectationFor({ ...QUOTE, fee_amount: null, network_fee: null }, target, WALLET, opts),
     ).toBeNull();
   });
 
   it('accepts a matching payload (addresses compared without case on EVM)', () => {
-    const e = expectationFor(QUOTE, target, WALLET, true)!;
+    const e = expectationFor(QUOTE, target, WALLET, opts)!;
     expect(() => assertPrepareMatches(prepared(), e)).not.toThrow();
   });
 
@@ -142,7 +152,7 @@ describe('the quote → what may be signed', () => {
     ['fee_amount', { fee_amount: '0' }],
     ['deadline', { deadline: '2026-10-28T12:12:01.000Z' }],
   ])('refuses a payload with another %s', (field, over) => {
-    const e = expectationFor(QUOTE, target, WALLET, true)!;
+    const e = expectationFor(QUOTE, target, WALLET, opts)!;
     const err = (() => {
       try {
         assertPrepareMatches(prepared(over as Partial<PreparePayload>), e);
@@ -153,5 +163,70 @@ describe('the quote → what may be signed', () => {
     })();
     expect(err).toBeInstanceOf(GaslessMismatchError);
     expect((err as GaslessMismatchError).field).toBe(field);
+  });
+});
+
+describe('the fee signed is the fee shown (I1)', () => {
+  const field = (fn: () => unknown) => {
+    try {
+      fn();
+    } catch (x) {
+      expect(x).toBeInstanceOf(GaslessMismatchError);
+      return (x as GaslessMismatchError).field;
+    }
+    return null;
+  };
+  const sponsored = {
+    ...QUOTE,
+    fee_amount: null,
+    network_fee: { method: 'eip3009', fee_mode: null, paid_by: 'merchant' as const, amount: null },
+  };
+
+  it('merchant sponsors: the fee is 0', () => {
+    expect(expectationFor(sponsored, target, WALLET, opts)!.fee).toBe(0n);
+    expect(quoteFee(sponsored)).toBe(0n);
+  });
+
+  it('"paid by {merchant}" with a fee_amount anyway: refused, never signed', () => {
+    expect(
+      field(() => expectationFor({ ...sponsored, fee_amount: '500000' }, target, WALLET, opts)),
+    ).toBe('fee_amount');
+  });
+
+  it('the shopper pays in the token: fee_amount must equal the fee line amount', () => {
+    expect(quoteFee(QUOTE)).toBe(96_000n);
+    const shown = (amount: string | null) => ({
+      ...QUOTE,
+      network_fee: { ...QUOTE.network_fee, amount },
+    });
+    expect(field(() => expectationFor(shown('95999'), target, WALLET, opts))).toBe('fee_amount');
+    expect(field(() => expectationFor(shown(null), target, WALLET, opts))).toBe('fee_amount');
+    expect(field(() => expectationFor({ ...QUOTE, fee_amount: null }, target, WALLET, opts))).toBe(
+      'fee_amount',
+    );
+    expect(field(() => expectationFor({ ...QUOTE, fee_amount: '0' }, target, WALLET, opts))).toBe(
+      'fee_amount',
+    );
+  });
+});
+
+describe("the fee recipient (T10-g): the API's value, pinned in config", () => {
+  const API = '0x3333333333333333333333333333333333333333';
+  const OTHER = '0x4444444444444444444444444444444444444444';
+  const UPPER = '0x' + API.slice(2).toUpperCase();
+  it.each<[string, string | null, string | undefined, boolean, string | null]>([
+    ['live, pinned and equal (case-insensitive on EVM)', API, UPPER, true, API],
+    ['live, pinned and different', API, OTHER, true, null],
+    ['live, not pinned', API, undefined, true, null],
+    ['test mode, not pinned: the API value', API, undefined, false, API],
+    ['test mode, pinned and different', API, OTHER, false, null],
+    ['no API value', null, API, true, null],
+  ])('%s', (_n, api, pinned, livemode, want) => {
+    expect(resolveFeeRecipient(api, pinned, 'evm', livemode)).toBe(want);
+  });
+
+  it('other chains compare exactly', () => {
+    expect(resolveFeeRecipient('alice.near', 'alice.near', 'near', true)).toBe('alice.near');
+    expect(resolveFeeRecipient('Abc', 'abc', 'solana', true)).toBeNull();
   });
 });

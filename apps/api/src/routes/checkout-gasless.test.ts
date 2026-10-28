@@ -1,3 +1,4 @@
+import { TEST_PAYMENT_DOMAIN_NAME, TEST_VERIFYING_CONTRACT } from '@tendr/contracts';
 import type { Merchant } from '@prisma/client';
 import { Wallet } from 'ethers';
 import type { FastifyInstance } from 'fastify';
@@ -159,17 +160,13 @@ describe('gasless checkout routes (test mode: simulated relayer)', () => {
         chain: 'base',
         family: 'evm',
         native_symbol: 'ETH',
+        // Ruling T10-g: the page checks every fee leg goes exactly here.
+        fee_recipient: await feeAddress(),
+        // Test mode never offers the paymaster (ruling T10-f): the smart wallet would send a
+        // real operation.
         options: [
           { method: 'eip3009', paid_by: 'merchant', reason: null, fee_modes: [], token_fee: null },
           { method: 'permit', paid_by: 'merchant', reason: null, fee_modes: [], token_fee: null },
-          // Smart wallets with an EIP-5792 paymaster capability (Pimlico).
-          {
-            method: 'paymaster',
-            paid_by: 'merchant',
-            reason: null,
-            fee_modes: [],
-            token_fee: null,
-          },
         ],
       });
       // Options reserve nothing.
@@ -199,7 +196,7 @@ describe('gasless checkout routes (test mode: simulated relayer)', () => {
         wallet_address: shopper.address,
       });
       expect(res.statusCode, res.body).toBe(200);
-      expect(res.json()).toMatchObject({ native_symbol: 'ETH', options: [] });
+      expect(res.json()).toMatchObject({ native_symbol: 'ETH', fee_recipient: null, options: [] });
       const bad = await call('POST', 'gasless/options', s.client_secret, {
         origin_asset: USDC_BASE,
         wallet_address: 'alice.near',
@@ -245,7 +242,15 @@ describe('gasless checkout routes (test mode: simulated relayer)', () => {
       const [permit, payment] = prepared.to_sign;
       expect(permit!.typed_data.message.spender.toLowerCase()).toBe(FORWARDER);
       expect(permit!.typed_data.message.value).toBe(String(BigInt(quote.amount_in) + 48_000n));
-      expect(payment!.typed_data.domain.verifyingContract.toLowerCase()).toBe(FORWARDER);
+      // Test mode: every message is on the test domain at the code-less sentinel (T10-f).
+      expect(permit!.typed_data.domain).toMatchObject({
+        name: TEST_PAYMENT_DOMAIN_NAME,
+        verifyingContract: TEST_VERIFYING_CONTRACT,
+      });
+      expect(payment!.typed_data.domain).toMatchObject({
+        name: TEST_PAYMENT_DOMAIN_NAME,
+        verifyingContract: TEST_VERIFYING_CONTRACT,
+      });
     });
 
     it('a copy-address quote, or fee_mode native, is not gasless', async () => {

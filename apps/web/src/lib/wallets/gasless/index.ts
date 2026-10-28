@@ -8,6 +8,7 @@
 // reports `paymasterService` for the chain) → native; Solana kora; NEAR meta_tx (wallets that
 // sign delegate actions); Tron forwarder (exact-amount approve, then a TendrPayment). A wallet is
 // never asked to delegate itself (EIP-7702).
+import { keccak_256 } from '@noble/hashes/sha3';
 import type { Token } from '@/lib/checkout/api';
 import type { PayTarget } from '../index';
 import { sameAddress } from '../match';
@@ -44,6 +45,8 @@ export interface GaslessOptions {
   family: string | null;
   /** The chain's coin ("ETH", "SOL"…), for "You'll need {coin} for the network fee". */
   native_symbol: string | null;
+  /** Tendr's gas-fee account on this chain (ruling T10-g); null when no option is offered. */
+  fee_recipient?: string | null;
   options: GaslessOption[];
 }
 
@@ -130,7 +133,16 @@ export interface GaslessExpectation {
   fee: bigint;
   /** The quote's deadline (ISO). Nothing signed may outlive it. */
   deadline: string;
+  /**
+   * Test mode (ruling T10-f): every payload must carry the test markers (`@tendr/contracts`
+   * gasless-test.ts) so nothing signed is usable on a real chain; live payloads must not.
+   */
   livemode: boolean;
+  /**
+   * Tendr's gas-fee account for this chain (ruling T10-g), resolved by `resolveFeeRecipient`.
+   * Every fee leg must go exactly here; null refuses any payload that names one.
+   */
+  feeRecipient: string | null;
 }
 
 /** A prepared payload does not match the quote: the wallet is never asked to sign it. */
@@ -167,19 +179,62 @@ export function deadlineSeconds(iso: string): bigint {
   return BigInt(Math.floor(ms / 1000));
 }
 
+/** The quote fields the fee is read from (what the page shows and what is signed). */
+export interface QuoteFeeFields {
+  fee_amount?: string | null;
+  network_fee?: {
+    method: string | null;
+    fee_mode: FeeMode | null;
+    paid_by?: 'merchant' | 'shopper';
+    amount?: string | null;
+  } | null;
+}
+
+/**
+ * The one fee the shopper sends on top of `amount_in` (I1): the fee line, the pay button and the
+ * signed fee leg all use it. A fee only exists when the shopper pays in the token, and then
+ * `fee_amount` must equal the amount the fee line shows; anything else is refused.
+ */
+export function quoteFee(quote: QuoteFeeFields): bigint {
+  const nf = quote.network_fee;
+  const raw = quote.fee_amount ?? null;
+  if (nf?.paid_by === 'shopper' && nf.fee_mode === 'token') {
+    const fee = raw === null ? 0n : uintOf(raw, 'fee_amount');
+    if (fee === 0n || nf.amount !== raw) throw mismatch('fee_amount');
+    return fee;
+  }
+  if (raw !== null && uintOf(raw, 'fee_amount') !== 0n) throw mismatch('fee_amount');
+  return 0n;
+}
+
+/**
+ * The fee recipient to check payloads against (ruling T10-g): the API's `fee_recipient`, which
+ * must equal the address pinned in the page's config (NEXT_PUBLIC_GAS_FEE_RECIPIENTS). Live
+ * payments need a pin; test mode accepts the API's value when none is pinned. Null → no gasless.
+ */
+export function resolveFeeRecipient(
+  api: string | null | undefined,
+  pinned: string | undefined,
+  family: string,
+  livemode: boolean,
+): string | null {
+  if (!api) return null;
+  if (pinned === undefined) return livemode ? null : api;
+  const same = family === 'evm' ? api.toLowerCase() === pinned.toLowerCase() : api === pinned;
+  return same ? api : null;
+}
+
 /** The gasless expectation for a quote, or null when the quote is not a gasless one. */
 export function expectationFor(
-  quote: {
+  quote: QuoteFeeFields & {
     id: string;
     deposit_address: string;
     amount_in: string;
     deadline: string;
-    fee_amount?: string | null;
-    network_fee?: { method: string | null; fee_mode: FeeMode | null } | null;
   },
   target: PayTarget,
   wallet: string,
-  livemode: boolean,
+  o: { livemode: boolean; feeRecipient: string | null },
 ): GaslessExpectation | null {
   const method = gaslessMethodOf(quote);
   if (!method) return null;
@@ -190,9 +245,10 @@ export function expectationFor(
     wallet,
     depositAddress: quote.deposit_address,
     amount: uintOf(quote.amount_in, 'amount'),
-    fee: quote.fee_amount ? uintOf(quote.fee_amount, 'fee_amount') : 0n,
+    fee: quoteFee(quote),
     deadline: quote.deadline,
-    livemode,
+    livemode: o.livemode,
+    feeRecipient: o.feeRecipient,
   };
 }
 
@@ -203,6 +259,22 @@ export function gaslessMethodOf(quote: {
   const nf = quote.network_fee;
   if (!nf || nf.fee_mode === 'native' || !isGaslessMethod(nf.method)) return null;
   return nf.method;
+}
+
+/** A fee leg's recipient must be exactly Tendr's gas-fee account (EVM addresses without case). */
+export function assertFeeRecipient(e: GaslessExpectation, to: unknown, field: string): void {
+  const r = e.feeRecipient;
+  const ok =
+    typeof to === 'string' &&
+    r !== null &&
+    (e.target.family === 'evm' ? to.toLowerCase() === r.toLowerCase() : to === r);
+  if (!ok) throw mismatch(field);
+}
+
+/** The deterministic nonce of a signed leg: keccak256("tendr:gasless:<leg>:<quote id>") (m6). */
+export function gaslessNonce(quoteId: string, leg: 'payment' | 'fee' | 'tendr_payment'): string {
+  const bytes = keccak_256(new TextEncoder().encode(`tendr:gasless:${leg}:${quoteId}`));
+  return '0x' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** The fields every family's payload shares: same quote, method, chain, signer and amounts. */
