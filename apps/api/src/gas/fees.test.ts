@@ -219,11 +219,14 @@ describe('network fees', () => {
       expect(calls[0]!.url).toBe(env().SOLANA_RPC_URL);
     });
 
-    it('NEAR: gas price × units', async () => {
-      // 100_000_000 yocto/gas × 50 Tgas = 5e21 yocto = 0.005 NEAR × $3 = $0.015.
+    it('NEAR: gas price × units, plus the deposit address registration for meta_tx', async () => {
+      // 100_000_000 yocto/gas × (50 Tgas + 10 Tgas storage_deposit) = 6e21 yocto, + 1.25e21
+      // storage deposit = 0.00725 NEAR × $3 = $0.02175.
       const { f } = rpc({ gas_price: { result: { gas_price: '100000000' } } });
       useFetch(f);
-      expect(await estimateNetworkFeeUsd('near', 'meta_tx', { livemode: true })).toBe('0.015');
+      expect(await estimateNetworkFeeUsd('near', 'meta_tx', { livemode: true })).toBe('0.02175');
+      // A normal send: 15 Tgas = 1.5e21 yocto × $3 = $0.0045.
+      expect(await estimateNetworkFeeUsd('near', 'native', { livemode: true })).toBe('0.0045');
     });
 
     it('Tron: energy price × energy units + bandwidth', async () => {

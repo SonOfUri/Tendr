@@ -83,6 +83,8 @@ export interface TxResult {
   status: 'success' | 'failure';
   topLevelStatus: 'success' | 'failure';
   failure?: string;
+  /** yoctoNEAR burnt for gas by the transaction and all its receipts (when the RPC reports it). */
+  tokensBurnt?: bigint;
 }
 
 export interface ProvisionParams {
@@ -114,6 +116,11 @@ export interface TxStatusResult {
   delegateSenderIds?: string[];
   /** Every receipt (not the transaction outcome itself), with its executor and logs. */
   receipts: TxReceipt[];
+  /** yoctoNEAR / gas burnt by the transaction and all its receipts (RPC lookups only). */
+  tokensBurnt?: bigint;
+  gasBurnt?: bigint;
+  /** The transaction's own result (`FinalExecutionOutcome.status`) succeeded. */
+  topLevelOk?: boolean;
 }
 
 export interface CallOptions {
@@ -348,6 +355,92 @@ export class RpcNearClient implements NearClient {
   }
 }
 
+/**
+ * `relayer-near`'s sender (gasless NEAR payments, project 5a): signs from its implicit account
+ * only what `assertRelayerNearTransaction` allows (one signed delegate, or one registration-only
+ * `storage_deposit`). Signing and sending are separate steps, so a caller can record a
+ * transaction's hash before it is broadcast. Never used by `NearClient.call`, provisioning or
+ * top-ups.
+ *
+ * Nonces: next = max(node nonce, last nonce this process handed out) + 1 (as `RpcNearClient`).
+ */
+export class RelayerNearSender {
+  private lastNonce = 0n;
+  private key: { raw: Uint8Array; accountId: string } | null = null;
+
+  constructor(
+    readonly rpc: NearRpc,
+    private readonly kv: KeyVault = getKeyVault(),
+  ) {}
+
+  private async publicKey(): Promise<{ raw: Uint8Array; accountId: string }> {
+    if (this.key) return this.key;
+    const { curve, raw } = await this.kv.publicKey('relayer-near');
+    if (curve !== 'ed25519') throw new Error('relayer-near is not an ed25519 key');
+    this.key = { raw, accountId: implicitAccountId(raw) };
+    return this.key;
+  }
+
+  /** The relayer's implicit account (it pays the gas). */
+  async accountId(): Promise<string> {
+    return (await this.publicKey()).accountId;
+  }
+
+  /** Builds and vault-signs one transaction; NotBroadcastError on any failure (nothing sent). */
+  async sign(receiverId: string, actions: Action[]): Promise<SignedTx> {
+    try {
+      const { raw, accountId } = await this.publicKey();
+      const fetched = await this.rpc.accessKeyNonce(accountId, nearPublicKey(raw));
+      const nonce = (fetched > this.lastNonce ? fetched : this.lastNonce) + 1n;
+      this.lastNonce = nonce;
+      const tx = buildTransaction({
+        signerId: accountId,
+        publicKey: raw,
+        nonce,
+        receiverId,
+        blockHash: await this.rpc.finalBlockHash(),
+        actions,
+      });
+      return await signTransaction(this.kv, 'relayer-near', tx);
+    } catch (err) {
+      throw new NotBroadcastError(err);
+    }
+  }
+
+  /**
+   * Sends a signed transaction and waits until it is final. NotBroadcastError when the node
+   * rejected it as invalid (never executed); any other failure resends the identical bytes once,
+   * and if that fails too, OutcomeUnknownError (it may still execute: same hash, at most once).
+   */
+  async send(signed: SignedTx): Promise<TxResult> {
+    try {
+      return await this.rpc.sendTx(signed.bytes, signed.hash);
+    } catch (err) {
+      if (isInvalidTransaction(err)) throw new NotBroadcastError(err);
+      try {
+        return await this.rpc.sendTx(signed.bytes, signed.hash);
+      } catch (resendErr) {
+        throw new OutcomeUnknownError(err, resendErr);
+      }
+    }
+  }
+
+  /** `sign` then `send`; a stale nonce at the first send re-signs once with a fresh one. */
+  async signAndSend(receiverId: string, actions: Action[]): Promise<TxResult> {
+    for (let attempt = 0; ; attempt++) {
+      const signed = await this.sign(receiverId, actions);
+      try {
+        return await this.send(signed);
+      } catch (err) {
+        if (attempt === 0 && err instanceof NotBroadcastError && isInvalidNonce(err.cause)) {
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+}
+
 export function nearModeConfig(livemode: boolean, e: Env = env()): NearModeConfig {
   const hash = livemode ? e.MERCHANT_ACCOUNT_CODE_HASH_LIVE : e.MERCHANT_ACCOUNT_CODE_HASH_TEST;
   return {
@@ -402,7 +495,23 @@ export function fakeNearClient(livemode: boolean): FakeNearClient {
   return fake;
 }
 
+const relayerSenders = new Map<boolean, RelayerNearSender>();
+
+/** The process-wide `relayer-near` sender for a mode (its RPC is the mode's NEAR_RPC_URL_*). */
+export function relayerNearSender(livemode: boolean): RelayerNearSender {
+  let s = relayerSenders.get(livemode);
+  if (!s) {
+    const e = env();
+    s = new RelayerNearSender(
+      new NearRpc(new JsonRpcTransport(livemode ? e.NEAR_RPC_URL_LIVE : e.NEAR_RPC_URL_TEST)),
+    );
+    relayerSenders.set(livemode, s);
+  }
+  return s;
+}
+
 /** Drops the cached clients (tests: fresh fakes per test). */
 export function resetNearClients(): void {
   clients.clear();
+  relayerSenders.clear();
 }

@@ -20,6 +20,7 @@ import { expireSessions, pollDeposit, scanDueDeposits } from './checkout/watcher
 import { releaseStaleReservations } from './gas/quote-fee.js';
 import { pollEvmRelays } from './relayer/index.js';
 import { pollPaymasterOps } from './relayer/evm/pimlico.js';
+import { pollNearMetaRelays } from './relayer/near-meta.js';
 import { pollSolanaRelays } from './relayer/solana.js';
 import { releaseEndedSessionReservations } from './relayer/submissions.js';
 import {
@@ -158,6 +159,13 @@ export async function processCheckoutJob(
     try {
       const k = await pollSolanaRelays();
       if (k > 0) log('info', 'solana relay outcomes applied', { count: k });
+    } catch (err) {
+      failed ??= err;
+    }
+    // NEAR meta-transactions relayed by relayer-near (outcomes from the live NEAR RPC).
+    try {
+      const n = await pollNearMetaRelays();
+      if (n > 0) log('info', 'near relay outcomes applied', { count: n });
     } catch (err) {
       failed ??= err;
     }

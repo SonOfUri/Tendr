@@ -41,6 +41,35 @@ export interface AccountState {
 
 type ExecutionStatus = { SuccessValue?: string; SuccessReceiptId?: string; Failure?: unknown };
 
+interface Outcome {
+  logs: string[];
+  status: ExecutionStatus | string;
+  executor_id?: string;
+  /** yoctoNEAR burnt for gas by this outcome. */
+  tokens_burnt?: string | number;
+  gas_burnt?: string | number;
+}
+
+/** The gas and NEAR (yocto) every outcome of a transaction burnt, summed. */
+function burnt(o: FinalExecutionOutcome): { tokens: bigint; gas: bigint } {
+  let tokens = 0n;
+  let gas = 0n;
+  for (const r of [
+    ...(o.transaction_outcome ? [o.transaction_outcome] : []),
+    ...(o.receipts_outcome ?? []),
+  ]) {
+    tokens += asUint(r.outcome.tokens_burnt);
+    gas += asUint(r.outcome.gas_burnt);
+  }
+  return { tokens, gas };
+}
+
+function asUint(v: unknown): bigint {
+  if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) return BigInt(v);
+  if (typeof v === 'string' && /^\d+$/.test(v)) return BigInt(v);
+  return 0n;
+}
+
 interface FinalExecutionOutcome {
   status: ExecutionStatus | string;
   transaction?: {
@@ -49,14 +78,8 @@ interface FinalExecutionOutcome {
     receiver_id?: string;
     actions?: unknown[];
   };
-  transaction_outcome?: {
-    id?: string;
-    outcome: { logs: string[]; status: ExecutionStatus | string; executor_id?: string };
-  };
-  receipts_outcome?: {
-    id?: string;
-    outcome: { logs: string[]; status: ExecutionStatus | string; executor_id?: string };
-  }[];
+  transaction_outcome?: { id?: string; outcome: Outcome };
+  receipts_outcome?: { id?: string; outcome: Outcome }[];
   /** `EXPERIMENTAL_tx_status` only: the receipts themselves (predecessor of each). */
   receipts?: { receipt_id?: string; predecessor_id?: string }[];
 }
@@ -123,6 +146,14 @@ function errorText(err: unknown): string {
     .join(' ');
 }
 
+/** The queried account or access key does not exist (a query error, not an outage). */
+const UNKNOWN_ACCOUNT_OR_KEY =
+  /\b(does not exist|UNKNOWN_ACCOUNT|AccountDoesNotExist|UNKNOWN_ACCESS_KEY|AccessKeyDoesNotExist)\b/;
+
+export function isUnknownAccountOrKey(err: unknown): boolean {
+  return UNKNOWN_ACCOUNT_OR_KEY.test(errorText(err));
+}
+
 /** True if `err` is the node rejecting a transaction for a stale or reused nonce. */
 export function isInvalidNonce(err: unknown): boolean {
   return /\bInvalidNonce\b/.test(errorText(err));
@@ -176,9 +207,11 @@ export function toTxResult(o: FinalExecutionOutcome, fallbackHash: string): TxRe
     failureOf(o.status) ?? outcomes.map((r) => failureOf(r.outcome.status)).find(Boolean);
   const txHash = o.transaction?.hash ?? o.transaction_outcome?.id ?? fallbackHash;
   const topLevelStatus = failureOf(o.status) ? 'failure' : 'success';
+  const tokens = burnt(o).tokens;
+  const extra = tokens > 0n ? { tokensBurnt: tokens } : {};
   return failure
-    ? { txHash, logs, successLogs, status: 'failure', topLevelStatus, failure }
-    : { txHash, logs, successLogs, status: 'success', topLevelStatus };
+    ? { txHash, logs, successLogs, status: 'failure', topLevelStatus, failure, ...extra }
+    : { txHash, logs, successLogs, status: 'success', topLevelStatus, ...extra };
 }
 
 export class NearRpc {
@@ -211,6 +244,47 @@ export class NearRpc {
       );
     }
     return r;
+  }
+
+  /** The latest final block's height and hash. */
+  async finalBlock(): Promise<{ height: bigint; hash: Uint8Array }> {
+    const r = await this.transport.request<{ header: { hash: string; height: number | string } }>(
+      'block',
+      { finality: 'final' },
+    );
+    return { height: BigInt(r.header.height), hash: bs58.decode(r.header.hash) };
+  }
+
+  /**
+   * An access key of `accountId` (`publicKey` = `ed25519:…`): its nonce and whether it is a full
+   * access key. Null when the account or the key does not exist.
+   */
+  async accessKey(
+    accountId: string,
+    publicKey: string,
+  ): Promise<{ nonce: bigint; fullAccess: boolean } | null> {
+    try {
+      const r = await this.query<{ nonce: number | string; permission: unknown }>({
+        request_type: 'view_access_key',
+        finality: 'final',
+        account_id: accountId,
+        public_key: publicKey,
+      });
+      return { nonce: BigInt(r.nonce), fullAccess: r.permission === 'FullAccess' };
+    } catch (err) {
+      if (isUnknownAccountOrKey(err)) return null;
+      throw err;
+    }
+  }
+
+  /** `viewAccount`, or null when the account does not exist. */
+  async viewAccountOrNull(accountId: string): Promise<AccountState | null> {
+    try {
+      return await this.viewAccount(accountId);
+    } catch (err) {
+      if (isUnknownAccountOrKey(err)) return null;
+      throw err;
+    }
   }
 
   /** Hash of the latest final block, used as the transaction's recent block hash. */
@@ -276,8 +350,12 @@ export class NearRpc {
     const predecessors = new Map(
       (o.receipts ?? []).map((r) => [r.receipt_id ?? '', r.predecessor_id ?? '']),
     );
+    const { tokens, gas } = burnt(o);
     return {
       hash: o.transaction?.hash ?? hash,
+      tokensBurnt: tokens,
+      gasBurnt: gas,
+      topLevelOk: !failureOf(o.status),
       signerId: o.transaction?.signer_id ?? '',
       receiverId: o.transaction?.receiver_id ?? '',
       delegateSenderIds: delegateSenders(o.transaction?.actions),

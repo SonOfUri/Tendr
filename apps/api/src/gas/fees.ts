@@ -4,7 +4,8 @@
 //   EVM     eth_gasPrice × the method's gas units (EVM_GAS_UNITS)
 //   Solana  5000 lamports per signature + the median recent priority fee × SOLANA_COMPUTE_UNITS
 //           (+ a new token account's rent for `kora`: the paymaster creates the deposit's)
-//   NEAR    gas_price × the method's gas units (NEAR_GAS_UNITS)
+//   NEAR    gas_price × the method's gas units (NEAR_GAS_UNITS) (+ for `meta_tx` the deposit
+//           address's `storage_deposit` registration: its deposit and gas)
 //   Tron    the energy price (getEnergyFee) × the method's energy + a bandwidth allowance
 // priced in USD at the native coin's price in the 1Click token list. The per-chain unit price is
 // cached for FEE_CACHE_MS. Test mode never calls an RPC: it reads SIMULATED_FEE_USD.
@@ -59,7 +60,15 @@ export const SOLANA_TOKEN_ACCOUNT_RENT_LAMPORTS = 2_039_280n;
 export const NEAR_GAS_UNITS = {
   meta_tx: 50_000_000_000_000n,
   native: 15_000_000_000_000n,
+  /** The `storage_deposit` that registers the deposit address on the token. */
+  storage: 10_000_000_000_000n,
 } as const;
+/**
+ * A NEP-141 `storage_deposit` registration (USDC and USDT on NEAR ask 0.00125 NEAR). `relayer-near`
+ * registers the deposit address on the token before a meta-transaction (a fresh 1Click address is
+ * not registered), so one registration is part of a `meta_tx` payment's cost.
+ */
+export const NEAR_STORAGE_DEPOSIT_YOCTO = 1_250_000_000_000_000_000_000n;
 
 /** Tron energy per method: approve + the forwarder's two `transferFrom`s, or one TRC-20 transfer. */
 export const TRON_ENERGY_UNITS = { forwarder: 160_000n, native: 65_000n } as const;
@@ -332,7 +341,9 @@ function nativeCost(
       );
     }
     case 'near':
-      return (method === 'meta_tx' ? NEAR_GAS_UNITS.meta_tx : NEAR_GAS_UNITS.native) * price;
+      return method === 'meta_tx'
+        ? (NEAR_GAS_UNITS.meta_tx + NEAR_GAS_UNITS.storage) * price + NEAR_STORAGE_DEPOSIT_YOCTO
+        : NEAR_GAS_UNITS.native * price;
     case 'tron':
       return (
         (method === 'forwarder' ? TRON_ENERGY_UNITS.forwarder : TRON_ENERGY_UNITS.native) * price +

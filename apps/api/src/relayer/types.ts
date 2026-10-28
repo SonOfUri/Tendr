@@ -36,6 +36,12 @@ export interface GaslessOption {
   fee_modes: ('token' | 'native')[];
   /** The fee in the payment token, on top of the payment ("+0.08 USDC"); null when sponsored. */
   token_fee: { amount: string; symbol: string; decimals: number; usd: string } | null;
+  /**
+   * Set when the method exists for this wallet + token but cannot be used now; the pay page says
+   * why and does not offer it. NEAR: `near_account_needs_balance` (the account must exist and
+   * hold 1 yoctoNEAR per token transfer).
+   */
+  unavailable_reason?: string;
 }
 
 export interface GaslessOptions {
@@ -55,7 +61,7 @@ export interface PrepareInput {
 /**
  * What the shopper signs. EVM: EIP-712 typed data, in signing order. Solana (`kora`): one
  * `solana_transaction` whose `typed_data` carries the unsigned transaction to sign (see
- * relayer/solana.ts).
+ * relayer/solana.ts). NEAR (`meta_tx`): one `near_delegate_action` (see relayer/near-meta.ts).
  */
 export interface PreparePayload {
   quote_id: string;
@@ -80,11 +86,13 @@ export interface PreparePayload {
 
 /**
  * The shopper's signatures, keyed by `to_sign[].kind`, each with the message it signed (EVM); or,
- * for Solana, the transaction the wallet signed (base64 wire bytes) and no signatures.
+ * for Solana, the transaction the wallet signed (base64 wire bytes); or, for NEAR, the signed
+ * delegate action (base64 borsh `SignedDelegate`). Exactly one of the three.
  */
 export interface SignedPayload {
   signatures: Record<string, { message: Record<string, unknown>; signature: string }>;
   transaction?: string;
+  signedDelegate?: string;
 }
 
 export interface SubmitResult {

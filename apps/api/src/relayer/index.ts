@@ -21,6 +21,7 @@ import {
 import { evmTokenAddress } from './evm/tokens.js';
 import { prisma } from '../lib/prisma.js';
 import type { EvmSender } from './evm/sender.js';
+import { NearMetaGasless } from './near-meta.js';
 import { SimulatedRelayer } from './simulated.js';
 import { SolanaGasless } from './solana.js';
 import { applyRelayOutcome } from './submissions.js';
@@ -44,9 +45,10 @@ export function familyOf(chain: string): ChainFamily | null {
 const relayers = new Map<string, GaslessRelayer>();
 
 /**
- * The gasless relayer for a chain family and mode; null for a family without one yet (Tron and
- * NEAR arrive in later tasks: their wallets get no gasless option meanwhile). Test mode always
- * gets the simulated relayer (Solana's simulates inside `SolanaGasless`: no Pimlico, no RPC).
+ * The gasless relayer for a chain family and mode; null for a family without one yet (Tron
+ * arrives in a later task: its wallets get no gasless option meanwhile). Test mode always gets the
+ * simulated relayer (Solana's and NEAR's simulate inside `SolanaGasless` / `NearMetaGasless`: no
+ * Pimlico, no RPC).
  */
 export function relayerFor(family: ChainFamily, livemode: boolean): GaslessRelayer | null {
   const key = `${family}:${livemode}`;
@@ -59,6 +61,7 @@ export function relayerFor(family: ChainFamily, livemode: boolean): GaslessRelay
       : new SimulatedRelayer('evm', new EvmGasless(false));
   }
   if (family === 'solana') r = new SolanaGasless(livemode);
+  if (family === 'near') r = new NearMetaGasless(livemode);
   if (r) relayers.set(key, r);
   return r;
 }
@@ -160,11 +163,19 @@ export const GaslessSubmitInputSchema = z
       .max(1700)
       .regex(/^[A-Za-z0-9+/]+={0,2}$/, 'must be a base64 transaction')
       .optional(),
+    /** NEAR: the prepared delegate action as the wallet signed it (base64 borsh SignedDelegate). */
+    signed_delegate: z
+      .string()
+      .max(1700)
+      .regex(/^[A-Za-z0-9+/]+={0,2}$/, 'must be a base64 signed delegate action')
+      .optional(),
   })
   .strict()
-  .refine((v) => (v.signatures === undefined) !== (v.transaction === undefined), {
-    message: 'send either signatures or transaction',
-  });
+  .refine(
+    (v) =>
+      [v.signatures, v.transaction, v.signed_delegate].filter((x) => x !== undefined).length === 1,
+    { message: 'send exactly one of signatures, transaction or signed_delegate' },
+  );
 
 async function loadSession(shopper: ShopperCtx) {
   const s = await shopper.db.session.findFirst({ where: { id: shopper.sessionId } });

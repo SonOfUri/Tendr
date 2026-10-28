@@ -38,6 +38,7 @@ import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { toJsonDecimal } from '../lib/serialize.js';
 import { gaslessToken } from '../relayer/evm/tokens.js';
+import { nearGaslessToken } from '../relayer/near-meta.js';
 import { solanaGaslessToken } from '../relayer/solana-tx.js';
 import { chainFamily, isValidAddress } from './address-format.js';
 import {
@@ -561,6 +562,16 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
     method === 'kora' &&
     chainFamily(origin.blockchain) === 'solana' &&
     !solanaGaslessToken(origin.assetId)
+  ) {
+    throw new AppError('VALIDATION_ERROR', `${method} is not available for this token`, 400, {
+      field: 'gasless_method',
+    });
+  }
+  // NEAR: only allow-listed NEP-141 USDC / USDT (never wNEAR).
+  if (
+    method === 'meta_tx' &&
+    chainFamily(origin.blockchain) === 'near' &&
+    !nearGaslessToken(origin.assetId)
   ) {
     throw new AppError('VALIDATION_ERROR', `${method} is not available for this token`, 400, {
       field: 'gasless_method',

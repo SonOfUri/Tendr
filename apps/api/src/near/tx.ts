@@ -25,15 +25,20 @@ import {
 } from '@near-js/transactions';
 import { sha256 } from '@noble/hashes/sha2';
 import bs58 from 'bs58';
+import { deserialize, serialize } from 'borsh';
 import type { KeyVault } from '../keyvault/types.js';
 import type { InitConfigJson } from './client.js';
 
 export { SCHEMA };
 
-/** Tendr's NEAR signing keys. `funding-near` only creates accounts; `relayer-accounts` only calls. */
-export type NearSigningKey = 'funding-near' | 'relayer-accounts';
+/**
+ * Tendr's NEAR signing keys. `funding-near` only creates accounts; `relayer-accounts` only calls;
+ * `relayer-near` only relays shoppers' gasless payments (NEP-366 meta-transactions) and registers
+ * accounts on token contracts (`assertRelayerNearTransaction`).
+ */
+export type NearSigningKey = 'funding-near' | 'relayer-accounts' | 'relayer-near';
 
-const TGAS = 1_000_000_000_000n;
+export const TGAS = 1_000_000_000_000n;
 /** Gas for a relayed contract call when the caller does not set one. */
 export const DEFAULT_CALL_GAS = 100n * TGAS;
 /**
@@ -127,12 +132,20 @@ export interface SignedTx {
   hash: string;
 }
 
-/** Signs `tx` with `key` in the vault: signature = Ed25519(sha256(borsh(tx))). */
+/**
+ * Signs `tx` with `key` in the vault: signature = Ed25519(sha256(borsh(tx))). `relayer-near`
+ * signs only the shapes `assertRelayerNearTransaction` allows, and only it relays delegates.
+ */
 export async function signTransaction(
   kv: KeyVault,
   key: NearSigningKey,
   tx: Transaction,
 ): Promise<SignedTx> {
+  if (key === 'relayer-near') {
+    assertRelayerNearTransaction(tx);
+  } else if (tx.actions.some((a) => actionKind(a) === 'signedDelegate')) {
+    throw new Error(`${key} never relays a delegate action`);
+  }
   const hashBytes = sha256(tx.encode());
   const sig = await kv.sign(key, hashBytes);
   if (sig.curve !== 'ed25519') throw new Error(`${key} is not an ed25519 key`);
@@ -198,6 +211,200 @@ export function decodeSigned(bytes: Uint8Array): DecodedSignedTx {
 export function implicitAccountId(publicKey: Uint8Array): string {
   if (publicKey.length !== 32) throw new Error('Expected a 32-byte ed25519 public key');
   return Buffer.from(publicKey).toString('hex');
+}
+
+// ---------------------------------------------------------------------------------------------
+// NEP-366 meta-transactions (https://github.com/near/NEPs/blob/master/neps/nep-0366.md)
+// ---------------------------------------------------------------------------------------------
+
+/** The u32 prefix (2^30 + 366) before borsh(DelegateAction) in what a delegate signs. */
+const DELEGATE_PREFIX = 2 ** 30 + 366;
+
+/** A delegate action as borsh encodes it (plain values: no classes needed). */
+export interface DelegateActionValue {
+  senderId: string;
+  receiverId: string;
+  actions: Action[] | object[];
+  nonce: bigint;
+  maxBlockHeight: bigint;
+  publicKey: { ed25519Key: { data: Uint8Array | number[] } } | object;
+}
+
+/** A delegate action signed by an ed25519 key of `senderId`. */
+export function delegateAction(p: {
+  senderId: string;
+  receiverId: string;
+  actions: Action[];
+  nonce: bigint;
+  maxBlockHeight: bigint;
+  /** 32-byte raw Ed25519 public key. */
+  publicKey: Uint8Array;
+}): DelegateActionValue {
+  return {
+    senderId: p.senderId,
+    receiverId: p.receiverId,
+    actions: p.actions,
+    nonce: p.nonce,
+    maxBlockHeight: p.maxBlockHeight,
+    publicKey: { ed25519Key: { data: p.publicKey } },
+  };
+}
+
+/** What the sender's key signs: sha256(u32le(2^30 + 366) ‖ borsh(DelegateAction)). */
+export function delegateActionHash(da: DelegateActionValue): Uint8Array {
+  const body = serialize(SCHEMA.DelegateAction, da);
+  const out = new Uint8Array(4 + body.length);
+  new DataView(out.buffer).setUint32(0, DELEGATE_PREFIX, true);
+  out.set(body, 4);
+  return sha256(out);
+}
+
+/** borsh(SignedDelegate) of `da` with an ed25519 signature (what a wallet hands back). */
+export function encodeSignedDelegateAction(
+  da: DelegateActionValue,
+  signature: Uint8Array,
+): Uint8Array {
+  return serialize(SCHEMA.SignedDelegate, {
+    delegateAction: da,
+    signature: { ed25519Signature: { data: signature } },
+  });
+}
+
+/** A decoded delegate action's function call (the only action kind gasless payments allow). */
+export type DecodedDelegateAction =
+  | {
+      kind: 'functionCall';
+      methodName: string;
+      args: Uint8Array;
+      gas: bigint;
+      deposit: bigint;
+    }
+  | { kind: string };
+
+export interface DecodedSignedDelegate {
+  senderId: string;
+  receiverId: string;
+  actions: DecodedDelegateAction[];
+  nonce: bigint;
+  maxBlockHeight: bigint;
+  /** 32-byte raw Ed25519 public key (only ed25519 keys are accepted). */
+  publicKey: Uint8Array;
+  signature: Uint8Array;
+  /** What the signature signs (`delegateActionHash`). */
+  hash: Uint8Array;
+  /** The decoded borsh value, re-encodable as is (the outer transaction's action). */
+  raw: { delegateAction: DelegateActionValue; signature: object };
+}
+
+/**
+ * Decodes borsh(SignedDelegate). Throws unless the bytes are exactly one canonical encoding (no
+ * trailing data) of a delegate signed by an ed25519 key.
+ */
+export function decodeSignedDelegate(bytes: Uint8Array): DecodedSignedDelegate {
+  const raw = deserialize(SCHEMA.SignedDelegate, bytes) as {
+    delegateAction: {
+      senderId: string;
+      receiverId: string;
+      actions: object[];
+      nonce: bigint | number;
+      maxBlockHeight: bigint | number;
+      publicKey: object;
+    };
+    signature: object;
+  };
+  const again = serialize(SCHEMA.SignedDelegate, raw);
+  if (again.length !== bytes.length || again.some((b, i) => b !== bytes[i])) {
+    throw new Error('not a canonical signed delegate');
+  }
+  const [keyKind, key] = variant(raw.delegateAction.publicKey);
+  const [sigKind, sig] = variant(raw.signature);
+  if (keyKind !== 'ed25519Key' || sigKind !== 'ed25519Signature') {
+    throw new Error('only ed25519 delegate keys are accepted');
+  }
+  const da = raw.delegateAction as unknown as DelegateActionValue;
+  return {
+    senderId: raw.delegateAction.senderId,
+    receiverId: raw.delegateAction.receiverId,
+    actions: raw.delegateAction.actions.map((a) => {
+      const [kind, f] = variant(a);
+      if (kind !== 'functionCall') return { kind };
+      const fc = f as { methodName: string; args: unknown; gas: unknown; deposit: unknown };
+      return {
+        kind,
+        methodName: fc.methodName,
+        args: bytesOf(fc.args),
+        gas: BigInt(fc.gas as bigint),
+        deposit: BigInt(fc.deposit as bigint),
+      };
+    }),
+    nonce: BigInt(raw.delegateAction.nonce),
+    maxBlockHeight: BigInt(raw.delegateAction.maxBlockHeight),
+    publicKey: bytesOf((key as { data: unknown }).data),
+    signature: bytesOf((sig as { data: unknown }).data),
+    hash: delegateActionHash(da),
+    raw: { delegateAction: da, signature: raw.signature },
+  };
+}
+
+/** The outer transaction's single action: the signed delegate (NEP-366 `Delegate`). */
+export function signedDelegateAction(sd: DecodedSignedDelegate): Action {
+  return new Action({
+    signedDelegate: sd.raw,
+  } as unknown as ConstructorParameters<typeof Action>[0]);
+}
+
+function actionKind(a: Action | object): string {
+  return (a as { enum?: string }).enum ?? Object.keys(a)[0] ?? '';
+}
+
+/**
+ * The most `relayer-near` attaches to a `storage_deposit` registration (0.01 NEAR; NEP-141 tokens
+ * ask 0.00125).
+ */
+export const RELAYER_NEAR_MAX_STORAGE_DEPOSIT = 10_000_000_000_000_000_000_000n;
+
+/**
+ * `relayer-near` signs exactly two shapes, each a single action: a NEP-366 signed delegate whose
+ * sender is the transaction's receiver (the shopper's meta-transaction), or a `storage_deposit`
+ * `{ account_id, registration_only: true }` with at most RELAYER_NEAR_MAX_STORAGE_DEPOSIT
+ * attached (registering a deposit or gas-fee account on a token). Never a NEAR transfer, key
+ * change or any other call: a stolen code path can only waste the relayer's working gas.
+ */
+export function assertRelayerNearTransaction(tx: Transaction): void {
+  const refuse = (why: string): never => {
+    throw new Error(`relayer-near refuses to sign: ${why}`);
+  };
+  if (tx.actions.length !== 1) refuse('exactly one action');
+  const action = tx.actions[0]!;
+  const kind = actionKind(action);
+  if (kind === 'signedDelegate') {
+    const sd = (action as unknown as { signedDelegate: { delegateAction: { senderId: string } } })
+      .signedDelegate;
+    if (sd.delegateAction.senderId !== tx.receiverId) {
+      refuse('the receiver must be the delegate sender');
+    }
+    return;
+  }
+  if (kind !== 'functionCall') refuse(`a ${kind} action`);
+  const fc = action.functionCall!;
+  if (fc.methodName !== 'storage_deposit') refuse(`a ${fc.methodName} call`);
+  if (BigInt(fc.deposit) > RELAYER_NEAR_MAX_STORAGE_DEPOSIT) refuse('a deposit above the cap');
+  let args: unknown;
+  try {
+    args = JSON.parse(new TextDecoder().decode(fc.args));
+  } catch {
+    return refuse('unreadable arguments');
+  }
+  const a = args as Record<string, unknown>;
+  if (
+    !a ||
+    typeof a !== 'object' ||
+    Object.keys(a).sort().join(',') !== 'account_id,registration_only' ||
+    typeof a.account_id !== 'string' ||
+    a.registration_only !== true
+  ) {
+    refuse('storage_deposit must be registration-only for one account');
+  }
 }
 
 /** Decodes a base58 NEAR CryptoHash (e.g. a global contract code hash). */

@@ -127,6 +127,7 @@ export const checkoutClientRoutes: FastifyPluginAsync<CheckoutClientRouteOptions
     const res = await relayer.submit(q, {
       signatures: input.signatures ?? {},
       ...(input.transaction !== undefined ? { transaction: input.transaction } : {}),
+      ...(input.signed_delegate !== undefined ? { signedDelegate: input.signed_delegate } : {}),
     });
     return reply.status(202).send({
       submission_id: res.submissionId,

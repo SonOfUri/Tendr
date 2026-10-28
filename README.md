@@ -733,6 +733,22 @@ fee share, 1Click's fee and the spread.
   `getTransaction`, `isBlockhashValid` and `getMultipleAccounts`. Then pay a few cents of USDC from Phantom
   and Solflare, merchant-sponsored and shopper-paid, and check the watcher marks it paid, the poll
   job records the SOL cost, and the fee lands in the `gas-fees-solana` token account.
+- NEAR gasless (NEP-366 meta-transactions, `relayer-near`), before live use: fund the
+  `relayer-near` implicit account (hex of its public key) with working NEAR; it pays every
+  meta-transaction's gas and the 0.00125 NEAR `storage_deposit` that registers each new deposit
+  address (and, once per token, the `gas-fees-near` implicit account) on the token. Confirm
+  `apps/api/src/relayer/near-meta.ts` `NEAR_GASLESS_TOKENS` against the 1Click token list: USDC
+  `17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1` and USDT
+  `usdt.tether-token.near` (6 decimals, `storage_balance_bounds().min` ≤ 0.01 NEAR, NEP-141
+  `ft_transfer` events emitted by the token contract: fee revenue is read from them). Confirm the
+  1Click NEAR deposit addresses are plain accounts that `storage_deposit` can register.
+  `NEAR_RPC_URL_LIVE` must serve `send_tx`, `EXPERIMENTAL_tx_status` (with `tokens_burnt`), `block`
+  and `query` (`view_account`, `view_access_key`, `call_function`). Confirm which wallets sign
+  delegate actions (wallet-selector `signDelegateActions`) with a FULL ACCESS key and honour the
+  prepared `max_block_height` (`block_height_ttl`): function-call keys and longer TTLs are
+  refused. Then pay a few cents of USDC and USDT from Meteor and Intear, merchant-sponsored and
+  shopper-paid, and check the watcher marks it paid, the poll job records the NEAR burnt, and the
+  fee lands in `gas-fees-near`.
 
 **Live checklist (FX for non-USD stores):** the live FX provider is
 [Open Exchange Rates](https://openexchangerates.org) (`FX_PROVIDER=openexchangerates`,
