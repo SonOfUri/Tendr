@@ -18,8 +18,9 @@
 //   - Give up: past `giveUpAt` (the quote deadline: the signed payload can only revert by then)
 //     a 0-value self-transfer at the same nonce frees it, and the transaction ends `failed`.
 //
-// The sender is generic (gasless payments now, integrator hooks later): each row names its
-// `purpose` and `refId`, and `tick` returns final outcomes for the caller to apply.
+// The sender is generic (gasless payments and integrator hooks): each row names its `purpose` and
+// `refId`, and `tick` returns final outcomes for the caller to apply. A hook call (`purpose`
+// integrator_hook) is signed only after the records check (hooks/guard.ts).
 import type { Prisma } from '@prisma/client';
 import { Signature, Transaction, getBytes, hexlify, parseUnits } from 'ethers';
 import type { Redis } from 'ioredis';
@@ -30,6 +31,11 @@ import type { KeyVault } from '../../keyvault/types.js';
 import { newId } from '../../lib/ids.js';
 import { log } from '../../lib/logger.js';
 import { prisma } from '../../lib/prisma.js';
+import {
+  INTEGRATOR_HOOK_PURPOSE,
+  assertHookTransaction,
+  isOnTendrDepositCall,
+} from '../../hooks/guard.js';
 import { EvmRpc, EvmRpcError, EvmTransportError } from './rpc.js';
 import { EVM_CHAIN_IDS } from './tokens.js';
 
@@ -159,6 +165,29 @@ export class EvmSender {
   async send(input: EvmSendInput): Promise<EvmSendResult> {
     const chainId = EVM_CHAIN_IDS[input.chain];
     if (!chainId) throw new EvmNotBroadcastError(`not an EVM chain: ${input.chain}`, 'rejected');
+    // Integrator hooks (ruling T11-b): `onTendrDeposit` only as a hook, and a hook only exactly as
+    // Tendr's records give it (the session's settlement contract, the payment's own arguments).
+    if (input.purpose === INTEGRATOR_HOOK_PURPOSE) {
+      try {
+        await assertHookTransaction({
+          hookCallId: input.refId,
+          chain: input.chain,
+          to: input.to,
+          data: input.data,
+        });
+      } catch (err) {
+        throw new EvmNotBroadcastError(
+          err instanceof Error ? err.message : 'hook call refused',
+          'rejected',
+          err,
+        );
+      }
+    } else if (isOnTendrDepositCall(input.data)) {
+      throw new EvmNotBroadcastError(
+        'onTendrDeposit is sent only as an integrator hook',
+        'rejected',
+      );
+    }
     let from: string;
     let rpc: EvmRpc;
     try {

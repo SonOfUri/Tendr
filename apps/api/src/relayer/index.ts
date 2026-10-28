@@ -27,6 +27,8 @@ import { SolanaGasless, solanaGasFeeAddress } from './solana.js';
 import { TronGasless } from './tron.js';
 import { tronGasFeeAddress } from './tron-energy.js';
 import { applyRelayOutcome } from './submissions.js';
+import { applyEvmHookOutcome } from '../hooks/deliver.js';
+import { INTEGRATOR_HOOK_PURPOSE } from '../hooks/guard.js';
 import type {
   ChainFamily,
   GaslessContext,
@@ -70,8 +72,8 @@ export function relayerFor(family: ChainFamily, livemode: boolean): GaslessRelay
 
 /**
  * One pass of the live EVM relayer: receipts, replacements, give-ups; then every final outcome
- * is applied to its gasless submission (`applyRelayOutcome`) and marked handled. Returns how many
- * outcomes were applied.
+ * is applied to its gasless submission (`applyRelayOutcome`) or integrator hook call
+ * (`applyEvmHookOutcome`) and marked handled. Returns how many outcomes were applied.
  */
 export async function pollEvmRelays(sender: EvmSender = liveEvmSender()): Promise<number> {
   const outcomes = await sender.tick();
@@ -109,6 +111,10 @@ export async function pollEvmRelays(sender: EvmSender = liveEvmSender()): Promis
           feeMoved,
           relayerTxId: o.txId,
         });
+        applied++;
+      } else if (o.purpose === INTEGRATOR_HOOK_PURPOSE) {
+        // An integrator hook call (`onTendrDeposit`): success, or a failed attempt to retry.
+        await applyEvmHookOutcome(o);
         applied++;
       }
       await sender.markHandled(o.txId);

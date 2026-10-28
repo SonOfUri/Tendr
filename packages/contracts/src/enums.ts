@@ -94,6 +94,8 @@ export const SponsorshipMethodValues = [
   'meta_tx',
   /** Pimlico's Solana paymaster (Kora). */
   'kora',
+  /** An integrator hook call's gas above its quoted estimate: Tendr's loss (cost = the excess). */
+  'hook',
 ] as const;
 export type SponsorshipMethod = (typeof SponsorshipMethodValues)[number];
 export const SponsorshipMethodSchema = z.enum(SponsorshipMethodValues);

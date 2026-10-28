@@ -86,9 +86,44 @@ export const TRON_ENERGY_UNITS = {
 /** Bandwidth a Tron transaction burns when the payer has none staked, in sun. */
 export const TRON_BANDWIDTH_SUN = 350_000n;
 
-/** Gas the integrator hook call (`onTendrDeposit`) uses; Task 11 refines per chain. */
-export const HOOK_GAS_UNITS = 150_000n;
+/**
+ * EVM gas of one integrator hook transaction: `onTendrDeposit` on the reference receiver
+ * (onchain/evm/src/reference/TendrDepositReceiver.sol), measured by its Foundry test
+ * `test_gasOfAHookCall` (21k base + calldata + execution): 85.2k for a typical call (short
+ * hook_data, a fresh `notified` slot, `accounted` already non-zero), 104.8k for a token's very
+ * first deposit, 126.9k with 1 KB of hook_data. Estimated at the typical case plus headroom; a
+ * costlier call's excess is Tendr's loss (ruling T11-a), never the merchant's.
+ */
+const EVM_HOOK_GAS = 90_000n;
+/**
+ * NEAR gas burnt by one `on_tendr_deposit` call on the reference receiver
+ * (onchain/integrator-near): the function call, its `ft_balance_of` on the token and the
+ * `on_balance` callback. Attached gas is NEAR_HOOK_ATTACHED_GAS (relayer/hooks); unused gas is
+ * refunded, so the estimate is the burnt amount (on-chain measurement: live checklist).
+ */
 const NEAR_HOOK_GAS = 30_000_000_000_000n;
+
+/**
+ * Gas (NEAR: gas units) the integrator hook call uses, per settlement chain: every EVM gas chain
+ * and NEAR. A chain missing here has no hook (a HOOK session cannot settle there).
+ */
+export const HOOK_GAS_UNITS: Readonly<Record<string, bigint>> = {
+  eth: EVM_HOOK_GAS,
+  base: EVM_HOOK_GAS,
+  arb: EVM_HOOK_GAS,
+  op: EVM_HOOK_GAS,
+  pol: EVM_HOOK_GAS,
+  bsc: EVM_HOOK_GAS,
+  avax: EVM_HOOK_GAS,
+  gnosis: EVM_HOOK_GAS,
+  bera: EVM_HOOK_GAS,
+  near: NEAR_HOOK_GAS,
+};
+
+/** Whether integrator hooks can be called on `chain` (it has HOOK_GAS_UNITS). */
+export function hookChainSupported(chain: string): boolean {
+  return Object.hasOwn(HOOK_GAS_UNITS, chain);
+}
 
 /**
  * Test-mode network fees (USD) per chain: deterministic, no RPC. Other chains use the static
@@ -439,16 +474,15 @@ export async function estimateNetworkFeeUsd(
 }
 
 /**
- * The integrator hook call's estimated cost (USD, no margin) on the settlement `chain`: EVM
- * `HOOK_GAS_UNITS` × gas price, NEAR a fixed 30 Tgas. Test mode reads SIMULATED_FEE_USD. Throws
- * NETWORK_FEE_UNAVAILABLE for any other chain or when the RPC fails.
+ * The integrator hook call's estimated cost (USD, no margin) on the settlement `chain`: the
+ * chain's HOOK_GAS_UNITS × its gas price. Test mode reads SIMULATED_FEE_USD. Throws
+ * NETWORK_FEE_UNAVAILABLE for a chain without hooks or when the RPC fails.
  */
 export async function estimateHookFeeUsd(
   chain: string,
   opts: { livemode: boolean },
 ): Promise<string> {
-  const family = chainFamily(chain);
-  if (family !== 'evm' && family !== 'near') throw unavailable(chain, 'no hook on this chain');
+  if (!hookChainSupported(chain)) throw unavailable(chain, 'no hook on this chain');
   if (!opts.livemode) return SIMULATED_FEE_USD[chain] ?? SIMULATED_FEE_USD.base!;
   let price: bigint;
   try {
@@ -457,6 +491,6 @@ export async function estimateHookFeeUsd(
     log('warn', 'hook fee: RPC unavailable', { chain, err: String(err) });
     throw unavailable(chain, 'rpc');
   }
-  const units = (family === 'near' ? NEAR_HOOK_GAS : HOOK_GAS_UNITS) * price;
+  const units = HOOK_GAS_UNITS[chain]! * price;
   return nativeUsd(chain, units, opts.livemode);
 }

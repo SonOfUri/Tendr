@@ -76,9 +76,9 @@ export interface PlanInput {
   now?: Date;
 }
 
-/** Whether `usd` is more than MAX_SPONSORED_ORDER_BPS of the session's order. */
-function overOrderCap(input: PlanInput, usd: string): boolean {
-  return new Prisma.Decimal(usd).mul(10_000).gt(input.session.amount.mul(MAX_SPONSORED_ORDER_BPS));
+/** Whether `usd` is more than `bps` (default MAX_SPONSORED_ORDER_BPS) of the session's order. */
+function overOrderCap(input: PlanInput, usd: string, bps = MAX_SPONSORED_ORDER_BPS): boolean {
+  return new Prisma.Decimal(usd).mul(10_000).gt(input.session.amount.mul(bps));
 }
 
 function addUsd(a: string, b: string): string {
@@ -126,13 +126,13 @@ async function hookEstimate(input: PlanInput): Promise<string> {
 export async function planNetworkFee(input: PlanInput): Promise<NetworkFeePlan> {
   const chain = input.origin.blockchain;
   const hookUsd = await hookEstimate(input);
-  if (overOrderCap(input, hookUsd)) {
+  if (overOrderCap(input, hookUsd, MAX_HOOK_ORDER_BPS)) {
     // The hook is always called, so its cost cannot fall back to anyone else: refuse the quote.
     throw new AppError(
       'QUOTE_TOO_SMALL',
       'This order is too small to cover the integrator hook call',
       400,
-      { hook_fee_usd: hookUsd, max_bps_of_order: MAX_SPONSORED_ORDER_BPS },
+      { hook_fee_usd: hookUsd, max_bps_of_order: MAX_HOOK_ORDER_BPS },
     );
   }
   const native = async (reason: NetworkFeeReason | null): Promise<NetworkFeePlan> => ({
@@ -260,10 +260,15 @@ type FeeColumns = {
 
 /**
  * The most a merchant may sponsor (network fee + integrator hook estimate), in basis points of the
- * order. Above it the shopper pays (`per_payment_cap`); an integrator hook estimate alone above it
- * refuses the quote (QUOTE_TOO_SMALL), since the hook is always called.
+ * order. Above it the shopper pays (`per_payment_cap`).
  */
 export const MAX_SPONSORED_ORDER_BPS = 100;
+/**
+ * The most the integrator hook estimate alone may take from an order's proceeds, in basis points.
+ * Above it the quote is refused (QUOTE_TOO_SMALL): the hook is always called, so its cost cannot
+ * fall back to anyone else.
+ */
+export const MAX_HOOK_ORDER_BPS = 1000;
 
 /** Reasons the pay page may see as they are; any other becomes `not_sponsored`. */
 const SHOPPER_REASONS = new Set(['shopper_choice', 'fee_unavailable', 'fee_token_unpriced']);

@@ -12,6 +12,7 @@ import {
 import { registerRefundHooks } from '../checkout/refunds.js';
 import { registerWatcherHooks } from '../checkout/watcher.js';
 import { registerWebhookHandlers } from '../checkout/webhooks.js';
+import { registerHookHandlers } from '../hooks/hooks.js';
 import { registerAccountHandlers } from './account-notices.js';
 import { registerNotificationEmailNotices } from './notification-email-notices.js';
 import { registerPaymentNotices } from './payment-notices.js';
@@ -57,3 +58,7 @@ registerPaymentNotices();
 
 // The store's notification email (W16): the verify link and the change warnings, after commit.
 registerNotificationEmailNotices();
+
+// Integrator hooks (gasless spec §4): a HOOK session's settled payment gets its contract call
+// (`onTendrDeposit` / `on_tendr_deposit`), and `hook.failed` mails the store once.
+registerHookHandlers();

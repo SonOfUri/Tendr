@@ -28,6 +28,8 @@ import {
 } from './rpc.js';
 import {
   DEFAULT_CALL_GAS,
+  NEAR_HOOK_ATTACHED_GAS,
+  NEAR_HOOK_METHOD,
   buildTransaction,
   decodeHash,
   functionCallAction,
@@ -36,8 +38,10 @@ import {
   signTransaction,
   transferAction,
   type NearSigningKey,
+  type SignOptions,
   type SignedTx,
 } from './tx.js';
+import { assertHookTransaction, type HookArgs } from '../hooks/guard.js';
 import type { Action } from '@near-js/transactions';
 import type { TxReceipt } from './events.js';
 
@@ -356,9 +360,9 @@ export class RpcNearClient implements NearClient {
 }
 
 /**
- * `relayer-near`'s sender (gasless NEAR payments, project 5a): signs from its implicit account
- * only what `assertRelayerNearTransaction` allows (one signed delegate, or one registration-only
- * `storage_deposit`). Signing and sending are separate steps, so a caller can record a
+ * `relayer-near`'s sender (gasless NEAR payments and integrator hooks, project 5a): signs from its
+ * implicit account only what `assertRelayerNearTransaction` allows (one signed delegate, one
+ * registration-only `storage_deposit`, or one records-checked `on_tendr_deposit`). Signing and sending are separate steps, so a caller can record a
  * transaction's hash before it is broadcast. Never used by `NearClient.call`, provisioning or
  * top-ups.
  *
@@ -386,8 +390,24 @@ export class RelayerNearSender {
     return (await this.publicKey()).accountId;
   }
 
+  /**
+   * Builds and vault-signs an integrator hook call (`on_tendr_deposit`) to `receiverId`, only
+   * after the records check (`assertHookTransaction`: the receiver is the session's settlement
+   * contract and `args` are exactly the hook's), and only with the hook allowance for that
+   * receiver. NotBroadcastError on any failure (nothing sent).
+   */
+  async signHook(hookCallId: string, receiverId: string, args: HookArgs): Promise<SignedTx> {
+    try {
+      await assertHookTransaction({ hookCallId, chain: 'near', receiverId, args: { ...args } });
+    } catch (err) {
+      throw new NotBroadcastError(err);
+    }
+    const action = functionCallAction(NEAR_HOOK_METHOD, args, NEAR_HOOK_ATTACHED_GAS, 0n);
+    return this.sign(receiverId, [action], { hookReceiver: receiverId });
+  }
+
   /** Builds and vault-signs one transaction; NotBroadcastError on any failure (nothing sent). */
-  async sign(receiverId: string, actions: Action[]): Promise<SignedTx> {
+  async sign(receiverId: string, actions: Action[], opts: SignOptions = {}): Promise<SignedTx> {
     try {
       const { raw, accountId } = await this.publicKey();
       const fetched = await this.rpc.accessKeyNonce(accountId, nearPublicKey(raw));
@@ -401,7 +421,7 @@ export class RelayerNearSender {
         blockHash: await this.rpc.finalBlockHash(),
         actions,
       });
-      return await signTransaction(this.kv, 'relayer-near', tx);
+      return await signTransaction(this.kv, 'relayer-near', tx, opts);
     } catch (err) {
       throw new NotBroadcastError(err);
     }

@@ -33,6 +33,15 @@ import {
   type DeliverJobData,
 } from './checkout/webhooks.js';
 import { sweepConnections } from './connect/authorize.js';
+import {
+  attemptHook,
+  DELIVER_HOOK_JOB,
+  pollNearHooks,
+  setHookQueue,
+  SWEEP_HOOKS_JOB,
+  sweepDueHooks,
+  type DeliverHookJobData,
+} from './hooks/deliver.js';
 import { sweepNotificationEmailLinks } from './merchants/notification-email.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
@@ -82,11 +91,14 @@ export const RELEASE_GAS_RESERVATIONS_EVERY_MS = 60_000;
  */
 export const POLL_EVM_RELAYS_JOB = 'poll-evm-relays';
 export const POLL_EVM_RELAYS_EVERY_MS = 15_000;
-/** Merchant webhook sends (one job per attempt, delayed for retries) and the due-retry sweep. */
+/**
+ * Merchant webhook sends and integrator hook calls (one job per attempt, delayed for retries) and
+ * their due-retry sweeps.
+ */
 export const WEBHOOKS_QUEUE = 'tendr-webhooks';
 export const SWEEP_WEBHOOKS_EVERY_MS = 60_000;
 
-/** Runs one webhooks-queue job. */
+/** Runs one webhooks-queue job (merchant webhooks and integrator hook calls). */
 export async function processWebhookJob(job: Pick<Job, 'name' | 'data'>): Promise<void> {
   if (job.name === DELIVER_WEBHOOK_JOB) {
     await attemptDelivery((job.data as DeliverJobData).deliveryId);
@@ -95,6 +107,15 @@ export async function processWebhookJob(job: Pick<Job, 'name' | 'data'>): Promis
   if (job.name === SWEEP_WEBHOOKS_JOB) {
     const n = await sweepDueDeliveries();
     if (n > 0) log('info', 'webhook sweep queued due deliveries', { count: n });
+    return;
+  }
+  if (job.name === DELIVER_HOOK_JOB) {
+    await attemptHook((job.data as DeliverHookJobData).hookCallId);
+    return;
+  }
+  if (job.name === SWEEP_HOOKS_JOB) {
+    const n = await sweepDueHooks();
+    if (n > 0) log('info', 'hook sweep queued due calls', { count: n });
     return;
   }
   throw new Error(`unknown webhooks job ${job.name}`);
@@ -167,6 +188,13 @@ export async function processCheckoutJob(
     try {
       const n = await pollNearMetaRelays();
       if (n > 0) log('info', 'near relay outcomes applied', { count: n });
+    } catch (err) {
+      failed ??= err;
+    }
+    // NEAR integrator hook calls whose outcome was unknown when sent.
+    try {
+      const h = await pollNearHooks();
+      if (h > 0) log('info', 'near hook outcomes applied', { count: h });
     } catch (err) {
       failed ??= err;
     }
@@ -330,6 +358,7 @@ export async function startWorker(
   // Merchant webhooks: each send waits up to 10 s on the merchant's server, so many at once.
   const webhooksQueue = new Queue(WEBHOOKS_QUEUE, setup);
   setWebhookQueue(webhooksQueue);
+  setHookQueue(webhooksQueue);
   const webhooksWorker = new Worker(WEBHOOKS_QUEUE, processWebhookJob, {
     ...setup,
     concurrency: 20,
@@ -413,6 +442,11 @@ export async function startWorker(
     { every: SWEEP_WEBHOOKS_EVERY_MS },
     { name: SWEEP_WEBHOOKS_JOB },
   );
+  await webhooksQueue.upsertJobScheduler(
+    SWEEP_HOOKS_JOB,
+    { every: SWEEP_WEBHOOKS_EVERY_MS },
+    { name: SWEEP_HOOKS_JOB },
+  );
 
   const stopDispatcher =
     opts.dispatcher === false
@@ -442,6 +476,7 @@ export async function startWorker(
       );
       setAccountJobs(null);
       setWebhookQueue(null);
+      setHookQueue(null);
       await closeConnection(connection);
       await health.close();
     },

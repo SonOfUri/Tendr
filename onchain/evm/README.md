@@ -118,3 +118,45 @@ version,uint256 chainId,address verifyingContract)` struct. `chainId` is the
   `TRON_FORWARDER_ADDRESS` (base58 `T…`, no default; Tron gasless stays off until it
   is set). The API side is `apps/api/src/relayer/tron.ts` (the two signing steps,
   the `payWithApproval` relay) and `tron-energy.ts` (just-in-time delegation).
+
+## Reference integrator receiver
+
+`src/reference/TendrDepositReceiver.sol` is an example for integrators, not a
+Tendr contract: Tendr never deploys it. An integrator settles its payments into
+its own contract; once a payment has settled there, Tendr's relayer
+(`relayer-evm`) calls
+
+```solidity
+function onTendrDeposit(bytes32 paymentId, bytes32 sessionId, bytes hookData,
+                        address token, uint256 amount, bytes32 txHash) external;
+```
+
+`paymentId` / `sessionId` are the Tendr ids (`pay_…`, `ses_…`) as UTF-8 bytes
+right-padded to 32; `hookData` is the session's `hook_data` as JSON (≤ 1 KB);
+`token` is the settlement token (`address(0)` for the native coin); `txHash` is
+the settlement transaction. The API side is `apps/api/src/hooks/` (`guard.ts`
+builds and checks the exact call; `relayer-evm` signs nothing else to a
+contract).
+
+Checks every integrator contract must keep (the reference has them):
+
+1. **Sender:** only Tendr's published relayer address for the chain.
+2. **Balance:** credit `min(amount, balance(token) − accounted[token])` and add
+   it to `accounted[token]`, so even a compromised relayer key cannot make the
+   contract credit money that never arrived. Anything that moves tokens out must
+   lower `accounted[token]` by the same amount.
+3. **Duplicates:** each `txHash` is notified once.
+
+**Misattribution limit.** These checks do not stop a compromised relayer key
+from crediting the wrong reference: with two deposits pending (player A's and
+player B's), a forged call naming player A and both amounts credits A with B's
+deposit, and B's own call then credits nothing. Integrators who need stronger
+guarantees reconcile each credit against Tendr's signed `payment.succeeded` /
+`hook.succeeded` webhooks, or check `txHash` against the actual transfer. The
+NEAR reference (`onchain/integrator-near`) has the same limit.
+
+Gas (`test_gasOfAHookCall`, full transaction): 85.2k for a typical call, 104.8k
+for a token's first deposit, 126.9k with 1 KB of `hookData`. The API estimates
+90k (`HOOK_GAS_UNITS`) and deducts it from the payment's proceeds; a costlier
+call's excess is Tendr's loss. A reverting call is retried for 3 days (the
+contract may be paused), then reported as `hook.failed`.

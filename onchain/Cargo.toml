@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["merchant-account", "mock-intents"]
+members = ["merchant-account", "mock-intents", "integrator-near"]
 
 [workspace.package]
 edition = "2021"

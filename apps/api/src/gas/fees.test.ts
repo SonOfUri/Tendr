@@ -4,6 +4,7 @@ import { env } from '../env.js';
 import { AppError } from '../lib/errors.js';
 import {
   estimateHookFeeUsd,
+  HOOK_GAS_UNITS,
   estimateNetworkFeeUsd,
   feeInToken,
   gaslessMethodSupported,
@@ -282,10 +283,28 @@ describe('network fees', () => {
       expect(calls).toEqual([]);
     });
 
-    it('the hook estimate prices HOOK_GAS_UNITS on the chain', async () => {
-      // 1 gwei × 150k gas = 0.00015 ETH × $2500 = $0.375.
+    it('the hook estimate prices the chain own HOOK_GAS_UNITS', async () => {
+      // 1 gwei × 90k gas (onTendrDeposit on the reference receiver) = 0.00009 ETH × $2500 = $0.225.
       useFetch(rpc({ eth_gasPrice: { result: '0x3b9aca00' } }).f);
-      expect(await estimateHookFeeUsd('base', { livemode: true })).toBe('0.375');
+      expect(HOOK_GAS_UNITS.base).toBe(90_000n);
+      expect(await estimateHookFeeUsd('base', { livemode: true })).toBe('0.225');
+    });
+
+    it('the NEAR hook estimate prices its gas (call + ft_balance_of + callback)', async () => {
+      // 100_000_000 yocto/gas × 30 Tgas = 3e21 yocto = 0.003 NEAR × $3 = $0.009.
+      useFetch(rpc({ gas_price: { result: { gas_price: '100000000' } } }).f);
+      expect(HOOK_GAS_UNITS.near).toBe(30_000_000_000_000n);
+      expect(await estimateHookFeeUsd('near', { livemode: true })).toBe('0.009');
+    });
+
+    it('every gas chain with hooks has its own units; others have no hook', async () => {
+      for (const chain of ['eth', 'base', 'arb', 'op', 'pol', 'bsc', 'avax', 'gnosis', 'bera']) {
+        expect(HOOK_GAS_UNITS[chain]).toBe(90_000n);
+      }
+      expect(HOOK_GAS_UNITS.sol).toBeUndefined();
+      expect(HOOK_GAS_UNITS.tron).toBeUndefined();
+      const err = await estimateHookFeeUsd('sol', { livemode: true }).catch((e: unknown) => e);
+      expect((err as AppError).code).toBe('NETWORK_FEE_UNAVAILABLE');
     });
   });
 });

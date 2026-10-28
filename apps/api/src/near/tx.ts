@@ -34,8 +34,8 @@ export { SCHEMA };
 
 /**
  * Tendr's NEAR signing keys. `funding-near` only creates accounts; `relayer-accounts` only calls;
- * `relayer-near` only relays shoppers' gasless payments (NEP-366 meta-transactions) and registers
- * accounts on token contracts (`assertRelayerNearTransaction`).
+ * `relayer-near` only relays shoppers' gasless payments (NEP-366 meta-transactions), registers
+ * accounts on token contracts and calls integrator hooks (`assertRelayerNearTransaction`).
  */
 export type NearSigningKey = 'funding-near' | 'relayer-accounts' | 'relayer-near';
 
@@ -141,11 +141,14 @@ export async function signTransaction(
   kv: KeyVault,
   key: NearSigningKey,
   tx: Transaction,
+  opts: SignOptions = {},
 ): Promise<SignedTx> {
   if (key === 'relayer-near') {
-    assertRelayerNearTransaction(tx);
+    assertRelayerNearTransaction(tx, opts);
   } else if (tx.actions.some((a) => actionKind(a) === 'signedDelegate')) {
     throw new Error(`${key} never relays a delegate action`);
+  } else if (opts.hookReceiver !== undefined) {
+    throw new Error(`${key} never calls an integrator hook`);
   }
   const hashBytes = sha256(tx.encode());
   const sig = await kv.sign(key, hashBytes);
@@ -364,14 +367,34 @@ function actionKind(a: Action | object): string {
  */
 export const RELAYER_NEAR_MAX_STORAGE_DEPOSIT = 10_000_000_000_000_000_000_000n;
 
+/** The integrator hook method (gasless spec §4.2) `relayer-near` calls on NEAR integrators. */
+export const NEAR_HOOK_METHOD = 'on_tendr_deposit';
 /**
- * `relayer-near` signs exactly two shapes, each a single action: a NEP-366 signed delegate whose
- * sender is the transaction's receiver (the shopper's meta-transaction), or a `storage_deposit`
- * `{ account_id, registration_only: true }` on an allow-listed gasless token contract with at
- * most RELAYER_NEAR_MAX_STORAGE_DEPOSIT attached (registering a deposit or gas-fee account). Never a NEAR transfer, key
- * change or any other call: a stolen code path can only waste the relayer's working gas.
+ * Gas `relayer-near` attaches to an `on_tendr_deposit` call: the reference receiver
+ * (onchain/integrator-near) spends it on `ft_balance_of` on the token and its `on_balance`
+ * callback. Unused gas is refunded to the relayer.
  */
-export function assertRelayerNearTransaction(tx: Transaction): void {
+export const NEAR_HOOK_ATTACHED_GAS = 50n * TGAS;
+/** The most gas `relayer-near` ever attaches to a hook call. */
+export const NEAR_HOOK_MAX_GAS = 100n * TGAS;
+const NEAR_HOOK_ARG_KEYS = 'amount,hook_data,payment_id,session_id,token,tx_hash';
+
+/** Signing options: `hookReceiver` allows one `on_tendr_deposit` call to that contract only. */
+export interface SignOptions {
+  hookReceiver?: string;
+}
+
+/**
+ * `relayer-near` signs exactly three shapes, each a single action: a NEP-366 signed delegate whose
+ * sender is the transaction's receiver (the shopper's meta-transaction), a `storage_deposit`
+ * `{ account_id, registration_only: true }` on an allow-listed gasless token contract with at
+ * most RELAYER_NEAR_MAX_STORAGE_DEPOSIT attached (registering a deposit or gas-fee account), or,
+ * only when the caller names the receiver in `opts.hookReceiver` (RelayerNearSender.signHook,
+ * after checking the records: hooks/guard.ts), an `on_tendr_deposit` integrator hook with no
+ * deposit, at most NEAR_HOOK_MAX_GAS and exactly its six string arguments. Never a NEAR transfer,
+ * key change or any other call: a stolen code path can only waste the relayer's working gas.
+ */
+export function assertRelayerNearTransaction(tx: Transaction, opts: SignOptions = {}): void {
   const refuse = (why: string): never => {
     throw new Error(`relayer-near refuses to sign: ${why}`);
   };
@@ -388,6 +411,30 @@ export function assertRelayerNearTransaction(tx: Transaction): void {
   }
   if (kind !== 'functionCall') refuse(`a ${kind} action`);
   const fc = action.functionCall!;
+  if (fc.methodName === NEAR_HOOK_METHOD) {
+    if (!opts.hookReceiver || opts.hookReceiver !== tx.receiverId) {
+      refuse(`an ${NEAR_HOOK_METHOD} call to ${tx.receiverId} (not the allowed hook receiver)`);
+    }
+    if (BigInt(fc.deposit) !== 0n) refuse('a deposit on a hook call');
+    if (BigInt(fc.gas) > NEAR_HOOK_MAX_GAS) refuse('more gas than a hook call may have');
+    let hookArgs: unknown;
+    try {
+      hookArgs = JSON.parse(new TextDecoder().decode(fc.args));
+    } catch {
+      return refuse('unreadable arguments');
+    }
+    const h = hookArgs as Record<string, unknown> | null;
+    if (
+      !h ||
+      typeof h !== 'object' ||
+      Array.isArray(h) ||
+      Object.keys(h).sort().join(',') !== NEAR_HOOK_ARG_KEYS ||
+      Object.values(h).some((v) => typeof v !== 'string')
+    ) {
+      refuse('hook arguments must be exactly the six hook strings');
+    }
+    return;
+  }
   if (fc.methodName !== 'storage_deposit') refuse(`a ${fc.methodName} call`);
   if (!NEAR_GASLESS_TOKENS.some((t) => t.contract === tx.receiverId)) {
     refuse(`storage_deposit on ${tx.receiverId} (not a gasless token)`);

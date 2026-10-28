@@ -957,15 +957,27 @@ describe('shopper checkout routes', () => {
       expect(row.hookFeeUsd!.toFixed()).toBe('0.048'); // simulated base $0.04 + 20 %
       expect(row.networkFeeBps).toBeGreaterThan(0);
 
-      // On eth the simulated hook ($1.44) is over 1 % of the $25 order.
-      const big = await newSession();
+      // The hook alone may take up to 10 % of the order (MAX_HOOK_ORDER_BPS): on eth the
+      // simulated hook ($1.44) is 5.76 % of a $25 order (allowed), 14.4 % of a $10 order (refused).
+      const eth = await newSession();
       await prisma.session.update({
-        where: { id: big.id },
+        where: { id: eth.id },
         data: { delivery: 'HOOK', destChain: 'eth' },
       });
-      const refused = await call('POST', 'quote', big.client_secret, { origin_asset: USDC_BASE });
+      const allowed = await call('POST', 'quote', eth.client_secret, { origin_asset: USDC_BASE });
+      expect(allowed.statusCode, allowed.body).toBe(201);
+
+      const small = await newSession({ amount: '10.00' });
+      await prisma.session.update({
+        where: { id: small.id },
+        data: { delivery: 'HOOK', destChain: 'eth' },
+      });
+      const refused = await call('POST', 'quote', small.client_secret, {
+        origin_asset: USDC_BASE,
+      });
       expect(refused.statusCode, refused.body).toBe(400);
       expect(refused.json().error.code).toBe('QUOTE_TOO_SMALL');
+      expect(refused.json().error.details).toMatchObject({ max_bps_of_order: 1000 });
     });
 
     it('sponsorship above 100 bps of the order: the shopper pays (per_payment_cap)', async () => {

@@ -119,6 +119,7 @@ const GAS_BUDGET_KEYS = [
   'spent_usd',
   'remaining_usd',
 ] as const;
+const HOOK_KEYS = ['hook_call_id', 'chain', 'contract', 'attempts'] as const;
 const TYPE_DATA_KEYS: Readonly<Partial<Record<string, readonly string[]>>> = {
   /** Who paid the network fee and how (`NetworkFeeView`; null for older quotes). */
   'payment.succeeded': ['network_fee'],
@@ -126,6 +127,10 @@ const TYPE_DATA_KEYS: Readonly<Partial<Record<string, readonly string[]>>> = {
   'refund.failed': ['status'],
   'gas.budget_low': GAS_BUDGET_KEYS,
   'gas.budget_exhausted': [...GAS_BUDGET_KEYS, 'requested_usd'],
+  /** Integrator hooks: the call, the contract it notified and how many attempts it took. */
+  'hook.succeeded': HOOK_KEYS,
+  /** …and the last error (the contract's revert reason). */
+  'hook.failed': [...HOOK_KEYS, 'error'],
 };
 
 /**

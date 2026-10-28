@@ -325,6 +325,7 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         chain: 'base',
         targetContract: '0x0000000000000000000000000000000000000001',
         hookData: { order: 'A-1' },
+        retryUntil: new Date(Date.now() + 3 * 24 * 3600_000),
         ...o,
       },
     });
