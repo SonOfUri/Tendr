@@ -230,7 +230,9 @@ describe('network fees', () => {
     });
 
     it('Tron: energy price × energy units + bandwidth', async () => {
-      // 210 sun/energy × 160k = 33.6 TRX + 0.35 TRX bandwidth = 33.95 TRX × $0.25 = $8.4875.
+      // Approve + payWithApproval into a fresh deposit address: 210 sun/energy × 235k = 49.35 TRX
+      // + 0.35 TRX bandwidth = 49.7 TRX × $0.25 = $12.425; the shopper's fee leg adds a second
+      // transferFrom (65k): 300k → 63.35 TRX → $15.8375.
       const { f } = rpc({
         '/wallet/getchainparameters': {
           chainParameter: [
@@ -240,7 +242,10 @@ describe('network fees', () => {
         },
       });
       useFetch(f);
-      expect(await estimateNetworkFeeUsd('tron', 'forwarder', { livemode: true })).toBe('8.4875');
+      expect(await estimateNetworkFeeUsd('tron', 'forwarder', { livemode: true })).toBe('12.425');
+      expect(
+        await estimateNetworkFeeUsd('tron', 'forwarder', { livemode: true, feeLeg: true }),
+      ).toBe('15.8375');
     });
 
     it('an RPC failure is NETWORK_FEE_UNAVAILABLE and is not cached', async () => {

@@ -759,7 +759,13 @@ fee share, 1Click's fee and the spread.
   `nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near` ↔ contract
   `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`, 6 decimals. Confirm on Nile, then mainnet: USDT's
   `approve` overwrites a non-zero allowance (no zero-first rule; a re-approve after an abandoned
-  quote relies on it) and `transferFrom` returns `true`; the approve's energy estimate
+  quote relies on it) and `transferFrom` returns `true`; the energy of an approve plus a
+  `payWithApproval` into a fresh 1Click deposit address (no USDT held yet) against
+  `TRON_ENERGY_UNITS` in `apps/api/src/gas/fees.ts` (235k, +65k for a shopper-paid fee leg) and
+  re-tune it; that `triggerconstantcontract` reports a reverting approve as `transaction.ret[0]
+= FAILED` or a `result.code`/`message` (energy is never lent for one); that
+  `getaccountresource` `EnergyUsed` rises by what the receiver spends of lent energy (the cost
+  model measures consumption from it); the approve's energy estimate
   (`triggerconstantcontract`) is ≤ 100 000; a delegation with `lock = false` can be undelegated at
   once (the energy job reclaims as soon as the approve's outcome is final, at most 10 minutes
   after it was made); undelegating after the shopper used delegated energy moves that usage to

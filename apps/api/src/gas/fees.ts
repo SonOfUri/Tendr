@@ -70,8 +70,19 @@ export const NEAR_GAS_UNITS = {
  */
 export const NEAR_STORAGE_DEPOSIT_YOCTO = 1_250_000_000_000_000_000_000n;
 
-/** Tron energy per method: approve + the forwarder's two `transferFrom`s, or one TRC-20 transfer. */
-export const TRON_ENERGY_UNITS = { forwarder: 160_000n, native: 65_000n } as const;
+/**
+ * Tron energy per method. `forwarder` is the shopper's USDT `approve` (~45k) plus `payWithApproval`
+ * (signature check, nonce SSTORE, overhead ~60k) moving the payment into a fresh 1Click deposit
+ * address: a USDT transfer to an address holding no USDT costs ~130k under Tron's dynamic energy
+ * model, so 235k. A shopper-paid fee adds a second `transferFrom` to `gas-fees-tron` (a holder:
+ * ~65k), 300k in all. `native` is one TRC-20 transfer from the shopper's wallet (to a holder; a
+ * fresh deposit address costs ~2× — final-wave review). Confirm on Nile (README live checklist).
+ */
+export const TRON_ENERGY_UNITS = {
+  forwarder: 235_000n,
+  forwarderFeeLeg: 65_000n,
+  native: 65_000n,
+} as const;
 /** Bandwidth a Tron transaction burns when the payer has none staked, in sun. */
 export const TRON_BANDWIDTH_SUN = 350_000n;
 
@@ -346,7 +357,10 @@ function nativeCost(
         : NEAR_GAS_UNITS.native * price;
     case 'tron':
       return (
-        (method === 'forwarder' ? TRON_ENERGY_UNITS.forwarder : TRON_ENERGY_UNITS.native) * price +
+        (method === 'forwarder'
+          ? TRON_ENERGY_UNITS.forwarder + (opts.feeLeg ? TRON_ENERGY_UNITS.forwarderFeeLeg : 0n)
+          : TRON_ENERGY_UNITS.native) *
+          price +
         TRON_BANDWIDTH_SUN
       );
     default:

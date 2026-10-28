@@ -1438,38 +1438,48 @@ model RelayerTransaction {
 /// verifies, funds with just-in-time `gas-tron` delegations (`tron_delegations`) and broadcasts.
 /// The relayer's own record (infra): ids of the merchant, session and quote are kept for lookups.
 model TronApproval {
-  id              String           @id
-  merchantId      String           @map("merchant_id")
-  livemode        Boolean
-  sessionId       String           @map("session_id")
-  quoteId         String           @map("quote_id")
+  id                 String           @id
+  merchantId         String           @map("merchant_id")
+  livemode           Boolean
+  sessionId          String           @map("session_id")
+  quoteId            String           @map("quote_id")
   /// The shopper (base58): the approve's owner and the delegations' receiver.
-  wallet          String
+  wallet             String
   /// sha256 of the signed raw data (hex); stored before anything is broadcast.
-  txId            String           @map("tx_id")
+  txId               String           @map("tx_id")
   /// The signed `Transaction` (protobuf, hex): re-broadcast as is until it lands or cannot.
-  signedTx        String           @map("signed_tx")
-  expiration      DateTime
+  signedTx           String           @map("signed_tx")
+  expiration         DateTime
   /// pending: delegations in flight, approve not sent yet; submitted: approve sent.
-  status          ExternalTxStatus @default(pending)
-  broadcastAt     DateTime?        @map("broadcast_at")
+  status             ExternalTxStatus @default(pending)
+  broadcastAt        DateTime?        @map("broadcast_at")
   /// First look that found the approve unknown with the solidified head past its expiration.
-  expiredSeenAt   DateTime?        @map("expired_seen_at")
+  expiredSeenAt      DateTime?        @map("expired_seen_at")
   /// Energy the approve took from the shopper's own and delegated energy (its receipt).
-  energyUsed      BigInt?          @map("energy_used")
+  energyUsed         BigInt?          @map("energy_used")
   /// Value (sun) of the `gas-tron` resources this approval used: its delegations' transactions
   /// and the delegated energy the approve consumed (see relayer/tron-energy.ts, cost model).
-  costSun         BigInt?          @map("cost_sun")
+  costSun            BigInt?          @map("cost_sun")
   /// Where `cost_sun` is counted: the payment submission (`gas_sponsorships.id`) whose cost
   /// includes it, or a `sponsor = tendr` row of its own. Null until counted.
-  costBookedTo    String?          @map("cost_booked_to")
+  costBookedTo       String?          @map("cost_booked_to")
+  /// The part of `cost_sun` the payment submission carries (set when it is booked to one); any
+  /// cost measured later (energy the shopper spent elsewhere) is Tendr's at close.
+  costBookedSun      BigInt?          @map("cost_booked_sun")
+  /// The `sponsor = tendr` row holding this approval's provisional cost: the most its
+  /// delegations can cost, recognised when they are made (the daily loss cap sees it at once),
+  /// set to the actual unrecovered cost at close.
+  provisionalCostId  String?          @map("provisional_cost_id")
+  /// How many delegations the claim planned (0: the shopper had the resources); an approval
+  /// whose rows never appeared is failed, never sent without its energy.
+  plannedDelegations Int              @default(0) @map("planned_delegations")
   /// The `TendrPayment` issued for this approval (step 2): its deadline. The nonce is the quote's.
-  paymentDeadline DateTime?        @map("payment_deadline")
-  lastError       String?          @map("last_error")
+  paymentDeadline    DateTime?        @map("payment_deadline")
+  lastError          String?          @map("last_error")
   /// Final: the approve's outcome is known, every delegation is reclaimed, the cost is counted.
-  closedAt        DateTime?        @map("closed_at")
-  createdAt       DateTime         @default(now()) @map("created_at")
-  updatedAt       DateTime         @updatedAt @map("updated_at")
+  closedAt           DateTime?        @map("closed_at")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
 
   delegations TronDelegation[]
 
@@ -1500,6 +1510,10 @@ model TronDelegation {
   delegateTx           String    @map("delegate_tx")
   delegateExpiration   DateTime  @map("delegate_expiration")
   delegatedAt          DateTime? @map("delegated_at")
+  /// Energy delegations: the receiver's `EnergyUsed` when delegated and just before the reclaim;
+  /// the difference (capped at `units`) is the lent energy actually consumed, by anything.
+  energyUsedBefore     BigInt?   @map("energy_used_before")
+  energyUsedAfter      BigInt?   @map("energy_used_after")
   /// sun the delegate / undelegate transactions burned (their receipts).
   delegateFeeSun       BigInt?   @map("delegate_fee_sun")
   undelegateTxId       String?   @map("undelegate_tx_id")

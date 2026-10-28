@@ -2,6 +2,7 @@
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { describe, expect, it } from 'vitest';
 import { getKeyVault } from '../keyvault/index.js';
+import { TronCallReverted, TronHttp } from './tron-rpc.js';
 import {
   approveData,
   assertGasTronTransaction,
@@ -211,5 +212,44 @@ describe('gas-tron signing guard', () => {
       },
     ];
     for (const raw of bad) expect(() => assertGasTronTransaction(raw, p)).toThrow();
+  });
+});
+
+describe('TronHttp constant calls', () => {
+  const answer = (body: unknown) =>
+    (async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch;
+  const call = (body: unknown) =>
+    new TronHttp({ url: 'https://tron.example', fetch: answer(body) }).constantCall(
+      USDT,
+      USDT,
+      'approve(address,uint256)',
+      '00',
+    );
+
+  it('returns the result and energy of a call that ran', async () => {
+    await expect(
+      call({
+        result: { result: true },
+        energy_used: 31_000,
+        constant_result: ['01'],
+        transaction: { ret: [{}] },
+      }),
+    ).resolves.toEqual({ result: '01', energyUsed: 31_000n });
+  });
+
+  it('surfaces a revert, which TronGrid still answers with result: true', async () => {
+    await expect(
+      call({
+        result: { result: true },
+        energy_used: 2_000,
+        constant_result: [''],
+        transaction: { ret: [{ ret: 'FAILED' }] },
+      }),
+    ).rejects.toBeInstanceOf(TronCallReverted);
+    await expect(
+      call({
+        result: { code: 'CONTRACT_EXE_ERROR', message: Buffer.from('REVERT').toString('hex') },
+      }),
+    ).rejects.toThrow(/REVERT/);
   });
 });

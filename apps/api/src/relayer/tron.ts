@@ -89,6 +89,7 @@ import {
 } from './submissions.js';
 import {
   TRON_APPROVE_FEE_LIMIT_SUN,
+  TRON_DELEGATIONS_PER_ADDRESS_PER_DAY,
   TRON_PAYMENT_FEE_LIMIT_SUN,
   TRON_TX_TTL_MS,
   allowanceOf,
@@ -102,6 +103,7 @@ import {
   lockWallet,
   ownTxCostSun,
   pollTronEnergy,
+  recordProvisionalCost,
   resetTronEnergy,
   sendApprove,
   tronApi,
@@ -524,7 +526,7 @@ export class TronGasless implements GaslessRelayer {
       return this.paymentPayload(q, p, confirmed.id);
     }
     await this.assertHoldClaimable(q);
-    const blocker = await walletBlockedBy(prisma, p.wallet, q.quote.id, now);
+    const blocker = await walletBlockedBy(prisma, p.wallet, q.quote.id, now, q.shopper.livemode);
     if (blocker) throw inProgress({ reason: 'tron_approval_in_progress' });
     // Prepare never spends: reads only.
     let blockId: string;
@@ -698,7 +700,8 @@ export class TronGasless implements GaslessRelayer {
     if (!call) throw mismatch('tron_approve.data');
     if (call.spender !== p.forwarder) throw mismatch('tron_approve.spender');
     if (call.value !== p.amount + p.fee) throw mismatch('tron_approve.value');
-    if (raw.feeLimit <= 0n || raw.feeLimit > TRON_APPROVE_FEE_LIMIT_SUN) {
+    // Exactly the issued limit: a lower one makes the approve cheap to fail after energy is lent.
+    if (raw.feeLimit !== TRON_APPROVE_FEE_LIMIT_SUN) {
       throw mismatch('tron_approve.fee_limit');
     }
     if (raw.expiration > BigInt(q.quote.deadline.getTime())) {
@@ -742,6 +745,22 @@ export class TronGasless implements GaslessRelayer {
       if (!(await this.read('getaccount', () => this.api.accountExists(p.wallet)))) {
         throw notActivated();
       }
+      // The payment must be possible before anything is lent (ruling I2): the tokens are there,
+      // and the approve itself does not revert (simulated inside `delegationsFor`).
+      const balance = await this.read('balanceOf', () =>
+        this.api.constantCall(
+          p.wallet,
+          p.token,
+          'balanceOf(address)',
+          balanceOfParameter(p.wallet),
+        ),
+      );
+      if (BigInt(`0x${balance.result || '0'}`) < p.amount + p.fee) {
+        throw submitFailed(
+          'insufficient_token_balance',
+          'Your token balance does not cover this payment',
+        );
+      }
       const gasTron = await gasTronAddress(this.kv);
       needs = await this.read('resources', () =>
         delegationsFor(
@@ -780,7 +799,7 @@ export class TronGasless implements GaslessRelayer {
       });
       if (again)
         throw inProgress({ step: 'approve', submission_id: again.id, tx_hash: again.txId });
-      if (await walletBlockedBy(tx, p.wallet, q.quote.id, now)) {
+      if (await walletBlockedBy(tx, p.wallet, q.quote.id, now, scope.livemode)) {
         throw inProgress({ reason: 'tron_approval_in_progress' });
       }
       // One live delegation at a time: per session, and per receiving address.
@@ -792,6 +811,22 @@ export class TronGasless implements GaslessRelayer {
         select: { id: true },
       });
       if (live) throw inProgress({ reason: 'tron_delegation_active' });
+      // At most TRON_DELEGATIONS_PER_ADDRESS_PER_DAY funded approvals per address per UTC day.
+      if (needs.length > 0) {
+        const funded = await tx.tronApproval.count({
+          where: {
+            wallet: p.wallet,
+            livemode: scope.livemode,
+            plannedDelegations: { gt: 0 },
+            createdAt: { gte: new Date(`${now.toISOString().slice(0, 10)}T00:00:00.000Z`) },
+          },
+        });
+        if (funded >= TRON_DELEGATIONS_PER_ADDRESS_PER_DAY) {
+          throw new AppError('RATE_LIMITED', 'Too many payment attempts; try again later', 429, {
+            max_delegations_per_address_per_day: TRON_DELEGATIONS_PER_ADDRESS_PER_DAY,
+          });
+        }
+      }
       await tx.tronApproval.create({
         data: {
           id,
@@ -803,6 +838,7 @@ export class TronGasless implements GaslessRelayer {
           signedTx: v.signedHex,
           expiration: new Date(Number(v.raw.expiration)),
           status: this.live ? 'pending' : 'confirmed',
+          plannedDelegations: needs.length,
           ...(this.live ? {} : { broadcastAt: now, costSun: 0n }),
         },
       });
@@ -813,6 +849,12 @@ export class TronGasless implements GaslessRelayer {
     const d = this.energyDeps();
     let ok: boolean;
     try {
+      // The most these loans can cost counts toward the daily loss cap before anything is lent.
+      await recordProvisionalCost(
+        d,
+        { id, ...scope, sessionId: q.session.id, quoteId: q.quote.id, txId: v.txId },
+        needs,
+      );
       ok = await delegate(d, { id, livemode: scope.livemode, wallet: p.wallet }, needs);
     } catch (err) {
       log('warn', 'tron gasless: delegation not sent', { approvalId: id, err: String(err) });
@@ -1038,10 +1080,10 @@ export class TronGasless implements GaslessRelayer {
           data: { txHash: tx.txId, paymasterData: stored as unknown as Prisma.InputJsonValue },
         });
         if (count !== 1) throw new ClaimLost();
-        if (approvals.length) {
+        for (const a of approvals) {
           await t.tronApproval.updateMany({
-            where: { id: { in: approvals.map((a) => a.id) }, costBookedTo: null },
-            data: { costBookedTo: id },
+            where: { id: a.id, costBookedTo: null },
+            data: { costBookedTo: id, costBookedSun: a.costSun ?? 0n },
           });
         }
       });
@@ -1124,7 +1166,7 @@ async function unbookApprovals(submissionId: string): Promise<void> {
   try {
     await prisma.tronApproval.updateMany({
       where: { costBookedTo: submissionId },
-      data: { costBookedTo: null },
+      data: { costBookedTo: null, costBookedSun: null },
     });
   } catch (err) {
     log('error', 'tron gasless: approval cost not unbooked', { submissionId, err: String(err) });

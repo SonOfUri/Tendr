@@ -3,8 +3,10 @@
 // bandwidth will not cover it) for ONE `approve`, broadcasts the shopper's signed approve itself,
 // and takes the resources back with `undelegateResource`.
 //
-//   when      only at submit, after the approve passed every check, the session's and the
-//             wallet's limits, and the claim (an open session with no live delegation and no other
+//   when      only at submit, after the approve passed every check (fee_limit exactly as issued,
+//             the USDT balance covers amount + fee, the approve's simulation does not revert),
+//             the session's and the wallet's limits, at most 3 funded approvals per address per
+//             UTC day, and the claim (an open session with no live delegation and no other
 //             approval of the wallet that could still pay). Never at prepare.
 //   how much  the approve's energy estimate (`triggerconstantcontract` from the shopper) + 20 %,
 //             less the energy the shopper already has, turned into staked TRX at the network's
@@ -22,10 +24,14 @@
 // unit) whether it comes from `gas-tron`'s stake, a delegation, or TRX burned; staked and free
 // bandwidth is treated as free (it regenerates daily); TRX actually burned (`fee`) counts as is.
 //   - `gas-tron`'s own transactions (delegate, undelegate, payWithApproval): fee + energy × price.
-//   - The approve: the delegated energy it consumed (its receipt, at most what was delegated) ×
-//     price. An approve without a receipt (never landed) counts ALL the energy delegated for it:
-//     the shopper may have spent it on something else, and undelegating then hands that usage to
-//     `gas-tron` (bounded by one approve's worth).
+//   - The approve's loan: the lent energy actually consumed, by the approve or by anything else
+//     the shopper sent with it: the receiver's `EnergyUsed` is read when the loan is planned and
+//     again just before the reclaim, and the difference (at most what was lent) counts, or the
+//     approve's receipt if that shows more. Until it is measured: the receipt, or without one ALL
+//     the energy lent (undelegating hands any usage to `gas-tron`).
+//   - Exposure: the most a loan can cost (all energy lent × price) is recorded as Tendr's
+//     (`sponsor = tendr`, recognised at once) before anything is lent, so the daily loss cap
+//     bounds it; the row is set to the actual unrecovered cost when the approval closes.
 //   - Lending unused energy for minutes costs nothing: undelegation returns what was not used.
 // An approval's cost (delegate transactions + the approve) is added to its payment's cost when
 // `payWithApproval` is broadcast (the quote's estimate covers approve + payment); a cost no payment
@@ -41,7 +47,13 @@ import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { MIN_RELAY_WINDOW_MS } from './submissions.js';
-import { TRON_REJECTED_CODES, TronHttp, type TronApi, type TronTxInfo } from './tron-rpc.js';
+import {
+  TRON_REJECTED_CODES,
+  TronCallReverted,
+  TronHttp,
+  type TronApi,
+  type TronTxInfo,
+} from './tron-rpc.js';
 import {
   allowanceParameter,
   approveData,
@@ -62,8 +74,15 @@ export const TRON_TX_TTL_MS = 60_000;
 export const TRON_APPROVE_ENERGY_MARGIN_PCT = 20n;
 /** An approve estimated above this much energy is not funded (a USDT approve needs ~30–50k). */
 export const TRON_MAX_APPROVE_ENERGY = 100_000n;
-/** The most TRX (sun) one delegation may lend (`gas-tron` signing guard). */
-export const TRON_MAX_DELEGATION_SUN = 50_000_000_000n;
+/**
+ * The most TRX (sun) one delegation may lend (`gas-tron` signing guard): the largest approve
+ * funded (TRON_MAX_APPROVE_ENERGY + margin = 120k energy) at ~10 energy per staked TRX is ~12k TRX.
+ */
+export const TRON_MAX_DELEGATION_SUN = 20_000_000_000n;
+/** Approvals funded with lent resources per receiving address per UTC day. */
+export const TRON_DELEGATIONS_PER_ADDRESS_PER_DAY = 3;
+/** A pending approval with fewer delegation rows than planned this long after its claim failed. */
+export const TRON_ORPHAN_APPROVAL_MS = 2 * 60_000;
 /** fee_limit of the shopper's approve (sun): covers the funded energy at the burn price. */
 export const TRON_APPROVE_FEE_LIMIT_SUN = 30_000_000n;
 /** fee_limit of `gas-tron`'s payWithApproval, and the most the signing guard allows. */
@@ -165,7 +184,17 @@ export interface DelegationNeed {
   /** Resource units the balance gives at today's network ratio (≥ the shortfall). */
   units: bigint;
   balanceSun: bigint;
+  /** Energy: the receiver's `EnergyUsed` when the loan was planned (consumption is measured from it). */
+  usedBefore?: bigint;
 }
+
+const wouldRevert = () =>
+  new AppError(
+    'GASLESS_SUBMIT_FAILED',
+    'This approval would fail on chain (check the token balance and any earlier approval)',
+    409,
+    { reason: 'approve_would_revert' },
+  );
 
 const ceilDiv = (a: bigint, b: bigint) => (a + b - 1n) / b;
 const positive = (a: bigint) => (a > 0n ? a : 0n);
@@ -189,6 +218,8 @@ export async function delegationsFor(
       await api.constantCall(approve.wallet, approve.token, 'approve(address,uint256)', param)
     ).energyUsed;
   } catch (err) {
+    // The simulation reverted: the approve would fail on chain; never lend energy for it.
+    if (err instanceof TronCallReverted) throw wouldRevert();
     log('warn', 'tron gasless: approve estimate unavailable', { err: String(err) });
     throw unavailable();
   }
@@ -208,7 +239,12 @@ export async function delegationsFor(
     if (r.totalEnergyLimit <= 0n || r.totalEnergyWeight <= 0n) throw unavailable();
     const trx = ceilDiv(energy * r.totalEnergyWeight, r.totalEnergyLimit);
     const units = (trx * r.totalEnergyLimit) / r.totalEnergyWeight;
-    needs.push({ resource: 'energy', units, balanceSun: (trx > 0n ? trx : 1n) * SUN });
+    needs.push({
+      resource: 'energy',
+      units,
+      balanceSun: (trx > 0n ? trx : 1n) * SUN,
+      usedBefore: r.energyUsed,
+    });
   }
   const bytes = BigInt(approve.rawBytes) + TX_BANDWIDTH_OVERHEAD;
   const bandwidth = positive(
@@ -276,6 +312,7 @@ export async function delegate(
         delegateTxId: tx.txId,
         delegateTx: tx.signedHex,
         delegateExpiration: tx.expiration,
+        ...(n.usedBefore !== undefined ? { energyUsedBefore: n.usedBefore } : {}),
       },
     });
     let res;
@@ -306,6 +343,17 @@ export async function delegationsReady(
   approvalId: string,
 ): Promise<'ready' | 'failed' | 'pending'> {
   const rows = await prisma.tronDelegation.findMany({ where: { approvalId } });
+  const approval = await prisma.tronApproval.findUnique({
+    where: { id: approvalId },
+    select: { plannedDelegations: true, createdAt: true },
+  });
+  // Rows missing (the claim's process stopped before recording them): never send the approve
+  // without its energy (it would burn the shopper's own TRX).
+  if (approval && rows.length < approval.plannedDelegations) {
+    return deps.now.getTime() - approval.createdAt.getTime() >= TRON_ORPHAN_APPROVAL_MS
+      ? 'failed'
+      : 'pending';
+  }
   let pending = false;
   for (const d of rows) {
     if (d.status === 'failed') return 'failed';
@@ -387,7 +435,7 @@ export async function failApproval(
   reason: string,
   info: TronTxInfo | null,
 ): Promise<void> {
-  const costSun = await approvalCostSun(deps, approvalId, info);
+  const costSun = await approvalCostSun(deps, approvalId, info ? info.energyUsage : null);
   await prisma.tronApproval.updateMany({
     where: { id: approvalId, status: { in: ['pending', 'submitted'] } },
     data: {
@@ -399,19 +447,93 @@ export async function failApproval(
   });
 }
 
-/** See the cost model in the file header. */
+/**
+ * See the cost model in the file header. `receiptEnergy`: the approve's receipt `energy_usage`
+ * (null: no receipt). Once the receiver's energy use has been read before the reclaim, the lent
+ * energy actually consumed (by anything) counts when it is more than the receipt shows.
+ */
 async function approvalCostSun(
   deps: EnergyDeps,
   approvalId: string,
-  info: TronTxInfo | null,
+  receiptEnergy: bigint | null,
 ): Promise<bigint> {
   const rows = await prisma.tronDelegation.findMany({ where: { approvalId } });
   const lent = rows.filter((d) => d.status !== 'failed' && d.resource === 'energy');
   const energyLent = lent.reduce((t, d) => t + d.units, 0n);
   const fees = rows.reduce((t, d) => t + (d.delegateFeeSun ?? 0n), 0n);
   if (energyLent === 0n) return fees;
-  const used = info ? (info.energyUsage < energyLent ? info.energyUsage : energyLent) : energyLent;
+  const cap = (x: bigint) => (x < energyLent ? x : energyLent);
+  const fromReceipt = receiptEnergy === null ? null : cap(receiptEnergy);
+  const measuredRows = lent.filter(
+    (d) => d.energyUsedBefore !== null && d.energyUsedAfter !== null,
+  );
+  let used: bigint;
+  if (measuredRows.length > 0) {
+    const measured = cap(
+      measuredRows.reduce((t, d) => {
+        const delta = positive(d.energyUsedAfter! - d.energyUsedBefore!);
+        return t + (delta < d.units ? delta : d.units);
+      }, 0n),
+    );
+    used = fromReceipt !== null && fromReceipt > measured ? fromReceipt : measured;
+  } else {
+    // Not measured yet: the receipt, or (none) everything lent, the upper bound.
+    used = fromReceipt ?? energyLent;
+  }
   return fees + used * (await deps.api.energyPrice());
+}
+
+/**
+ * Recognises the most the approval's loans can cost (all energy lent, at the burn price) as
+ * Tendr's at once, before anything is lent, so the daily loss cap bounds the exposure; the row is
+ * set to the actual unrecovered cost when the approval closes. Throws 503 when it cannot be priced.
+ */
+export async function recordProvisionalCost(
+  deps: EnergyDeps,
+  approval: Pick<TronApproval, 'id' | 'merchantId' | 'livemode' | 'sessionId' | 'quoteId' | 'txId'>,
+  needs: DelegationNeed[],
+): Promise<void> {
+  const energy = needs.filter((n) => n.resource === 'energy').reduce((t, n) => t + n.units, 0n);
+  if (energy === 0n) return;
+  let costUsd: string;
+  let sun: bigint;
+  try {
+    sun = energy * (await deps.api.energyPrice());
+    costUsd = await nativeUsd('tron', sun, approval.livemode);
+  } catch (err) {
+    log('warn', 'tron gasless: delegation cost unpriced', { err: String(err) });
+    throw unavailable();
+  }
+  const id = newId('gas');
+  await prisma.$transaction(async (tx) => {
+    await tx.gasSponsorship.create({
+      data: {
+        id,
+        merchantId: approval.merchantId,
+        livemode: approval.livemode,
+        sessionId: approval.sessionId,
+        chain: 'tron',
+        method: 'forwarder',
+        provider: 'gas-tron',
+        sponsor: 'tendr',
+        status: 'confirmed',
+        txHash: approval.txId,
+        costUsd,
+        lossRecognizedAt: deps.now,
+        paymasterData: {
+          kind: 'tron_approval',
+          approval_id: approval.id,
+          quote_id: approval.quoteId,
+          sun: sun.toString(),
+          provisional: true,
+        },
+      },
+    });
+    await tx.tronApproval.update({
+      where: { id: approval.id },
+      data: { provisionalCostId: id },
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -463,10 +585,12 @@ export async function walletBlockedBy(
   wallet: string,
   quoteId: string,
   now: Date,
+  livemode: boolean,
 ): Promise<string | null> {
   const rows = await db.tronApproval.findMany({
     where: {
       wallet,
+      livemode,
       quoteId: { not: quoteId },
       status: { in: ['pending', 'submitted', 'confirmed'] },
       createdAt: { gte: new Date(now.getTime() - 2 * 24 * 3600_000) },
@@ -676,7 +800,7 @@ async function resolveApprove(d: EnergyDeps, a: TronApproval): Promise<boolean> 
       );
       return true;
     }
-    const costSun = await approvalCostSun(d, a.id, l.info);
+    const costSun = await approvalCostSun(d, a.id, l.info.energyUsage);
     await prisma.tronApproval.updateMany({
       where: { id: a.id, status: 'submitted' },
       data: { status: 'confirmed', energyUsed: l.info.energyUsage, costSun, expiredSeenAt: null },
@@ -794,12 +918,38 @@ async function settleIfNothingLeft(
   return true;
 }
 
+/**
+ * Reads the receiver's energy use just before the first reclaim (ruling I1): the lent energy it
+ * consumed since the loan, by the approve or by anything else, is part of the approval's cost. A
+ * final approval's cost is recomputed with it (a payment it is booked to carries what was booked;
+ * any more is Tendr's at close).
+ */
+async function measureUse(d: EnergyDeps, row: TronDelegation): Promise<void> {
+  const r = await d.api.resources(row.receiver);
+  await prisma.tronDelegation.updateMany({
+    where: { id: row.id, energyUsedAfter: null },
+    data: { energyUsedAfter: r.energyUsed },
+  });
+  const a = await prisma.tronApproval.findUnique({
+    where: { id: row.approvalId },
+    select: { status: true, energyUsed: true },
+  });
+  if (a && (a.status === 'confirmed' || a.status === 'failed')) {
+    const costSun = await approvalCostSun(d, row.approvalId, a.energyUsed);
+    await prisma.tronApproval.updateMany({
+      where: { id: row.approvalId, closedAt: null },
+      data: { costSun },
+    });
+  }
+}
+
 async function startUndelegate(
   d: EnergyDeps,
   row: TronDelegation,
   gasTron: string,
   resource: TronResource,
 ): Promise<boolean> {
+  if (resource === 'energy' && row.energyUsedAfter === null) await measureUse(d, row);
   // Only what is still delegated (a previous attempt may have landed unseen).
   const left = await d.api.delegatedSun(gasTron, row.receiver, resource);
   const balance = left < row.balanceSun ? left : row.balanceSun;
@@ -881,36 +1031,50 @@ async function closeApproval(
     });
     if (sp?.status === 'pending' || sp?.status === 'submitted') return false;
   }
-  // Undelegation fees are never carried by a payment; the approval's own cost is unless booked.
+  // Tendr's part: undelegation fees (never carried by a payment), and the approval's cost when no
+  // payment carries it, or what was measured beyond what the payment carries.
   const undelegateSun = a.delegations.reduce((t, x) => t + (x.undelegateFeeSun ?? 0n), 0n);
-  const maxSun = undelegateSun + (a.costBookedTo === null ? (a.costSun ?? 0n) : 0n);
-  let costUsd: string | null = null;
-  if (maxSun > 0n) {
+  const tendrPart = (f: Pick<TronApproval, 'costBookedTo' | 'costSun' | 'costBookedSun'>) =>
+    undelegateSun +
+    (f.costBookedTo === null
+      ? (f.costSun ?? 0n)
+      : positive((f.costSun ?? 0n) - (f.costBookedSun ?? f.costSun ?? 0n)));
+  const priced = async (sun: bigint): Promise<string | null> => {
+    if (sun === 0n) return '0';
     try {
-      costUsd = await nativeUsd('tron', maxSun, a.livemode);
+      return await nativeUsd('tron', sun, a.livemode);
     } catch (err) {
       log('warn', 'tron gasless: approval cost unpriced', { approvalId: a.id, err: String(err) });
+      return null;
     }
-  }
+  };
+  const expected = tendrPart(a);
+  const expectedUsd = await priced(expected);
   return prisma.$transaction(async (tx) => {
     const fresh = await tx.tronApproval.findUniqueOrThrow({ where: { id: a.id } });
     if (fresh.closedAt) return false;
-    let bookedTo = fresh.costBookedTo;
-    // A payment broadcast meanwhile carries the approval's cost: only the undelegation is left.
-    const tendrSun = undelegateSun + (bookedTo === null ? (fresh.costSun ?? 0n) : 0n);
-    if (tendrSun !== maxSun) costUsd = null;
-    if (tendrSun > 0n) {
-      const id = newId('gas');
-      if (costUsd === null) {
-        try {
-          costUsd = await nativeUsd('tron', tendrSun, a.livemode);
-        } catch {
-          // Recorded unpriced; the loss cap counts priced rows only.
-        }
-      }
+    const tendrSun = tendrPart(fresh);
+    // Priced outside the transaction; re-priced only if a payment booked it meanwhile.
+    const costUsd = tendrSun === expected ? expectedUsd : await priced(tendrSun);
+    const data = {
+      kind: 'tron_approval',
+      approval_id: a.id,
+      quote_id: a.quoteId,
+      sun: tendrSun.toString(),
+    };
+    let rowId: string | null = fresh.provisionalCostId;
+    if (rowId) {
+      // The provisional maximum becomes the actual (0 when a payment carries it all). Unpriced:
+      // the provisional amount stays (errs high).
+      await tx.gasSponsorship.updateMany({
+        where: { id: rowId, sponsor: 'tendr' },
+        data: { ...(costUsd !== null ? { costUsd } : {}), paymasterData: data },
+      });
+    } else if (tendrSun > 0n) {
+      rowId = newId('gas');
       await tx.gasSponsorship.create({
         data: {
-          id,
+          id: rowId,
           merchantId: a.merchantId,
           livemode: a.livemode,
           sessionId: a.sessionId,
@@ -922,19 +1086,16 @@ async function closeApproval(
           txHash: a.txId,
           ...(costUsd ? { costUsd } : {}),
           lossRecognizedAt: d.now,
-          paymasterData: {
-            kind: 'tron_approval',
-            approval_id: a.id,
-            quote_id: a.quoteId,
-            sun: tendrSun.toString(),
-          },
+          paymasterData: data,
         },
       });
-      bookedTo ??= `tendr:${id}`;
     }
     await tx.tronApproval.updateMany({
       where: { id: a.id, closedAt: null },
-      data: { closedAt: d.now, costBookedTo: bookedTo ?? 'none' },
+      data: {
+        closedAt: d.now,
+        costBookedTo: fresh.costBookedTo ?? (rowId ? `tendr:${rowId}` : 'none'),
+      },
     });
     return true;
   });

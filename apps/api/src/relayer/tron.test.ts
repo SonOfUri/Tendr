@@ -23,6 +23,7 @@ import { getRedis } from '../lib/redis.js';
 import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
 import { isolatedSimStore } from '../test/sim-1click.js';
 import { gaslessQuote, resetRelayers } from './index.js';
+import { TronCallReverted } from './tron-rpc.js';
 import type { BroadcastResult, TronApi, TronBlock, TronResources, TronTxInfo } from './tron-rpc.js';
 import {
   approveData,
@@ -81,6 +82,8 @@ class FakeTron implements TronApi {
   /** Kinds mined as soon as they are broadcast. */
   mine = { delegate: true, undelegate: true, approve: true, pay: true };
   approveFails = false;
+  /** The approve simulation (`triggerconstantcontract`) reverts. */
+  approveReverts = false;
   /** Answers for the next broadcasts, in order (undefined: the normal answer). */
   broadcastResults: (BroadcastResult | undefined)[] = [];
   down: string | null = null;
@@ -135,6 +138,7 @@ class FakeTron implements TronApi {
     const addr = (i: number) => evmToTron('0x' + word(i).slice(24));
     const out = (v: bigint) => v.toString(16).padStart(64, '0');
     if (selector === 'approve(address,uint256)') {
+      if (this.approveReverts) throw new TronCallReverted('REVERT opcode executed');
       return { result: out(1n), energyUsed: APPROVE_ENERGY };
     }
     if (selector === 'allowance(address,address)' && contract === USDT) {
@@ -473,6 +477,20 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
   const pollAt = (at: number) =>
     pollTronRelays({ api: chain, livemode: false, now: () => new Date(at) });
 
+  /** What Tendr has recorded as its own Tron cost (USD), provisional rows included. */
+  const tendrUsd = async () =>
+    (
+      await prisma.gasSponsorship.aggregate({
+        where: { sponsor: 'tendr' },
+        _sum: { costUsd: true },
+      })
+    )._sum.costUsd?.toFixed() ?? '0';
+  /** USD of `sun` at the simulator's TRX price ($0.25), rounded up to micro-USD. */
+  const usdOf = (sun: bigint) => {
+    const micro = (sun * 25n + 99n) / 100n;
+    return (Number(micro) / 1e6).toString();
+  };
+
   /** Prepares, signs and submits the approve, then lets the poller confirm it (solidified). */
   async function approved(p: TQuote) {
     const td = await approveTd(p);
@@ -690,7 +708,7 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
     expect(
       (await prisma.tronApproval.findUniqueOrThrow({ where: { id: approval.id } })).closedAt,
     ).not.toBeNull();
-    expect(await prisma.gasSponsorship.count({ where: { sponsor: 'tendr' } })).toBe(0);
+    expect(await tendrUsd()).toBe('0');
     // Further passes (or a restarted worker) send nothing more.
     await pollAt(clock + TRON_RECLAIM_AFTER_MS);
     expect(chain.ofType('delegate')).toHaveLength(1);
@@ -713,7 +731,7 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
     expect(chain.sent).toHaveLength(1);
     expect((await prisma.tronApproval.findFirstOrThrow()).closedAt).not.toBeNull();
     // Nothing was lent: no cost.
-    expect(await prisma.gasSponsorship.count({ where: { sponsor: 'tendr' } })).toBe(0);
+    expect(await tendrUsd()).toBe('0');
     const res = await submitApprove(p, signApprove(td));
     expect(res.status).toBe('submitted');
     expect(chain.ofType('delegate')).toHaveLength(3);
@@ -734,10 +752,13 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
     await pollAt(clock);
     await pollAt(clock);
     expect(await prisma.tronDelegation.findFirstOrThrow()).toMatchObject({ status: 'reclaimed' });
-    // Without a receipt every unit lent counts (the shopper may have spent it elsewhere).
+    // Counted at its maximum (all lent) the moment it was lent; settled at close to what the
+    // receiver actually consumed, measured before the reclaim (nothing here).
     const d = await prisma.tronDelegation.findFirstOrThrow();
+    expect(d).toMatchObject({ energyUsedBefore: 0n, energyUsedAfter: 0n });
     const tendr = await prisma.gasSponsorship.findFirstOrThrow({ where: { sponsor: 'tendr' } });
-    expect(tendr.paymasterData).toMatchObject({ sun: (d.units * PRICE).toString() });
+    expect(tendr.paymasterData).toMatchObject({ sun: '0' });
+    expect(tendr.costUsd?.toFixed()).toBe('0');
     expect((await submitApprove(p, signApprove(td))).status).toBe('submitted');
     expect(chain.ofType('delegate')).toHaveLength(2);
   });
@@ -857,6 +878,8 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
         { mutate: (r) => ({ ...r, expiration: BigInt(p.quote.deadline.getTime() + 1000) }) },
       ],
       ['tron_approve.fee_limit', { mutate: (r) => ({ ...r, feeLimit: r.feeLimit + 1n }) }],
+      // Pinned to the issued value: a lower limit would make the approve cheap to fail.
+      ['tron_approve.fee_limit', { mutate: (r) => ({ ...r, feeLimit: 1n }) }],
       [
         'tron_approve.ref_block',
         { mutate: (r) => ({ ...r, ref: { bytes: Uint8Array.from([1, 2]), hash: r.ref.hash } }) },
@@ -1054,6 +1077,165 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
       delete process.env.TENDR_SPONSOR_LOSS_CAP_USD;
       loadEnv();
     }
+  });
+
+  it('books lent energy the shopper spent elsewhere when its approve then fails', async () => {
+    chain.approveFails = true;
+    const p = await tronQuote();
+    const td = await approveTd(p);
+    await submitApprove(p, signApprove(td));
+    const lent = (await prisma.tronDelegation.findFirstOrThrow()).units;
+    // The shopper used the lent energy on its own transfer; its approve then ran out (receipt 20k).
+    chain.own.set(WALLET, { energyUsed: lent });
+    await pollAt(clock);
+    await pollAt(clock);
+    await pollAt(clock);
+    const d = await prisma.tronDelegation.findFirstOrThrow();
+    expect(d).toMatchObject({ status: 'reclaimed', energyUsedBefore: 0n, energyUsedAfter: lent });
+    const a = await prisma.tronApproval.findFirstOrThrow();
+    expect(a.closedAt).not.toBeNull();
+    const tendr = await prisma.gasSponsorship.findFirstOrThrow({ where: { sponsor: 'tendr' } });
+    expect(a.costBookedTo).toBe(`tendr:${tendr.id}`);
+    expect(tendr.paymasterData).toMatchObject({ sun: (lent * PRICE).toString() });
+    expect(tendr.costUsd?.toFixed()).toBe(usdOf(lent * PRICE));
+  });
+
+  it('a payment carries the lent energy actually consumed, not only its approve receipt', async () => {
+    const p = await tronQuote();
+    const td = await approveTd(p);
+    await submitApprove(p, signApprove(td));
+    const lent = (await prisma.tronDelegation.findFirstOrThrow()).units;
+    chain.own.set(WALLET, { energyUsed: lent });
+    await pollAt(clock);
+    const ptd = await paymentTd(p);
+    const sub = await submitPayment(p, ptd, await signPayment(ptd));
+    await pollAt(clock);
+    const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sub.submissionId } });
+    expect(sp.status).toBe('confirmed');
+    expect(sp.costUsd?.toFixed()).toBe(usdOf(110_000n * PRICE + 270_000n + lent * PRICE));
+    await pollAt(clock);
+    expect(await tendrUsd()).toBe('0');
+  });
+
+  it('refuses before lending energy when the USDT balance does not cover the payment', async () => {
+    const p = await tronQuote();
+    const td = await approveTd(p);
+    chain.balances.set(WALLET, BigInt(p.quote.amountIn.toFixed(0)) - 1n);
+    const err = await refusal(submitApprove(p, signApprove(td)));
+    expect(err.code).toBe('GASLESS_SUBMIT_FAILED');
+    expect(err.details).toMatchObject({ reason: 'insufficient_token_balance' });
+    expect(chain.sent).toHaveLength(0);
+    expect(await prisma.tronApproval.count()).toBe(0);
+  });
+
+  it('refuses before lending energy when the approve would revert', async () => {
+    chain.approveReverts = true;
+    const p = await tronQuote();
+    const td = await approveTd(p);
+    const err = await refusal(submitApprove(p, signApprove(td)));
+    expect(err.code).toBe('GASLESS_SUBMIT_FAILED');
+    expect(err.details).toMatchObject({ reason: 'approve_would_revert' });
+    expect(chain.sent).toHaveLength(0);
+    expect(await prisma.tronApproval.count()).toBe(0);
+  });
+
+  it('counts the most a delegation can cost toward the loss cap the moment it is made', async () => {
+    chain.mine.approve = false;
+    const p = await tronQuote();
+    const td = await approveTd(p);
+    await submitApprove(p, signApprove(td));
+    const d = await prisma.tronDelegation.findFirstOrThrow();
+    const a = await prisma.tronApproval.findFirstOrThrow();
+    const row = await prisma.gasSponsorship.findUniqueOrThrow({
+      where: { id: a.provisionalCostId! },
+    });
+    expect(row).toMatchObject({ sponsor: 'tendr', provider: 'gas-tron' });
+    expect(row.lossRecognizedAt).not.toBeNull();
+    expect(row.costUsd?.toFixed()).toBe(usdOf(d.units * PRICE));
+    // With the cap at that amount, nothing more is lent.
+    process.env.TENDR_SPONSOR_LOSS_CAP_USD = usdOf(d.units * PRICE);
+    loadEnv();
+    try {
+      newWallet();
+      const b = await tronQuote();
+      expect((await refusal(prepare(b))).code).toBe('GASLESS_NOT_AVAILABLE');
+    } finally {
+      delete process.env.TENDR_SPONSOR_LOSS_CAP_USD;
+      loadEnv();
+    }
+  });
+
+  it('lends to one address at most three times per UTC day', async () => {
+    const p = await tronQuote();
+    const td = await approveTd(p);
+    for (let i = 0; i < 3; i++) {
+      await prisma.tronApproval.create({
+        data: {
+          id: `tap_seed${i}`,
+          merchantId: merchant.id,
+          livemode: false,
+          sessionId: p.s.id,
+          quoteId: p.quote.id,
+          wallet: WALLET,
+          txId: `${i}`.padStart(64, '0'),
+          signedTx: '00',
+          expiration: new Date(clock),
+          status: 'failed',
+          plannedDelegations: 1,
+        },
+      });
+    }
+    const err = await refusal(submitApprove(p, signApprove(td)));
+    expect(err.code).toBe('RATE_LIMITED');
+    expect(chain.sent).toHaveLength(0);
+  });
+
+  it('fails an approval whose planned delegations never appeared, without sending it', async () => {
+    const p = await tronQuote();
+    const td = await approveTd(p);
+    const s = signApprove(td);
+    await prisma.tronApproval.create({
+      data: {
+        id: 'tap_orphan',
+        merchantId: merchant.id,
+        livemode: false,
+        sessionId: p.s.id,
+        quoteId: p.quote.id,
+        wallet: WALLET,
+        txId: td.transaction.txID,
+        signedTx: s.rawDataHex,
+        expiration: p.quote.deadline,
+        status: 'pending',
+        plannedDelegations: 1,
+        createdAt: new Date(clock - 3 * 60_000),
+      },
+    });
+    await pollAt(clock);
+    expect(
+      await prisma.tronApproval.findUniqueOrThrow({ where: { id: 'tap_orphan' } }),
+    ).toMatchObject({ status: 'failed' });
+    expect(chain.sent).toHaveLength(0);
+  });
+
+  it("another mode's approval of the wallet never blocks this one", async () => {
+    const a = await tronQuote();
+    // A live-mode approval of the same address that could still pay (issued, deadline ahead).
+    await prisma.tronApproval.create({
+      data: {
+        id: 'tap_othermode',
+        merchantId: merchant.id,
+        livemode: true,
+        sessionId: a.s.id,
+        quoteId: 'quo_othermode',
+        wallet: WALLET,
+        txId: '1'.padStart(64, '0'),
+        signedTx: '00',
+        expiration: new Date(clock + 600_000),
+        status: 'confirmed',
+        paymentDeadline: new Date(clock + 600_000),
+      },
+    });
+    expect((await prepare(a)).step).toBe('approve');
   });
 
   describe('test mode (simulated: no Tron API)', () => {

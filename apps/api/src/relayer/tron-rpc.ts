@@ -14,6 +14,14 @@ export class TronRpcError extends Error {
   }
 }
 
+/** A constant call ran and reverted (or the node refused to run it): the real call would fail. */
+export class TronCallReverted extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TronCallReverted';
+  }
+}
+
 export interface TronBlock {
   /** `blockID`, hex. */
   id: string;
@@ -223,6 +231,15 @@ export class TronHttp implements TronApi {
     });
     const res = (r.result ?? {}) as Record<string, unknown>;
     const out = Array.isArray(r.constant_result) ? r.constant_result[0] : undefined;
+    // A revert still answers `result.result: true` (with `energy_used`): it shows in the simulated
+    // transaction's `ret` or as an error code / message on `result`.
+    const tx = (r.transaction ?? {}) as Record<string, unknown>;
+    const ret = Array.isArray(tx.ret) ? ((tx.ret[0] ?? {}) as Record<string, unknown>).ret : null;
+    if (ret === 'FAILED' || typeof res.code === 'string' || typeof res.message === 'string') {
+      let message = typeof res.message === 'string' ? res.message : String(ret ?? res.code);
+      if (/^[0-9a-fA-F]+$/.test(message)) message = Buffer.from(message, 'hex').toString('utf8');
+      throw new TronCallReverted(`${selector}: ${message.slice(0, 200)}`);
+    }
     if (res.result !== true || typeof out !== 'string' || !/^[0-9a-fA-F]*$/.test(out)) {
       throw new TronRpcError(`triggerconstantcontract ${selector}: refused`);
     }
