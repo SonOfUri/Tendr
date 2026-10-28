@@ -11,6 +11,7 @@
 import { WalletError, afterSignError, toWalletError } from './errors';
 import type { DepositRequest, PayTarget, WalletAdapter } from './index';
 import { assertDepositMatches } from './match';
+import { createNearGasless, type NearSignDelegate } from './gasless/near';
 
 /** A read-only contract call (`view`): the parsed JSON result. */
 export type NearView = (
@@ -38,6 +39,8 @@ export interface NearWalletLike {
     receiverId: string;
     actions: NearFunctionCall[];
   }): Promise<unknown>;
+  /** Signs a NEP-366 delegate action (gasless); absent when the wallet cannot. */
+  signDelegate?: NearSignDelegate;
 }
 
 export interface NearDeps {
@@ -152,6 +155,10 @@ export function createNearAdapter(target: PayTarget, deps: NearDeps): WalletAdap
   let accountId: string | null = null;
   return {
     chainFamily: 'near',
+    gasless: createNearGasless(target, {
+      address: () => accountId,
+      signDelegate: () => wallet?.signDelegate ?? null,
+    }),
     async connect() {
       try {
         const options = await deps.wallets();
@@ -291,6 +298,9 @@ export function nearSelectorDeps(
         signOut(): Promise<void>;
         signAndSendTransaction(p: object): Promise<unknown>;
       };
+      // No `signDelegate`: Meteor and Intear (wallet-selector 10.1.4) throw "Method not supported"
+      // for `signDelegateAction`, so NEAR shoppers pay normally until a wallet module signs
+      // delegate actions with a full-access key (ruling T10-e).
       return {
         signIn: (p) => w.signIn(p),
         getAccounts: () => w.getAccounts(),

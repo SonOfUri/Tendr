@@ -4,6 +4,7 @@
 import { WalletError, afterSignError, toWalletError } from './errors';
 import type { PayTarget, WalletAdapter } from './index';
 import { assertDepositMatches } from './match';
+import { createTronGasless } from './gasless/tron';
 
 interface TronWebLike {
   defaultAddress?: { base58?: string | false };
@@ -43,11 +44,23 @@ function tronWebOf(win: TronWindow): TronWebLike | null {
   return tw || null;
 }
 
-export function createTronAdapter(target: PayTarget, deps: { win: TronWindow }): WalletAdapter {
+export function createTronAdapter(
+  target: PayTarget,
+  deps: {
+    win: TronWindow;
+    /** Tendr's Tron forwarder (the page's config); null turns gasless Tron off. */
+    forwarder?: string | null;
+  },
+): WalletAdapter {
   if (target.family !== 'tron') throw new WalletError('failed', { detail: 'not a Tron asset' });
   let address: string | null = null;
   return {
     chainFamily: 'tron',
+    gasless: createTronGasless(target, {
+      win: deps.win as never,
+      address: () => address,
+      forwarder: deps.forwarder ?? null,
+    }),
     async connect() {
       const link = deps.win.tronLink;
       if (!link) throw new WalletError('unavailable', { detail: 'TronLink not found' });

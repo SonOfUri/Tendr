@@ -78,6 +78,8 @@ export interface DepositReporter {
     state: PendingState;
     /** Save only; reported later (the tx id before its broadcast). A reload still resumes it. */
     persistOnly?: boolean;
+    /** A gasless relay: Tendr reported the deposit itself, so it is kept (blocking) but never POSTed. */
+    alreadyReported?: boolean;
   }): Promise<ReportOutcome>;
   /** After a reload: POSTs a saved hash that was not acknowledged yet (its own quote only). */
   resume(): Promise<ReportOutcome | null>;
@@ -160,7 +162,13 @@ export function createDepositReporter(opts: {
     return promise;
   };
 
-  const record: DepositReporter['record'] = ({ txHash, quoteId, state, persistOnly }) => {
+  const record: DepositReporter['record'] = ({
+    txHash,
+    quoteId,
+    state,
+    persistOnly,
+    alreadyReported,
+  }) => {
     if (
       !current ||
       current.txHash !== txHash ||
@@ -168,7 +176,7 @@ export function createDepositReporter(opts: {
       current.state !== state
     ) {
       // A failed-on-chain transaction is kept, never reported as a deposit.
-      const reported = txHash === null || state === 'failed';
+      const reported = txHash === null || state === 'failed' || alreadyReported === true;
       const sameTx = current?.txHash === txHash && current?.quoteId === quoteId;
       save({
         txHash,

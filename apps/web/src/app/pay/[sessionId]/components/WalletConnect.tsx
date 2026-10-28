@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import type { Quote, Token } from '@/lib/checkout/api';
+import type { FeeMode, GaslessApi, GaslessMethod } from '@/lib/wallets/gasless/index';
 import { publicEnv } from '@/lib/env';
 import { showBlockNotice, type PaymentBlock } from '@/lib/wallets/block';
 import { adapterFor, needsReown, type WalletRoute } from '@/lib/wallets/index';
@@ -11,6 +12,12 @@ export type { WalletSendResult };
 
 /** How re-quoting with the connected wallet as the return address went. */
 export type WalletQuoteResult = 'ok' | 'refused' | 'failed';
+
+/** What the wallet path asks the quote for: the gasless method and, when the shopper pays, how. */
+export interface WalletGaslessParams {
+  gasless_method?: GaslessMethod;
+  fee_mode?: FeeMode;
+}
 
 /**
  * The connect-wallet slot: connect (Reown AppKit for EVM, Solana and Bitcoin, TronLink, NEAR
@@ -26,14 +33,24 @@ export interface WalletConnectProps {
   quote: Pick<
     Quote,
     'id' | 'deposit_address' | 'amount_in' | 'origin_asset' | 'deadline' | 'refund_address'
-  >;
+  > &
+    Partial<Pick<Quote, 'network_fee' | 'fee_amount'>>;
   /** The token being paid with (network, decimals, symbol). */
   token: Token;
   /**
    * The connected wallet's address on the token's network. The page re-quotes with it as the
-   * return address, so money that needs to come back goes straight to that wallet.
+   * return address (so money that needs to come back goes straight to that wallet) and as the
+   * paying wallet, with the gasless method and fee choice when there is one.
    */
-  onWalletAddress?: (address: string) => Promise<WalletQuoteResult> | void;
+  onWalletAddress?: (
+    address: string,
+    gasless?: WalletGaslessParams,
+  ) => Promise<WalletQuoteResult> | void;
+  /**
+   * Gasless payments (project 5a): the shopper routes, the store's name for "Network fee: paid by
+   * {merchant}", and the chain's coin (to preselect it when the wallet holds enough).
+   */
+  gasless?: { api: GaslessApi; merchantName: string; nativeToken: Token | null };
   /** The wallet sent (or may have sent) a payment: the page records and reports it. */
   onDepositSent?: (r: WalletSendResult) => void;
   /** Test mode: wallets connect, but no payment is ever sent from them. */
@@ -129,7 +146,13 @@ export function WalletConnect(props: WalletConnectProps) {
     return <PaymentSentNotice blocked={blocked} onDidntGoThrough={onDidntGoThrough} />;
   }
 
-  if (!route || (needsReown(route.chainFamily) && publicEnv.reownProjectId === null)) {
+  // End-to-end tests only: an injected test wallet stands in for Reown (lib/env.ts).
+  const injected =
+    route?.chainFamily === 'evm' &&
+    publicEnv.e2eInjectedWallet &&
+    typeof window !== 'undefined' &&
+    'ethereum' in window;
+  if (!route || (needsReown(route.chainFamily) && publicEnv.reownProjectId === null && !injected)) {
     return (
       <div className="pay-wallet">
         <p className="muted small">

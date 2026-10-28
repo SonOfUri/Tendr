@@ -22,3 +22,28 @@ export function base64ToBytes(b64: string): Uint8Array {
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
+
+/** Bytes to standard (padded) base64, in the browser and in Node. */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+  return btoa(bin);
+}
+
+/** Base58 (Bitcoin alphabet) to bytes; throws on any other character. */
+export function base58Decode(s: string): Uint8Array {
+  let n = 0n;
+  for (const c of s) {
+    const v = ALPHABET.indexOf(c);
+    if (v < 0) throw new Error('not base58');
+    n = n * 58n + BigInt(v);
+  }
+  const out: number[] = [];
+  while (n > 0n) {
+    out.unshift(Number(n & 0xffn));
+    n >>= 8n;
+  }
+  let zeros = 0;
+  while (zeros < s.length && s[zeros] === '1') zeros++;
+  return new Uint8Array([...new Array<number>(zeros).fill(0), ...out]);
+}

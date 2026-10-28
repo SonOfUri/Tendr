@@ -2,6 +2,7 @@
 // session client secret as `Authorization: Bearer <secret>`. The secret goes in that header only:
 // never in a URL, a body, a cookie or web storage. Requests carry no cookies (`credentials:
 // 'omit'`) and no referrer. Errors use the API's `{ error: { code, message, details? } }` envelope.
+import type { FeeMode, GaslessApi, GaslessMethod } from '@/lib/wallets/gasless/index';
 
 export class CheckoutApiError extends Error {
   constructor(
@@ -26,6 +27,18 @@ export interface FeeLine {
   amount_usd: string;
 }
 
+/** Who pays the network fee and how (`network_fee` on the quote; shopper-safe reasons only). */
+export interface NetworkFee {
+  paid_by: 'merchant' | 'shopper';
+  fee_mode: FeeMode | null;
+  /** Shopper pays in the token: base units of the origin asset, on top of `amount_in`. */
+  amount: string | null;
+  asset: string | null;
+  usd: string;
+  method: string | null;
+  reason: string | null;
+}
+
 export interface Quote {
   id: string;
   origin_asset: string;
@@ -38,6 +51,11 @@ export interface Quote {
   refund: 'origin_chain' | 'store';
   refund_address: string | null;
   fee_lines: FeeLine[];
+  /** Null on quotes made before gasless payments. */
+  network_fee?: NetworkFee | null;
+  fee_mode?: FeeMode | null;
+  /** Shopper pays the fee in the token: base units sent in addition to `amount_in`. */
+  fee_amount?: string | null;
   small_overpay_notice: boolean;
   small_overpay_usd: number;
 }
@@ -114,6 +132,10 @@ export interface QuoteInput {
   origin_asset: string;
   refund_address?: string;
   refund_chain?: string;
+  /** The connected wallet paying (the wallet path); without it the quote is for a manual send. */
+  wallet_address?: string;
+  gasless_method?: GaslessMethod;
+  fee_mode?: FeeMode;
 }
 
 export interface RefundAddressInput {
@@ -171,7 +193,7 @@ async function request<T>(
   return body as T;
 }
 
-export interface CheckoutClient {
+export interface CheckoutClient extends GaslessApi {
   session(): Promise<SessionView>;
   tokens(): Promise<{ tokens: Token[] }>;
   quote(input: QuoteInput): Promise<Quote>;
@@ -203,6 +225,10 @@ export function createCheckoutClient(opts: {
     email: (email) => post('email', { email }),
     refundAddress: (input) => post('refund-address', input),
     simulate: (scenario) => post('simulate', { scenario }),
+    gaslessOptions: (input) => post('gasless/options', input),
+    gaslessPrepare: (input) => post('gasless/prepare', input),
+    gaslessSubmit: (body) => post('gasless/submit', body),
+    gaslessSubmission: (id) => get(`gasless/submissions/${encodeURIComponent(id)}`),
   };
 }
 

@@ -7,12 +7,59 @@ import { publicEnv } from '@/lib/env';
 import { toWalletError, walletErrorCopy } from '@/lib/wallets/errors';
 import type { ChainFamily, WalletAdapter, WalletRoute } from '@/lib/wallets/index';
 import { sameAddress } from '@/lib/wallets/match';
-import { runWalletPay } from '@/lib/wallets/pay';
+import { runGaslessPay, runWalletPay, type GaslessProgress } from '@/lib/wallets/pay';
 import { isFramed } from '@/lib/wallets/popup';
-import type { WalletConnectProps, WalletQuoteResult } from './WalletConnect';
+import {
+  defaultFeeMode,
+  expectationFor,
+  feeChoiceAvailable,
+  gaslessMethodOf,
+  nativeFeeUnits,
+  pickOption,
+  unavailableReason,
+  type FeeMode,
+  type GaslessOption,
+} from '@/lib/wallets/gasless/index';
+import { NetworkFee, showFeeChoice } from './NetworkFee';
+import type { WalletConnectProps, WalletGaslessParams, WalletQuoteResult } from './WalletConnect';
 
-// The wallet step after "Connect wallet" was clicked (loaded on demand by WalletConnect.tsx):
-// connect, re-quote with the wallet as the return address, then pay the locked quote.
+// The wallet step after "Connect wallet" was clicked (loaded on demand by WalletConnect.tsx), in
+// the wallet-first order (ruling T10-a): connect → which gasless method this wallet can use
+// (`gasless/options` + the wallet's own abilities) → quote for this wallet with that method and
+// fee choice → the network-fee line → sign and relay (gasless) or send (the chain's coin).
+
+/** What this wallet can do without the chain's coin, decided once per connected address. */
+interface GaslessPlan {
+  address: string;
+  option: GaslessOption | null;
+  nativeSymbol: string | null;
+  /** Why a method the wallet could use is not offered to this account. */
+  unavailable: string | null;
+  defaultMode: FeeMode;
+}
+
+/** The quote fields for a plan: the method, and the fee choice when the shopper pays. */
+export function gaslessParams(plan: GaslessPlan | null, mode: FeeMode): WalletGaslessParams {
+  const o = plan?.option;
+  if (!o) return {};
+  if (o.paid_by === 'merchant') return { gasless_method: o.method };
+  return { gasless_method: o.method, fee_mode: mode };
+}
+
+const UNAVAILABLE_COPY: Record<string, string> = {
+  near_account_needs_balance: 'Your NEAR account needs a tiny amount of NEAR to pay this way.',
+  tron_account_not_activated: "Your Tron account isn't activated yet.",
+};
+
+const PROGRESS_COPY: Record<GaslessProgress, string> = {
+  preparing: 'Preparing your payment…',
+  signing: 'Confirm in your wallet…',
+  confirming: 'Confirming your payment…',
+  previous_attempt: 'Your previous attempt is still being confirmed…',
+};
+
+const MISMATCH_COPY =
+  "This payment request doesn't match your price, so we didn't ask your wallet to sign it. Try again or pay by sending manually.";
 
 /** Whether the pay button is live. */
 export function canPay(opts: {
@@ -23,9 +70,11 @@ export function canPay(opts: {
   livemode: boolean;
   paymentSent: boolean;
   busy: boolean;
+  /** A gasless quote: the wallet only signs, so test mode can run it (the relay is simulated). */
+  gasless?: boolean;
 }): boolean {
   return (
-    opts.livemode &&
+    (opts.livemode || opts.gasless === true) &&
     !opts.paymentSent &&
     !opts.busy &&
     sameAddress(opts.family, opts.address, opts.quote.refund_address) &&
@@ -50,6 +99,7 @@ export function WalletPanel({
   openWalletWindow,
   checkBeforeSend,
   onSendingChange,
+  gasless,
 }: WalletConnectProps & { route: WalletRoute }) {
   const adapterRef = useRef<WalletAdapter | null>(null);
   const sendingRef = useRef(false);
@@ -61,6 +111,13 @@ export function WalletPanel({
   const [refused, setRefused] = useState(false);
   const [offerWindow, setOfferWindow] = useState(false);
   const [nearWallets, setNearWallets] = useState<{ id: string; name: string }[] | null>(null);
+  const planRef = useRef<GaslessPlan | null>(null);
+  const [plan, setPlan] = useState<GaslessPlan | null>(null);
+  const [feeMode, setFeeMode] = useState<FeeMode>('token');
+  // GASLESS_NOT_AVAILABLE: this wallet pays the fee in the chain's coin from now on.
+  const gaslessOff = useRef(false);
+  const [progress, setProgress] = useState<GaslessProgress | null>(null);
+  const [canRetry, setCanRetry] = useState(false);
 
   // Mounted by the "Connect wallet" click: start connecting right away. Unmounting (another
   // token, or a payment went out) drops the wallet connection.
@@ -135,12 +192,61 @@ export function WalletPanel({
     }
   }
 
-  /** Re-quotes with the wallet as the return address (screened by the API). */
-  async function quoteForWallet(adapter: WalletAdapter, a: string) {
+  /** Which gasless method this wallet uses here, and the fee choice's starting point. */
+  async function planFor(adapter: WalletAdapter, a: string): Promise<GaslessPlan> {
+    const base: GaslessPlan = {
+      address: a,
+      option: null,
+      nativeSymbol: gasless?.nativeToken?.symbol ?? null,
+      unavailable: null,
+      defaultMode: 'token',
+    };
+    if (!adapter.gasless || !gasless || gaslessOff.current) return base;
+    try {
+      const [opts, methods] = await Promise.all([
+        gasless.api.gaslessOptions({ origin_asset: quote.origin_asset, wallet_address: a }),
+        adapter.gasless.methods().catch(() => []),
+      ]);
+      const option = pickOption(opts.options, methods);
+      let defaultMode: FeeMode = 'token';
+      if (feeChoiceAvailable(option)) {
+        // Preselect the coin only when the wallet holds at least twice its fee.
+        const nativeFee = nativeFeeUnits(option!.token_fee?.usd, gasless.nativeToken);
+        const balance =
+          nativeFee === null ? null : await adapter.gasless.nativeBalance().catch(() => null);
+        defaultMode = defaultFeeMode(balance, nativeFee);
+      }
+      return {
+        address: a,
+        option,
+        nativeSymbol: opts.native_symbol ?? base.nativeSymbol,
+        unavailable: option ? null : unavailableReason(opts.options, methods),
+        defaultMode,
+      };
+    } catch {
+      // Options unavailable: the wallet sends normally, and the page says it needs the coin.
+      return base;
+    }
+  }
+
+  /**
+   * Re-quotes for the wallet: its address as the return address (screened by the API) and as the
+   * paying wallet, with the gasless method and fee choice (`mode` when the shopper switches).
+   */
+  async function quoteForWallet(adapter: WalletAdapter, a: string, mode?: FeeMode) {
     setPhase('quoting');
     let result: WalletQuoteResult = 'failed';
     try {
-      result = (await onWalletAddress?.(a)) ?? 'ok';
+      let p = planRef.current;
+      let m = mode ?? feeMode;
+      if (!p || p.address !== a) {
+        p = await planFor(adapter, a);
+        planRef.current = p;
+        setPlan(p);
+        m = mode ?? p.defaultMode;
+      }
+      setFeeMode(m);
+      result = (await onWalletAddress?.(a, gaslessParams(p, m))) ?? 'ok';
     } finally {
       if (result === 'refused') {
         setRefused(true);
@@ -152,15 +258,93 @@ export function WalletPanel({
     }
   }
 
+  /** Gasless: prepare, check, sign, relay and wait for the outcome. */
+  async function payGasless(adapter: WalletAdapter, a: string) {
+    let expect;
+    try {
+      expect = expectationFor(quote, route.target, a, livemode);
+    } catch {
+      setMessage(MISMATCH_COPY);
+      return;
+    }
+    if (!expect || !adapter.gasless || !gasless) return;
+    const step = await runGaslessPay({
+      quote,
+      expect,
+      api: gasless.api,
+      signer: adapter.gasless,
+      now: () => Date.now(),
+      checkBeforeSend,
+      record: (r) => onDepositSent?.(r),
+      onProgress: setProgress,
+    });
+    setProgress(null);
+    switch (step.kind) {
+      case 'requote':
+        if (!step.gasless) {
+          // This wallet can't pay without the coin right now: quote it for a normal send.
+          gaslessOff.current = true;
+          planRef.current = null;
+          setMessage(
+            `Paying without ${plan?.nativeSymbol ?? 'the network’s coin'} isn't available right now.`,
+          );
+        } else {
+          setMessage("Your price ran out, so we've updated it. Check the amount, then pay.");
+        }
+        await quoteForWallet(adapter, a);
+        break;
+      case 'sign_again':
+        setMessage('Your signature ran out. Sign again to pay.');
+        break;
+      case 'mismatch':
+        setMessage(MISMATCH_COPY);
+        break;
+      case 'relay_failed':
+        setMessage(
+          step.reason === 'insufficient_token_balance'
+            ? `Your wallet doesn't hold enough ${token.symbol} for this payment.`
+            : "Your payment couldn't be sent, and nothing left your wallet. Try again.",
+        );
+        break;
+      case 'retry':
+        setMessage("We couldn't reach the network to send your payment.");
+        setCanRetry(true);
+        break;
+      case 'rate_limited':
+        setMessage('Too many attempts. Wait a few minutes, then try again.');
+        break;
+      case 'still_confirming':
+        setMessage(PROGRESS_COPY.previous_attempt);
+        break;
+      case 'check_failed':
+        setMessage("We couldn't check your payment status. Try again in a moment.");
+        break;
+      case 'account_changed':
+        setAddress(step.address);
+        setMessage('Your wallet switched accounts, so we updated the price for this one.');
+        await quoteForWallet(adapter, step.address);
+        break;
+      case 'error':
+        fail(step.error, 'send');
+        break;
+      // 'sent', 'recorded', 'blocked': the page now shows the payment notice.
+    }
+  }
+
   async function pay() {
     const adapter = adapterRef.current;
     if (!adapter || !address || sendingRef.current || blocked) return;
     sendingRef.current = true;
     onSendingChange?.(true);
     setMessage(null);
+    setCanRetry(false);
     setOfferWindow(false);
     setPhase('sending');
     try {
+      if (gaslessQuote) {
+        await payGasless(adapter, address);
+        return;
+      }
       const step = await runWalletPay({
         quote,
         decimals: token.decimals,
@@ -190,6 +374,7 @@ export function WalletPanel({
       }
     } finally {
       sendingRef.current = false;
+      setProgress(null);
       setPhase((p) => (p === 'idle' ? p : 'ready'));
       onSendingChange?.(false);
     }
@@ -198,6 +383,8 @@ export function WalletPanel({
   async function disconnect() {
     const a = adapterRef.current;
     adapterRef.current = null;
+    planRef.current = null;
+    setPlan(null);
     setAddress(null);
     setPhase('idle');
     setMessage(null);
@@ -219,7 +406,20 @@ export function WalletPanel({
     setPhase('popup');
   }
 
-  const amount = formatUnits(quote.amount_in, token.decimals);
+  const gaslessQuote = gasless !== undefined && gaslessMethodOf(quote) !== null;
+  // A token fee is sent on top of the payment: the button shows the total.
+  const total = (() => {
+    try {
+      const fee =
+        gaslessQuote && quote.network_fee?.fee_mode === 'token' && quote.fee_amount
+          ? BigInt(quote.fee_amount)
+          : 0n;
+      return BigInt(quote.amount_in) + fee;
+    } catch {
+      return quote.amount_in;
+    }
+  })();
+  const amount = formatUnits(total, token.decimals);
   const busy =
     phase === 'loading' || phase === 'connecting' || phase === 'quoting' || phase === 'sending';
   const payable = canPay({
@@ -230,7 +430,10 @@ export function WalletPanel({
     livemode,
     paymentSent: blocked !== null,
     busy,
+    gasless: gaslessQuote,
   });
+  const quoteIsForWallet = sameAddress(route.chainFamily, address, quote.refund_address);
+  const choiceShown = showFeeChoice(plan?.option ?? null, quote.network_fee);
 
   return (
     <div className="pay-wallet">
@@ -286,20 +489,51 @@ export function WalletPanel({
               Get a price for this wallet
             </button>
           ) : null}
-          {livemode ? (
-            <button
-              type="button"
-              className="pay-button"
-              onClick={() => void pay()}
-              disabled={!payable}
-              aria-busy={phase === 'sending'}
-            >
-              {phase === 'sending'
-                ? 'Confirm in your wallet…'
-                : phase === 'quoting'
-                  ? 'Updating your price…'
-                  : `Pay ${amount ?? ''} ${token.symbol}`}
-            </button>
+          {gasless && quoteIsForWallet && phase !== 'quoting' ? (
+            <NetworkFee
+              networkFee={quote.network_fee}
+              merchantName={gasless.merchantName}
+              token={token}
+              coin={plan?.nativeSymbol ?? null}
+              disabled={busy}
+              choice={
+                choiceShown
+                  ? {
+                      mode: quote.network_fee?.fee_mode === 'native' ? 'native' : 'token',
+                      tokenFeeAmount: plan?.option?.token_fee?.amount ?? null,
+                      onChoose: (m) =>
+                        adapterRef.current && void quoteForWallet(adapterRef.current, address, m),
+                    }
+                  : null
+              }
+            />
+          ) : null}
+          {plan?.unavailable && UNAVAILABLE_COPY[plan.unavailable] ? (
+            <p className="muted small">{UNAVAILABLE_COPY[plan.unavailable]}</p>
+          ) : null}
+          {livemode || gaslessQuote ? (
+            <>
+              <button
+                type="button"
+                className="pay-button"
+                onClick={() => void pay()}
+                disabled={!payable}
+                aria-busy={phase === 'sending'}
+              >
+                {phase === 'sending'
+                  ? progress
+                    ? PROGRESS_COPY[progress]
+                    : 'Confirm in your wallet…'
+                  : phase === 'quoting'
+                    ? 'Updating your price…'
+                    : `Pay ${amount ?? ''} ${token.symbol}`}
+              </button>
+              {!livemode ? (
+                <p className="muted small">
+                  Test mode: your wallet signs, but nothing is sent on chain.
+                </p>
+              ) : null}
+            </>
           ) : (
             <p className="muted small">
               Test mode: payments aren&apos;t sent from wallets. Use the test controls below.
@@ -317,6 +551,15 @@ export function WalletPanel({
         <p className="pay-error" role="alert">
           {message}
         </p>
+      ) : null}
+      {canRetry && phase === 'ready' ? (
+        <button
+          type="button"
+          className="pay-button pay-button-secondary"
+          onClick={() => void pay()}
+        >
+          Try again
+        </button>
       ) : null}
       {offerWindow ? (
         <button

@@ -8,6 +8,8 @@
 // - Every adapter checks each request against the quote it was made for (`assertDepositMatches`
 //   in ./match.ts): the same asset, the exact base-unit amount (BigInt), a well-formed address.
 
+import type { GaslessSigner } from './gasless/index';
+
 export type ChainFamily = 'evm' | 'solana' | 'bitcoin' | 'tron' | 'near';
 
 /** What to send: the locked quote's deposit address, asset and base-unit amount. */
@@ -25,6 +27,8 @@ export interface SendHooks {
 
 export interface WalletAdapter {
   chainFamily: ChainFamily;
+  /** Gasless signing (project 5a) when this family supports it; see ./gasless/index.ts. */
+  gasless?: GaslessSigner;
   connect(): Promise<{ address: string; chainId?: string }>;
   /**
    * Sends exactly `q`. `hooks.onSigned` is called with the tx id when the adapter learns it

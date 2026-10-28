@@ -117,6 +117,8 @@ export default defineConfig({
         // No Reown project, whatever the root .env says: no WalletConnect traffic in the e2e (and
         // the checkout spec aborts every non-local request anyway).
         NEXT_PUBLIC_REOWN_PROJECT_ID: '',
+        // EVM wallets come from the test wallet the gasless spec injects as window.ethereum.
+        NEXT_PUBLIC_E2E_INJECTED_WALLET: '1',
       },
     },
     {
