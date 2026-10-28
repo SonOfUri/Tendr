@@ -1,31 +1,37 @@
 // Gasless Solana token payments through Pimlico's Solana paymaster (project 5a, spec §2.3 Solana,
-// §2.5, §9.1; rulings T7-a … T7-d). Pimlico runs Kora (`https://solana.pimlico.io/v1/{mainnet|
-// devnet}/rpc?apikey=…`, network PIMLICO_SOLANA_NETWORK, key = the stored `pimlico` secret, never
-// sent to the browser or logged).
+// §2.5, §9.1; rulings T7-a … T7-d, fix-round rulings I1–I3). Pimlico runs Kora
+// (`https://solana.pimlico.io/v1/{mainnet|devnet}/rpc?apikey=…`, network PIMLICO_SOLANA_NETWORK,
+// key = the stored `pimlico` secret, never sent to the browser or logged).
 //
-//   prepare   the paymaster's fee payer (`getPayerSigner`) and a fresh blockhash (`getBlockhash`),
-//             then the v0 transaction of relayer/solana-tx.ts: the payment `transferChecked` of
+//   prepare   refused (409 CONFLICT) while a submission of the quote may still land. Then the
+//             paymaster's fee payer (`getPayerSigner`) and a fresh blockhash (`getBlockhash`),
+//             and the v0 transaction of relayer/solana-tx.ts: the payment `transferChecked` of
 //             `amount_in` to the deposit address's token account (created, paymaster as rent
 //             payer, when it does not exist yet), plus, when the shopper pays the fee, a
 //             `transferChecked` of `fee_amount` to the `gas-fees-solana` token account. Always
-//             sponsored by Pimlico (no Kora payment instruction, ruling T7-a): the SOL fee and
-//             rent come from Tendr's Pimlico balance. The blockhash is recorded (Redis) as issued
-//             for the quote at that time.
-//   submit    the shared pipeline (relayer/submissions.ts) with the Solana check: the partially
-//             signed transaction is decoded and must be EXACTLY the quote's payment (ruling T7-b),
-//             signed by the quote's wallet, fee payer = the paymaster; its blockhash must have
-//             been issued for this quote at most 60 s ago (else 409 GASLESS_EXPIRED: the pay page
-//             prepares again). Tendr's daily loss cap refuses in both modes (Tendr's Pimlico
-//             balance pays either way). Then Kora `signAndSendTransaction`: the paymaster signs
-//             and broadcasts. Its signature is the transaction id.
-//   outcome   `pollSolanaRelays` (worker): `getSignatureStatuses` / `getTransaction` on
-//             SOLANA_RPC_URL. The actual cost is what the fee payer's balance lost (fee + rent);
-//             a shopper fee leg's revenue is the gas-fee token account's balance change (capped
-//             at the fee signed). Never landed once the blockhash expired → failed, no gas. A
-//             submit whose Kora call got no answer stays `pending` (never a second payment): the
-//             poller finds it on chain by the shopper's signature, or undoes the claim once the
-//             blockhash can no longer land. Settlement, release and loss follow the shared
-//             lifecycle; cost above what is recovered counts toward the daily loss cap.
+//             sponsored by Pimlico (no Kora payment instruction, ruling T7-a). The blockhash is
+//             recorded (Redis) as issued for the quote, with the time and that fee payer.
+//   submit    the shared pipeline (relayer/submissions.ts) with the Solana check: the blockhash
+//             must have been issued for this quote at most 60 s ago (else 409 GASLESS_EXPIRED),
+//             and the partially signed transaction must be EXACTLY the quote's payment (ruling
+//             T7-b), signed by the quote's wallet, fee payer = the recorded paymaster. Tendr's
+//             daily loss cap refuses in both modes. Then:
+//               1. Kora `signTransaction`: the paymaster co-signs; nothing is sent. Any failure
+//                  → not broadcast (claim undone, the shopper may retry).
+//               2. The returned bytes must be ours plus a valid fee-payer signature: that
+//                  signature is the transaction id.
+//               3. The id and the signed bytes are stored on the submission (a failure → not
+//                  broadcast).
+//               4. Tendr broadcasts through SOLANA_RPC_URL `sendTransaction`. A preflight
+//                  refusal → not broadcast (claim undone). Any other failure → `submitted`
+//                  anyway: the poller re-sends the same bytes.
+//   outcome   `pollSolanaRelays` (worker), on the known id: `getSignatureStatuses` (confirmed)
+//             then `getTransaction`. The actual cost is what the fee payer's balance lost (fee +
+//             rent); a shopper fee leg's revenue is the gas-fee token account's balance change
+//             (capped at the fee signed). Not seen while the blockhash is valid → the same bytes
+//             are sent again; never landed once it expired → failed, no gas. Settlement, release
+//             and loss follow the shared lifecycle; cost above what is recovered counts toward
+//             the daily loss cap.
 //
 // Native SOL is never routed here (its sender pays its own fee). Test mode never calls Pimlico or
 // a Solana RPC: a simulated fee payer and blockhash, the same checks, and the transaction is
@@ -37,7 +43,6 @@ import { z } from 'zod';
 import { isValidAddress } from '../checkout/address-format.js';
 import { providerFor, simulatedOneClick } from '../checkout/oneclick/index.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
-import { env } from '../env.js';
 import { SIMULATED_FEE_USD, nativeUsd, solanaComputeUnitPrice } from '../gas/fees.js';
 import { lossCapReached } from '../gas/loss-cap.js';
 import { planNetworkFee, shopperReason } from '../gas/quote-fee.js';
@@ -46,8 +51,18 @@ import { AppError } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { getRedis } from '../lib/redis.js';
-import { pimlicoApiKey, recordUnrecovered } from './evm/pimlico.js';
+import { recordUnrecovered } from './evm/pimlico.js';
 import {
+  KoraClient,
+  KoraError,
+  SolanaRpc,
+  SolanaRpcError,
+  isSignature,
+  type SolanaTransaction,
+  type TokenBalance,
+} from './solana-clients.js';
+import {
+  ACTIVE,
   RelayNotBroadcast,
   applyRelayOutcome,
   assertRelayable,
@@ -63,8 +78,10 @@ import {
   associatedTokenAccount,
   buildPaymentTransaction,
   checkPaymentTransaction,
+  feePayerSignature,
   isSolanaAddress,
   solanaGaslessToken,
+  transactionBlockhash,
   type SolanaPayment,
 } from './solana-tx.js';
 import type {
@@ -79,14 +96,20 @@ import type {
   SubmitResult,
 } from './types.js';
 
+export { KoraClient, KoraError, SolanaRpc } from './solana-clients.js';
+
 /** A blockhash older than this at submit is refused (it expires on chain after ~60–90 s). */
 export const SOLANA_BLOCKHASH_MAX_AGE_MS = 60_000;
-/** How long the paymaster's fee payer address is reused. */
+/**
+ * A claimed submission still `pending` with no signed transaction stored this long after its last
+ * change is undone by the poller: nothing can have been sent for it (the transaction is stored
+ * before any broadcast) and its blockhash is past use.
+ */
+export const SOLANA_STALE_PENDING_MS = 3 * 60_000;
+/** How long the paymaster's fee payer address is reused at prepare. */
 const PAYER_CACHE_MS = 10 * 60_000;
 /** Test mode: the compute-unit price the simulated transaction sets. */
 const SIMULATED_CU_PRICE = 1_000n;
-/** A submit whose Kora call got no answer is reconciled only after this long. */
-const PENDING_GRACE_MS = 60_000;
 /** The `to_sign[].kind` of a Solana payment. */
 export const SOLANA_TO_SIGN_KIND = 'solana_transaction';
 
@@ -122,236 +145,32 @@ export async function solanaGasFeeAddress(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Kora (Pimlico's Solana paymaster)
-// ---------------------------------------------------------------------------------------------
-
-/**
- * A Kora call failed; the message never contains the API key. `refused`: Kora answered with an
- * error (nothing was sent). `unavailable`: no usable answer, but nothing can have been sent (HTTP
- * 4xx). `unknown`: no answer (network, timeout, 5xx): the transaction may have been sent.
- */
-export class KoraError extends Error {
-  constructor(
-    message: string,
-    readonly kind: 'refused' | 'unavailable' | 'unknown',
-  ) {
-    super(message);
-    this.name = 'KoraError';
-  }
-}
-
-function redact(s: string, key: string): string {
-  if (!key) return s;
-  let out = s;
-  for (const form of new Set([key, encodeURIComponent(key)])) {
-    out = out.split(form).join('[redacted]');
-  }
-  return out;
-}
-
-/** Kora's JSON-RPC on Pimlico: `https://solana.pimlico.io/v1/{network}/rpc?apikey=…`. */
-export class KoraClient {
-  constructor(
-    private readonly deps: {
-      fetch?: typeof fetch;
-      apiKey?: () => Promise<string>;
-      network?: () => 'mainnet' | 'devnet';
-      timeoutMs?: number;
-    } = {},
-  ) {}
-
-  private async request(method: string, params?: unknown): Promise<unknown> {
-    const key = await (this.deps.apiKey ?? pimlicoApiKey)();
-    const network = (this.deps.network ?? (() => env().PIMLICO_SOLANA_NETWORK))();
-    const url = `https://solana.pimlico.io/v1/${network}/rpc?apikey=${encodeURIComponent(key)}`;
-    let res: Response;
-    try {
-      res = await (this.deps.fetch ?? fetch)(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, ...(params ? { params } : {}) }),
-        signal: AbortSignal.timeout(this.deps.timeoutMs ?? 15_000),
-      });
-    } catch (err) {
-      throw new KoraError(`unreachable: ${redact(String(err), key).slice(0, 200)}`, 'unknown');
-    }
-    if (!res.ok) {
-      throw new KoraError(`HTTP ${res.status}`, res.status >= 500 ? 'unknown' : 'unavailable');
-    }
-    let body: { result?: unknown; error?: { code?: unknown; message?: unknown } };
-    try {
-      body = (await res.json()) as typeof body;
-    } catch {
-      throw new KoraError('invalid JSON response', 'unknown');
-    }
-    if (body?.error) {
-      const msg = typeof body.error.message === 'string' ? body.error.message : 'error';
-      throw new KoraError(
-        `${String(body.error.code)} ${redact(msg, key).slice(0, 300)}`,
-        'refused',
-      );
-    }
-    return body?.result ?? null;
-  }
-
-  async payerSigner(): Promise<string> {
-    const r = z
-      .object({ signer_address: z.string() })
-      .safeParse(await this.request('getPayerSigner'));
-    if (!r.success || !isSolanaAddress(r.data.signer_address)) {
-      throw new KoraError('unexpected getPayerSigner result', 'unavailable');
-    }
-    return r.data.signer_address;
-  }
-
-  async blockhash(): Promise<string> {
-    const r = z.object({ blockhash: z.string() }).safeParse(await this.request('getBlockhash'));
-    if (!r.success || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(r.data.blockhash)) {
-      throw new KoraError('unexpected getBlockhash result', 'unavailable');
-    }
-    return r.data.blockhash;
-  }
-
-  /** Signs as fee payer and broadcasts; returns the transaction signature (its id). */
-  async signAndSendTransaction(transaction: string): Promise<string> {
-    const raw = await this.request('signAndSendTransaction', { transaction });
-    const r = z.object({ signature: z.string() }).safeParse(raw);
-    if (!r.success || !isSignature(r.data.signature)) {
-      // Kora answered success: the transaction was sent, but its id is unreadable.
-      throw new KoraError('unexpected signAndSendTransaction result', 'unknown');
-    }
-    return r.data.signature;
-  }
-}
-
-function isSignature(s: string): boolean {
-  try {
-    return bs58.decode(s).length === 64;
-  } catch {
-    return false;
-  }
-}
-
-// ---------------------------------------------------------------------------------------------
-// Solana JSON-RPC (SOLANA_RPC_URL)
-// ---------------------------------------------------------------------------------------------
-
-const TokenBalanceSchema = z.object({
-  accountIndex: z.number().int(),
-  mint: z.string(),
-  owner: z.string().optional(),
-  uiTokenAmount: z.object({ amount: z.string().regex(/^\d+$/) }),
-});
-
-const TransactionSchema = z.object({
-  transaction: z.object({
-    signatures: z.array(z.string()),
-    message: z.object({ accountKeys: z.array(z.string()) }).optional(),
-  }),
-  meta: z
-    .object({
-      err: z.unknown(),
-      fee: z.number().int().nonnegative(),
-      preBalances: z.array(z.number()),
-      postBalances: z.array(z.number()),
-      computeUnitsConsumed: z.number().int().optional(),
-      preTokenBalances: z.array(TokenBalanceSchema).nullish(),
-      postTokenBalances: z.array(TokenBalanceSchema).nullish(),
-    })
-    .nullable(),
-});
-export type SolanaTransaction = z.infer<typeof TransactionSchema>;
-
-const StatusSchema = z
-  .object({ err: z.unknown(), confirmationStatus: z.string().nullish() })
-  .nullable();
-
-export class SolanaRpc {
-  constructor(
-    private readonly url: string = env().SOLANA_RPC_URL,
-    private readonly fetchImpl: typeof fetch = (u, i) => fetch(u, i),
-    private readonly timeoutMs = 10_000,
-  ) {}
-
-  private async call(method: string, params: unknown[]): Promise<unknown> {
-    const res = await this.fetchImpl(this.url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    });
-    if (!res.ok) throw new Error(`Solana RPC HTTP ${res.status}`);
-    const body = (await res.json()) as { result?: unknown; error?: { message?: unknown } };
-    if (body?.error)
-      throw new Error(`Solana RPC error: ${String(body.error.message).slice(0, 200)}`);
-    return body?.result ?? null;
-  }
-
-  /** Whether each account exists. */
-  async accountsExist(addresses: string[]): Promise<boolean[]> {
-    const r = (await this.call('getMultipleAccounts', [
-      addresses,
-      { encoding: 'base64', commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
-    ])) as { value?: unknown[] } | null;
-    const value = r?.value;
-    if (!Array.isArray(value) || value.length !== addresses.length) {
-      throw new Error('unexpected getMultipleAccounts result');
-    }
-    return value.map((v) => v !== null);
-  }
-
-  async signatureStatus(signature: string): Promise<z.infer<typeof StatusSchema>> {
-    const r = (await this.call('getSignatureStatuses', [
-      [signature],
-      { searchTransactionHistory: true },
-    ])) as { value?: unknown[] } | null;
-    return StatusSchema.parse(r?.value?.[0] ?? null);
-  }
-
-  async transaction(signature: string): Promise<SolanaTransaction | null> {
-    const raw = await this.call('getTransaction', [
-      signature,
-      { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 },
-    ]);
-    return raw === null ? null : TransactionSchema.parse(raw);
-  }
-
-  /** Whether the blockhash can still land a transaction (the most recent view). */
-  async isBlockhashValid(blockhash: string): Promise<boolean> {
-    const r = (await this.call('isBlockhashValid', [blockhash, { commitment: 'processed' }])) as {
-      value?: unknown;
-    } | null;
-    if (typeof r?.value !== 'boolean') throw new Error('unexpected isBlockhashValid result');
-    return r.value;
-  }
-
-  async signaturesForAddress(address: string, limit: number): Promise<string[]> {
-    const r = await this.call('getSignaturesForAddress', [address, { limit }]);
-    if (!Array.isArray(r)) throw new Error('unexpected getSignaturesForAddress result');
-    return r
-      .map((x) => (x as { signature?: unknown }).signature)
-      .filter((x): x is string => typeof x === 'string');
-  }
-}
-
-// ---------------------------------------------------------------------------------------------
 // Issued blockhashes
 // ---------------------------------------------------------------------------------------------
 
 const blockhashKey = (quoteId: string, blockhash: string) =>
   `tendr:gasless:sol-bh:${quoteId}:${blockhash}`;
 
-async function recordBlockhash(quoteId: string, blockhash: string, at: Date): Promise<void> {
+interface IssuedBlockhash {
+  at: number;
+  /** The paymaster fee payer the transaction was built for. */
+  feePayer: string;
+}
+
+async function recordBlockhash(quoteId: string, blockhash: string, v: IssuedBlockhash) {
   try {
-    await getRedis().set(blockhashKey(quoteId, blockhash), String(at.getTime()), 'EX', 300);
+    await getRedis().set(blockhashKey(quoteId, blockhash), JSON.stringify(v), 'EX', 300);
   } catch (err) {
     log('warn', 'solana gasless: blockhash store unavailable', { err: String(err) });
     throw unavailable();
   }
 }
 
-/** When Tendr issued `blockhash` for the quote; null if it never did (or long ago). */
-async function blockhashIssuedAt(quoteId: string, blockhash: string): Promise<number | null> {
+/** When (and for which fee payer) Tendr issued `blockhash` for the quote; null if it never did. */
+async function blockhashIssued(
+  quoteId: string,
+  blockhash: string,
+): Promise<IssuedBlockhash | null> {
   let v: string | null;
   try {
     v = await getRedis().get(blockhashKey(quoteId, blockhash));
@@ -359,32 +178,38 @@ async function blockhashIssuedAt(quoteId: string, blockhash: string): Promise<nu
     log('warn', 'solana gasless: blockhash store unavailable', { err: String(err) });
     throw unavailable();
   }
-  const at = v === null ? NaN : Number(v);
-  return Number.isFinite(at) ? at : null;
+  if (v === null) return null;
+  const r = z
+    .object({ at: z.number().finite(), feePayer: z.string() })
+    .safeParse(JSON.parse(v) as unknown);
+  return r.success ? r.data : null;
 }
 
 // ---------------------------------------------------------------------------------------------
 // The relayer
 // ---------------------------------------------------------------------------------------------
 
-/** What a Kora submission keeps (`gas_sponsorships.paymaster_data`). */
+/** What a Kora submission keeps (`gas_sponsorships.paymaster_data`), stored before broadcast. */
 interface StoredKora {
   kind: 'kora';
   blockhash: string;
   feePayer: string;
-  /** The shopper's signature: finds the transaction on chain when Kora's answer was lost. */
-  shopperSignature: string;
+  /** The fee payer's signature: the transaction id. */
+  signature: string;
+  /** The fully signed transaction (base64): re-sent as is until it lands or expires. */
+  transaction: string;
 }
 
+const StoredKoraSchema = z.object({
+  kind: z.literal('kora'),
+  blockhash: z.string(),
+  feePayer: z.string(),
+  signature: z.string(),
+  transaction: z.string(),
+});
+
 function storedKora(v: Prisma.JsonValue | null): StoredKora | null {
-  const r = z
-    .object({
-      kind: z.literal('kora'),
-      blockhash: z.string(),
-      feePayer: z.string(),
-      shopperSignature: z.string(),
-    })
-    .safeParse(v);
+  const r = StoredKoraSchema.safeParse(v);
   return r.success ? r.data : null;
 }
 
@@ -393,7 +218,6 @@ interface SolanaRelayCall {
   transaction: string;
   blockhash: string;
   feePayer: string;
-  shopperSignature: string;
 }
 
 export interface SolanaGaslessDeps {
@@ -402,6 +226,23 @@ export interface SolanaGaslessDeps {
   /** Live compute-unit price (micro-lamports); default the median recent priority fee. */
   priorityFee?: () => Promise<bigint>;
   now?: () => Date;
+  /** Records the signed transaction on the claimed submission (default: the DB; tests fail it). */
+  record?: typeof recordSigned;
+}
+
+/** Writes the signed transaction and its id on the claimed (`pending`) submission. */
+async function recordSigned(
+  scope: { merchantId: string; livemode: boolean },
+  id: string,
+  stored: StoredKora,
+): Promise<void> {
+  const { count } = await tenantTransaction(scope, (tx) =>
+    tx.gasSponsorship.updateMany({
+      where: { ...scope, id, status: 'pending' },
+      data: { txHash: stored.signature, paymasterData: stored as unknown as Prisma.InputJsonValue },
+    }),
+  );
+  if (count !== 1) throw new Error('submission no longer pending');
 }
 
 const scopeOf = (q: QuoteContext) => ({
@@ -487,7 +328,7 @@ export class SolanaGasless implements GaslessRelayer {
   }
 
   /** Everything the transaction binds: from the quote, the paymaster and the gas-fee key. */
-  private async payment(q: QuoteContext): Promise<SolanaPayment> {
+  private async payment(q: QuoteContext, feePayer: string): Promise<SolanaPayment> {
     const token = solanaGaslessToken(q.quote.originAssetId);
     if (
       !token ||
@@ -509,7 +350,7 @@ export class SolanaGasless implements GaslessRelayer {
       throw gaslessNotAvailable();
     }
     return {
-      feePayer: await this.feePayer(),
+      feePayer,
       wallet: q.quote.walletAddress!,
       mint: token.mint,
       decimals: token.decimals,
@@ -535,7 +376,20 @@ export class SolanaGasless implements GaslessRelayer {
     ) {
       throw mismatch('fee_mode');
     }
-    const p = await this.payment(q);
+    // Never a second transaction for the quote while an earlier one may still land.
+    const active = await prisma.gasSponsorship.findFirst({
+      where: { ...scopeOf(q), quoteId: q.quote.id, status: ACTIVE },
+      select: { id: true },
+    });
+    if (active) {
+      throw new AppError(
+        'CONFLICT',
+        'A payment for this quote is already in flight; wait for its outcome',
+        409,
+        { submission_id: active.id },
+      );
+    }
+    const p = await this.payment(q, await this.feePayer());
     await this.assertUnderLossCap(q);
     const deposit = await associatedTokenAccount(p.depositAddress, p.mint);
     const feeAccount = p.feeOwner ? await associatedTokenAccount(p.feeOwner, p.mint) : null;
@@ -573,7 +427,7 @@ export class SolanaGasless implements GaslessRelayer {
       cuLimit: SOLANA_GASLESS_CU_LIMIT,
       cuPrice,
     });
-    await recordBlockhash(q.quote.id, blockhash, now);
+    await recordBlockhash(q.quote.id, blockhash, { at: now.getTime(), feePayer: p.feePayer });
     const transfers = [
       {
         leg: 'payment',
@@ -623,13 +477,20 @@ export class SolanaGasless implements GaslessRelayer {
     };
   }
 
-  /** Checks the signed transaction (ruling T7-b) and its blockhash's age (ruling T7-d). */
+  /** Checks the blockhash's age (ruling T7-d), then the signed transaction (ruling T7-b). */
   private async verify(q: QuoteContext, signed: SignedPayload): Promise<SolanaRelayCall> {
     if (!signed.transaction || Object.keys(signed.signatures).length > 0) {
       throw mismatch('transaction');
     }
     await this.assertUnderLossCap(q);
-    const p = await this.payment(q);
+    const blockhash = transactionBlockhash(signed.transaction);
+    if (!blockhash) throw mismatch('transaction');
+    const issued = await blockhashIssued(q.quote.id, blockhash);
+    if (!issued || this.now().getTime() - issued.at > SOLANA_BLOCKHASH_MAX_AGE_MS) {
+      throw expired();
+    }
+    // The fee payer the transaction was built for (Kora may rotate its signer meanwhile).
+    const p = await this.payment(q, issued.feePayer);
     let checked;
     try {
       checked = await checkPaymentTransaction(p, signed.transaction);
@@ -637,11 +498,7 @@ export class SolanaGasless implements GaslessRelayer {
       if (err instanceof SolanaTxMismatch) throw mismatch(err.field);
       throw err;
     }
-    const issued = await blockhashIssuedAt(q.quote.id, checked.blockhash);
-    if (issued === null || this.now().getTime() - issued > SOLANA_BLOCKHASH_MAX_AGE_MS) {
-      throw expired();
-    }
-    return { ...checked, feePayer: p.feePayer };
+    return { transaction: checked.transaction, blockhash, feePayer: p.feePayer };
   }
 
   async submit(q: QuoteContext, signed: SignedPayload): Promise<SubmitResult> {
@@ -656,46 +513,68 @@ export class SolanaGasless implements GaslessRelayer {
     return { ...res, status: 'confirmed' };
   }
 
+  /** Sign (Kora) → store the id and bytes → send (SOLANA_RPC_URL). See the file header. */
   private async broadcast(
     q: QuoteContext,
     call: SolanaRelayCall,
     id: string,
   ): Promise<{ txHash: string }> {
     if (!this.live) return { txHash: simulatedSignature(id) };
+    let signedTx: string;
+    try {
+      signedTx = await this.kora.signTransaction(call.transaction);
+    } catch (err) {
+      // Kora only signs: nothing was sent, whatever the error.
+      const reason = err instanceof KoraError ? err.message : 'request failed';
+      log('warn', 'solana gasless: Kora did not sign', { submissionId: id, reason });
+      throw new RelayNotBroadcast(
+        reason,
+        err instanceof KoraError && err.kind === 'refused' ? 'simulation_reverted' : 'unavailable',
+      );
+    }
+    let signature: string;
+    try {
+      signature = feePayerSignature(call.transaction, signedTx, call.feePayer);
+    } catch {
+      log('error', 'solana gasless: Kora returned another transaction', { submissionId: id });
+      throw new RelayNotBroadcast('the paymaster returned an unexpected transaction', 'rejected');
+    }
     const stored: StoredKora = {
       kind: 'kora',
       blockhash: call.blockhash,
       feePayer: call.feePayer,
-      shopperSignature: call.shopperSignature,
+      signature,
+      transaction: signedTx,
     };
-    // Before Kora sends anything: enough to find the transaction on chain if the answer is lost.
     const scope = scopeOf(q);
-    await tenantTransaction(scope, (tx) =>
-      tx.gasSponsorship.updateMany({
-        where: { ...scope, id, status: 'pending' },
-        data: { paymasterData: stored as unknown as Prisma.InputJsonValue },
-      }),
-    );
     try {
-      return { txHash: await this.kora.signAndSendTransaction(call.transaction) };
+      await (this.deps.record ?? recordSigned)(scope, id, stored);
     } catch (err) {
-      const reason = err instanceof KoraError ? err.message : 'request failed';
-      if (err instanceof KoraError && err.kind === 'refused') {
-        log('warn', 'solana gasless: Kora refused the transaction', { submissionId: id, reason });
-        throw new RelayNotBroadcast(reason, 'simulation_reverted');
-      }
-      if (err instanceof KoraError && err.kind === 'unavailable') {
-        log('warn', 'solana gasless: Kora unavailable', { submissionId: id, reason });
-        throw new RelayNotBroadcast(reason, 'unavailable');
-      }
-      // The transaction may have been sent: the submission stays pending (a retry returns it,
-      // never a second payment) and the poller reconciles it on chain.
-      log('warn', 'solana gasless: no answer from Kora; outcome unknown', {
+      // Never broadcast a transaction whose id is not recorded.
+      log('warn', 'solana gasless: could not record the transaction', {
         submissionId: id,
-        reason,
+        err: String(err),
       });
-      throw unavailable();
+      throw new RelayNotBroadcast('the transaction could not be recorded', 'unavailable');
     }
+    try {
+      await this.rpc.sendTransaction(signedTx);
+    } catch (err) {
+      if (err instanceof SolanaRpcError && err.preflightRefused) {
+        // The node refused it in preflight and did not forward it.
+        log('warn', 'solana gasless: preflight refused the transaction', {
+          submissionId: id,
+          reason: err.message,
+        });
+        throw new RelayNotBroadcast(err.message, 'simulation_reverted');
+      }
+      // It may have been forwarded: `submitted` with its known id; the poller re-sends it.
+      log('warn', 'solana gasless: broadcast outcome unknown; the poller re-sends', {
+        submissionId: id,
+        err: String(err),
+      });
+    }
+    return { txHash: signature };
   }
 
   /** Test mode: the transaction "lands" at once and the deposit reaches the simulated 1Click. */
@@ -753,7 +632,7 @@ export function tokenBalanceIncrease(
   const keys = tx.transaction.message?.accountKeys ?? [];
   const index = keys.indexOf(where.account);
   if (index < 0 || !tx.meta) return 0n;
-  const amountAt = (list: z.infer<typeof TokenBalanceSchema>[] | null | undefined) => {
+  const amountAt = (list: TokenBalance[] | null | undefined) => {
     const b = (list ?? []).find((x) => x.accountIndex === index && x.mint === where.mint);
     return b ? BigInt(b.uiTokenAmount.amount) : 0n;
   };
@@ -763,8 +642,9 @@ export function tokenBalanceIncrease(
 }
 
 /**
- * One pass over Kora submissions awaiting their outcome (see the file header). Returns how many
- * outcomes were applied.
+ * One pass over Kora submissions awaiting their outcome (see the file header). Every row visited
+ * is marked checked (rows rotate, so failing rows cannot starve the rest). Returns how many
+ * outcomes were applied (claims undone included).
  */
 export async function pollSolanaRelays(
   deps: { rpc?: SolanaRpc; now?: () => Date; livemode?: boolean } = {},
@@ -785,100 +665,163 @@ export async function pollSolanaRelays(
   });
   let applied = 0;
   for (const row of rows) {
-    const stored = storedKora(row.paymasterData);
-    if (!row.quote || !stored) continue;
     const scope = { merchantId: row.merchantId, livemode: row.livemode };
     try {
-      if (row.status === 'pending') {
-        await reconcileUnanswered(rpc, row, stored, now);
-        continue;
-      }
-      const signature = row.txHash!;
-      let status = await rpc.signatureStatus(signature);
-      if (!status) {
-        if (await rpc.isBlockhashValid(stored.blockhash)) {
-          await touch(row.id, now);
-          continue;
-        }
-        // Expired: anything that could still land is visible by now.
-        status = await rpc.signatureStatus(signature);
-        if (!status) {
-          if (
-            await applyRelayOutcome(
-              row.id,
-              {
-                status: 'failed',
-                txHash: null,
-                gasUsed: null,
-                costUsd: null,
-                reason: 'the transaction never landed (blockhash expired)',
-                feeMoved: null,
-              },
-              now,
-            )
-          ) {
+      if (!row.quote) continue;
+      const stored = storedKora(row.paymasterData);
+      if (!stored || !isSignature(stored.signature)) {
+        // Claimed, but nothing was ever signed and stored: nothing can have been sent.
+        if (row.status === 'pending') {
+          if (now.getTime() - row.updatedAt.getTime() >= SOLANA_STALE_PENDING_MS) {
+            await undoClaim(scope, row.id, 'the transaction was never recorded or sent');
             applied++;
           }
           continue;
         }
-      }
-      if (status.confirmationStatus !== 'confirmed' && status.confirmationStatus !== 'finalized') {
+        log('error', 'solana gasless: submitted row without its transaction', {
+          sponsorshipId: row.id,
+        });
         await touch(row.id, now);
         continue;
       }
-      const tx = await rpc.transaction(signature);
-      if (!tx?.meta) {
-        await touch(row.id, now);
-        continue;
+      if (row.status === 'pending') {
+        // Stored but the submit stopped before marking it: it may have been sent.
+        await markSent(scope, row.id, row.quote, stored.signature, now);
       }
-      const ok = tx.meta.err === null || tx.meta.err === undefined;
-      // What the fee payer's balance lost: the fee and the rent of any account it created.
-      const payerIndex = tx.transaction.message?.accountKeys.indexOf(stored.feePayer) ?? 0;
-      const pre = tx.meta.preBalances[payerIndex < 0 ? 0 : payerIndex] ?? 0;
-      const post = tx.meta.postBalances[payerIndex < 0 ? 0 : payerIndex] ?? 0;
-      const lamports = BigInt(Math.max(pre - post, tx.meta.fee));
-      let costUsd: string | null = null;
-      try {
-        costUsd = await nativeUsd('sol', lamports, row.livemode);
-      } catch (err) {
-        log('warn', 'solana gasless: cost unpriced', { sponsorshipId: row.id, err: String(err) });
-      }
-      let feeMoved: bigint | null = null;
-      if (ok && row.sponsor === 'shopper' && row.feeAsset && row.feeAmount) {
-        const token = solanaGaslessToken(row.feeAsset);
-        feeMoved = token
-          ? tokenBalanceIncrease(tx, {
-              account: await associatedTokenAccount(await solanaGasFeeAddress(), token.mint),
-              mint: token.mint,
-              cap: BigInt(row.feeAmount.toFixed(0)),
-            })
-          : 0n;
-      }
-      const did = await applyRelayOutcome(
-        row.id,
-        {
-          status: ok ? 'confirmed' : 'failed',
-          txHash: signature,
-          gasUsed: BigInt(tx.meta.computeUnitsConsumed ?? tx.meta.fee),
-          costUsd,
-          reason: ok ? null : `failed on chain: ${JSON.stringify(tx.meta.err).slice(0, 200)}`,
-          feeMoved,
-        },
-        now,
-      );
-      if (did) {
-        applied++;
-        await recordUnrecovered(row.id, now);
-      }
+      if (await applyOutcome(rpc, row, stored, now)) applied++;
     } catch (err) {
       log('warn', 'solana gasless: outcome lookup failed', {
         sponsorshipId: row.id,
-        scope: scope.livemode ? 'live' : 'test',
         err: String(err),
       });
+      try {
+        await touch(row.id, now);
+      } catch {
+        // The next pass retries.
+      }
     }
   }
   return applied;
+}
+
+/** The submission is `submitted` with its id; the quote records the deposit tx; 1Click is told. */
+async function markSent(
+  scope: { merchantId: string; livemode: boolean },
+  id: string,
+  quote: { id: string; depositAddress: string },
+  signature: string,
+  now: Date,
+): Promise<void> {
+  await tenantTransaction(scope, async (t) => {
+    await t.gasSponsorship.updateMany({
+      where: { ...scope, id, status: 'pending' },
+      data: { status: 'submitted', txHash: signature },
+    });
+    await t.quote.updateMany({
+      where: { ...scope, id: quote.id, depositTxHash: null },
+      data: { depositTxHash: signature, depositTxSubmittedAt: now },
+    });
+  });
+  try {
+    await providerFor(scope.livemode).submitDeposit(signature, quote.depositAddress);
+  } catch (err) {
+    log('warn', 'solana gasless: 1Click deposit notice failed', {
+      sponsorshipId: id,
+      err: String(err),
+    });
+  }
+}
+
+/** One submitted transaction: wait / re-send / apply its outcome. True when an outcome applied. */
+async function applyOutcome(
+  rpc: SolanaRpc,
+  row: {
+    id: string;
+    livemode: boolean;
+    sponsor: string;
+    feeAsset: string | null;
+    feeAmount: Prisma.Decimal | null;
+  },
+  stored: StoredKora,
+  now: Date,
+): Promise<boolean> {
+  const signature = stored.signature;
+  let status = await rpc.signatureStatus(signature);
+  if (!status) {
+    if (await rpc.isBlockhashValid(stored.blockhash)) {
+      // Not seen yet and it can still land: send the same bytes again (same id, lands once).
+      try {
+        await rpc.sendTransaction(stored.transaction);
+      } catch (err) {
+        log('warn', 'solana gasless: re-send failed', { sponsorshipId: row.id, err: String(err) });
+      }
+      await touch(row.id, now);
+      return false;
+    }
+    // Expired: anything that could still land is visible by now.
+    status = await rpc.signatureStatus(signature);
+    if (!status) {
+      return applyRelayOutcome(
+        row.id,
+        {
+          status: 'failed',
+          txHash: null,
+          gasUsed: null,
+          costUsd: null,
+          reason: 'the transaction never landed (blockhash expired)',
+          feeMoved: null,
+        },
+        now,
+      );
+    }
+  }
+  if (status.confirmationStatus !== 'confirmed' && status.confirmationStatus !== 'finalized') {
+    await touch(row.id, now);
+    return false;
+  }
+  const tx = await rpc.transaction(signature);
+  if (!tx?.meta) {
+    await touch(row.id, now);
+    return false;
+  }
+  const ok = tx.meta.err === null || tx.meta.err === undefined;
+  // What the fee payer's balance lost: the fee and the rent of any account it created.
+  const found = tx.transaction.message?.accountKeys.indexOf(stored.feePayer) ?? 0;
+  const payerIndex = found < 0 ? 0 : found;
+  const pre = tx.meta.preBalances[payerIndex] ?? 0;
+  const post = tx.meta.postBalances[payerIndex] ?? 0;
+  const lamports = BigInt(Math.max(pre - post, tx.meta.fee));
+  let costUsd: string | null = null;
+  try {
+    costUsd = await nativeUsd('sol', lamports, row.livemode);
+  } catch (err) {
+    log('warn', 'solana gasless: cost unpriced', { sponsorshipId: row.id, err: String(err) });
+  }
+  let feeMoved: bigint | null = null;
+  if (ok && row.sponsor === 'shopper' && row.feeAsset && row.feeAmount) {
+    const token = solanaGaslessToken(row.feeAsset);
+    feeMoved = token
+      ? tokenBalanceIncrease(tx, {
+          account: await associatedTokenAccount(await solanaGasFeeAddress(), token.mint),
+          mint: token.mint,
+          cap: BigInt(row.feeAmount.toFixed(0)),
+        })
+      : 0n;
+  }
+  const did = await applyRelayOutcome(
+    row.id,
+    {
+      status: ok ? 'confirmed' : 'failed',
+      txHash: signature,
+      gasUsed: BigInt(tx.meta.computeUnitsConsumed ?? tx.meta.fee),
+      costUsd,
+      reason: ok ? null : `failed on chain: ${JSON.stringify(tx.meta.err).slice(0, 200)}`,
+      feeMoved,
+    },
+    now,
+  );
+  if (did) await recordUnrecovered(row.id, now);
+  return did;
 }
 
 /** Marks a row checked (the next pass visits rows not checked for longest first). */
@@ -887,57 +830,6 @@ async function touch(id: string, now: Date): Promise<void> {
     where: { id, status: { in: ['pending', 'submitted'] } },
     data: { updatedAt: now },
   });
-}
-
-/**
- * A submit whose Kora call got no answer: once its blockhash can no longer land, look for the
- * shopper's signed transaction among the wallet's recent transactions. Found → `submitted` with
- * its signature (the next pass applies the outcome). Not found → nothing can land any more: the
- * claim is undone (a sponsored hold stays held; a shopper row fails) so the shopper can retry.
- */
-async function reconcileUnanswered(
-  rpc: SolanaRpc,
-  row: {
-    id: string;
-    merchantId: string;
-    livemode: boolean;
-    signerAddress: string | null;
-    updatedAt: Date;
-    quote: { id: string; depositAddress: string; walletAddress: string | null } | null;
-  },
-  stored: StoredKora,
-  now: Date,
-): Promise<void> {
-  if (now.getTime() - row.updatedAt.getTime() < PENDING_GRACE_MS) return;
-  if (await rpc.isBlockhashValid(stored.blockhash)) return;
-  const wallet = row.signerAddress ?? row.quote?.walletAddress;
-  if (!wallet || !row.quote) return;
-  const scope = { merchantId: row.merchantId, livemode: row.livemode };
-  for (const sig of await rpc.signaturesForAddress(wallet, 25)) {
-    const tx = await rpc.transaction(sig);
-    if (!tx?.transaction.signatures.includes(stored.shopperSignature)) continue;
-    const quote = row.quote;
-    await tenantTransaction(scope, async (t) => {
-      await t.gasSponsorship.updateMany({
-        where: { ...scope, id: row.id, status: 'pending' },
-        data: { status: 'submitted', txHash: sig },
-      });
-      await t.quote.updateMany({
-        where: { ...scope, id: quote.id, depositTxHash: null },
-        data: { depositTxHash: sig, depositTxSubmittedAt: now },
-      });
-    });
-    try {
-      await providerFor(row.livemode).submitDeposit(sig, quote.depositAddress);
-    } catch (err) {
-      log('warn', 'solana gasless: 1Click deposit notice failed', {
-        sponsorshipId: row.id,
-        err: String(err),
-      });
-    }
-    return;
-  }
-  await undoClaim(scope, row.id, 'no answer from the paymaster and the transaction never landed');
 }
 
 /** Drops cached state (tests). */

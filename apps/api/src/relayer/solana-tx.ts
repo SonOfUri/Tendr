@@ -208,7 +208,7 @@ export async function buildPaymentTransaction(
         { blockhash: toBlockhash(o.blockhash), lastValidBlockHeight: 0n },
         m,
       ),
-    (m) => setTransactionMessageComputeUnitLimit(o.cuLimit, m),
+    (m) => (o.cuLimit > 0 ? setTransactionMessageComputeUnitLimit(o.cuLimit, m) : m),
     (m) => (o.cuPrice > 0n ? setTransactionMessageComputeUnitPrice(o.cuPrice, m) : m),
     (m) => appendTransactionMessageInstructions(ixs, m),
   );
@@ -294,6 +294,7 @@ export async function checkPaymentTransaction(
     throw new SolanaTxMismatch('transaction.address_table_lookups');
   }
   const keys = msg.staticAccounts as readonly string[];
+  if (new Set(keys).size !== keys.length) throw new SolanaTxMismatch('transaction.accounts');
   if (msg.header.numSignerAccounts !== 2 || msg.header.numReadonlySignerAccounts !== 1) {
     throw new SolanaTxMismatch('transaction.signers');
   }
@@ -358,6 +359,8 @@ export async function checkPaymentTransaction(
     }
     i++;
   }
+  // Without a limit the runtime allows 200 000 CU per instruction: a price needs a limit.
+  if (priceSeen && !limitSeen) throw new SolanaTxMismatch('transaction.compute_unit_limit');
   // Idempotent creates of the deposit's and the gas-fee owner's token accounts, paymaster pays.
   const creatable = new Map<string, string>([[accounts.deposit, p.depositAddress]]);
   if (accounts.fee && p.feeOwner) creatable.set(accounts.fee, p.feeOwner);
@@ -403,6 +406,65 @@ export async function checkPaymentTransaction(
     blockhash: msg.lifetimeToken,
     shopperSignature: bs58.encode(shopperSig),
   };
+}
+
+/** Splits wire bytes into the signature slots and the message (null when malformed). */
+function splitWire(base64: string): { sigs: Uint8Array[]; message: Uint8Array } | null {
+  const bytes = new Uint8Array(Buffer.from(base64, 'base64'));
+  if (bytes.length === 0 || Buffer.from(bytes).toString('base64') !== base64) return null;
+  let count: number;
+  let at: number;
+  try {
+    [count, at] = readCompactU16(bytes, 0);
+  } catch {
+    return null;
+  }
+  if (count < 1 || count > 8 || bytes.length <= at + 64 * count) return null;
+  const sigs: Uint8Array[] = [];
+  for (let k = 0; k < count; k++) sigs.push(bytes.slice(at + 64 * k, at + 64 * (k + 1)));
+  return { sigs, message: bytes.slice(at + 64 * count) };
+}
+
+/** The blockhash a wire transaction names, without checking anything else (null if unreadable). */
+export function transactionBlockhash(base64: string): string | null {
+  const w = splitWire(base64);
+  if (!w) return null;
+  try {
+    return getCompiledTransactionMessageDecoder().decode(w.message).lifetimeToken;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Checks what the paymaster returned from `signTransaction`: the same message and the same
+ * shopper signature as `submitted`, plus a valid fee-payer signature by `feePayer` in slot 0.
+ * Returns that signature (base58): the transaction's id. Throws SolanaTxMismatch.
+ */
+export function feePayerSignature(submitted: string, signed: string, feePayer: string): string {
+  const a = splitWire(submitted);
+  const b = splitWire(signed);
+  if (!a || !b || a.sigs.length !== 2 || b.sigs.length !== 2) {
+    throw new SolanaTxMismatch('signed_transaction');
+  }
+  if (
+    Buffer.compare(Buffer.from(a.message), Buffer.from(b.message)) !== 0 ||
+    Buffer.compare(Buffer.from(a.sigs[1]!), Buffer.from(b.sigs[1]!)) !== 0
+  ) {
+    throw new SolanaTxMismatch('signed_transaction');
+  }
+  let ok = false;
+  try {
+    ok = ed25519.verify(
+      b.sigs[0]!,
+      b.message,
+      getAddressEncoder().encode(address(feePayer)) as Uint8Array,
+    );
+  } catch {
+    ok = false;
+  }
+  if (!ok) throw new SolanaTxMismatch('signed_transaction.fee_payer_signature');
+  return bs58.encode(b.sigs[0]!);
 }
 
 /** Whether `s` is a base58 Solana address (32 bytes). */

@@ -724,10 +724,13 @@ fee share, 1Click's fee and the spread.
   1Click token list (asset id ↔ `contractAddress` = the mint, SPL Token program, decimals). Confirm
   Pimlico accepts our transaction shape: the paymaster as rent payer of idempotent associated token
   account creates, our compute-unit limit and price (≤ 200 000 CU, ≤ 1 000 000 µlamports/CU), no
-  payment instruction (Tendr-sponsored), and that a `signAndSendTransaction` JSON-RPC error means
-  nothing was sent (the shopper may retry after one). `SOLANA_RPC_URL` must serve
-  `getSignatureStatuses` with history, `getTransaction`, `isBlockhashValid`,
-  `getSignaturesForAddress` and `getMultipleAccounts`. Then pay a few cents of USDC from Phantom
+  payment instruction (Tendr-sponsored), and that Pimlico serves Kora `signTransaction` (sign
+  only; Tendr broadcasts) and never sends what it signs. Check whether Pimlico uses one fee payer
+  or a pool (the fee payer is recorded per prepared blockhash; a pool that signs with another key
+  than `getPayerSigner` returned makes every submit fail). Create the `gas-fees-solana` USDC/USDT
+  token accounts once before go-live (their one-time rent is in no quote). `SOLANA_RPC_URL` must
+  serve `sendTransaction` (with preflight), `getSignatureStatuses` with history,
+  `getTransaction`, `isBlockhashValid` and `getMultipleAccounts`. Then pay a few cents of USDC from Phantom
   and Solflare, merchant-sponsored and shopper-paid, and check the watcher marks it paid, the poll
   job records the SOL cost, and the fee lands in the `gas-fees-solana` token account.
 

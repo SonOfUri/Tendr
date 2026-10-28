@@ -282,7 +282,14 @@ export async function undoClaim(scope: Scope, id: string, reason: string): Promi
   await tenantTransaction(scope, async (tx) => {
     await tx.gasSponsorship.updateMany({
       where: { ...scope, id, status: 'pending', sponsor: 'merchant' },
-      data: { quoteId: null, signerAddress: null, lastError },
+      // A transaction recorded for the undone attempt (Solana) was never sent: forget it.
+      data: {
+        quoteId: null,
+        signerAddress: null,
+        lastError,
+        txHash: null,
+        paymasterData: Prisma.DbNull,
+      },
     });
     await tx.gasSponsorship.updateMany({
       where: { ...scope, id, status: 'pending', sponsor: 'shopper' },
