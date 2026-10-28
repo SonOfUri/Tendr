@@ -15,7 +15,11 @@
 //!    (`ft_balance_of`) and credits in the `on_balance` callback, where the read, the check and the
 //!    update happen in one receipt.
 //! 3. Duplicates: each settlement transaction (`tx_hash`) is credited once (checked at the call and
-//!    again, atomically, in the callback).
+//!    again, atomically, in the callback). Keep the panic message exactly `already notified`:
+//!    on a retry or resend Tendr reads it as "already delivered".
+//!
+//! Storage: `notified` and `accounted` grow forever and NEAR charges storage staking from this
+//! contract's balance (about 0.001 NEAR per notified transaction); keep enough NEAR in it.
 //! 4. Outflows: whatever moves tokens out (withdrawals, payouts) must lower `accounted[token]` by
 //!    the same amount; and because the balance is read one receipt before the callback runs, an
 //!    outflow between the two can make the read stale: an outflow must also make pending callbacks
@@ -29,7 +33,7 @@
 //! signed `payment.succeeded` / `hook.succeeded` webhooks (same payment, amount and transaction).
 //!
 //! Gas: Tendr attaches 50 Tgas and deducts its estimate (30 Tgas burnt) from the payment's own
-//! proceeds. A failed call (a panic, a failed token lookup) is retried for 3 days, then reported to
+//! proceeds. A call that fails on chain (a panic, a failed token lookup) is not retried: reported to
 //! the integrator as `hook.failed`.
 use near_sdk::json_types::U128;
 use near_sdk::serde_json::json;
@@ -117,7 +121,7 @@ impl TendrDepositReceiver {
             )
     }
 
-    /// The token's answer. Fails (nothing recorded, so Tendr's retry is accepted) when the lookup
+    /// The token's answer. Fails (nothing recorded, so a resend is accepted) when the lookup
     /// failed or the transaction was credited meanwhile; otherwise credits and returns the amount.
     #[private]
     pub fn on_balance(

@@ -241,8 +241,11 @@ export class EvmGaslessRelayer implements GaslessRelayer {
           });
           return { txHash: res.txHash, relayerTxId: res.txId };
         } catch (err) {
-          if (err instanceof EvmNotBroadcastError)
-            throw new RelayNotBroadcast(err.message, err.reason);
+          if (err instanceof EvmNotBroadcastError) {
+            // `gas_cap` only comes from bounds a payment relay never sets (integrator hooks).
+            const reason = err.reason === 'gas_cap' ? 'rejected' : err.reason;
+            throw new RelayNotBroadcast(err.message, reason);
+          }
           throw err;
         }
       },

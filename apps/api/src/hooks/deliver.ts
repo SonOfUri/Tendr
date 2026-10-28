@@ -16,10 +16,19 @@
 // `attempt` and `lease_until` in one conditional update, and a `submitted` row is never sent again.
 //
 // Retries: the webhook schedule (60 s × 2^(n-1), `retryDelayMs`) until `retry_until` (3 days
-// after creation; the last retry lands on it). A revert (dry run or mined) is retried: the contract
-// may be paused; the reason is kept in `last_error`. At or past `retry_until` a failure is final:
-// `failed`, and the first time also `hook.failed` (webhook-deliverable; one alert email,
-// hooks.ts). A resend (hooks.ts) sets `retry_until` to the resend time: a one-off attempt.
+// after creation; the last retry lands on it), for failures that spent nothing or whose outcome is
+// unknown: transport / RPC errors, a dry-run revert (the contract may be paused; no gas spent), a
+// transaction given up or never seen. The reason is kept in `last_error`. Terminal at once (fix
+// round 1, Important 1): a call that reverted ON CHAIN (it burnt relayer gas; EVM receipt status
+// 0, NEAR execution failure), and an EVM send refused for gas (estimate above HOOK_GAS_CEILING, or
+// gas limit × gas price above the payment's 10 % hook budget). At or past `retry_until`, or on a
+// terminal failure: `failed`, and the first time also `hook.failed` (webhook-deliverable; one
+// alert email, hooks.ts). A resend (hooks.ts) sets `retry_until` to the resend time: one attempt.
+//
+// Duplicates (fix round 1, Minor 6): on a retry or resend (attempt ≥ 2), the reference receivers'
+// own duplicate refusal (EVM `AlreadyNotified(bytes32)`, NEAR panic "already notified") means an
+// earlier attempt landed: the call counts as delivered. Custom receivers should refuse duplicates
+// with the same error to get this.
 //
 // Gas (ruling T11-a): the quoted hook estimate (`quotes.hook_fee_usd`) was already taken from the
 // payment's proceeds and never touches the sponsorship budget. The actual cost of every attempt
@@ -29,10 +38,12 @@ import { Prisma, type HookCall } from '@prisma/client';
 import type { Queue } from 'bullmq';
 import { createHash, randomBytes } from 'node:crypto';
 import bs58 from 'bs58';
+import { id } from 'ethers';
 import { retryDelayMs } from '../checkout/webhooks.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { recordEvent } from '../events/record.js';
-import { nativeUsd } from '../gas/fees.js';
+import { nativeUnitsForUsd, nativeUsd } from '../gas/fees.js';
+import { MAX_HOOK_ORDER_BPS } from '../gas/quote-fee.js';
 import { alertLossCapReached, lossCapReached, recognizeTendrLoss } from '../gas/loss-cap.js';
 import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
@@ -42,7 +53,9 @@ import { relayerNearSender } from '../near/client.js';
 import { NotBroadcastError } from '../near/rpc.js';
 import { liveEvmSender } from '../relayer/evm/index.js';
 import {
+  EVM_REVERTED_ON_CHAIN,
   EvmNotBroadcastError,
+  EvmRpcError,
   type EvmOutcome,
   type EvmSendInput,
   type EvmSendResult,
@@ -65,6 +78,23 @@ export const HOOK_LEASE_MS = 60_000;
 export const EVM_HOOK_GIVE_UP_MS = 10 * 60_000;
 /** A NEAR hook transaction the node still does not know after this was dropped: retried. */
 export const NEAR_HOOK_UNKNOWN_MS = 10 * 60_000;
+/**
+ * The most gas an EVM hook transaction may have (its gas limit is min(estimate × 1.2, this)); an
+ * estimate above it is refused and the call fails at once. The reference receiver needs ~127k at
+ * worst (1 KB hook data).
+ */
+export const HOOK_GAS_CEILING = 300_000n;
+/** The reference EVM receiver's duplicate refusal: `AlreadyNotified(bytes32)`'s selector. */
+export const EVM_ALREADY_NOTIFIED_SELECTOR = id('AlreadyNotified(bytes32)').slice(0, 10);
+/** The reference NEAR receiver's duplicate refusal, as a NEAR execution error reports it. */
+export const NEAR_ALREADY_NOTIFIED_PANIC = 'Smart contract panicked: already notified';
+/** How often a running attempt renews its lease (a slow EVM send must not lose its claim). */
+const LEASE_RENEW_MS = 20_000;
+let leaseRenewMs = LEASE_RENEW_MS;
+/** Tests: the lease renewal interval (`null` restores LEASE_RENEW_MS). */
+export function setHookLeaseRenewMs(ms: number | null): void {
+  leaseRenewMs = ms ?? LEASE_RENEW_MS;
+}
 /** A `submitted` NEAR row younger than this is left to the attempt that sent it. */
 const NEAR_POLL_MIN_AGE_MS = 30_000;
 const MAX_ERROR_LEN = 500;
@@ -73,10 +103,22 @@ const MAX_ERROR_LEN = 500;
 
 /** What one attempt did. */
 export type HookSendResult =
-  /** The call executed and succeeded. `costUsd`: its actual gas cost, when priced. */
-  | { outcome: 'succeeded'; txHash: string; costUsd: string | null }
-  /** It did not succeed: reverted (on chain or in the dry run) or was never sent. */
-  | { outcome: 'failed'; txHash: string | null; costUsd: string | null; error: string }
+  /**
+   * The call executed and succeeded (`txHash` null: an earlier attempt's call, proven by a
+   * duplicate refusal). `costUsd`: its actual gas cost, when priced.
+   */
+  | { outcome: 'succeeded'; txHash: string | null; costUsd: string | null }
+  /**
+   * It did not succeed: reverted (on chain or in the dry run) or was never sent. `terminal`: no
+   * automatic retry (an on-chain revert, a gas bound).
+   */
+  | {
+      outcome: 'failed';
+      txHash: string | null;
+      costUsd: string | null;
+      error: string;
+      terminal?: boolean;
+    }
   /** A transaction is out; its outcome arrives later (EVM receipt, NEAR status). */
   | { outcome: 'submitted'; txHash: string };
 
@@ -148,6 +190,31 @@ async function priced(chain: string, units: bigint | null | undefined): Promise<
   }
 }
 
+/**
+ * The payment's hook budget in the chain's native units: MAX_HOOK_ORDER_BPS (10 %) of the order,
+ * the same cap the quote applies to the hook estimate.
+ */
+async function hookBudgetWei(call: ExpectedHookCall): Promise<bigint> {
+  const h = await prisma.hookCall.findUniqueOrThrow({
+    where: { id: call.hookCallId },
+    select: { session: { select: { amount: true } } },
+  });
+  const usd = h.session.amount
+    .mul(MAX_HOOK_ORDER_BPS)
+    .div(10_000)
+    .toDecimalPlaces(6, Prisma.Decimal.ROUND_DOWN)
+    .toFixed();
+  return nativeUnitsForUsd(call.chain, usd, true);
+}
+
+/** The revert data an RPC error carries (hex), if any. */
+function revertData(err: unknown): string | null {
+  const data = err instanceof EvmRpcError ? err.data : null;
+  if (typeof data === 'string') return data;
+  const nested = (data as { data?: unknown } | null)?.data;
+  return typeof nested === 'string' ? nested : null;
+}
+
 /** Live EVM: `onTendrDeposit` via relayer-evm; the outcome comes back through `pollEvmRelays`. */
 const liveEvm: HookTransport = async (call) => {
   // A transaction already out for this call (an attempt that crashed before writing `submitted`)
@@ -158,6 +225,17 @@ const liveEvm: HookTransport = async (call) => {
     select: { txHash: true },
   });
   if (out) return { outcome: 'submitted', txHash: out.txHash };
+  let maxCostWei: bigint;
+  try {
+    maxCostWei = await hookBudgetWei(call);
+  } catch (err) {
+    return {
+      outcome: 'failed',
+      txHash: null,
+      costUsd: null,
+      error: `the hook budget could not be priced: ${errorText(err)}`,
+    };
+  }
   try {
     const res = await deps.evmSender().send({
       chain: call.chain,
@@ -166,22 +244,57 @@ const liveEvm: HookTransport = async (call) => {
       giveUpAt: new Date(Date.now() + EVM_HOOK_GIVE_UP_MS),
       purpose: INTEGRATOR_HOOK_PURPOSE,
       refId: call.hookCallId,
+      maxGasLimit: HOOK_GAS_CEILING,
+      maxCostWei,
     });
     return { outcome: 'submitted', txHash: res.txHash };
   } catch (err) {
     if (err instanceof EvmNotBroadcastError) {
-      return { outcome: 'failed', txHash: null, costUsd: null, error: err.message };
+      if (err.reason === 'gas_cap') {
+        return {
+          outcome: 'failed',
+          txHash: null,
+          costUsd: null,
+          error: `hook gas above its bound: ${err.message}`,
+          terminal: true,
+        };
+      }
+      const data = revertData(err.cause);
+      return {
+        outcome: 'failed',
+        txHash: null,
+        costUsd: null,
+        error: data ? `${err.message} [revert data ${data.slice(0, 200)}]` : err.message,
+      };
     }
     throw err;
   }
 };
 
+/**
+ * Whether a failure is the reference receivers' duplicate refusal: the EVM revert data starts
+ * with `AlreadyNotified(bytes32)`'s selector, or the NEAR execution error is exactly the
+ * "already notified" panic.
+ */
+function isDuplicateRefusal(error: string): boolean {
+  const evm = /\[revert data (0x[0-9a-fA-F]*)\]/.exec(error)?.[1];
+  if (evm) return evm.toLowerCase().startsWith(EVM_ALREADY_NOTIFIED_SELECTOR);
+  return error.includes(`"ExecutionError":"${NEAR_ALREADY_NOTIFIED_PANIC}"`);
+}
+
 /** A NEAR execution result as a hook outcome (success only when no receipt failed). */
 async function nearOutcome(r: TxResult): Promise<HookSendResult> {
   const costUsd = await priced('near', r.tokensBurnt);
+  // A failure here executed on chain (relayer gas spent): terminal.
   return r.status === 'success'
     ? { outcome: 'succeeded', txHash: r.txHash, costUsd }
-    : { outcome: 'failed', txHash: r.txHash, costUsd, error: r.failure ?? 'the call failed' };
+    : {
+        outcome: 'failed',
+        txHash: r.txHash,
+        costUsd,
+        error: r.failure ?? 'the call failed',
+        terminal: true,
+      };
 }
 
 /** Live NEAR: `on_tendr_deposit` via relayer-near; the hash is recorded before the broadcast. */
@@ -312,7 +425,7 @@ export async function attemptHook(
         : call.family === 'evm'
           ? liveEvm
           : liveNear((hash) => markSubmitted(hookCallId, attempt, hash)));
-    result = await transport(call);
+    result = await withLeaseRenewal(hookCallId, attempt, () => transport(call));
   } catch (err) {
     if (!(err instanceof HookRefused)) {
       log('warn', 'hook attempt failed', { hookCallId, attempt, err: String(err) });
@@ -321,6 +434,23 @@ export async function attemptHook(
   }
   await recordOutcome(hookCallId, { attempt, statuses: ['pending', 'submitted'] }, result, now);
   return prisma.hookCall.findUnique({ where: { id: hookCallId } });
+}
+
+/** Runs `fn` while renewing the attempt's lease every `leaseRenewMs` (only while it is ours). */
+async function withLeaseRenewal<T>(id: string, attempt: number, fn: () => Promise<T>): Promise<T> {
+  const timer = setInterval(() => {
+    prisma.hookCall
+      .updateMany({
+        where: { id, attempt, status: 'pending' },
+        data: { leaseUntil: new Date(Date.now() + HOOK_LEASE_MS) },
+      })
+      .catch((err: unknown) => log('warn', 'hook: lease renewal failed', { id, err: String(err) }));
+  }, leaseRenewMs);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 /** NEAR: the signed hash is on the row (`submitted`) before the broadcast. False: claim lost. */
@@ -349,10 +479,16 @@ const clip = (s: string) => s.slice(0, MAX_ERROR_LEN);
 async function recordOutcome(
   hookCallId: string,
   claim: Claim,
-  result: HookSendResult,
+  sent: HookSendResult,
   now: Date,
 ): Promise<void> {
   const row = await prisma.hookCall.findUniqueOrThrow({ where: { id: hookCallId } });
+  let result = sent;
+  if (result.outcome === 'failed' && row.attempt >= 2 && isDuplicateRefusal(result.error)) {
+    // An earlier attempt landed: the receiver already has this payment.
+    log('info', 'hook: duplicate refusal on a retry, counted as delivered', { hookCallId });
+    result = { outcome: 'succeeded', txHash: result.txHash, costUsd: result.costUsd };
+  }
   const ctx = { merchantId: row.merchantId, livemode: row.livemode };
   const where: Prisma.HookCallWhereInput = {
     id: hookCallId,
@@ -372,17 +508,17 @@ async function recordOutcome(
     } else if (result.outcome === 'succeeded') {
       data = {
         status: 'confirmed',
-        txHash: result.txHash,
+        txHash: result.txHash ?? row.txHash,
         succeededAt: now,
         nextRetryAt: null,
         leaseUntil: null,
         lastError: null,
         costUsd: cost,
       };
-      event = { type: 'hook.succeeded', extra: { tx_hash: result.txHash } };
+      event = { type: 'hook.succeeded', extra: { tx_hash: result.txHash ?? row.txHash } };
     } else {
       const deadline = row.retryUntil.getTime();
-      const final = now.getTime() >= deadline;
+      const final = result.terminal === true || now.getTime() >= deadline;
       const error = clip(result.error);
       data = {
         status: final ? 'failed' : 'pending',
@@ -453,7 +589,7 @@ async function recognizeShortfall(
   });
   const estimate = payment.quote.hookFeeUsd ?? new Prisma.Decimal(0);
   const booked = await tx.gasSponsorship.aggregate({
-    where: { ...ctx, method: 'hook', quoteId: payment.quoteId },
+    where: { ...ctx, method: 'hook', recoveredFromPaymentId: row.paymentId },
     _sum: { costUsd: true },
   });
   const excess = totalCost
@@ -468,6 +604,7 @@ async function recognizeShortfall(
       ...ctx,
       sessionId: row.sessionId,
       quoteId: payment.quoteId,
+      recoveredFromPaymentId: row.paymentId,
       chain: row.chain,
       txHash,
       method: 'hook',
@@ -484,10 +621,13 @@ async function recognizeShortfall(
 
 /** An EVM hook transaction's final outcome (from `pollEvmRelays`). */
 export async function applyEvmHookOutcome(o: EvmOutcome, now = new Date()): Promise<void> {
+  // OP-stack chains (base, op) also charge an L1 data fee, reported on the receipt (`l1Fee`).
   const cost =
     o.gasUsed !== null && o.effectiveGasPrice !== null
-      ? await priced(o.chain, o.gasUsed * o.effectiveGasPrice)
+      ? await priced(o.chain, o.gasUsed * o.effectiveGasPrice + (o.l1Fee ?? 0n))
       : null;
+  // A mined revert burnt relayer gas: terminal. A give-up (nonce freed) or a nonce taken by an
+  // unknown transaction: retried.
   const result: HookSendResult =
     o.status === 'confirmed' && o.txHash
       ? { outcome: 'succeeded', txHash: o.txHash, costUsd: cost }
@@ -496,6 +636,7 @@ export async function applyEvmHookOutcome(o: EvmOutcome, now = new Date()): Prom
           txHash: o.txHash,
           costUsd: cost,
           error: o.reason ?? 'the transaction failed',
+          terminal: o.reason === EVM_REVERTED_ON_CHAIN,
         };
   await recordOutcome(o.refId, { attempt: null, statuses: ['submitted'] }, result, now);
 }
@@ -534,7 +675,13 @@ export async function pollNearHooks(
         const costUsd = await priced('near', status.tokensBurnt);
         result = ok
           ? { outcome: 'succeeded', txHash: status.hash, costUsd }
-          : { outcome: 'failed', txHash: status.hash, costUsd, error: 'the call failed' };
+          : {
+              outcome: 'failed',
+              txHash: status.hash,
+              costUsd,
+              error: 'the call failed on chain',
+              terminal: true,
+            };
       } else if (now.getTime() - row.updatedAt.getTime() >= NEAR_HOOK_UNKNOWN_MS) {
         result = {
           outcome: 'failed',

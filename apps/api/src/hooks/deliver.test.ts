@@ -10,10 +10,13 @@ import { webhookData } from '../checkout/webhooks.js';
 import { recordEvent } from '../events/record.js';
 import { setFeeDeps } from '../gas/fees.js';
 import { prisma } from '../lib/prisma.js';
-import { EvmNotBroadcastError, type EvmSendInput } from '../relayer/evm/sender.js';
+import { EvmNotBroadcastError, EvmRpcError, type EvmSendInput } from '../relayer/evm/sender.js';
 import { createMerchant, createRow, resetDb } from '../test/helpers.js';
 import {
+  EVM_ALREADY_NOTIFIED_SELECTOR,
+  HOOK_GAS_CEILING,
   HOOK_RETRY_BASE_MS,
+  setHookLeaseRenewMs,
   applyEvmHookOutcome,
   attemptHook,
   pollNearHooks,
@@ -296,7 +299,12 @@ describe('hook delivery', () => {
         to: CONTRACT,
         purpose: INTEGRATOR_HOOK_PURPOSE,
         refId: hook.id,
+        // Gas limit ≤ 300k, and its cost ≤ the 10 % hook budget: $49 order → $4.9 at
+        // $2500/ETH = 0.00196 ETH.
+        maxGasLimit: HOOK_GAS_CEILING,
+        maxCostWei: 1_960_000_000_000_000n,
       });
+      expect(HOOK_GAS_CEILING).toBe(300_000n);
       const args = iface.decodeFunctionData('onTendrDeposit', sent[0]!.data);
       expect(args.toArray().map(String)).toEqual([
         // bytes32 ids: the id's UTF-8 bytes, right-padded.
@@ -338,6 +346,7 @@ describe('hook delivery', () => {
       expect(loss).toMatchObject({ sponsor: 'tendr', chain: 'base', provider: 'relayer-evm' });
       expect(loss.costUsd!.toFixed()).toBe('0.127');
       expect(loss.estimateUsd!.toFixed()).toBe('0.048');
+      expect(loss.recoveredFromPaymentId).toBe(payment.id); // the shortfall is keyed per payment
       expect(loss.lossRecognizedAt).not.toBeNull();
       expect(loss.reservationState).toBeNull(); // never against the budget
       expect(await prisma.event.count({ where: { type: 'hook.succeeded' } })).toBe(1);
@@ -398,7 +407,7 @@ describe('hook delivery', () => {
       expect(hook.nextRetryAt).not.toBeNull();
     });
 
-    it('a mined revert costs gas (counted) and is retried', async () => {
+    it('a mined revert is terminal: failed at once, hook.failed and one email; cost counted', async () => {
       setHookDeliveryDeps({
         evmSender: {
           send: async () => ({
@@ -422,47 +431,170 @@ describe('hook delivery', () => {
         logs: [],
       });
       const row = await prisma.hookCall.findUniqueOrThrow({ where: { id: hook.id } });
-      expect(row).toMatchObject({ status: 'pending', lastError: 'reverted on chain' });
+      expect(row).toMatchObject({ status: 'failed', nextRetryAt: null });
+      expect(row.lastError).toMatch(/reverted on chain/);
+      expect(row.alertedAt).not.toBeNull();
       expect(row.costUsd!.toFixed()).toBe('0.025');
-      // $0.025 is within the $0.048 estimate: no loss yet.
+      // $0.025 is within the $0.048 estimate: no loss.
       expect(await prisma.gasSponsorship.count()).toBe(0);
+      const failed = await prisma.event.findMany({ where: { type: 'hook.failed' } });
+      expect(failed).toHaveLength(1);
+      await onHookFailedNotice(failed[0]!);
+      await onHookFailedNotice(failed[0]!);
+      expect(mailer.sent).toHaveLength(1);
+      // The merchant can still resend it (one-off).
+      expect(await attemptHook(hook.id)).toBeNull(); // no automatic retry
     });
 
-    it('gas above the estimate across attempts is booked once, incrementally', async () => {
+    it('the gas ceiling or the 10 % hook budget refused the send: failed at once, alerted once', async () => {
+      setHookDeliveryDeps({
+        evmSender: {
+          send: async () => {
+            throw new EvmNotBroadcastError(
+              'the call needs 450000 gas, above the 300000 gas ceiling',
+              'gas_cap',
+            );
+          },
+        },
+      });
+      const { hook } = await settledHook({ livemode: true });
+      expect(hook).toMatchObject({ status: 'failed', nextRetryAt: null });
+      expect(hook.lastError).toBe(
+        'hook gas above its bound: the call needs 450000 gas, above the 300000 gas ceiling',
+      );
+      expect(hook.alertedAt).not.toBeNull();
+      const failed = await prisma.event.findMany({ where: { type: 'hook.failed' } });
+      expect(failed).toHaveLength(1);
+      expect(failed[0]!.payload).toMatchObject({ error: hook.lastError });
+      await onHookFailedNotice(failed[0]!);
+      expect(mailer.sent).toHaveLength(1);
+      expect(mailer.sent[0]!.text).toContain('gas');
+    });
+
+    it('a transport/RPC failure (nothing sent) is retried', async () => {
+      setHookDeliveryDeps({
+        evmSender: {
+          send: async () => {
+            throw new EvmNotBroadcastError('the chain is unavailable', 'unavailable');
+          },
+        },
+      });
+      const { hook } = await settledHook({ livemode: true });
+      expect(hook).toMatchObject({ status: 'pending', lastError: 'the chain is unavailable' });
+      expect(hook.alertedAt).toBeNull();
+    });
+
+    it('an unpriced budget (token list down) is retried, nothing sent', async () => {
+      setFeeDeps({ tokens: async () => new Map() });
+      const send = vi.fn();
+      setHookDeliveryDeps({ evmSender: { send } });
+      const { hook } = await settledHook({ livemode: true });
+      expect(send).not.toHaveBeenCalled();
+      expect(hook.status).toBe('pending');
+      expect(hook.lastError).toMatch(/budget/);
+    });
+
+    it('the OP-stack L1 data fee (receipt l1Fee) is part of the recorded cost', async () => {
       setHookDeliveryDeps({
         evmSender: {
           send: async () => ({
-            txId: 'rtx_4',
-            txHash: `0x${'44'.repeat(32)}`,
+            txId: 'rtx_5',
+            txHash: `0x${'55'.repeat(32)}`,
             broadcast: 'submitted',
           }),
         },
       });
       const { hook } = await settledHook({ livemode: true });
-      const outcome = (status: 'confirmed' | 'failed') => ({
-        txId: 'rtx_4',
+      // 10k gas at 1 gwei (1e13 wei) + an L1 fee of 1e13 wei = 2e13 wei × $2500 = $0.05.
+      await applyEvmHookOutcome({
+        txId: 'rtx_5',
         purpose: INTEGRATOR_HOOK_PURPOSE,
         refId: hook.id,
         chain: 'base',
-        status,
-        txHash: `0x${'44'.repeat(32)}`,
-        gasUsed: 40_000n, // 40k gas at 1 gwei = 0.00004 ETH × $2500 = $0.1
+        status: 'confirmed',
+        txHash: `0x${'55'.repeat(32)}`,
+        gasUsed: 10_000n,
         effectiveGasPrice: 1_000_000_000n,
-        reason: status === 'failed' ? 'reverted on chain' : null,
+        l1Fee: 10_000_000_000_000n,
+        reason: null,
         logs: [],
       });
-      // A mined revert: $0.1 spent, $0.052 over the $0.048 estimate.
-      await applyEvmHookOutcome(outcome('failed'));
-      // The retry succeeds: $0.2 in all, $0.152 over; $0.1 more is booked.
-      await prisma.hookCall.update({ where: { id: hook.id }, data: { nextRetryAt: new Date(0) } });
-      await attemptHook(hook.id);
-      await applyEvmHookOutcome(outcome('confirmed'));
-      const rows = await prisma.gasSponsorship.findMany({
-        where: { method: 'hook' },
-        orderBy: { createdAt: 'asc' },
+      const row = await prisma.hookCall.findUniqueOrThrow({ where: { id: hook.id } });
+      expect(row.costUsd!.toFixed()).toBe('0.05');
+    });
+
+    it('the lease is renewed while a slow send runs', async () => {
+      setHookLeaseRenewMs(20);
+      let leaseMidSend: Date | null = null;
+      let initial: Date | null = null;
+      setHookDeliveryDeps({
+        evmSender: {
+          send: async (input) => {
+            initial = (await prisma.hookCall.findUniqueOrThrow({ where: { id: input.refId } }))
+              .leaseUntil;
+            await new Promise((r) => setTimeout(r, 120));
+            leaseMidSend = (await prisma.hookCall.findUniqueOrThrow({ where: { id: input.refId } }))
+              .leaseUntil;
+            return { txId: 'rtx_6', txHash: `0x${'66'.repeat(32)}`, broadcast: 'submitted' };
+          },
+        },
       });
-      expect(rows.map((r) => r.costUsd!.toFixed())).toEqual(['0.052', '0.1']);
-      expect(rows.every((r) => r.sponsor === 'tendr')).toBe(true);
+      try {
+        await settledHook({ livemode: true });
+      } finally {
+        setHookLeaseRenewMs(null);
+      }
+      expect(initial).not.toBeNull();
+      expect(leaseMidSend!.getTime()).toBeGreaterThan(initial!.getTime());
+    });
+
+    describe('a duplicate refusal on a retry or resend counts as delivered', () => {
+      const dup = () =>
+        new EvmNotBroadcastError(
+          'dry run reverted: eth_estimateGas: execution reverted',
+          'simulation_reverted',
+          new EvmRpcError(
+            'eth_estimateGas',
+            3,
+            'execution reverted',
+            `${EVM_ALREADY_NOTIFIED_SELECTOR}${'ab'.repeat(32)}`,
+          ),
+        );
+
+      it('EVM: AlreadyNotified(txHash) on attempt 2 → succeeded; on attempt 1 → retried', async () => {
+        setHookDeliveryDeps({
+          evmSender: {
+            send: async () => {
+              throw dup();
+            },
+          },
+        });
+        const { hook } = await settledHook({ livemode: true });
+        expect(hook.status).toBe('pending'); // first attempt: not trusted as delivered
+        expect(hook.lastError).toContain(EVM_ALREADY_NOTIFIED_SELECTOR);
+        await attemptHook(hook.id, { now: hook.nextRetryAt! });
+        const row = await prisma.hookCall.findUniqueOrThrow({ where: { id: hook.id } });
+        expect(row).toMatchObject({ status: 'confirmed', attempt: 2, lastError: null });
+        expect(await prisma.event.count({ where: { type: 'hook.succeeded' } })).toBe(1);
+      });
+
+      it('EVM: any other revert data is not a duplicate', async () => {
+        setHookDeliveryDeps({
+          evmSender: {
+            send: async () => {
+              throw new EvmNotBroadcastError(
+                'dry run reverted: eth_estimateGas: execution reverted',
+                'simulation_reverted',
+                new EvmRpcError('eth_estimateGas', 3, 'execution reverted', '0xdeadbeef'),
+              );
+            },
+          },
+        });
+        const { hook } = await settledHook({ livemode: true });
+        await attemptHook(hook.id, { now: hook.nextRetryAt! });
+        const row = await prisma.hookCall.findUniqueOrThrow({ where: { id: hook.id } });
+        expect(row.status).toBe('pending');
+      });
     });
 
     it('a relayer transaction already out for the call is never doubled (crash after send)', async () => {
@@ -563,7 +695,7 @@ describe('hook delivery', () => {
       expect(await prisma.gasSponsorship.count()).toBe(0); // within the estimate
     });
 
-    it('a panic in the contract is a failed attempt with the reason; retried', async () => {
+    it('a panic in the contract is an on-chain revert: failed at once with the reason', async () => {
       fakeNear(async () => ({
         txHash: NEAR_TX,
         logs: [],
@@ -579,8 +711,47 @@ describe('hook delivery', () => {
         asset: 'nep141:usdt.tether-token.near',
         settleTx: '8tAHnxWBmrhXbLWrfjfSVBvvSDwPxXKbH5ZM4JNKTvBA',
       });
-      expect(hook.status).toBe('pending');
+      expect(hook).toMatchObject({ status: 'failed', nextRetryAt: null });
       expect(hook.lastError).toContain('paused');
+      expect(await prisma.event.count({ where: { type: 'hook.failed' } })).toBe(1);
+    });
+
+    it('NEAR: the reference duplicate refusal on a retry counts as delivered', async () => {
+      const dupFailure = {
+        txHash: NEAR_TX,
+        logs: [],
+        successLogs: [],
+        status: 'failure',
+        topLevelStatus: 'failure',
+        failure:
+          '{"ActionError":{"index":0,"kind":{"FunctionCallError":{"ExecutionError":"Smart contract panicked: already notified"}}}}',
+      };
+      const { OutcomeUnknownError } = await import('../near/rpc.js');
+      let first = true;
+      fakeNear(async () => {
+        if (first) {
+          first = false;
+          throw new OutcomeUnknownError(new Error('timeout'), new Error('timeout'));
+        }
+        return dupFailure;
+      });
+      const t0 = new Date();
+      const { hook } = await settledHook({
+        livemode: true,
+        chain: 'near',
+        contract: 'game.near',
+        asset: 'nep141:usdt.tether-token.near',
+        settleTx: '8tAHnxWBmrhXbLWrfjfSVBvvSDwPxXKbH5ZM4JNKTvBA',
+        at: t0,
+      });
+      // The first attempt's outcome is never seen: retried.
+      await pollNearHooks({ now: () => new Date(t0.getTime() + 11 * 60_000) });
+      const retrying = await prisma.hookCall.findUniqueOrThrow({ where: { id: hook.id } });
+      expect(retrying.status).toBe('pending');
+      // The retry is refused as a duplicate: the first one landed after all.
+      await attemptHook(hook.id, { now: retrying.nextRetryAt! });
+      const row = await prisma.hookCall.findUniqueOrThrow({ where: { id: hook.id } });
+      expect(row).toMatchObject({ status: 'confirmed', attempt: 2, lastError: null });
     });
 
     it('an unknown outcome stays submitted; the poller applies the final status', async () => {

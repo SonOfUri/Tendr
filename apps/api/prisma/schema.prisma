@@ -1429,6 +1429,8 @@ model RelayerTransaction {
   minedHash            String?          @map("mined_hash")
   gasUsed              Decimal?         @map("gas_used") @db.Decimal(78, 0)
   effectiveGasPrice    Decimal?         @map("effective_gas_price") @db.Decimal(78, 0)
+  /// OP-stack chains: the receipt's L1 data fee (wei), charged on top of gas.
+  l1Fee                Decimal?         @map("l1_fee") @db.Decimal(78, 0)
   lastError            String?          @map("last_error")
   /// Logs of the mined receipt emitted by `to_address` (the purpose decodes them).
   receiptLogs          Json?            @map("receipt_logs")

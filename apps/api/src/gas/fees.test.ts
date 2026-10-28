@@ -5,6 +5,7 @@ import { AppError } from '../lib/errors.js';
 import {
   estimateHookFeeUsd,
   HOOK_GAS_UNITS,
+  nativeUnitsForUsd,
   estimateNetworkFeeUsd,
   feeInToken,
   gaslessMethodSupported,
@@ -288,6 +289,13 @@ describe('network fees', () => {
       useFetch(rpc({ eth_gasPrice: { result: '0x3b9aca00' } }).f);
       expect(HOOK_GAS_UNITS.base).toBe(90_000n);
       expect(await estimateHookFeeUsd('base', { livemode: true })).toBe('0.225');
+    });
+
+    it('nativeUnitsForUsd inverts nativeUsd, rounding down', async () => {
+      // $0.225 at $2500 per ETH = 0.00009 ETH = 9e13 wei; $1 at $3 per NEAR = 0.333… NEAR.
+      expect(await nativeUnitsForUsd('base', '0.225', true)).toBe(90_000_000_000_000n);
+      expect(await nativeUnitsForUsd('near', '1', true)).toBe(333_333_333_333_333_333_333_333n);
+      await expect(nativeUnitsForUsd('base', 'x', true)).rejects.toBeInstanceOf(AppError);
     });
 
     it('the NEAR hook estimate prices its gas (call + ft_balance_of + callback)', async () => {

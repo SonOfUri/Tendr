@@ -50,8 +50,21 @@ Tendr deducts its estimate (30 Tgas burnt, `HOOK_GAS_UNITS.near`) from the
 payment's proceeds. The unit tests measure 39.2 Tgas used by the call itself
 including the 20 Tgas it hands to its two receipts (`ft_balance_of` 5 Tgas,
 `on_balance` 15 Tgas), within the 50 Tgas attached; the gas actually burnt on
-chain is a live-checklist measurement. A panicking call is retried for 3 days
-(the contract may be paused), then reported to the integrator as `hook.failed`.
+chain is a live-checklist measurement. A call that fails on chain (a panic, a
+failed token lookup) is not retried: the integrator gets one `hook.failed` and
+can resend it. A call whose outcome is unknown is retried for 3 days.
+
+**Duplicates.** Refuse a repeated `tx_hash` with a panic of exactly
+`already notified` (as here). On a retry or resend Tendr reads that error as
+"already delivered" (an earlier attempt landed); a custom receiver using another
+message gets a `hook.failed` instead.
+
+## Storage
+
+The `notified` set (one entry per settlement transaction, about 100 bytes) and
+`accounted` grow forever: NEAR charges storage staking from the contract's own
+balance (about 0.001 NEAR per entry). Keep enough NEAR in the contract for it,
+or calls start failing once the balance cannot cover storage.
 
 ## Build and test
 

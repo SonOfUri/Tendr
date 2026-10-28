@@ -422,6 +422,36 @@ export async function solanaComputeUnitPrice(): Promise<bigint> {
  * micro-dollar, at the 1Click token-list price. Throws NETWORK_FEE_UNAVAILABLE when unpriced.
  */
 export async function nativeUsd(chain: string, units: bigint, livemode: boolean): Promise<string> {
+  const { price, decimals } = await nativePrice(chain, livemode);
+  // usd micro = units / 10^dec × price.digits / 10^ps × 10^6
+  const num = units * price.digits * pow10(USD_SCALE);
+  const den = pow10(decimals) * pow10(price.scale);
+  return microToUsd(ceilDiv(num, den));
+}
+
+/**
+ * The most units of `chain`'s native coin (its smallest unit) that `usd` buys at the 1Click
+ * token-list price, rounded down (a budget). Throws NETWORK_FEE_UNAVAILABLE when unpriced or
+ * `usd` is not a decimal.
+ */
+export async function nativeUnitsForUsd(
+  chain: string,
+  usd: string,
+  livemode: boolean,
+): Promise<bigint> {
+  const amount = parseDecimal(usd);
+  if (!amount) throw unavailable(chain, 'bad USD amount');
+  const { price, decimals } = await nativePrice(chain, livemode);
+  // units = usd.digits / 10^us × 10^dec × 10^ps / price.digits
+  return (
+    (amount.digits * pow10(decimals) * pow10(price.scale)) / (pow10(amount.scale) * price.digits)
+  );
+}
+
+async function nativePrice(
+  chain: string,
+  livemode: boolean,
+): Promise<{ price: { digits: bigint; scale: number }; decimals: number }> {
   const symbols = NATIVE_SYMBOLS[chain] ?? [];
   const tokens = await deps.tokens(livemode);
   let coin: TokenInfo | undefined;
@@ -433,11 +463,7 @@ export async function nativeUsd(chain: string, units: bigint, livemode: boolean)
   }
   const price = coin?.priceUsd ? parseDecimal(coin.priceUsd) : null;
   if (!coin || !price || price.digits === 0n) throw unavailable(chain, 'native coin unpriced');
-  const decimals = NATIVE_DECIMALS[chain] ?? coin.decimals;
-  // usd micro = units / 10^dec × price.digits / 10^ps × 10^6
-  const num = units * price.digits * pow10(USD_SCALE);
-  const den = pow10(decimals) * pow10(price.scale);
-  return microToUsd(ceilDiv(num, den));
+  return { price, decimals: NATIVE_DECIMALS[chain] ?? coin.decimals };
 }
 
 /**

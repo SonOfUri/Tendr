@@ -9,7 +9,13 @@ import { recordEvent } from '../events/record.js';
 import { setHookTransport, type HookTransport } from '../hooks/deliver.js';
 import { createHookCallForPayment } from '../hooks/hooks.js';
 import { prisma } from '../lib/prisma.js';
-import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
+import { CONNECTION_KEY_SCOPES, type MerchantUserRole } from '@tendr/contracts';
+import { resetOneClickProviders, SimulatedOneClick } from '../checkout/oneclick/index.js';
+import { pollDeposit } from '../checkout/watcher.js';
+import { fakeNearClient, resetNearClients } from '../near/client.js';
+import { dashHeaders, loginAs } from '../test/dashboard.js';
+import { isolatedSimStore } from '../test/sim-1click.js';
+import { createApiKey, createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
 
 const CONTRACT = '0x00000000000000000000000000000000000c0de1';
 const USDC_BASE = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near';
@@ -403,6 +409,132 @@ describe('integrator hook routes', () => {
       const paymentId = await settle(s.json().id);
       const none = await resend(paymentId);
       expect(none.statusCode, none.body).toBe(409);
+    });
+  });
+
+  describe('auth', () => {
+    async function connectionKey() {
+      const conn = await createRow('Connection', merchant.id, false, {});
+      const { raw, record } = await createApiKey(merchant.id, {
+        livemode: false,
+        scopes: [...CONNECTION_KEY_SCOPES],
+      });
+      await prisma.apiKey.update({ where: { id: record.id }, data: { connectionId: conn.id } });
+      return raw;
+    }
+    async function member(role: MerchantUserRole) {
+      const user = await createUser({ emailVerifiedAt: new Date() });
+      await createRow('MerchantUser', merchant.id, false, { userId: user.id, role });
+      return dashHeaders(await loginAs(user.id), { merchantId: merchant.id, livemode: false });
+    }
+    async function failedPayment() {
+      setHookTransport(async () => ({
+        outcome: 'failed',
+        txHash: null,
+        costUsd: null,
+        error: 'execution reverted: Paused()',
+        terminal: true,
+      }));
+      const s = await create(body({ hook_data: { player: 'p-1' } }));
+      const paymentId = await settle(s.json().id);
+      setHookTransport(null);
+      return paymentId;
+    }
+
+    it('a connected site key is refused on both routes (403)', async () => {
+      await integrator();
+      const paymentId = await failedPayment();
+      const raw = await connectionKey();
+      const list = await app.inject({
+        method: 'GET',
+        url: '/v1/hook-calls',
+        headers: { authorization: `Bearer ${raw}` },
+      });
+      expect(list.statusCode, list.body).toBe(403);
+      const resend = await app.inject({
+        method: 'POST',
+        url: `/v1/payments/${paymentId}/hook/resend`,
+        headers: { authorization: `Bearer ${raw}` },
+      });
+      expect(resend.statusCode, resend.body).toBe(403);
+      expect((await prisma.hookCall.findUniqueOrThrow({ where: { paymentId } })).status).toBe(
+        'failed',
+      );
+    });
+
+    it('dashboard: any member lists; only webhooks:resend may resend', async () => {
+      await integrator();
+      const paymentId = await failedPayment();
+      for (const role of ['viewer', 'finance'] as const) {
+        const headers = await member(role);
+        const list = await app.inject({ method: 'GET', url: '/v1/hook-calls', headers });
+        expect(list.statusCode, `${role}: ${list.body}`).toBe(200);
+        expect(list.json().hook_calls).toHaveLength(1);
+        const denied = await app.inject({
+          method: 'POST',
+          url: `/v1/payments/${paymentId}/hook/resend`,
+          headers,
+        });
+        expect(denied.statusCode, `${role}: ${denied.body}`).toBe(403);
+      }
+      const admin = await member('admin');
+      const ok = await app.inject({
+        method: 'POST',
+        url: `/v1/payments/${paymentId}/hook/resend`,
+        headers: admin,
+      });
+      expect(ok.statusCode, ok.body).toBe(200);
+      expect(ok.json().status).toBe('succeeded');
+    });
+  });
+
+  describe('test mode end to end (watcher → SETTLED → hook)', () => {
+    const sim1click = isolatedSimStore();
+    let sim: SimulatedOneClick;
+
+    beforeEach(async () => {
+      await sim1click.clear();
+      resetNearClients();
+      fakeNearClient(false);
+      sim = new SimulatedOneClick({ store: sim1click.store() });
+      resetOneClickProviders({ simulated: sim });
+    });
+    afterEach(() => {
+      resetOneClickProviders();
+      resetNearClients();
+    });
+    afterAll(async () => {
+      await sim1click.clear();
+    });
+
+    it('an EVM-settled HOOK session is notified once the simulated settlement lands', async () => {
+      await integrator();
+      const s = await create(body({ hook_data: { player: 'p-7' } }));
+      expect(s.statusCode, s.body).toBe(201);
+      const q = await app.inject({
+        method: 'POST',
+        url: '/v1/checkout/client/quote',
+        headers: { authorization: `Bearer ${s.json().client_secret}` },
+        payload: { origin_asset: 'nep141:eth.test' },
+      });
+      expect(q.statusCode, q.body).toBe(201);
+      const depositAddress = q.json().deposit_address as string;
+      await sim.simulate(depositAddress, 'exact');
+      await pollDeposit(depositAddress, { livemode: false });
+
+      const payment = await prisma.payment.findFirstOrThrow({ where: { sessionId: s.json().id } });
+      expect(payment.status).toBe('SETTLED');
+      // A wallet payout on an EVM chain settles with an EVM-shaped transaction hash.
+      expect(payment.settleTx).toMatch(/^0x[0-9a-f]{64}$/);
+      const event = await prisma.event.findFirstOrThrow({
+        where: { type: 'payment.succeeded', aggregateId: payment.id },
+      });
+      // The outbox handler (registered for payment.succeeded) creates and delivers the hook.
+      await createHookCallForPayment(event);
+      const hook = await prisma.hookCall.findUniqueOrThrow({ where: { paymentId: payment.id } });
+      expect(hook).toMatchObject({ status: 'confirmed', attempt: 1, lastError: null });
+      expect(await prisma.event.count({ where: { type: 'hook.succeeded' } })).toBe(1);
+      expect(await prisma.event.count({ where: { type: 'hook.failed' } })).toBe(0);
     });
   });
 });

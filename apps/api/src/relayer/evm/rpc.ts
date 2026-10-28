@@ -44,6 +44,8 @@ export interface EvmReceipt {
   status: 0 | 1;
   gasUsed: bigint;
   effectiveGasPrice: bigint;
+  /** OP-stack chains (base, op): the L1 data fee in wei; null where the receipt has none. */
+  l1Fee: bigint | null;
   blockNumber: bigint;
   logs: { address: string; topics: string[]; data: string }[];
 }
@@ -165,6 +167,7 @@ export class EvmRpc {
       status: toBig(r.status, 'status') === 1n ? 1 : 0,
       gasUsed: toBig(r.gasUsed, 'gasUsed'),
       effectiveGasPrice: toBig(r.effectiveGasPrice, 'effectiveGasPrice'),
+      l1Fee: r.l1Fee === undefined || r.l1Fee === null ? null : toBig(r.l1Fee, 'l1Fee'),
       blockNumber: toBig(r.blockNumber, 'blockNumber'),
       logs: (Array.isArray(r.logs) ? r.logs : []).map((l) => {
         const log = l as { address?: unknown; topics?: unknown; data?: unknown };

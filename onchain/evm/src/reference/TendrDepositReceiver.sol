@@ -29,9 +29,15 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /// `hook.succeeded` webhooks (they name the same payment, amount and settlement transaction), or
 /// check `txHash` against the actual transfer before releasing value.
 ///
-/// Gas: Tendr deducts its estimate for this call (80k gas on EVM chains) from the payment's own
-/// proceeds; keep `_credit` small. A call that reverts is retried for 3 days (the contract may be
-/// paused), then reported to the integrator as `hook.failed`.
+/// Gas: Tendr deducts its estimate for this call (90k gas on EVM chains) from the payment's own
+/// proceeds; keep `_credit` small. Tendr never sends a hook needing more than 300k gas, or costing
+/// more than 10 % of the order. A call refused in Tendr's dry run (e.g. the contract is paused) is
+/// retried for 3 days; a call that reverts on chain is not retried. Either way the integrator is
+/// told once (`hook.failed`) and can resend it.
+///
+/// Duplicates: refuse a repeated `txHash` with exactly `AlreadyNotified(bytes32)` (as here). On a
+/// retry or resend, Tendr reads that error as "already delivered" (an earlier attempt landed)
+/// instead of a failure; a custom receiver using another error gets a `hook.failed` instead.
 contract TendrDepositReceiver {
     /// @notice Tendr's relayer (`relayer-evm`) address on this chain: the only allowed caller.
     address public immutable relayer;

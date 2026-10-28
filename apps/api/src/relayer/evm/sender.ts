@@ -57,12 +57,14 @@ export const POLL_LEASE_MS = 30_000;
 /** A nonce used by a transaction we hold no receipt for: failed once this long past give-up. */
 export const UNKNOWN_NONCE_GRACE_MS = 10 * 60_000;
 const CANCEL_GAS = 21_000n;
+/** `last_error` of a transaction mined with receipt status 0. */
+export const EVM_REVERTED_ON_CHAIN = 'reverted on chain';
 
 /** Nothing reached the chain: the dry run reverted, the node refused, or a step before failed. */
 export class EvmNotBroadcastError extends Error {
   constructor(
     message: string,
-    readonly reason: 'simulation_reverted' | 'fee_cap' | 'rejected' | 'unavailable',
+    readonly reason: 'simulation_reverted' | 'fee_cap' | 'gas_cap' | 'rejected' | 'unavailable',
     readonly cause?: unknown,
   ) {
     super(message);
@@ -79,6 +81,13 @@ export interface EvmSendInput {
   giveUpAt: Date;
   purpose: string;
   refId: string;
+  /**
+   * Gas limit ceiling: the limit is min(estimate × GAS_LIMIT_BUFFER_PCT, this); an estimate above
+   * it is refused (`gas_cap`), nothing sent. Integrator hooks set it (the contract is not ours).
+   */
+  maxGasLimit?: bigint;
+  /** Refused (`gas_cap`) when gas limit × the current gas price (base fee + tip) is above this. */
+  maxCostWei?: bigint;
 }
 
 export interface EvmSendResult {
@@ -105,6 +114,8 @@ export interface EvmOutcome {
   txHash: string | null;
   gasUsed: bigint | null;
   effectiveGasPrice: bigint | null;
+  /** OP-stack chains: the receipt's L1 data fee (wei), charged on top of gas; else null. */
+  l1Fee?: bigint | null;
   reason: string | null;
   /** The mined receipt's logs (lower-case emitter address); [] when none. */
   logs: ReceiptLog[];
@@ -291,12 +302,23 @@ export class EvmSender {
         tip = min(tip, cap - base);
       }
       const dbNext = inFlight._max.nonce === null ? 0n : inFlight._max.nonce + 1n;
-      return {
-        gasLimit: (gas * GAS_LIMIT_BUFFER_PCT + 99n) / 100n,
-        maxFee,
-        tip,
-        nonce: max(pending, dbNext),
-      };
+      let gasLimit = (gas * GAS_LIMIT_BUFFER_PCT + 99n) / 100n;
+      if (input.maxGasLimit !== undefined) {
+        if (gas > input.maxGasLimit) {
+          throw new EvmNotBroadcastError(
+            `the call needs ${gas} gas, above the ${input.maxGasLimit} gas ceiling`,
+            'gas_cap',
+          );
+        }
+        gasLimit = min(gasLimit, input.maxGasLimit);
+      }
+      if (input.maxCostWei !== undefined && gasLimit * (base + tip) > input.maxCostWei) {
+        throw new EvmNotBroadcastError(
+          `the call may cost ${gasLimit * (base + tip)} wei (${gasLimit} gas), above its ${input.maxCostWei} wei budget`,
+          'gas_cap',
+        );
+      }
+      return { gasLimit, maxFee, tip, nonce: max(pending, dbNext) };
     } catch (err) {
       if (err instanceof EvmNotBroadcastError) throw err;
       throw new EvmNotBroadcastError('the chain is unavailable', 'unavailable', err);
@@ -452,6 +474,7 @@ export class EvmSender {
           txHash: hash,
           gasUsed: r.gasUsed.toString(),
           effectiveGasPrice: r.effectiveGasPrice.toString(),
+          l1Fee: r.l1Fee === null ? null : r.l1Fee.toString(),
           // Every log of the receipt (the forwarder's events and the token transfers it caused).
           receiptLogs: r.logs.map((l) => ({
             address: l.address.toLowerCase(),
@@ -462,7 +485,7 @@ export class EvmSender {
             ? 'gave up after the deadline (nonce freed)'
             : r.status === 1
               ? null
-              : 'reverted on chain',
+              : EVM_REVERTED_ON_CHAIN,
         },
       });
       return;
@@ -664,6 +687,7 @@ function outcomeOf(r: Row): EvmOutcome {
     txHash: r.minedHash,
     gasUsed: r.gasUsed ? BigInt(r.gasUsed.toFixed(0)) : null,
     effectiveGasPrice: r.effectiveGasPrice ? BigInt(r.effectiveGasPrice.toFixed(0)) : null,
+    l1Fee: r.l1Fee ? BigInt(r.l1Fee.toFixed(0)) : null,
     reason: r.lastError,
     logs: Array.isArray(r.receiptLogs) ? (r.receiptLogs as unknown as ReceiptLog[]) : [],
   };

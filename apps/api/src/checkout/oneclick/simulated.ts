@@ -184,9 +184,25 @@ const EVM_CHAINS = new Set(['eth', 'base', 'arb', 'op', 'pol', 'bsc', 'avax', 'g
 const sha256 = (s: string): Buffer => createHash('sha256').update(s).digest();
 const hex = (s: string, bytes: number): string => sha256(s).subarray(0, bytes).toString('hex');
 
-/** Deterministic destination (NEAR) tx hash of a simulated settlement, base58 like a real one. */
-export function simulatedDestinationTxHash(depositAddress: string): string {
-  return bs58.encode(sha256(`sim-dest:${depositAddress}`));
+/**
+ * Deterministic destination tx hash of a simulated settlement, shaped like a real one on the chain
+ * the settlement lands on: `0x` + 64 hex on an EVM chain (a wallet payout there), base58 elsewhere
+ * (NEAR: intents credits and NEAR wallet payouts).
+ */
+export function simulatedDestinationTxHash(depositAddress: string, chain = 'near'): string {
+  const digest = sha256(`sim-dest:${depositAddress}`);
+  return EVM_CHAINS.has(chain) ? `0x${digest.toString('hex')}` : bs58.encode(digest);
+}
+
+/** The chain a simulated settlement lands on: NEAR for intents credits, else the asset's chain. */
+function destinationChainOf(req: QuoteRequest): string {
+  if (req.recipientType === 'INTENTS') return 'near';
+  const listed = SIM_TOKENS.find((t) => t.assetId === req.destinationAsset);
+  if (listed) return listed.blockchain;
+  return (
+    /^nep141:([a-z0-9]+)(?:-0x[0-9a-fA-F]{40})?\.omft\.near$/.exec(req.destinationAsset)?.[1] ??
+    'near'
+  );
 }
 
 /** Deterministic origin-chain tx hash of the n-th simulated deposit to an address. */
@@ -441,7 +457,10 @@ export class SimulatedOneClick implements OneClickProvider {
       // Credits are saved on the stored (pre-deposit) state as they happen, so a retry after a
       // partial failure skips recipients already credited.
       await this.settle(depositAddress, d);
-      await this.store.putDestination(simulatedDestinationTxHash(depositAddress), depositAddress);
+      await this.store.putDestination(
+        simulatedDestinationTxHash(depositAddress, destinationChainOf(d.req)),
+        depositAddress,
+      );
       next.credited = d.credited;
       next.status = 'SUCCESS';
       next.settled = true;
@@ -594,7 +613,7 @@ function view(depositAddress: string, d: SimDeposit): StatusResponse {
     swapDetails: {
       originChainTxHashes: d.origin.map((h) => ({ ...h })),
       destinationChainTxHashes: d.settled
-        ? [{ hash: simulatedDestinationTxHash(depositAddress) }]
+        ? [{ hash: simulatedDestinationTxHash(depositAddress, destinationChainOf(d.req)) }]
         : [],
       ...(started
         ? {

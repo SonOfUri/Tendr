@@ -10,6 +10,8 @@ export interface FakeReceipt {
   gasUsed: bigint;
   effectiveGasPrice: bigint;
   logs: { address: string; topics: string[]; data: string }[];
+  /** OP-stack L1 data fee (wei), reported as `l1Fee` when set. */
+  l1Fee?: bigint;
 }
 
 type Handler = (params: unknown[]) => unknown;
@@ -107,6 +109,7 @@ export class FakeEvmNode {
           status: hex(BigInt(r.status)),
           gasUsed: hex(r.gasUsed),
           effectiveGasPrice: hex(r.effectiveGasPrice),
+          ...(r.l1Fee !== undefined ? { l1Fee: hex(r.l1Fee) } : {}),
           blockNumber: '0x11',
           logs: r.logs,
         };

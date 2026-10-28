@@ -158,5 +158,14 @@ NEAR reference (`onchain/integrator-near`) has the same limit.
 Gas (`test_gasOfAHookCall`, full transaction): 85.2k for a typical call, 104.8k
 for a token's first deposit, 126.9k with 1 KB of `hookData`. The API estimates
 90k (`HOOK_GAS_UNITS`) and deducts it from the payment's proceeds; a costlier
-call's excess is Tendr's loss. A reverting call is retried for 3 days (the
-contract may be paused), then reported as `hook.failed`.
+call's excess is Tendr's loss. Tendr never sends a hook whose gas estimate is
+above 300k (`HOOK_GAS_CEILING`), or whose gas limit × gas price is above 10 % of
+the order (the hook-only cap); the call is then reported failed at once. A call
+refused in Tendr's dry run (e.g. the contract is paused) is retried for 3 days;
+a call that reverts on chain is not retried. Either way the integrator gets one
+`hook.failed` and can resend.
+
+**Duplicates.** Refuse a repeated `txHash` with exactly
+`AlreadyNotified(bytes32)`, as the reference does: on a retry or resend Tendr
+reads that error as "already delivered" (an earlier attempt landed). A custom
+receiver using another error gets a `hook.failed` instead.

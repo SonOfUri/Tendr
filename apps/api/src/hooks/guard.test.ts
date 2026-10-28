@@ -1,6 +1,7 @@
 // Ruling T11-b: relayer-evm and relayer-near sign a hook call only to the integrator's settlement
 // contract of that session, only the hook method, with exactly the arguments Tendr's records give.
 import type { Merchant } from '@prisma/client';
+import { Transaction } from 'ethers';
 import type { Redis } from 'ioredis';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -212,6 +213,62 @@ describe('hook signing guards', () => {
         .catch((e: unknown) => e);
       expect((err as EvmNotBroadcastError).reason).toBe('rejected');
       expect(node.count('eth_estimateGas')).toBe(0);
+    });
+
+    describe('gas bounds (maxGasLimit, maxCostWei)', () => {
+      async function send(
+        node: FakeEvmNode,
+        bounds: { maxGasLimit?: bigint; maxCostWei?: bigint },
+      ) {
+        const s = sender(node);
+        await redis.del(`tendr:evm-nonce:base:${await s.address()}`);
+        const h = await hookCall();
+        const call = await expectedHookCall(h.id as string);
+        return s
+          .send({
+            chain: 'base',
+            to: CONTRACT,
+            data: call.data!,
+            giveUpAt: new Date(Date.now() + 600_000),
+            purpose: INTEGRATOR_HOOK_PURPOSE,
+            refId: h.id as string,
+            ...bounds,
+          })
+          .catch((e: unknown) => e);
+      }
+
+      it('caps the gas limit at min(estimate × 1.2, maxGasLimit)', async () => {
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+        const node = new FakeEvmNode();
+        node.gasEstimate = 280_000n; // × 1.2 = 336k, above the 300k ceiling
+        const res = await send(node, { maxGasLimit: 300_000n });
+        expect(res).toMatchObject({ broadcast: 'submitted' });
+        expect(Transaction.from(node.sent[0]!).gasLimit).toBe(300_000n);
+
+        const small = new FakeEvmNode();
+        small.gasEstimate = 90_000n;
+        await send(small, { maxGasLimit: 300_000n });
+        expect(Transaction.from(small.sent[0]!).gasLimit).toBe(108_000n);
+      });
+
+      it('refuses (gas_cap, nothing signed or recorded) when the estimate is above the ceiling', async () => {
+        const node = new FakeEvmNode();
+        node.gasEstimate = 300_001n;
+        const err = await send(node, { maxGasLimit: 300_000n });
+        expect(err).toBeInstanceOf(EvmNotBroadcastError);
+        expect((err as EvmNotBroadcastError).reason).toBe('gas_cap');
+        expect(node.sent).toHaveLength(0);
+        expect(await prisma.relayerTransaction.count()).toBe(0);
+      });
+
+      it('refuses (gas_cap) when gas limit × the current gas price is above maxCostWei', async () => {
+        const node = new FakeEvmNode(); // 100k estimate → 120k limit; 1.1 gwei → 1.32e14 wei
+        const over = await send(node, { maxCostWei: 131_999_999_999_999n });
+        expect((over as EvmNotBroadcastError).reason).toBe('gas_cap');
+        expect(node.sent).toHaveLength(0);
+        const ok = await send(new FakeEvmNode(), { maxCostWei: 132_000_000_000_000n });
+        expect(ok).toMatchObject({ broadcast: 'submitted' });
+      });
     });
   });
 

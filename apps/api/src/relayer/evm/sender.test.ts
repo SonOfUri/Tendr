@@ -291,6 +291,22 @@ describe('EvmSender', () => {
     expect(await sender.tick()).toEqual([]);
   });
 
+  it('records the OP-stack L1 data fee (receipt l1Fee) and hands it over; null elsewhere', async () => {
+    const res = await sender.send(input());
+    node.mine(res.txHash);
+    node.receipts.get(res.txHash)!.l1Fee = 12_345n;
+    const [o] = await sender.tick();
+    expect(o).toMatchObject({ txId: res.txId, l1Fee: 12_345n });
+    const row = await prisma.relayerTransaction.findUniqueOrThrow({ where: { id: res.txId } });
+    expect(row.l1Fee!.toFixed()).toBe('12345');
+
+    await sender.markHandled(res.txId);
+    const plain = await sender.send(input({ refId: 'gas_plain' }));
+    node.mine(plain.txHash);
+    const [p] = await sender.tick();
+    expect(p).toMatchObject({ txId: plain.txId, l1Fee: null });
+  });
+
   it('a reverted transaction is failed', async () => {
     const res = await sender.send(input());
     node.mine(res.txHash, 0);
