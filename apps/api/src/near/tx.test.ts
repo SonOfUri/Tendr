@@ -195,6 +195,8 @@ describe('relayer-near signing guard', () => {
         functionCallAction('ft_transfer', { receiver_id: 'x.near', amount: '1' }, TGAS, 1n),
       ]),
       await build('usdt.tether-token.near', [storage('bob.near', false, 1n)]),
+      // Registrations only on the gasless token contracts.
+      await build('evil.near', [storage('bob.near', true, 1n)]),
       await build('usdt.tether-token.near', [
         storage('bob.near', true, RELAYER_NEAR_MAX_STORAGE_DEPOSIT + 1n),
       ]),

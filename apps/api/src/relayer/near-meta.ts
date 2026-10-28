@@ -60,6 +60,7 @@ import { prisma } from '../lib/prisma.js';
 import { getRedis } from '../lib/redis.js';
 import { relayerNearSender, type RelayerNearSender } from '../near/client.js';
 import { creditedAmount } from '../near/events.js';
+import { nearGaslessToken } from '../near/tokens.js';
 import { NotBroadcastError, isInvalidNonce, type AccountState } from '../near/rpc.js';
 import {
   RELAYER_NEAR_MAX_STORAGE_DEPOSIT,
@@ -78,6 +79,8 @@ import {
   applyRelayOutcome,
   assertRelayable,
   gaslessNotAvailable,
+  quoteExpired,
+  sponsorshipReleased,
   submissionStatus,
   submitRelayed,
   undoClaim,
@@ -94,32 +97,7 @@ import type {
   SubmitResult,
 } from './types.js';
 
-/**
- * The NEP-141 tokens gasless NEAR payments accept (ruling T8-d): Circle's native USDC and Tether's
- * USDT on NEAR mainnet, as the 1Click token list names them. Both are plain NEP-141 contracts (no
- * fee-on-transfer, no rebasing) that need a `storage_deposit` registration per receiver.
- */
-export const NEAR_GASLESS_TOKENS = [
-  {
-    assetId: 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
-    contract: '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
-    symbol: 'USDC',
-    decimals: 6,
-  },
-  {
-    assetId: 'nep141:usdt.tether-token.near',
-    contract: 'usdt.tether-token.near',
-    symbol: 'USDT',
-    decimals: 6,
-  },
-] as const;
-
-export type NearGaslessToken = (typeof NEAR_GASLESS_TOKENS)[number];
-
-/** The allow-listed token for a 1Click asset id, or null. */
-export function nearGaslessToken(assetId: string): NearGaslessToken | null {
-  return NEAR_GASLESS_TOKENS.find((t) => t.assetId === assetId) ?? null;
-}
+export { NEAR_GASLESS_TOKENS, nearGaslessToken, type NearGaslessToken } from '../near/tokens.js';
 
 /** The `to_sign[].kind` of a NEAR payment. */
 export const NEAR_DELEGATE_KIND = 'near_delegate_action';
@@ -135,8 +113,14 @@ export const NEAR_STORAGE_GAS = 30n * TGAS;
  * computed: a delegate action never outlives its quote.
  */
 export const NEAR_ASSUMED_BLOCK_MS = 1_000;
-/** Blocks added to that height (the "small margin" of ruling T8-a). */
-export const NEAR_MAX_BLOCK_HEIGHT_MARGIN = 10n;
+/**
+ * Blocks between the TTL handed to the wallet and the issued bound (fix-round ruling I1): a
+ * wallet sets max_block_height = its own head when it signs (often the optimistic head) + the
+ * TTL, so this absorbs approval time and head drift (~90 s of NEAR blocks at ~1.6/s).
+ */
+export const NEAR_SIGNING_SLACK_BLOCKS = 150n;
+/** The shortest TTL handed to a wallet; a quote with less left before its deadline is refused. */
+export const NEAR_MIN_TTL_BLOCKS = 60n;
 /**
  * "Can no longer execute" needs two looks at least this far apart (one poll interval), both
  * finding the final head past the delegate's max_block_height and the transaction unknown.
@@ -291,6 +275,11 @@ interface StoredNearMeta {
   /** The shopper's borsh(SignedDelegate), base64. */
   delegate: string;
   maxBlockHeight: string;
+  /**
+   * yoctoNEAR this payment's `storage_deposit` registrations spent (deposit + gas), sent just
+   * before the relay: part of the payment's cost. Absent when nothing needed registering.
+   */
+  storageYocto?: string;
   /** When the poller first found the delegate expired and the transaction unknown (ms). */
   expiredSeenAt?: number;
 }
@@ -302,6 +291,7 @@ const StoredSchema = z.object({
   transaction: z.string().min(1),
   delegate: z.string(),
   maxBlockHeight: z.string().regex(/^\d+$/),
+  storageYocto: z.string().regex(/^\d+$/).optional(),
   expiredSeenAt: z.number().finite().optional(),
 });
 
@@ -314,6 +304,7 @@ function storedMeta(v: Prisma.JsonValue | null): StoredNearMeta | null {
 interface NearRelayCall {
   delegate: string;
   sd: DecodedSignedDelegate;
+  payment: NearPayment;
 }
 
 /** The claim was undone meanwhile (e.g. by the poller): this transaction is never sent. */
@@ -511,24 +502,26 @@ export class NearMetaGasless implements GaslessRelayer {
     }
     const p = await this.payment(q);
     await this.assertUnderLossCap(q);
+    await this.assertHoldClaimable(q);
     const legList = legs(p);
     let height: bigint;
     let relayerId: string;
+    // Prepare never spends (fix-round ruling I2): registrations happen at submit.
     if (this.live) {
       height = (await this.read('block', () => this.sender.rpc.finalBlock())).height;
       if (!(await this.canAttach(p.wallet, BigInt(legList.length)))) throw needsBalance();
       relayerId = await this.read('relayer key', () => this.sender.accountId());
-      await this.ensureRegistered(q, p.contract, p.depositAddress);
-      if (p.feeAccount) await this.ensureRegistered(q, p.contract, p.feeAccount);
     } else {
       height = simulatedHeight(now);
       relayerId = implicitAccountId((await getKeyVault().publicKey('relayer-near')).raw);
     }
     const untilDeadline = q.quote.deadline.getTime() - now.getTime();
+    // The bound: the block height at the quote deadline (blocks assumed no faster than 1/s).
     const maxBlockHeight =
-      height +
-      BigInt(Math.max(0, Math.floor(untilDeadline / NEAR_ASSUMED_BLOCK_MS))) +
-      NEAR_MAX_BLOCK_HEIGHT_MARGIN;
+      height + BigInt(Math.max(0, Math.floor(untilDeadline / NEAR_ASSUMED_BLOCK_MS)));
+    // The wallet adds the TTL to its own head when it signs: leave slack below the bound.
+    const ttl = maxBlockHeight - height - NEAR_SIGNING_SLACK_BLOCKS;
+    if (ttl < NEAR_MIN_TTL_BLOCKS) throw quoteExpired('is too close to its deadline to sign');
     await recordIssued(q.quote.id, maxBlockHeight, Math.ceil(untilDeadline / 1000) + 3600);
     return {
       quote_id: q.quote.id,
@@ -555,10 +548,13 @@ export class NearMetaGasless implements GaslessRelayer {
                 deposit: '1',
               },
             })),
-            /** The signed delegate's max_block_height must not exceed this. */
+            /** The signed delegate's max_block_height must not exceed this (the deadline). */
             max_block_height: maxBlockHeight.toString(),
-            /** The same as a TTL from the current final block (`blockHeightTtl`). */
-            block_height_ttl: Number(maxBlockHeight - height),
+            /**
+             * The TTL to sign with (`blockHeightTtl`): the wallet's head at signing + this stays
+             * under max_block_height with NEAR_SIGNING_SLACK_BLOCKS to spare.
+             */
+            block_height_ttl: Number(ttl),
             /** Pays the gas (shown to the shopper as the relayer). */
             relayer_id: relayerId,
             expires_at: q.quote.deadline.toISOString(),
@@ -576,17 +572,40 @@ export class NearMetaGasless implements GaslessRelayer {
   }
 
   /**
-   * Registers `account` on the token contract (ruling T8-c) unless `storage_balance_of` says it
-   * is: `relayer-near` sends one registration-only `storage_deposit` of the contract's minimum,
-   * under a Redis lock so concurrent prepares send it once. The cost is recorded as Tendr's.
+   * A merchant-sponsored quote whose hold can no longer be claimed (released, or used by a relay
+   * that failed) is refused here, before the shopper signs: the page re-quotes first.
    */
-  private async ensureRegistered(q: QuoteContext, contract: string, account: string) {
+  private async assertHoldClaimable(q: QuoteContext): Promise<void> {
+    if (q.quote.networkFeePaidBy !== 'merchant') return;
+    const hold = q.quote.gasSponsorshipId
+      ? await prisma.gasSponsorship.findFirst({
+          where: { ...scopeOf(q), id: q.quote.gasSponsorshipId },
+          select: { reservationState: true, status: true, quoteId: true },
+        })
+      : null;
+    if (hold?.reservationState !== 'reserved' || hold.status !== 'pending' || hold.quoteId) {
+      throw sponsorshipReleased();
+    }
+  }
+
+  /**
+   * Registers `account` on the token contract (ruling T8-c, at submit per fix-round ruling I2)
+   * unless `storage_balance_of` says it is: `relayer-near` sends one registration-only
+   * `storage_deposit` of the contract's minimum, under a Redis lock so concurrent submits send it
+   * once. Returns what it spent (deposit + gas) for the payment's cost, or null when nothing was
+   * needed. A registration that executed but failed records its gas as Tendr's, then throws.
+   */
+  private async ensureRegistered(
+    ctx: StorageCtx,
+    contract: string,
+    account: string,
+  ): Promise<Registration | null> {
     const rpc = this.sender.rpc;
     const registered = async () =>
       (await this.read('storage_balance_of', () =>
         rpc.viewFunction<unknown>(contract, 'storage_balance_of', { account_id: account }),
       )) !== null;
-    if (await registered()) return;
+    if (await registered()) return null;
     const key = `tendr:gasless:near-storage:${contract}:${account}`;
     let locked: boolean;
     try {
@@ -596,12 +615,13 @@ export class NearMetaGasless implements GaslessRelayer {
       throw unavailable();
     }
     if (!locked) {
-      // Another prepare is registering it right now.
-      if (await registered()) return;
+      // Another submit is registering it right now.
+      if (await registered()) return null;
       throw unavailable();
     }
+    let keepLock = false;
     try {
-      if (await registered()) return;
+      if (await registered()) return null;
       const bounds = await this.read('storage_balance_bounds', () =>
         rpc.viewFunction<{ min?: unknown }>(contract, 'storage_balance_bounds', {}),
       );
@@ -622,29 +642,33 @@ export class NearMetaGasless implements GaslessRelayer {
           ),
         ]);
       } catch (err) {
+        // It may still execute: hold the lock to its TTL so no second deposit races it.
+        keepLock = !(err instanceof NotBroadcastError);
         log('warn', 'near gasless: storage_deposit not confirmed', {
           contract,
           err: err instanceof Error ? err.name : 'error',
         });
         throw unavailable();
       }
-      const ok = res.topLevelStatus === 'success';
-      // A failed registration refunds the deposit; the gas is spent either way.
-      await recordStorageCost(q, {
-        contract,
-        account,
-        txHash: res.txHash,
-        yocto: (ok ? min : 0n) + (res.tokensBurnt ?? 0n),
-      });
-      if (!ok) {
+      if (res.topLevelStatus !== 'success') {
+        // The deposit is refunded; the gas is spent and this payment will not be relayed now.
+        await recordStorageCost(ctx, {
+          contract,
+          account,
+          txHash: res.txHash,
+          yocto: res.tokensBurnt ?? 0n,
+        });
         log('error', 'near gasless: storage_deposit failed', { contract, txHash: res.txHash });
         throw unavailable();
       }
+      return { contract, account, txHash: res.txHash, yocto: min + (res.tokensBurnt ?? 0n) };
     } finally {
-      try {
-        await getRedis().del(key);
-      } catch {
-        // Expires on its own.
+      if (!keepLock) {
+        try {
+          await getRedis().del(key);
+        } catch {
+          // Expires on its own.
+        }
       }
     }
   }
@@ -676,7 +700,7 @@ export class NearMetaGasless implements GaslessRelayer {
     if (sd.maxBlockHeight > issued) throw mismatch('signed_delegate.max_block_height');
     if (!this.live) {
       if (sd.maxBlockHeight <= simulatedHeight(this.now())) throw expired();
-      return { delegate: b64, sd };
+      return { delegate: b64, sd, payment: p };
     }
     const rpc = this.sender.rpc;
     const head = await this.read('block', () => rpc.finalBlock());
@@ -686,6 +710,8 @@ export class NearMetaGasless implements GaslessRelayer {
     );
     if (!key?.fullAccess) throw mismatch('signed_delegate.public_key');
     if (sd.nonce <= key.nonce) throw mismatch('signed_delegate.nonce');
+    // nearcore refuses a delegate nonce ≥ block height × 10^6 (DelegateActionNonceTooLarge).
+    if (sd.nonce >= head.height * 1_000_000n) throw mismatch('signed_delegate.nonce');
     if (!(await this.canAttach(p.wallet, BigInt(sd.actions.length)))) throw needsBalance();
     const balance = await this.read('ft_balance_of', () =>
       rpc.viewFunction<unknown>(p.contract, 'ft_balance_of', { account_id: p.wallet }),
@@ -702,7 +728,7 @@ export class NearMetaGasless implements GaslessRelayer {
         { reason: 'insufficient_token_balance' },
       );
     }
-    return { delegate: b64, sd };
+    return { delegate: b64, sd, payment: p };
   }
 
   async submit(q: QuoteContext, signed: SignedPayload): Promise<SubmitResult> {
@@ -717,13 +743,45 @@ export class NearMetaGasless implements GaslessRelayer {
     return { ...res, status: 'confirmed' };
   }
 
-  /** Sign (relayer-near) → store the hash and bytes → send. See the file header. */
+  /**
+   * Register (only now: the delegate passed every check) → sign (relayer-near) → store the hash
+   * and bytes → send. See the file header. Registrations paid for an attempt that is then not
+   * broadcast are recorded as Tendr's cost (the payment will not recover them).
+   */
   private async broadcast(
     q: QuoteContext,
     call: NearRelayCall,
     id: string,
   ): Promise<{ txHash: string }> {
     if (!this.live) return { txHash: simulatedNearTxHash(id) };
+    const ctx: StorageCtx = { scope: scopeOf(q), sessionId: q.session.id, quoteId: q.quote.id };
+    const regs: Registration[] = [];
+    const accounts = [call.payment.depositAddress];
+    if (call.payment.feeAccount) accounts.push(call.payment.feeAccount);
+    try {
+      for (const account of accounts) {
+        const r = await this.ensureRegistered(ctx, call.payment.contract, account);
+        if (r) regs.push(r);
+      }
+      const storageYocto = regs.reduce((t, r) => t + r.yocto, 0n);
+      return await this.relay(q, call, id, storageYocto);
+    } catch (err) {
+      for (const r of regs) await recordStorageCost(ctx, r);
+      if (err instanceof AppError && err.code === 'PROVIDER_UNAVAILABLE') {
+        // A registration could not be completed: nothing relayed, the claim is undone.
+        throw new RelayNotBroadcast('the payment accounts could not be registered', 'unavailable');
+      }
+      throw err;
+    }
+  }
+
+  /** Sign → record → send the outer transaction (a stale relayer nonce is re-signed once). */
+  private async relay(
+    q: QuoteContext,
+    call: NearRelayCall,
+    id: string,
+    storageYocto: bigint,
+  ): Promise<{ txHash: string }> {
     const scope = scopeOf(q);
     for (let attempt = 0; ; attempt++) {
       let signed: SignedTx;
@@ -745,6 +803,7 @@ export class NearMetaGasless implements GaslessRelayer {
         transaction: Buffer.from(signed.bytes).toString('base64'),
         delegate: call.delegate,
         maxBlockHeight: call.sd.maxBlockHeight.toString(),
+        ...(storageYocto > 0n ? { storageYocto: storageYocto.toString() } : {}),
       };
       try {
         await (this.deps.record ?? recordSigned)(scope, id, q.quote.id, stored);
@@ -825,15 +884,29 @@ export function simulatedNearTxHash(submissionId: string): string {
   );
 }
 
+/** Where a registration's cost is recorded: the session and quote it was made for. */
+interface StorageCtx {
+  scope: { merchantId: string; livemode: boolean };
+  sessionId: string;
+  quoteId: string;
+}
+
+/** One `storage_deposit` registration that executed: what it spent (deposit + gas). */
+interface Registration {
+  contract: string;
+  account: string;
+  txHash: string;
+  yocto: bigint;
+}
+
 /**
- * Records a `storage_deposit` registration's cost (deposit + gas) as Tendr's own (`sponsor =
- * tendr`, recognised now: counted by the daily loss cap). Never a submission (no quote id).
+ * Records registration spend the payment will not recover as Tendr's own (`sponsor = tendr`,
+ * recognised now: counted by the daily loss cap): a registration that failed, or one paid for an
+ * attempt that was then not broadcast or never executed. Never a submission (no quote id). A
+ * registration followed by its relay is part of that payment's cost instead (`storageYocto`).
  */
-async function recordStorageCost(
-  q: QuoteContext,
-  r: { contract: string; account: string; txHash: string; yocto: bigint },
-): Promise<void> {
-  const scope = scopeOf(q);
+async function recordStorageCost(ctx: StorageCtx, r: Registration): Promise<void> {
+  const scope = ctx.scope;
   let costUsd: string | null = null;
   try {
     costUsd = await nativeUsd('near', r.yocto, scope.livemode);
@@ -847,7 +920,7 @@ async function recordStorageCost(
         data: {
           id: newId('gas'),
           ...scope,
-          sessionId: q.session.id,
+          sessionId: ctx.sessionId,
           chain: 'near',
           method: 'meta_tx',
           provider: 'relayer-near',
@@ -858,7 +931,7 @@ async function recordStorageCost(
           lossRecognizedAt: now,
           paymasterData: {
             kind: 'near_storage',
-            quote_id: q.quote.id,
+            quote_id: ctx.quoteId,
             contract: r.contract,
             account_id: r.account,
             yocto: r.yocto.toString(),
@@ -976,6 +1049,9 @@ async function applyOutcome(
   sender: RelayerNearSender,
   row: {
     id: string;
+    merchantId: string;
+    sessionId: string;
+    quoteId: string | null;
     livemode: boolean;
     sponsor: string;
     feeAmount: Prisma.Decimal | null;
@@ -1013,7 +1089,7 @@ async function applyOutcome(
         );
         return false;
       }
-      return applyRelayOutcome(
+      const did = await applyRelayOutcome(
         row.id,
         {
           status: 'failed',
@@ -1025,6 +1101,23 @@ async function applyOutcome(
         },
         now,
       );
+      // Its registrations were paid for nothing this payment will recover.
+      if (did && stored.storageYocto && BigInt(stored.storageYocto) > 0n && row.quoteId) {
+        await recordStorageCost(
+          {
+            scope: { merchantId: row.merchantId, livemode: row.livemode },
+            sessionId: row.sessionId,
+            quoteId: row.quoteId,
+          },
+          {
+            contract: nearGaslessToken(row.quote.originAssetId)?.contract ?? '',
+            account: 'deposit and fee accounts',
+            txHash: stored.hash,
+            yocto: BigInt(stored.storageYocto),
+          },
+        );
+      }
+      return did;
     }
   }
   const token = nearGaslessToken(row.quote.originAssetId);
@@ -1037,7 +1130,9 @@ async function applyOutcome(
     status.receipts.some((r) => r.executorId === contract);
   let costUsd: string | null = null;
   try {
-    costUsd = await nativeUsd('near', status.tokensBurnt ?? 0n, row.livemode);
+    // The NEAR the relay burnt plus the registrations made for it just before.
+    const spent = (status.tokensBurnt ?? 0n) + BigInt(stored.storageYocto ?? '0');
+    costUsd = await nativeUsd('near', spent, row.livemode);
   } catch (err) {
     log('warn', 'near gasless: cost unpriced', { sponsorshipId: row.id, err: String(err) });
   }

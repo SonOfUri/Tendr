@@ -28,6 +28,7 @@ import {
   encodeSignedDelegateAction,
   functionCallAction,
   implicitAccountId,
+  transferAction,
   type DecodedSignedTx,
 } from '../near/tx.js';
 import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
@@ -38,7 +39,7 @@ import {
   NEAR_DELEGATE_KIND,
   NEAR_EXPIRY_CONFIRM_MS,
   NEAR_GASLESS_TOKENS,
-  NEAR_MAX_BLOCK_HEIGHT_MARGIN,
+  NEAR_SIGNING_SLACK_BLOCKS,
   NEAR_RECORDED_PENDING_MS,
   NEAR_STALE_PENDING_MS,
   NearMetaGasless,
@@ -70,13 +71,15 @@ class FakeNear implements RpcTransport {
   relayerNonce = 7;
   registered = new Set<string>();
   balances = new Map<string, bigint>();
-  /** Every transaction `send_tx` received (resends included). */
+  /** Every transaction `send_tx` received (resends included); errors hit relays only. */
   sent: { hash: string; tx: DecodedSignedTx; base64: string }[] = [];
   outcomes = new Map<string, unknown>();
   /** `send_tx`: errors to throw, one per call, before answering normally. */
   sendErrors: unknown[] = [];
   /** A request that fails (an RPC outage for that method). */
   down: string | null = null;
+  /** `storage_deposit` executes but fails (the contract refused it). */
+  failStorage = false;
 
   storageDeposits() {
     return this.sent.filter((s) => s.tx.actions[0]?.kind === 'functionCall');
@@ -139,12 +142,21 @@ class FakeNear implements RpcTransport {
       const tx = decodeSigned(Buffer.from(base64, 'base64'));
       const hash = bs58.encode(tx.hashBytes);
       this.sent.push({ hash, tx, base64 });
-      if (this.sendErrors.length) throw this.sendErrors.shift();
+      // Injected errors hit the relay (a registration may be sent just before it).
+      if (this.sendErrors.length && tx.actions[0]?.kind === 'signedDelegate') {
+        throw this.sendErrors.shift();
+      }
       const a = tx.actions[0]!;
       if (a.kind === 'functionCall') {
         const fc = a.fields as { methodName: string; args: Uint8Array };
         const args = JSON.parse(Buffer.from(fc.args).toString()) as { account_id: string };
         if (fc.methodName === 'storage_deposit') {
+          if (this.failStorage) {
+            return {
+              ...outcome(hash, tx.signerId, tx.receiverId, []),
+              status: { Failure: {} },
+            } as T;
+          }
           this.registered.add(`${tx.receiverId}/${args.account_id}`);
         }
       }
@@ -342,6 +354,8 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
     secret?: Uint8Array;
     signWith?: Uint8Array;
     rawArgs?: string[];
+    /** Signed actions as given (non-FunctionCall cases). */
+    rawActions?: ReturnType<typeof transferAction>[];
   };
 
   /** What a wallet's `signDelegateActions` returns for the prepared payload (base64 borsh). */
@@ -369,7 +383,7 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
     const d = delegateAction({
       senderId: over.senderId ?? td.sender_id,
       receiverId: over.receiverId ?? td.receiver_id,
-      actions,
+      actions: over.rawActions ?? actions,
       nonce: over.nonce ?? 43n,
       maxBlockHeight: over.maxBlockHeight ?? BigInt(td.max_block_height),
       publicKey: ed25519.getPublicKey(key),
@@ -400,15 +414,21 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
   const pollAt = (at: number) =>
     pollNearMetaRelays({ sender, livemode: false, now: () => new Date(at) });
 
-  it('registers the deposit address once, prepares the delegate action and relays it once', async () => {
+  const accountsRegistered = () =>
+    chain.storageDeposits().map((d) => {
+      const fc = d.tx.actions[0]!.fields as { args: Uint8Array };
+      return (JSON.parse(Buffer.from(fc.args).toString()) as { account_id: string }).account_id;
+    });
+
+  it('prepares the delegate action without spending; registers then relays once at submit', async () => {
     const p = await metaQuote();
     expect(p.quote.networkFeePaidBy).toBe('merchant');
     const amount = p.quote.amountIn.toFixed(0);
     const { payload, td } = await prepared(p);
+    // The bound is the block height at the quote deadline; the TTL leaves signing slack below it.
     const maxHeight =
       chain.height +
-      BigInt(Math.floor((p.quote.deadline.getTime() - clock) / NEAR_ASSUMED_BLOCK_MS)) +
-      NEAR_MAX_BLOCK_HEIGHT_MARGIN;
+      BigInt(Math.floor((p.quote.deadline.getTime() - clock) / NEAR_ASSUMED_BLOCK_MS));
     expect(payload).toMatchObject({
       quote_id: p.quote.id,
       method: 'meta_tx',
@@ -435,49 +455,34 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
         },
       ],
       max_block_height: maxHeight.toString(),
-      block_height_ttl: Number(maxHeight - chain.height),
+      block_height_ttl: Number(maxHeight - chain.height - NEAR_SIGNING_SLACK_BLOCKS),
       relayer_id: relayerAccount,
       expires_at: p.quote.deadline.toISOString(),
       transfers: [{ leg: 'payment', token: CONTRACT, to: p.quote.depositAddress, amount }],
     });
 
-    // The deposit address was not registered: one storage_deposit from relayer-near, before
-    // prepare returned; the gas-fee account is not needed when the merchant sponsors.
-    const deposits = chain.storageDeposits();
-    expect(deposits).toHaveLength(1);
-    expect(deposits[0]!.tx.signerId).toBe(relayerAccount);
-    expect(deposits[0]!.tx.receiverId).toBe(CONTRACT);
-    const fc = deposits[0]!.tx.actions[0]!.fields as { args: Uint8Array; deposit: bigint };
+    // Prepare never spends: no registration, no Tendr cost row, however often it is called.
+    await prepared(p);
+    expect(chain.sent).toHaveLength(0);
+    expect(await prisma.gasSponsorship.count({ where: { sponsor: 'tendr' } })).toBe(0);
+
+    const signed = signDelegate(td);
+    const res = await submit(p, signed);
+    // At submit, after every check: one storage_deposit from relayer-near, then the relay.
+    expect(chain.sent.map((s) => s.tx.actions[0]!.kind)).toEqual([
+      'functionCall',
+      'signedDelegate',
+    ]);
+    const deposit = chain.storageDeposits()[0]!;
+    expect(deposit.tx.signerId).toBe(relayerAccount);
+    expect(deposit.tx.receiverId).toBe(CONTRACT);
+    const fc = deposit.tx.actions[0]!.fields as { args: Uint8Array; deposit: bigint };
     expect(JSON.parse(Buffer.from(fc.args).toString())).toEqual({
       account_id: p.quote.depositAddress,
       registration_only: true,
     });
     expect(BigInt(fc.deposit)).toBe(STORAGE_MIN);
-    // Its cost (deposit + gas) is recorded as Tendr's at once (counted by the daily loss cap).
-    const storageRows = await prisma.gasSponsorship.findMany({
-      where: { sessionId: p.s.id, quoteId: null, sponsor: 'tendr' },
-    });
-    expect(storageRows).toHaveLength(1);
-    expect(storageRows[0]).toMatchObject({
-      chain: 'near',
-      method: 'meta_tx',
-      provider: 'relayer-near',
-      status: 'confirmed',
-      txHash: deposits[0]!.hash,
-    });
-    expect(storageRows[0]!.lossRecognizedAt).not.toBeNull();
-    // (0.00125 + 0.0003) NEAR × $3.
-    expect(storageRows[0]!.costUsd!.toFixed()).toBe('0.00465');
-
-    // Prepared again: already registered, no second storage_deposit.
-    await prepared(p);
-    expect(chain.storageDeposits()).toHaveLength(1);
-
-    const signed = signDelegate(td);
-    const res = await submit(p, signed);
-    const metas = chain.metaTxs();
-    expect(metas).toHaveLength(1);
-    const outer = metas[0]!;
+    const outer = chain.metaTxs()[0]!;
     expect(res).toEqual({
       submissionId: p.quote.gasSponsorshipId,
       txHash: outer.hash,
@@ -502,6 +507,7 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
       signerAddress: WALLET,
       txHash: outer.hash,
     });
+    // The registration's cost (deposit + gas) belongs to this payment's cost.
     expect(sp.paymasterData).toEqual({
       kind: 'near_meta',
       hash: outer.hash,
@@ -509,40 +515,105 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
       transaction: outer.base64,
       delegate: signed,
       maxBlockHeight: td.max_block_height,
+      storageYocto: (STORAGE_MIN + BURNT).toString(),
     });
+    expect(await prisma.gasSponsorship.count({ where: { sponsor: 'tendr' } })).toBe(0);
     const quote = await prisma.quote.findUniqueOrThrow({ where: { id: p.quote.id } });
     expect(quote.depositTxHash).toBe(outer.hash);
 
     // A repeat returns the same submission without sending again; no new delegate action can be
     // prepared while this one may still execute.
     expect(await submit(p, signed)).toMatchObject({ submissionId: sp.id, status: 'submitted' });
-    expect(chain.metaTxs()).toHaveLength(1);
+    expect(chain.sent).toHaveLength(2);
     expect(await refusal(relayer.prepare(p.q, {}))).toMatchObject({
       code: 'CONFLICT',
       details: { submission_id: sp.id },
     });
   });
 
-  it('concurrent prepares register the deposit address only once', async () => {
-    const p = await metaQuote();
-    await Promise.allSettled([relayer.prepare(p.q, {}), relayer.prepare(p.q, {})]);
-    expect(chain.storageDeposits()).toHaveLength(1);
+  it('repeated prepares across sessions spend nothing (no registration without a payer)', async () => {
+    for (let i = 0; i < 3; i++) {
+      const p = await metaQuote(i % 2 ? 'shopper' : undefined);
+      await prepared(p);
+      await prepared(p);
+    }
+    expect(chain.sent).toHaveLength(0);
+    expect(await prisma.gasSponsorship.count({ where: { sponsor: 'tendr' } })).toBe(0);
   });
 
-  it('a registration in progress elsewhere (lock held): 503, no second storage_deposit', async () => {
+  it('a wallet signing 60 s later against an optimistic head is accepted', async () => {
     const p = await metaQuote();
+    const prepareClock = clock;
+    const prepareHead = chain.height;
+    const { td } = await prepared(p);
+    // 60 s at ~1.6 blocks/s, and the wallet's optimistic head runs 4 blocks ahead of final.
+    chain.height = prepareHead + 96n;
+    clock += 60_000;
+    const walletHead = chain.height + 4n;
+    const res = await submit(
+      p,
+      signDelegate(td, { maxBlockHeight: walletHead + BigInt(td.block_height_ttl) }),
+    );
+    expect(res.status).toBe('submitted');
+    // The issued bound never exceeds the block height at the quote deadline.
+    expect(BigInt(td.max_block_height)).toBe(
+      prepareHead + BigInt(Math.floor((p.quote.deadline.getTime() - prepareClock) / 1000)),
+    );
+  });
+
+  it('a quote too close to its deadline for signing slack is refused at prepare', async () => {
+    const p = await metaQuote();
+    // ~100 s left: the deadline's height leaves less than the slack plus a minimum TTL.
+    clock = p.quote.deadline.getTime() - 100_000;
+    expect(await refusal(relayer.prepare(p.q, {}))).toMatchObject({ code: 'QUOTE_EXPIRED' });
+    expect(chain.sent).toHaveLength(0);
+  });
+
+  it('a merchant hold that can no longer be claimed is refused at prepare (re-quote first)', async () => {
+    const p = await metaQuote();
+    await prisma.gasSponsorship.update({
+      where: { id: p.quote.gasSponsorshipId! },
+      data: { reservationState: 'released' },
+    });
+    expect(await refusal(relayer.prepare(p.q, {}))).toMatchObject({
+      code: 'SPONSORSHIP_RELEASED',
+    });
+  });
+
+  it('a registration in progress elsewhere (lock held): 503, nothing relayed, retry works', async () => {
+    const p = await metaQuote();
+    const { td } = await prepared(p);
+    const signed = signDelegate(td);
     const lock = `tendr:gasless:near-storage:${CONTRACT}:${p.quote.depositAddress}`;
     await getRedis().set(lock, '1', 'EX', 60);
-    expect(await refusal(relayer.prepare(p.q, {}))).toMatchObject({
+    expect(await refusal(submit(p, signed))).toMatchObject({
       code: 'PROVIDER_UNAVAILABLE',
       status: 503,
     });
-    expect(chain.storageDeposits()).toHaveLength(0);
-    // The other prepare finished registering it: no deposit needed.
+    expect(chain.sent).toHaveLength(0);
+    expect(await rowOf(p.quote.gasSponsorshipId!)).toMatchObject({ quoteId: null });
+    // The other registration finished: the same signed delegate relays, with no deposit.
     chain.registered.add(`${CONTRACT}/${p.quote.depositAddress}`);
-    await expect(relayer.prepare(p.q, {})).resolves.toBeTruthy();
+    expect((await submit(p, signed)).status).toBe('submitted');
     expect(chain.storageDeposits()).toHaveLength(0);
+    expect(
+      ((await rowOf(p.quote.gasSponsorshipId!)).paymasterData as { storageYocto?: string })
+        .storageYocto,
+    ).toBeUndefined();
     await getRedis().del(lock);
+  });
+
+  it('a registration that fails on chain: not relayed, its gas is a Tendr cost', async () => {
+    const p = await metaQuote();
+    const { td } = await prepared(p);
+    chain.failStorage = true;
+    expect(await refusal(submit(p, signDelegate(td)))).toMatchObject({ status: 503 });
+    expect(chain.metaTxs()).toHaveLength(0);
+    expect(await rowOf(p.quote.gasSponsorshipId!)).toMatchObject({ quoteId: null });
+    const loss = await prisma.gasSponsorship.findFirstOrThrow({ where: { sponsor: 'tendr' } });
+    expect(loss.lossRecognizedAt).not.toBeNull();
+    // Gas only (the deposit is refunded): 0.0003 NEAR × $3.
+    expect(loss.costUsd!.toFixed()).toBe('0.0009');
   });
 
   it('the shopper pays: a second ft_transfer of the fee to the gas-fees-near account', async () => {
@@ -557,20 +628,16 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
     ]);
     expect(td.actions.every((a) => a.params.deposit === '1')).toBe(true);
     expect(td.transfers[1]).toEqual({ leg: 'fee', token: CONTRACT, to: feeAccount, amount: fee });
-    // Both receiving accounts registered, each once.
-    expect(
-      chain.storageDeposits().map((d) => {
-        const fc = d.tx.actions[0]!.fields as { args: Uint8Array };
-        return (JSON.parse(Buffer.from(fc.args).toString()) as { account_id: string }).account_id;
-      }),
-    ).toEqual([p.quote.depositAddress, feeAccount]);
 
-    // A sponsored-shaped delegate (no fee leg) is refused.
+    // A sponsored-shaped delegate (no fee leg) is refused, before any registration.
     expect(await refusal(submit(p, signDelegate(td, { actions: [td.actions[0]!] })))).toMatchObject(
       { code: 'GASLESS_PAYLOAD_MISMATCH', details: { field: 'signed_delegate.actions' } },
     );
+    expect(chain.sent).toHaveLength(0);
     const res = await submit(p, signDelegate(td));
     expect(res.status).toBe('submitted');
+    // Both receiving accounts registered, each once, before the relay.
+    expect(accountsRegistered()).toEqual([p.quote.depositAddress, feeAccount]);
     expect(await rowOf(res.submissionId)).toMatchObject({
       sponsor: 'shopper',
       method: 'meta_tx',
@@ -680,6 +747,34 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
       ['a signature by another key', () => ({ signWith: other }), 'signed_delegate.signature'],
       ['a key the account does not have', () => ({ secret: other }), 'signed_delegate.public_key'],
       ['a used nonce', () => ({ nonce: 42n }), 'signed_delegate.nonce'],
+      [
+        'a nonce nearcore refuses (≥ block height × 10^6)',
+        () => ({ nonce: 150_000_000n * 1_000_000n }),
+        'signed_delegate.nonce',
+      ],
+      [
+        'a Transfer instead of the ft_transfer',
+        () => ({ rawActions: [transferAction(1n)] }),
+        'signed_delegate.actions[0]',
+      ],
+      [
+        'a numeric amount',
+        (td) => ({
+          rawArgs: [
+            `{"receiver_id":"${td.actions[0]!.params.args.receiver_id as string}","amount":${td.actions[0]!.params.args.amount as string}}`,
+          ],
+        }),
+        'signed_delegate.actions[0].args',
+      ],
+      [
+        'reordered argument keys',
+        (td) => ({
+          rawArgs: [
+            `{"amount":"${td.actions[0]!.params.args.amount as string}","receiver_id":"${td.actions[0]!.params.args.receiver_id as string}"}`,
+          ],
+        }),
+        'signed_delegate.actions[0].args',
+      ],
       [
         'a max_block_height past the quote deadline',
         (td) => ({ maxBlockHeight: BigInt(td.max_block_height) + 1n }),
@@ -870,7 +965,18 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
         txHash: null,
         paymasterData: null,
       });
-      expect((await submit(p, signed)).status).toBe('submitted');
+      // The registration made for this attempt was paid for nothing it relayed: Tendr's cost,
+      // (0.00125 + 0.0003) NEAR × $3.
+      const loss = await prisma.gasSponsorship.findFirstOrThrow({ where: { sponsor: 'tendr' } });
+      expect(loss.costUsd!.toFixed()).toBe('0.00465');
+      expect(loss.lossRecognizedAt).not.toBeNull();
+      // The retry needs no second registration and carries none in its cost.
+      const again = await submit(p, signed);
+      expect(again.status).toBe('submitted');
+      expect(chain.storageDeposits()).toHaveLength(1);
+      expect(
+        ((await rowOf(again.submissionId)).paymasterData as { storageYocto?: string }).storageYocto,
+      ).toBeUndefined();
     });
 
     it('a stale relayer nonce: re-signed once, the new hash recorded before sending', async () => {
@@ -1035,13 +1141,13 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
       );
       expect(await pollAt(Date.now())).toBe(1);
       const sp = await rowOf(res.submissionId);
-      // 3 outcomes × 0.0003 NEAR × $3 = $0.0027.
+      // (3 outcomes × 0.0003 NEAR + the registration's 0.00125 + 0.0003 NEAR) × $3 = $0.00735.
       expect(sp).toMatchObject({
         status: 'confirmed',
         txHash: res.txHash,
         reservationState: 'reserved',
       });
-      expect(sp.costUsd!.toFixed()).toBe('0.0027');
+      expect(sp.costUsd!.toFixed()).toBe('0.00735');
       expect(sp.gasUsed!.toFixed()).toBe('9000000000000');
       expect(await pollAt(Date.now())).toBe(0);
     });

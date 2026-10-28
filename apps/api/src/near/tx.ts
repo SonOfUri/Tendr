@@ -28,6 +28,7 @@ import bs58 from 'bs58';
 import { deserialize, serialize } from 'borsh';
 import type { KeyVault } from '../keyvault/types.js';
 import type { InitConfigJson } from './client.js';
+import { NEAR_GASLESS_TOKENS } from './tokens.js';
 
 export { SCHEMA };
 
@@ -366,8 +367,8 @@ export const RELAYER_NEAR_MAX_STORAGE_DEPOSIT = 10_000_000_000_000_000_000_000n;
 /**
  * `relayer-near` signs exactly two shapes, each a single action: a NEP-366 signed delegate whose
  * sender is the transaction's receiver (the shopper's meta-transaction), or a `storage_deposit`
- * `{ account_id, registration_only: true }` with at most RELAYER_NEAR_MAX_STORAGE_DEPOSIT
- * attached (registering a deposit or gas-fee account on a token). Never a NEAR transfer, key
+ * `{ account_id, registration_only: true }` on an allow-listed gasless token contract with at
+ * most RELAYER_NEAR_MAX_STORAGE_DEPOSIT attached (registering a deposit or gas-fee account). Never a NEAR transfer, key
  * change or any other call: a stolen code path can only waste the relayer's working gas.
  */
 export function assertRelayerNearTransaction(tx: Transaction): void {
@@ -388,6 +389,9 @@ export function assertRelayerNearTransaction(tx: Transaction): void {
   if (kind !== 'functionCall') refuse(`a ${kind} action`);
   const fc = action.functionCall!;
   if (fc.methodName !== 'storage_deposit') refuse(`a ${fc.methodName} call`);
+  if (!NEAR_GASLESS_TOKENS.some((t) => t.contract === tx.receiverId)) {
+    refuse(`storage_deposit on ${tx.receiverId} (not a gasless token)`);
+  }
   if (BigInt(fc.deposit) > RELAYER_NEAR_MAX_STORAGE_DEPOSIT) refuse('a deposit above the cap');
   let args: unknown;
   try {
