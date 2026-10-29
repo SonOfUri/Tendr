@@ -3310,17 +3310,27 @@ wui-card,
 
   .demo-canvas {
     margin: 8px 8px 0;
-    min-height: min(68vh, 720px);
+    min-height: 0;
     max-width: calc(100vw - 16px);
-    overflow: auto;
+    overflow: visible;
   }
 
   .demo-canvas-chrome {
-    top: 10px;
-    left: 10px;
-    right: 10px;
+    position: sticky;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 5;
     gap: 0.5rem;
     flex-wrap: wrap;
+    padding: 10px;
+    margin: 0;
+    background: linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--demo-canvas) 92%, transparent),
+      color-mix(in srgb, var(--demo-canvas) 70%, transparent) 70%,
+      transparent
+    );
   }
 
   /* Flow panels in-document on small screens — absolute drag layout overflows. */
@@ -3330,7 +3340,7 @@ wui-card,
     top: auto !important;
     width: 100%;
     max-width: 100%;
-    padding: 64px 12px 20px;
+    padding: 8px 12px 20px;
     box-sizing: border-box;
     transform: none !important;
     touch-action: pan-y;
@@ -3417,10 +3427,17 @@ wui-card,
   .demo-sidebar {
     margin: 8px;
     max-width: calc(100vw - 16px);
+    height: auto;
+    min-height: 0;
   }
 
   .demo-sidebar-top {
     padding: 0.95rem 0.9rem 0.85rem;
+  }
+
+  .demo-sidebar-body {
+    flex: 0 0 auto;
+    overflow: visible;
   }
 
   .demo-scenario-toggle {
@@ -3454,11 +3471,11 @@ wui-card,
 
 @media (max-width: 520px) {
   .demo-canvas {
-    min-height: auto;
+    min-height: 0;
   }
 
   .demo-draggable {
-    padding: 58px 10px 16px;
+    padding: 6px 10px 14px;
   }
 
   .demo-cart-heading {
