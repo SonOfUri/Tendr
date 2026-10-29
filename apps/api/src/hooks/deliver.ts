@@ -47,7 +47,7 @@ import { nativeUnitsForUsd, nativeUsd, orderUsd } from '../gas/fees.js';
 import { MAX_HOOK_ORDER_BPS } from '../gas/quote-fee.js';
 import { alertLossCapReached, lossCapReached, recognizeTendrLoss } from '../gas/loss-cap.js';
 import { newId } from '../lib/ids.js';
-import { log } from '../lib/logger.js';
+import { log, redactUrls } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import type { RelayerNearSender, TxResult, TxStatusResult } from '../near/client.js';
 import { relayerNearSender } from '../near/client.js';
@@ -178,7 +178,8 @@ const simulated: HookTransport = async (call) => {
   };
 };
 
-const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+// Stored as `last_error` and logged: never with an RPC provider key (final review m4).
+const errorText = (err: unknown) => redactUrls(err instanceof Error ? err.message : String(err));
 
 /** USD of `units` of the chain's native coin; null when it cannot be priced (logged). */
 async function priced(chain: string, units: bigint | null | undefined): Promise<string | null> {

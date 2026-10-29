@@ -1206,6 +1206,27 @@ describe('Pimlico paymaster proxy', () => {
       expect(await prisma.gasSponsorship.count({ where: { quoteId: { not: null } } })).toBe(0);
     });
 
+    it('expired paymaster URL secrets are swept; live ones are kept', async () => {
+      const { sweepExpiredPaymasterUrls, PAYMASTER_GIVE_UP_MS } = await import('./pimlico.js');
+      const p = await prepared();
+      const q = await prisma.quote.findUniqueOrThrow({ where: { id: p.quote.id } });
+      const ref = q.paymasterTokenRef!;
+      expect(await prisma.secret.count({ where: { id: ref } })).toBe(1);
+      // Live (and within the give-up window after its deadline): kept.
+      expect(await sweepExpiredPaymasterUrls(new Date())).toBe(0);
+      expect(
+        await sweepExpiredPaymasterUrls(new Date(q.deadline.getTime() + PAYMASTER_GIVE_UP_MS - 1)),
+      ).toBe(0);
+      // Past it: the secret is deleted and the ref nulled; the hash stays (late calls refused).
+      const after = new Date(q.deadline.getTime() + PAYMASTER_GIVE_UP_MS + 1000);
+      expect(await sweepExpiredPaymasterUrls(after)).toBe(1);
+      expect(await prisma.secret.count({ where: { id: ref } })).toBe(0);
+      const swept = await prisma.quote.findUniqueOrThrow({ where: { id: p.quote.id } });
+      expect(swept.paymasterTokenRef).toBeNull();
+      expect(swept.paymasterTokenHash).toBe(paymasterTokenHash(p.token));
+      expect(await sweepExpiredPaymasterUrls(after)).toBe(0);
+    });
+
     it('prepare again returns the same live URL (N6); a new quote gets its own', async () => {
       const p = await prepared();
       const again = await app.inject({

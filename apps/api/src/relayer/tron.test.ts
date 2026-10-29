@@ -761,13 +761,14 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
     await pollAt(clock);
     await pollAt(clock);
     expect(await prisma.tronDelegation.findFirstOrThrow()).toMatchObject({ status: 'reclaimed' });
-    // Counted at its maximum (all lent) the moment it was lent; settled at close to what the
-    // receiver actually consumed, measured before the reclaim (nothing here).
+    // Counted at its maximum (all lent) the moment it was lent. The approve never succeeded, so
+    // the whole lent energy stays the cost at close (Task 9 ruling), even though the decaying
+    // measurement shows nothing used.
     const d = await prisma.tronDelegation.findFirstOrThrow();
     expect(d).toMatchObject({ energyUsedBefore: 0n, energyUsedAfter: 0n });
     const tendr = await prisma.gasSponsorship.findFirstOrThrow({ where: { sponsor: 'tendr' } });
-    expect(tendr.paymasterData).toMatchObject({ sun: '0' });
-    expect(tendr.costUsd?.toFixed()).toBe('0');
+    expect(tendr.paymasterData).toMatchObject({ sun: (d.units * PRICE).toString() });
+    expect(tendr.costUsd!.gt(0)).toBe(true);
     expect((await submitApprove(p, signApprove(td))).status).toBe('submitted');
     expect(chain.ofType('delegate')).toHaveLength(2);
   });

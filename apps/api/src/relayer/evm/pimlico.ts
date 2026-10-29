@@ -48,7 +48,7 @@ import { AppError, unauthorized } from '../../lib/errors.js';
 import { newId } from '../../lib/ids.js';
 import { log } from '../../lib/logger.js';
 import { prisma } from '../../lib/prisma.js';
-import { getSecret, putSecret } from '../../secrets/secrets.js';
+import { deleteSecret, getSecret, putSecret } from '../../secrets/secrets.js';
 import { gaslessQuote } from '../index.js';
 import { SIMULATED_GAS_USED } from '../simulated.js';
 import {
@@ -457,6 +457,44 @@ export async function issuePaymasterUrl(q: QuoteContext): Promise<string> {
   const token = await getSecret(existing.ref);
   if (paymasterTokenHash(token) !== existing.hash) throw unavailable();
   return urlFor(token);
+}
+
+/**
+ * Deletes the encrypted paymaster URL tokens of quotes past their deadline plus
+ * PAYMASTER_GIVE_UP_MS (no sponsorship can be requested or used through them any more) and nulls
+ * `paymaster_token_ref` (Task 6 parked item). The token's hash stays, so a late call to the URL
+ * still finds its quote and is refused as expired. Returns how many were swept.
+ */
+export async function sweepExpiredPaymasterUrls(now: Date = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - PAYMASTER_GIVE_UP_MS);
+  const rows = await prisma.quote.findMany({
+    where: { paymasterTokenRef: { not: null }, deadline: { lt: cutoff } },
+    select: { id: true, merchantId: true, livemode: true, paymasterTokenRef: true },
+    take: 500,
+  });
+  let swept = 0;
+  for (const r of rows) {
+    try {
+      await tenantTransaction({ merchantId: r.merchantId, livemode: r.livemode }, async (tx) => {
+        const { count } = await tx.quote.updateMany({
+          where: {
+            id: r.id,
+            merchantId: r.merchantId,
+            livemode: r.livemode,
+            paymasterTokenRef: r.paymasterTokenRef,
+          },
+          data: { paymasterTokenRef: null },
+        });
+        if (count === 1) {
+          await deleteSecret(r.paymasterTokenRef!, tx);
+          swept++;
+        }
+      });
+    } catch (err) {
+      log('error', 'paymaster URL sweep failed', { quoteId: r.id, err: String(err) });
+    }
+  }
+  return swept;
 }
 
 /**

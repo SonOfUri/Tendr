@@ -435,7 +435,7 @@ export async function failApproval(
   reason: string,
   info: TronTxInfo | null,
 ): Promise<void> {
-  const costSun = await approvalCostSun(deps, approvalId, info ? info.energyUsage : null);
+  const costSun = await approvalCostSun(deps, approvalId, info ? info.energyUsage : null, false);
   await prisma.tronApproval.updateMany({
     where: { id: approvalId, status: { in: ['pending', 'submitted'] } },
     data: {
@@ -449,19 +449,24 @@ export async function failApproval(
 
 /**
  * See the cost model in the file header. `receiptEnergy`: the approve's receipt `energy_usage`
- * (null: no receipt). Once the receiver's energy use has been read before the reclaim, the lent
- * energy actually consumed (by anything) counts when it is more than the receipt shows.
+ * (null: no receipt). `succeeded`: the approve has a SUCCESS receipt. When it did not succeed
+ * (failed, reverted, never landed) the whole lent energy is the cost (Task 9 ruling: the shopper
+ * may have spent it on something else, and EnergyUsed decays at read time, so a measured delta can
+ * understate it). Otherwise, once the receiver's energy use has been read before the reclaim, the
+ * lent energy actually consumed (by anything) counts when it is more than the receipt shows.
  */
 async function approvalCostSun(
   deps: EnergyDeps,
   approvalId: string,
   receiptEnergy: bigint | null,
+  succeeded: boolean,
 ): Promise<bigint> {
   const rows = await prisma.tronDelegation.findMany({ where: { approvalId } });
   const lent = rows.filter((d) => d.status !== 'failed' && d.resource === 'energy');
   const energyLent = lent.reduce((t, d) => t + d.units, 0n);
   const fees = rows.reduce((t, d) => t + (d.delegateFeeSun ?? 0n), 0n);
   if (energyLent === 0n) return fees;
+  if (!succeeded) return fees + energyLent * (await deps.api.energyPrice());
   const cap = (x: bigint) => (x < energyLent ? x : energyLent);
   const fromReceipt = receiptEnergy === null ? null : cap(receiptEnergy);
   const measuredRows = lent.filter(
@@ -800,7 +805,7 @@ async function resolveApprove(d: EnergyDeps, a: TronApproval): Promise<boolean> 
       );
       return true;
     }
-    const costSun = await approvalCostSun(d, a.id, l.info.energyUsage);
+    const costSun = await approvalCostSun(d, a.id, l.info.energyUsage, true);
     await prisma.tronApproval.updateMany({
       where: { id: a.id, status: 'submitted' },
       data: { status: 'confirmed', energyUsed: l.info.energyUsage, costSun, expiredSeenAt: null },
@@ -935,7 +940,12 @@ async function measureUse(d: EnergyDeps, row: TronDelegation): Promise<void> {
     select: { status: true, energyUsed: true },
   });
   if (a && (a.status === 'confirmed' || a.status === 'failed')) {
-    const costSun = await approvalCostSun(d, row.approvalId, a.energyUsed);
+    const costSun = await approvalCostSun(
+      d,
+      row.approvalId,
+      a.energyUsed,
+      a.status === 'confirmed',
+    );
     await prisma.tronApproval.updateMany({
       where: { id: row.approvalId, closedAt: null },
       data: { costSun },

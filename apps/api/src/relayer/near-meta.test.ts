@@ -82,6 +82,8 @@ class FakeNear implements RpcTransport {
   down: string | null = null;
   /** `storage_deposit` executes but fails (the contract refused it). */
   failStorage = false;
+  /** `send_tx` of a `storage_deposit`: errors to throw, one per call (an unknown outcome). */
+  storageSendErrors: unknown[] = [];
 
   storageDeposits() {
     return this.sent.filter((s) => s.tx.actions[0]?.kind === 'functionCall');
@@ -153,6 +155,7 @@ class FakeNear implements RpcTransport {
         const fc = a.fields as { methodName: string; args: Uint8Array };
         const args = JSON.parse(Buffer.from(fc.args).toString()) as { account_id: string };
         if (fc.methodName === 'storage_deposit') {
+          if (this.storageSendErrors.length) throw this.storageSendErrors.shift();
           if (this.failStorage) {
             return {
               ...outcome(hash, tx.signerId, tx.receiverId, []),
@@ -616,6 +619,23 @@ describe('NEAR gasless payments (NEP-366 meta-transactions)', () => {
     expect(loss.lossRecognizedAt).not.toBeNull();
     // Gas only (the deposit is refunded): 0.0003 NEAR × $3.
     expect(loss.costUsd!.toFixed()).toBe('0.0009');
+  });
+
+  it('a registration with an unknown outcome: not relayed, its most cost is a Tendr loss at once', async () => {
+    const p = await metaQuote();
+    const { td } = await prepared(p);
+    // The send and its identical resend both time out: it may still execute.
+    const timeout = () => Object.assign(new Error('Timeout'), { type: 'TimeoutError' });
+    chain.storageSendErrors = [timeout(), timeout()];
+    expect(await refusal(submit(p, signDelegate(td)))).toMatchObject({ status: 503 });
+    expect(chain.metaTxs()).toHaveLength(0);
+    expect(chain.storageDeposits()).toHaveLength(2); // the same bytes, sent twice
+    const loss = await prisma.gasSponsorship.findFirstOrThrow({ where: { sponsor: 'tendr' } });
+    expect(loss.lossRecognizedAt).not.toBeNull();
+    expect(loss.txHash).toBe(chain.storageDeposits()[0]!.hash);
+    // The deposit (0.00125 NEAR) + 30 Tgas at 1e8 yocto/gas (0.003 NEAR), × $3.
+    expect(loss.costUsd!.toFixed()).toBe('0.01275');
+    await getRedis().del(`tendr:gasless:near-storage:${CONTRACT}:${p.quote.depositAddress}`);
   });
 
   it('the shopper pays: a second ft_transfer of the fee to the gas-fees-near account', async () => {

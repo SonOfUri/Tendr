@@ -698,6 +698,46 @@ export async function releaseEndedSessionReservations(now: Date = new Date()): P
   return released;
 }
 
+/** A confirmed relay's hold not collected this long after its quote's deadline is released. */
+export const STUCK_HOLD_AFTER_MS = 7 * 24 * 3600_000;
+
+/**
+ * The 7-day sweep (Task 5 ruling): a hold still reserved STUCK_HOLD_AFTER_MS after its relay's
+ * quote deadline, with the relay confirmed but the payment never collected (whatever the session's
+ * status), is released and its gas recognised as Tendr's loss. A collection after that is no
+ * longer settled against the budget. Returns how many were released.
+ */
+export async function releaseStuckConfirmedHolds(now: Date = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - STUCK_HOLD_AFTER_MS);
+  const rows = await prisma.gasSponsorship.findMany({
+    where: {
+      reservationState: 'reserved',
+      status: 'confirmed',
+      quoteId: { not: null },
+      quote: { deadline: { lt: cutoff } },
+    },
+    select: { id: true, merchantId: true, livemode: true, sessionId: true },
+    take: 500,
+  });
+  let released = 0;
+  for (const r of rows) {
+    const scope = { merchantId: r.merchantId, livemode: r.livemode };
+    try {
+      const did = await tenantTransaction(scope, async (tx) => {
+        await tx.$queryRaw`SELECT id FROM sessions WHERE id = ${r.sessionId}
+          AND merchant_id = ${scope.merchantId} AND livemode = ${scope.livemode} FOR UPDATE`;
+        const sp = await tx.gasSponsorship.findFirstOrThrow({ where: { ...scope, id: r.id } });
+        if (sp.reservationState !== 'reserved' || sp.status !== 'confirmed') return false;
+        return releaseHold(tx, scope, sp, now);
+      });
+      if (did) released++;
+    } catch (err) {
+      log('error', 'stuck gas hold release failed', { sponsorshipId: r.id, err: String(err) });
+    }
+  }
+  return released;
+}
+
 /** A submission's state, or NOT_FOUND. */
 export async function submissionStatus(submissionId: string): Promise<SubmissionStatus> {
   const row = await prisma.gasSponsorship.findUnique({

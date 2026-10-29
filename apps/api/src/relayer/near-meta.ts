@@ -109,6 +109,11 @@ export const NEAR_FT_TRANSFER_MAX_GAS = 30n * TGAS;
 /** Gas for a `storage_deposit` registration. */
 export const NEAR_STORAGE_GAS = 30n * TGAS;
 /**
+ * yoctoNEAR per gas unit used to cost a registration whose outcome is unknown (NEAR's minimum gas
+ * price; the price only rises under congestion, so with all attached gas burnt this errs high).
+ */
+export const NEAR_UNKNOWN_GAS_PRICE_YOCTO = 100_000_000n;
+/**
  * The block time assumed when turning the quote deadline into a block height. NEAR produces
  * blocks faster than this (~0.6 s), so the height reached at the deadline is higher than the one
  * computed: a delegate action never outlives its quote.
@@ -638,23 +643,50 @@ export class NearMetaGasless implements GaslessRelayer {
         log('error', 'near gasless: unexpected storage_balance_bounds', { contract });
         throw unavailable();
       }
+      const actions = [
+        functionCallAction(
+          'storage_deposit',
+          { account_id: account, registration_only: true },
+          NEAR_STORAGE_GAS,
+          min,
+        ),
+      ];
       let res;
+      let sentHash: string | null = null;
       try {
-        res = await this.sender.signAndSend(contract, [
-          functionCallAction(
-            'storage_deposit',
-            { account_id: account, registration_only: true },
-            NEAR_STORAGE_GAS,
-            min,
-          ),
-        ]);
+        // `signAndSend`, keeping the hash of what was sent (a stale nonce re-signs once).
+        for (let attempt = 0; ; attempt++) {
+          const signedTx = await this.sender.sign(contract, actions);
+          sentHash = signedTx.hash;
+          try {
+            res = await this.sender.send(signedTx);
+            break;
+          } catch (err) {
+            if (attempt === 0 && err instanceof NotBroadcastError && isInvalidNonce(err.cause)) {
+              continue;
+            }
+            throw err;
+          }
+        }
       } catch (err) {
+        const unknown = !(err instanceof NotBroadcastError);
         // It may still execute: hold the lock to its TTL so no second deposit races it.
-        keepLock = !(err instanceof NotBroadcastError);
+        keepLock = unknown;
         log('warn', 'near gasless: storage_deposit not confirmed', {
           contract,
           err: err instanceof Error ? err.name : 'error',
         });
+        if (unknown) {
+          // Its cost is recorded as Tendr's at once (Task 8 N2): the deposit and all its gas,
+          // the most it can cost. If it executed, the next attempt finds the account
+          // registered and spends nothing more; if it did not, the cost errs high.
+          await recordStorageCost(ctx, {
+            contract,
+            account,
+            txHash: sentHash ?? 'unknown',
+            yocto: min + NEAR_STORAGE_GAS * NEAR_UNKNOWN_GAS_PRICE_YOCTO,
+          });
+        }
         throw unavailable();
       }
       if (res.topLevelStatus !== 'success') {

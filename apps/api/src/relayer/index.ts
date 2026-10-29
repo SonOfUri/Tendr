@@ -18,6 +18,7 @@ import {
   evmGasFeeAddress,
   liveEvmSender,
 } from './evm/index.js';
+import { recordUnrecovered } from './evm/pimlico.js';
 import { evmTokenAddress } from './evm/tokens.js';
 import { prisma } from '../lib/prisma.js';
 import type { EvmSender } from './evm/sender.js';
@@ -105,7 +106,7 @@ export async function pollEvmRelays(sender: EvmSender = liveEvmSender()): Promis
             ...(sp?.feeAmount ? { cap: BigInt(sp.feeAmount.toFixed(0)) } : {}),
           });
         }
-        await applyRelayOutcome(o.refId, {
+        const did = await applyRelayOutcome(o.refId, {
           status: o.status,
           txHash: o.txHash,
           gasUsed: o.gasUsed,
@@ -114,6 +115,9 @@ export async function pollEvmRelays(sender: EvmSender = liveEvmSender()): Promis
           feeMoved,
           relayerTxId: o.txId,
         });
+        // Partial loss (as the other families): the actual cost above what is recovered (the
+        // merchant's estimate, or the collected fee) counts toward the daily loss cap.
+        if (did) await recordUnrecovered(o.refId, new Date());
         applied++;
       } else if (o.purpose === INTEGRATOR_HOOK_PURPOSE) {
         // An integrator hook call (`onTendrDeposit`): success, or a failed attempt to retry.

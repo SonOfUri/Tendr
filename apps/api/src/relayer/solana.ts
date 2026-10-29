@@ -839,13 +839,17 @@ async function applyOutcome(
       );
     }
   }
+  // Seen by the chain: any earlier "expired and unseen" look no longer counts — a later
+  // disappearance (a dropped fork) must be seen twice afresh before the relay is failed.
+  const { expiredSeenAt: _seen, ...unseen } = stored;
+  const clearExpiry = stored.expiredSeenAt !== undefined ? unseen : undefined;
   if (status.confirmationStatus !== 'confirmed' && status.confirmationStatus !== 'finalized') {
-    await touch(row.id, now);
+    await touch(row.id, now, clearExpiry);
     return false;
   }
   const tx = await rpc.transaction(signature);
   if (!tx?.meta) {
-    await touch(row.id, now);
+    await touch(row.id, now, clearExpiry);
     return false;
   }
   const ok = tx.meta.err === null || tx.meta.err === undefined;

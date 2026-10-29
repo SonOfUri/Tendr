@@ -23,7 +23,11 @@ import { pollPaymasterOps } from './relayer/evm/pimlico.js';
 import { pollNearMetaRelays } from './relayer/near-meta.js';
 import { pollSolanaRelays } from './relayer/solana.js';
 import { pollTronRelays } from './relayer/tron.js';
-import { releaseEndedSessionReservations } from './relayer/submissions.js';
+import {
+  releaseEndedSessionReservations,
+  releaseStuckConfirmedHolds,
+} from './relayer/submissions.js';
+import { sweepExpiredPaymasterUrls } from './relayer/evm/pimlico.js';
 import {
   attemptDelivery,
   DELIVER_WEBHOOK_JOB,
@@ -173,7 +177,12 @@ export async function processCheckoutJob(
     return;
   }
   if (job.name === RELEASE_GAS_RESERVATIONS_JOB) {
-    const n = (await releaseStaleReservations()) + (await releaseEndedSessionReservations());
+    const n =
+      (await releaseStaleReservations()) +
+      (await releaseEndedSessionReservations()) +
+      (await releaseStuckConfirmedHolds());
+    const swept = await sweepExpiredPaymasterUrls();
+    if (swept > 0) log('info', 'expired paymaster URLs swept', { count: swept });
     if (n > 0) log('info', 'released gas reservations', { count: n });
     return;
   }

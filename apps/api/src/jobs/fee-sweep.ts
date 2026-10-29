@@ -39,7 +39,7 @@ import { opsNotice } from '../gas/ops-notice.js';
 import { getKeyVault } from '../keyvault/index.js';
 import type { KeyVault } from '../keyvault/types.js';
 import { newId } from '../lib/ids.js';
-import { log } from '../lib/logger.js';
+import { log, redactUrls } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { NEAR_GASLESS_TOKENS } from '../near/tokens.js';
 import {
@@ -149,7 +149,9 @@ export function quoteMinOutUsd(quote: {
   return out.mul(10_000 - FEE_SWEEP_SLIPPAGE_BPS).div(10_000);
 }
 
-const errText = (err: unknown) => (err instanceof Error ? err.message : String(err)).slice(0, 500);
+// Stored and logged: never with an RPC provider key (final review m4).
+const errText = (err: unknown) =>
+  redactUrls(err instanceof Error ? err.message : String(err)).slice(0, 500);
 
 /** Records (or refreshes) the account+token's one open plan; returns its id and status. */
 async function upsertOpenPlan(p: Omit<SweepPlan, 'id' | 'status'>): Promise<{

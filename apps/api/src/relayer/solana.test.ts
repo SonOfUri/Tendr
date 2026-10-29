@@ -1105,6 +1105,25 @@ describe('Solana gasless payments (Kora)', () => {
       expect(sp.lossRecognizedAt).not.toBeNull();
     });
 
+    it('a non-final status seen after the first expired look restarts the two-look rule', async () => {
+      const p = await koraQuote();
+      const { signed } = await preparedAndSigned(p);
+      const res = await submit(p, signed);
+      const id = txIdOf(signed);
+      chain.validBlockhash = false;
+      const t0 = Date.now();
+      expect(await pollAt(t0)).toBe(0); // first "expired and unseen" look recorded
+      // A node then reports it at `processed` (not final): the earlier look is cleared.
+      chain.statuses.set(id, { slot: 3, err: null, confirmationStatus: 'processed' });
+      expect(await pollAt(t0 + 1000)).toBe(0);
+      // It drops out again (a dropped fork): a full poll interval later is only a first look.
+      chain.statuses.delete(id);
+      expect(await pollAt(t0 + SOLANA_EXPIRY_CONFIRM_MS)).toBe(0);
+      expect((await rowOf(res.submissionId)).status).toBe('submitted');
+      expect(await pollAt(t0 + 2 * SOLANA_EXPIRY_CONFIRM_MS)).toBe(1);
+      expect((await rowOf(res.submissionId)).status).toBe('failed');
+    });
+
     it('never landed and the blockhash expired: failed, no gas, the hold is kept', async () => {
       const p = await koraQuote();
       const { signed } = await preparedAndSigned(p);

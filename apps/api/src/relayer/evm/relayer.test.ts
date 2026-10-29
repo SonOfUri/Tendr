@@ -270,6 +270,42 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
     expect(sp.costUsd!.toFixed()).toBe('0.32');
   });
 
+  it('partial loss: a sponsored relay costing more than its estimate records the excess (loss cap)', async () => {
+    const { q, signatures, sponsorshipId } = await sponsoredQuote();
+    const res = await relayer.submit(q, { signatures });
+    node.mine(res.txHash!, 1, 80_000n, [tendrPaid(q, 0n)]);
+    await pollEvmRelays(sender);
+    const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    // $0.22 actual − $0.048 the merchant is charged = $0.172 Tendr does not recover.
+    expect(sp).toMatchObject({ sponsor: 'merchant', status: 'confirmed' });
+    expect(sp.unrecoveredUsd!.toFixed()).toBe('0.172');
+    expect(sp.unrecoveredAt).not.toBeNull();
+  });
+
+  it('the 7-day sweep releases a confirmed relay hold never collected, with its gas as a loss', async () => {
+    const { releaseStuckConfirmedHolds, STUCK_HOLD_AFTER_MS } = await import('../submissions.js');
+    const { q, signatures, sponsorshipId } = await sponsoredQuote();
+    const res = await relayer.submit(q, { signatures });
+    node.mine(res.txHash!, 1, 80_000n, [tendrPaid(q, 0n)]);
+    await pollEvmRelays(sender);
+    const deadline = q.quote.deadline.getTime();
+    // Before 7 days past the quote deadline: kept (the payment may still be collected).
+    expect(await releaseStuckConfirmedHolds(new Date(deadline + STUCK_HOLD_AFTER_MS - 1000))).toBe(
+      0,
+    );
+    let sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    expect(sp.reservationState).toBe('reserved');
+    // After: released, the gas recognised as Tendr's loss, once.
+    const at = new Date(deadline + STUCK_HOLD_AFTER_MS + 1000);
+    expect(await releaseStuckConfirmedHolds(at)).toBe(1);
+    sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    expect(sp).toMatchObject({ reservationState: 'released', sponsor: 'tendr' });
+    expect(sp.costUsd!.toFixed()).toBe('0.22');
+    expect(sp.lossRecognizedAt).toEqual(at);
+    expect((await month()).reservedUsd.toFixed()).toBe('0');
+    expect(await releaseStuckConfirmedHolds(at)).toBe(0);
+  });
+
   it('a session that ends refunded after the relay: released, and the gas spent is a Tendr loss', async () => {
     const { s, q, signatures, sponsorshipId } = await sponsoredQuote();
     const res = await relayer.submit(q, { signatures });
