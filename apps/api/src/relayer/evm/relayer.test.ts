@@ -698,7 +698,7 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
       expect(node.count('eth_sendRawTransaction')).toBe(0);
     });
 
-    it('the daily loss cap stops options, prepare and submit; nothing broadcast', async () => {
+    it('the daily loss cap stops prepare and submit; nothing broadcast', async () => {
       const { s, q, signatures } = await sponsoredQuote('shopper');
       await prisma.gasSponsorship.create({
         data: {
