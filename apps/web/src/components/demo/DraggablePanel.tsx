@@ -36,11 +36,16 @@ function defaultOffset(
   return { x, y };
 }
 
+function isMobileLayout() {
+  return typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches;
+}
+
 export function DraggablePanel({ kind, visible, anchor, children }: Props) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [offset, setOffset] = useState<Point>({ x: 0, y: 0 });
   const [ready, setReady] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [mobile, setMobile] = useState(false);
   const dragOrigin = useRef<{ pointer: Point; offset: Point } | null>(null);
   const userMoved = useRef(false);
 
@@ -50,13 +55,12 @@ export function DraggablePanel({ kind, visible, anchor, children }: Props) {
     if (!el || !parent) return;
     userMoved.current = false;
 
-    const isMobile = () =>
-      typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches;
-
     const place = () => {
+      const onMobile = isMobileLayout();
+      setMobile(onMobile);
       if (userMoved.current || dragOrigin.current) return;
-      // Mobile uses document flow — skip absolute offsets (keeps opacity ready).
-      if (isMobile()) {
+      // Mobile: static flow — no drag offsets.
+      if (onMobile) {
         setOffset({ x: 0, y: 0 });
         setReady(true);
         return;
@@ -67,22 +71,23 @@ export function DraggablePanel({ kind, visible, anchor, children }: Props) {
 
     place();
 
+    const mq = window.matchMedia('(max-width: 900px)');
+    const onMq = () => place();
+    mq.addEventListener('change', onMq);
+
     const ro = new ResizeObserver(place);
     ro.observe(parent);
     ro.observe(el);
     window.addEventListener('resize', place);
     return () => {
+      mq.removeEventListener('change', onMq);
       ro.disconnect();
       window.removeEventListener('resize', place);
     };
   }, [anchor, kind]);
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
-    if (!visible) return;
-    // Mobile layout is flow-based (CSS); dragging only fights the viewport.
-    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches) {
-      return;
-    }
+    if (!visible || mobile || isMobileLayout()) return;
     const target = e.target as HTMLElement;
     if (target.closest('button, a, input, textarea, pre, code')) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -94,7 +99,7 @@ export function DraggablePanel({ kind, visible, anchor, children }: Props) {
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
-    if (!dragging || !dragOrigin.current) return;
+    if (mobile || !dragging || !dragOrigin.current) return;
     const parent = panelRef.current?.parentElement;
     const el = panelRef.current;
     if (!parent || !el) return;
@@ -118,13 +123,17 @@ export function DraggablePanel({ kind, visible, anchor, children }: Props) {
     setDragging(false);
   }
 
-  const style = {
-    '--dx': `${offset.x}px`,
-    '--dy': `${offset.y}px`,
-    left: 0,
-    top: 0,
-    opacity: ready ? undefined : 0,
-  } as CSSProperties;
+  const style = (
+    mobile
+      ? { opacity: ready ? undefined : 0 }
+      : {
+          '--dx': `${offset.x}px`,
+          '--dy': `${offset.y}px`,
+          left: 0,
+          top: 0,
+          opacity: ready ? undefined : 0,
+        }
+  ) as CSSProperties;
 
   return (
     <div
@@ -132,11 +141,12 @@ export function DraggablePanel({ kind, visible, anchor, children }: Props) {
       className={`demo-draggable${dragging ? ' is-dragging' : ''}`}
       data-kind={kind}
       data-hidden={visible ? 'false' : 'true'}
+      data-static={mobile ? 'true' : undefined}
       style={style}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerDown={mobile ? undefined : onPointerDown}
+      onPointerMove={mobile ? undefined : onPointerMove}
+      onPointerUp={mobile ? undefined : onPointerUp}
+      onPointerCancel={mobile ? undefined : onPointerUp}
     >
       {children}
     </div>

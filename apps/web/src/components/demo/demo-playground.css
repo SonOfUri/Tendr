@@ -3328,6 +3328,10 @@ wui-card,
     height: auto;
     max-width: calc(100vw - 12px);
     overflow: hidden;
+    position: relative;
+    z-index: 1;
+    /* Avoid trapping the fixed checkout overlay under the sidebar. */
+    isolation: auto;
   }
 
   .demo-canvas-chrome {
@@ -3358,7 +3362,7 @@ wui-card,
     -webkit-overflow-scrolling: touch;
   }
 
-  /* Flow panels in-document on small screens — absolute drag layout overflows. */
+  /* No dragging on mobile — panels sit in normal document flow. */
   .demo-draggable {
     position: relative !important;
     left: auto !important;
@@ -3370,12 +3374,14 @@ wui-card,
     transform: none !important;
     opacity: 1 !important;
     touch-action: pan-y;
-    cursor: default;
+    cursor: default !important;
+    user-select: text;
     will-change: auto;
+    pointer-events: auto;
   }
 
   .demo-draggable.is-dragging {
-    cursor: default;
+    cursor: default !important;
   }
 
   .demo-draggable[data-hidden='true'] {
@@ -3398,7 +3404,7 @@ wui-card,
     margin-inline: auto;
   }
 
-  /* Code view: panel hugs the snippet; dark canvas absorbs leftover height. */
+  /* Code view: readable size, wrap long lines, hug content. */
   .demo-draggable[data-kind='code'] {
     flex: 0 0 auto;
     min-height: 0;
@@ -3413,7 +3419,7 @@ wui-card,
     max-width: 100% !important;
     flex: 0 0 auto;
     height: auto;
-    max-height: min(62dvh, 100%);
+    max-height: min(70dvh, 100%);
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -3428,23 +3434,35 @@ wui-card,
     flex: 0 1 auto;
     min-height: 0;
     margin: 0;
-    padding: 0.1rem 0.55rem 0.75rem 0.35rem;
+    padding: 0.15rem 0.65rem 0.85rem 0.4rem;
     overflow: auto;
     -webkit-overflow-scrolling: touch;
-    max-height: min(54dvh, 480px);
-    font-size: 0.72rem;
-    line-height: 1.45;
-    font-weight: 550;
+    max-height: min(62dvh, 560px);
+    font-size: 0.92rem;
+    line-height: 1.55;
+    font-weight: 600;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .demo-code-line {
-    grid-template-columns: 1.7rem minmax(0, 1fr);
-    column-gap: 0.45rem;
+    grid-template-columns: 1.85rem minmax(0, 1fr);
+    column-gap: 0.5rem;
     min-height: 0;
+    align-items: start;
+  }
+
+  .demo-code-text {
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .demo-code-lineno {
-    font-size: 0.62rem;
+    font-size: 0.72rem;
+    padding-top: 0.12em;
   }
 
   /* Component cards stay content-sized inside the growing canvas. */
@@ -3491,9 +3509,13 @@ wui-card,
   }
 
   .demo-checkout-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
     padding: 0.75rem;
     align-items: flex-start;
     overflow: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .demo-checkout-card,
@@ -3514,11 +3536,18 @@ wui-card,
     min-height: min-content;
     flex: 0 0 auto;
     overflow: visible;
+    position: relative;
+    z-index: 0;
   }
 
-  .demo-checkout-overlay {
-    position: fixed;
-    inset: 0;
+  /* Sidebar was painting over checkout (canvas isolation + later sibling). */
+  .demo-playground:has(.demo-checkout-overlay) .demo-sidebar {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .demo-playground:has(.demo-checkout-overlay) .demo-canvas {
+    z-index: 5;
   }
 
   .demo-sidebar-top {
@@ -3712,8 +3741,8 @@ wui-card,
   }
 
   .demo-code-pre {
-    font-size: 0.68rem;
-    line-height: 1.4;
+    font-size: 0.9rem;
+    line-height: 1.5;
   }
 
   .demo-pred-actions {
