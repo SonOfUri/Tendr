@@ -245,16 +245,6 @@ export function DemoCheckoutPanel({
     [reporter, refresh, uiOnly],
   );
 
-  const simulateUiPayment = useCallback(() => {
-    if (completed.current) return;
-    setPhase('waiting');
-    window.setTimeout(() => {
-      if (completed.current) return;
-      completed.current = true;
-      setPhase('done');
-    }, 1600);
-  }, []);
-
   useEffect(() => {
     if (phase === 'waiting') onStatusChange?.('confirming');
     if (phase === 'done') onStatusChange?.('success');
@@ -405,59 +395,32 @@ export function DemoCheckoutPanel({
                   network={networkName(selectedToken!.blockchain)}
                   deadline={quote!.deadline}
                 />
-                {uiOnly ? (
-                  <button
-                    type="button"
-                    className="demo-checkout-primary"
-                    style={{ marginTop: '0.75rem' }}
-                    onClick={simulateUiPayment}
-                  >
-                    I&apos;ve sent it — continue
-                  </button>
-                ) : null}
               </div>
             ) : null}
 
             {method === 'wallet' && quote && selectedToken ? (
               <div className="demo-wallet-slot demo-checkout-reveal">
-                {uiOnly ? (
-                  <div className="demo-ui-wallet">
-                    <p className="demo-sidebar-note">
-                      UI demo — no wallet connection. Continue to feel the confirmation flow.
-                    </p>
-                    <button
-                      type="button"
-                      className="demo-checkout-primary"
-                      onClick={simulateUiPayment}
-                    >
-                      Continue as paid
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <WalletConnect
-                      key={selectedToken.asset_id}
-                      quote={quote}
-                      token={selectedToken}
-                      livemode={view?.livemode ?? false}
-                      sessionId={sessionId}
-                      autoOpen
-                      onWalletAddress={requoteForWallet}
-                      onDepositSent={onDepositSent}
-                    />
-                    {view && !view.livemode ? (
-                      <TestModePanel
-                        client={client}
-                        kind="pay"
-                        onDone={() => {
-                          void refresh()
-                            .then(() => setPhase('waiting'))
-                            .catch(() => undefined);
-                        }}
-                      />
-                    ) : null}
-                  </>
-                )}
+                <WalletConnect
+                  key={selectedToken.asset_id}
+                  quote={quote}
+                  token={selectedToken}
+                  livemode={view?.livemode ?? false}
+                  sessionId={sessionId}
+                  autoOpen
+                  onWalletAddress={requoteForWallet}
+                  onDepositSent={onDepositSent}
+                />
+                {!uiOnly && view && !view.livemode ? (
+                  <TestModePanel
+                    client={client}
+                    kind="pay"
+                    onDone={() => {
+                      void refresh()
+                        .then(() => setPhase('waiting'))
+                        .catch(() => undefined);
+                    }}
+                  />
+                ) : null}
               </div>
             ) : null}
           </>
