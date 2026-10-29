@@ -70,6 +70,10 @@ export function DraggablePanel({ kind, visible, anchor, children }: Props) {
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     if (!visible) return;
+    // Mobile layout is flow-based (CSS); dragging only fights the viewport.
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches) {
+      return;
+    }
     const target = e.target as HTMLElement;
     if (target.closest('button, a, input, textarea, pre, code')) return;
     e.currentTarget.setPointerCapture(e.pointerId);
