@@ -49,8 +49,10 @@ function onTendrDeposit(
     address token,
     uint256 amount,
     bytes32 txHash
-) external;
+) external returns (uint256);
 ```
+
+The reference contract returns the amount it credited. Tendr does not read the return value.
 
 - `paymentId`, `sessionId`: the Tendr ids (`pay_...`, `ses_...`) as UTF-8 bytes, right-padded to 32.
 - `hookData`: the session's `hook_data` as JSON text, UTF-8.
@@ -78,8 +80,9 @@ data. The relayer cannot be made to notify another contract or to send other arg
 Hook gas comes out of that payment's proceeds. The quote deducts an estimate: 90,000 gas on EVM chains,
 30 Tgas on NEAR. It does not count against your sponsorship budget.
 
-- Tendr never sends an EVM hook that needs more than 300,000 gas, or whose gas cost is more than 10% of
-  the order. Such a call fails at once.
+- Tendr never sends an EVM hook that needs more than 300,000 gas. Such a call fails at once.
+- While gas prices make the call cost more than 10% of the order, the attempt is not sent and is
+  retried later on the normal schedule.
 - A hook estimate above 10% of the order makes the quote fail with `QUOTE_TOO_SMALL`.
 - If the network fee plus the hook estimate is above 1% of the order, the network fee falls back to
   shopper-paid. The hook is still sent and still paid from proceeds.
@@ -101,6 +104,9 @@ for a token's first deposit and 126,900 with 1 KB of `hook_data`.
   an attempt is in flight, while Tendr is still retrying by itself, after the call succeeded, or when the
   payment has no hook call. A resend that fails again leaves the call `failed` without another event or
   email.
+- Each hook call can be resent at most 3 times. A fourth resend returns `409 CONFLICT` with
+  `details: { max_resends: 3, resends: 3 }`. Fix the contract before you resend, and contact Tendr
+  support if it still needs to be called after that.
 - If your contract reverts on a repeated `txHash` with `AlreadyNotified(bytes32)` (EVM) or a panic
   with exactly `already notified` (NEAR), Tendr reads that on a retry or resend as "an earlier attempt
   landed" and marks the call succeeded. Use those exact errors.
@@ -145,6 +151,36 @@ for a token's first deposit and 126,900 with 1 KB of `hook_data`.
 `external_ref`, `hook_call_id`, `chain`, `contract`, `attempts` and `tx_hash`; `hook.failed` also has
 `error`. `hook.failed` is sent once per call.
 
+## Relayer addresses
+
+`GET /v1/relayers` lists the address that calls hooks on each chain. It needs no key and returns
+addresses only. Use it to set the allowed sender in your contract (the reference contracts take it
+as their `relayer`).
+
+```json
+{
+  "relayers": [
+    {
+      "chain": "base",
+      "family": "evm",
+      "chain_id": 8453,
+      "address": "0x...",
+      "calls": "onTendrDeposit"
+    },
+    {
+      "chain": "near",
+      "family": "near",
+      "chain_id": null,
+      "address": "<64 hex>",
+      "calls": "on_tendr_deposit"
+    }
+  ]
+}
+```
+
+On EVM chains it is one address (`relayer-evm`) on every chain. On NEAR it is the `relayer-near`
+implicit account. The same addresses serve test and live mode; test mode never sends a transaction.
+
 ## Reference contracts
 
 Both are examples for you to copy. Tendr never deploys them.
@@ -157,8 +193,8 @@ Both are examples for you to copy. Tendr never deploys them.
 The call is only as trustworthy as your contract's checks. Keep all of them.
 
 1. **Sender.** Accept the call only from Tendr's published relayer address for that chain (the
-   `relayer-evm` address on EVM, the `relayer-near` account on NEAR). Without this, anyone can call your
-   function.
+   `relayer-evm` address on EVM, the `relayer-near` account on NEAR; see `GET /v1/relayers` above).
+   Without this, anyone can call your function.
 2. **Balance.** Credit at most what has arrived and is not yet accounted for:
    `min(amount, balance(token) - accounted[token])`, then add the credited amount to `accounted[token]`.
    Even a compromised relayer key then cannot make your contract credit money that never arrived. On

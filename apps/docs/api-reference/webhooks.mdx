@@ -10,6 +10,37 @@ The body is `{ id, type, created, livemode, data }`. `data.external_ref` is your
 resend keeps the event `id` (also sent as `Tendr-Event-Id`), so deduplicate on it. Failed deliveries are
 retried with exponential backoff for 3 days, and you can resend any delivery from the dashboard.
 
+## Headers
+
+Every delivery is a `POST` with these headers:
+
+| Header | Value |
+| --- | --- |
+| `Tendr-Signature` | `t=<unix seconds>,v1=<hex>`: HMAC-SHA256 of `<t>.<raw body>` with the endpoint's signing secret. For 24 hours after a secret rotation it carries a second `v1=` signed with the old secret; accept a match on any `v1`. The timestamp is the `t` in this header (there is no separate timestamp header). |
+| `Tendr-Event-Id` | The event `id`, the same on every retry and resend. |
+| `Content-Type` | `application/json` |
+| `User-Agent` | `Tendr-Webhooks/1.0` |
+
+Verify the raw body before parsing it, and reject a `t` more than 5 minutes old. See
+[Webhook signatures](/security/webhook-signatures).
+
+## Checkout, payment and refund events
+
+| Event | When |
+| --- | --- |
+| `checkout.session.expired` | A session expired without a payment. |
+| `payment.detected` | A deposit for the session was seen on chain. |
+| `payment.processing` | The deposit is being swapped and settled. |
+| `payment.succeeded` | The payment settled to your payout destination. Mark the order paid on this event. |
+| `payment.refunded` | The payment was refunded (see the `refund.*` events for each return). |
+| `payment.late` | A deposit arrived after the session ended. |
+| `payment.held` | The payment is held for review. |
+| `refund.pending` | A refund was created and waits to be sent. |
+| `refund.sent` | A refund was sent on chain. |
+| `refund.needs_address` | A refund needs a refund address before it can be sent. |
+| `refund.cancelled` | A refund's proposal was rejected by the signers or expired. No money moved. |
+| `refund.failed` | A refund failed when it executed on chain. No money moved. |
+
 ## Gasless and hook events
 
 | Event | When |

@@ -440,8 +440,8 @@ secret (`whsec_...`) is shown once, at creation and on rotation.
     (`YYYY-MM`), `budget_usd`, `reserved_usd`, `spent_usd`, `remaining_usd`, plus
     `requested_usd` on `gas.budget_exhausted`;
   - `hook.succeeded` and `hook.failed` for integrator stores (the contract hook call; see
-    [Gasless payments](#gasless-payments)). `data`: `payment_id`, `session_id`, `hook_call_id`,
-    `chain`, `contract`, `attempts`, `tx_hash`, plus `error` on `hook.failed`.
+    [Gasless payments](#gasless-payments)). `data`: `payment_id`, `session_id`, `external_ref`,
+    `hook_call_id`, `chain`, `contract`, `attempts`, `tx_hash`, plus `error` on `hook.failed`.
 - `refund.cancelled` means the refund's proposal was rejected by the signers or expired;
   `refund.failed` means it failed when it executed on chain. Either way no money moved for that
   proposal. `data` has `refund_id`, `payment_id`, `session_id`, `external_ref`, `asset`, `amount`
@@ -583,7 +583,8 @@ gas. Submitting never marks a payment paid: the watcher does. Docs: `apps/docs/g
 - **Integrator hooks.** `hook_data` on a session of an integrator store makes it call
   `onTendrDeposit` (EVM) or `on_tendr_deposit` (NEAR) on the settlement contract once the payment is
   settled. Retried for 3 days, then `hook.failed` and one email; `POST /v1/payments/:id/hook/resend`
-  afterwards. Hook gas comes out of the payment's proceeds (hook alone capped at 10 % of the order).
+  afterwards (at most 3 resends per hook call). `GET /v1/relayers` (public) publishes the address
+  that calls the hook on each chain. Hook gas comes out of the payment's proceeds (hook alone capped at 10 % of the order).
   Reference contracts: `onchain/evm/src/reference/TendrDepositReceiver.sol`, `onchain/integrator-near`.
 - **Jobs.** `release-gas-reservations` (60 s), `poll-evm-relays` (15 s), `deliver-hook` and
   `sweep-hooks`, `fee-sweep` (hourly) and `check-gas-balances` (15 min). The last two run only when
@@ -621,13 +622,17 @@ account is used and the sweep is off. The per-chain detail is in the
     `apps/api/src/gas/fees.ts`, and the Tron energy against `TRON_ENERGY_UNITS`. Ask 1Click whether
     NEAR delivery can carry a message (`ft_transfer_call`): if so, NEAR integrators can use an atomic
     notification and drop the relayer from the trust path.
-11. Publish the relayer addresses integrators must allow in their contracts (`relayer-evm` on each
-    EVM chain, the `relayer-near` account), and tell integrators about the misattribution limit in
+11. Check `GET /v1/relayers` on the live API returns the live `relayer-evm` address on each EVM hook
+    chain and the `relayer-near` account (it derives them from the KMS public keys), point
+    integrators at it, and tell them about the misattribution limit in
     `apps/docs/integrations/hooks.mdx`.
 12. Route `gas_ops` system events and `OPS ALERT` log lines to the on-call channel. The sweep and
     balance jobs are scheduled only with `NODE_ENV=production`.
 13. Sponsored live payments wait for the contract review and the checks above. Test mode already
     simulates all of it.
+14. Run the Mintlify CLI broken-links check on the docs before publishing them
+    (`cd apps/docs && npx --yes mintlify@4.2.83 broken-links`). It timed out in Docker during the
+    build; only a scripted nav and link check was run.
 
 ### Returns: the return fee and the under-$1 rule
 
@@ -819,8 +824,9 @@ fee share, 1Click's fee and the spread.
   delegate actions (wallet-selector `signDelegateActions`) with a FULL ACCESS key (function-call
   keys are refused) and pass the prepared `block_height_ttl` as `blockHeightTtl`: the wallet adds
   it to its own head at signing, and the issued bound (`max_block_height`, the quote deadline's
-  height) leaves 150 blocks (~90 s) of slack for approval time and an optimistic head; measure
-  real approval times against it. Then pay a few cents of USDC and USDT from Meteor and Intear, merchant-sponsored and
+  height) leaves 150 blocks (~90 s) of slack for approval time and an optimistic head. That slack
+  is not measured yet: time real wallet approvals (Meteor, Intear) against it, and widen it if they
+  run close. Then pay a few cents of USDC and USDT from Meteor and Intear, merchant-sponsored and
   shopper-paid, and check the watcher marks it paid, the poll job records the NEAR burnt, and the
   fee lands in `gas-fees-near`.
 - Tron gasless (approve + TendrPayment through the forwarder, `gas-tron`), before live use: deploy
@@ -836,7 +842,9 @@ fee share, 1Click's fee and the spread.
   re-tune it; that `triggerconstantcontract` reports a reverting approve as `transaction.ret[0]
 = FAILED` or a `result.code`/`message` (energy is never lent for one); that
   `getaccountresource` `EnergyUsed` rises by what the receiver spends of lent energy (the cost
-  model measures consumption from it); the approve's energy estimate
+  model measures consumption from it), and how much `EnergyUsed` has already decayed (it recovers
+  over 24 h) when it is read before the reclaim: a decayed reading understates use, which is why an
+  approve without a SUCCESS receipt books all the energy it was lent; the approve's energy estimate
   (`triggerconstantcontract`) is ≤ 100 000; a delegation with `lock = false` can be undelegated at
   once (the energy job reclaims as soon as the approve's outcome is final, at most 10 minutes
   after it was made); undelegating after the shopper used delegated energy moves that usage to

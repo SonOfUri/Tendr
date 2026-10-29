@@ -105,6 +105,7 @@ reservation is released if the payment is never submitted or fails.
       "livemode": false,
       "session_id": "ses_...",
       "recovered_from_payment_id": null,
+      "hook_payment_id": null,
       "chain": "base",
       "method": "eip3009",
       "provider": "relayer-evm",
@@ -131,12 +132,26 @@ reservation is released if the payment is never submitted or fails.
 - `sponsor` is `merchant` when the cost is taken from your payment, or `tendr` when Tendr could not
   recover it and absorbed the loss. Tendr never charges you later for a loss.
 - `method` is one of `eip3009`, `permit`, `paymaster`, `kora`, `meta_tx`, `forwarder`. A hook call that costs
-  more than its quoted estimate appears with `hook`; the excess is Tendr's loss (`sponsor: tendr`).
+  more than its quoted estimate appears with `hook`; the excess is Tendr's loss (`sponsor: tendr`), and
+  `hook_payment_id` names the payment whose hook it was. The stored method type also has
+  `paymaster_verifying`, `paymaster_erc20`, `energy` and `fee_payer`; no record is written with them
+  today, so you can treat them as reserved.
+- `recovered_from_payment_id` is the payment whose proceeds paid a sponsored fee (set when its
+  reservation is settled). It is null on every other record, hook shortfalls included.
 - `estimate_usd` is the quoted cost your payment was charged. `cost_usd` is the actual cost. Tendr keeps
-  or absorbs the difference.
+  or absorbs the difference. Both are shown on shopper-paid and Tendr-loss records too.
 - `reservation_state` is `reserved`, `settled` or `released`, or null when nothing was reserved.
 - `fee_mode`, `fee_asset` and `fee_amount` describe a shopper-paid fee (`fee_amount` in base units).
 - Amounts are strings. `fee_amount` and `gas_used` are integers.
+
+### A sponsored quote paid by copying the address
+
+When you sponsor a quote, the network fee is part of the quote: it comes out of your proceeds through
+1Click's fees on that quote. If the shopper then pays that quote by copying the deposit address and
+sending from their own wallet (paying the gas themselves), the quote's fee is still taken from your
+proceeds and counted against your budget, although Tendr paid no gas. This is a known difference from
+the design, which says the shopper then simply pays their own fee. It is bounded by your per-payment cap
+and monthly budget.
 
 ## Why a payment was not sponsored
 

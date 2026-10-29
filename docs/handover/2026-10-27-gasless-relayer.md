@@ -30,6 +30,7 @@ All are under `/v1`, per mode. Auth is a secret key, or a dashboard session with
 | `GET /v1/gas-sponsorships` | `payments:read` | `account:read` |
 | `GET /v1/hook-calls` | `payments:read`; connection keys refused | `account:read` |
 | `POST /v1/payments/{id}/hook/resend` | `sessions:write`; connection keys refused | `webhooks:resend` |
+| `GET /v1/relayers` | none: public, read-only | none |
 
 Request and response shapes, filters and error codes are in `apps/docs/gasless/gas-policy.mdx` and
 `apps/docs/integrations/hooks.mdx`. Points that are easy to miss:
@@ -48,7 +49,19 @@ Request and response shapes, filters and error codes are in `apps/docs/gasless/g
 - **Sponsorship record.** `sponsor` is `merchant` or `tendr` (a loss Tendr absorbed, never charged to the
   merchant). `estimate_usd` is what the merchant was charged, `cost_usd` the actual cost.
   `reservation_state` is `reserved | settled | released | null`. `status` is
-  `pending | submitted | confirmed | failed`.
+  `pending | submitted | confirmed | failed`. `recovered_from_payment_id` is the payment whose proceeds
+  paid a sponsored fee; a hook gas shortfall (`method: hook`) names its payment in `hook_payment_id`
+  instead.
+- **Merchants see Tendr's margin.** `estimate_usd` and `cost_usd` are both returned on every record,
+  shopper-paid and Tendr-loss rows included (spec §2.6), so a merchant can compare what was quoted with
+  what the relay actually cost, and so see Tendr's margin per relay. This is a product choice; a screen
+  showing both columns makes it obvious.
+- **Known deviation: a sponsored quote paid by copy-address still charges the merchant.** The
+  sponsored fee is baked into the quote (1Click `appFees`), so when the shopper pays that quote by
+  copying the deposit address (paying gas themselves), the merchant is still charged the quote's fee
+  and the reservation is settled, although Tendr paid no gas. Spec §2.4 says the shopper then simply
+  pays their own fee. Kept as is (bounded by the per-payment cap and budget) and documented in
+  `apps/docs/gasless/gas-policy.mdx`.
 - **Network fee on sessions and payments.** `network_fee`: `{ paid_by, fee_mode, amount, asset, usd,
   method, reason }`, null for payments quoted before this feature. `reason` is the full reason on
   merchant views (`shopper_choice`, `policy_disabled`, `chain`, `token`, `min_order`, `not_first_time`,
@@ -56,7 +69,11 @@ Request and response shapes, filters and error codes are in `apps/docs/gasless/g
   reduced set.
 - **Session create** accepts `gas_payer` (`merchant | shopper`) and, for integrator stores, `hook_data`.
 - **Hook call.** `status` is `pending | submitted | succeeded | failed`. A resend is allowed only when the
-  call is `failed` and not in flight; otherwise 409.
+  call is `failed` and not in flight, at most 3 times per hook call; otherwise 409 (the fourth carries
+  `details: { max_resends: 3, resends: 3 }`).
+- **Relayer addresses.** `GET /v1/relayers` (public) lists the address that calls integrator hooks per
+  chain: `relayer-evm` on each EVM hook chain and the `relayer-near` implicit account. Integrators allow
+  it as the sender in their contract. Addresses only, from public keys.
 
 ### Shopper-facing endpoints (not for the dashboard)
 
@@ -87,11 +104,11 @@ the policy before and after. These are for operators; the merchant dashboard doe
 
 | Job | Queue | Schedule | What it does |
 | --- | --- | --- | --- |
-| `release-gas-reservations` | checkout | every 60 s | Releases budget held by quotes that were replaced or expired unused (5 minute grace). |
+| `release-gas-reservations` | checkout | every 60 s | Releases budget held by quotes that were replaced or expired unused (5 minute grace), holds of sessions that ended uncollected, and holds whose relay confirmed but whose payment was not collected 7 days after the quote deadline (gas recognised as Tendr's loss). Also deletes expired paymaster URL secrets. |
 | `poll-evm-relays` | checkout | every 15 s | Follows relayed EVM transactions, Pimlico user operations, Solana, NEAR and Tron relays and NEAR hooks to their final outcome and records cost. |
 | `deliver-hook` | webhooks | per attempt, delayed for retries | One hook call attempt. |
 | `sweep-hooks` | webhooks | every 60 s | Re-queues hook calls whose retry is due. |
-| `fee-sweep` | maintenance | hourly, production only | Plans and, only with `FEE_SWEEP_ENABLED=true`, executes swaps of collected gas fees into USDC on NEAR. |
+| `fee-sweep` | maintenance | hourly, production only | Plans and, only with `FEE_SWEEP_ENABLED=true`, executes swaps of collected gas fees into USDC on NEAR. A sent sweep is `broadcast` until its transfer is confirmed on chain (`executed`) or failed; no new sweep of that account and token is planned meanwhile. |
 | `check-gas-balances` | maintenance | every 15 min, production only | Alerts when a relayer key's native balance or the Pimlico balance is below `GAS_LOW_BALANCE_USD`. |
 
 `fee-sweep` and `check-gas-balances` are scheduled only when `NODE_ENV=production`, and run in live mode
@@ -122,7 +139,11 @@ Environment variables: `GAS_FEE_MARGIN_BPS` (default 2000), `TENDR_SPONSOR_LOSS_
 - Sponsorship can silently fall back to shopper-pays after the merchant turned it on. `network_fee.reason`
   says why.
 - Hook gas comes from the payment's proceeds and is outside the sponsorship budget.
-- A hook call that reverted on chain fails at once, without the 3-day retry.
+- A hook call that reverted on chain fails at once, without the 3-day retry. So does an EVM hook whose
+  gas estimate is above 300,000. A gas price spike that makes it cost more than 10% of the order only
+  delays it (retried).
+- A re-quote is refused (`DEPOSIT_IN_PROGRESS`) while a gasless relay of the current quote is claimed
+  or broadcast with no known outcome yet, or a Tron approve is in flight, until the quote's deadline.
 - A failed hook leaves the payment settled: the money is already in the contract.
 - Copy-address payments are never gasless, whatever the policy says.
 - Test and live have separate policies, usage, records and hook calls.
