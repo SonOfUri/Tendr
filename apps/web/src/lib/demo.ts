@@ -47,11 +47,11 @@ export type DemoDefinition = {
   changeLabel?: string;
 };
 
-const LOGO_STORE = '/demo/adidas-store-logo.png';
-const LOGO_FINTECH = '/demo/pulse-finance-icon.png';
-const LOGO_GAMING = '/demo/pixel-forge-logo.png';
-const LOGO_PREDICTION = '/demo/omni-markets-logo.png';
-const LOGO_TENDR = '/demo/tendr-logo.png';
+const LOGO_STORE = '/demo/adidas-store-logo.webp';
+const LOGO_FINTECH = '/demo/pulse-finance-icon.webp';
+const LOGO_GAMING = '/demo/pixel-forge-logo.webp';
+const LOGO_PREDICTION = '/demo/omni-markets-logo.webp';
+const LOGO_TENDR = '/demo/tendr-logo.webp';
 
 export const DEMOS: DemoDefinition[] = [
   {

@@ -84,6 +84,21 @@ export function DemoPlayground() {
     window.history.replaceState(null, '', '/demo');
   }, []);
 
+  // Warm scenario media so Prediction / cart / logos don't stall on first open.
+  useEffect(() => {
+    const urls = [
+      '/demo/kane.webp',
+      '/demo/mbappe.webp',
+      '/demo/puffer-jacket.webp',
+      '/demo/beige-coat.webp',
+      ...DEMOS.map((d) => d.branding.defaultLogoUrl),
+    ];
+    for (const src of urls) {
+      const img = new Image();
+      img.src = src;
+    }
+  }, []);
+
   const startCheckout = useCallback(
     (amount?: string) => {
       const payAmount =

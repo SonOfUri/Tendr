@@ -28,7 +28,7 @@ const ITEMS = [
     detail: "Men's Black",
     price: '$999.00',
     qty: 1,
-    image: '/demo/puffer-jacket.png',
+    image: '/demo/puffer-jacket.webp',
     alt: 'Black puffer jacket portrait',
   },
   {
@@ -37,7 +37,7 @@ const ITEMS = [
     detail: 'Women top',
     price: '$1200.00',
     qty: 1,
-    image: '/demo/beige-coat.png',
+    image: '/demo/beige-coat.webp',
     alt: 'Beige tailored coat portrait',
   },
 ] as const;
