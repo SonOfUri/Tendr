@@ -3321,12 +3321,13 @@ wui-card,
   .demo-canvas {
     display: flex;
     flex-direction: column;
-    flex: 0 0 auto;
+    /* Grow into leftover viewport so the shell never shows a white void. */
+    flex: 1 1 auto;
     margin: 6px 6px 0;
     min-height: min-content;
     height: auto;
     max-width: calc(100vw - 12px);
-    overflow: visible;
+    overflow: hidden;
   }
 
   .demo-canvas-chrome {
@@ -3346,14 +3347,15 @@ wui-card,
   .demo-stage {
     position: relative;
     inset: auto;
-    flex: 0 0 auto;
+    flex: 1 1 auto;
     height: auto;
-    min-height: min-content;
-    overflow: visible;
+    min-height: 0;
+    overflow: auto;
     display: flex;
     flex-direction: column;
     align-items: stretch;
     padding: 0.25rem 0.4rem 0.45rem;
+    -webkit-overflow-scrolling: touch;
   }
 
   /* Flow panels in-document on small screens — absolute drag layout overflows. */
@@ -3394,6 +3396,60 @@ wui-card,
     max-width: 100% !important;
     box-sizing: border-box;
     margin-inline: auto;
+  }
+
+  /* Code view: panel hugs the snippet; dark canvas absorbs leftover height. */
+  .demo-draggable[data-kind='code'] {
+    flex: 0 0 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 2px 4px 8px;
+  }
+
+  .demo-code-panel {
+    min-width: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 0 0 auto;
+    height: auto;
+    max-height: min(62dvh, 100%);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .demo-code-toolbar {
+    flex: 0 0 auto;
+    padding: 0.4rem 0.5rem 0;
+  }
+
+  .demo-code-pre {
+    flex: 0 1 auto;
+    min-height: 0;
+    margin: 0;
+    padding: 0.1rem 0.55rem 0.75rem 0.35rem;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    max-height: min(54dvh, 480px);
+    font-size: 0.72rem;
+    line-height: 1.45;
+    font-weight: 550;
+  }
+
+  .demo-code-line {
+    grid-template-columns: 1.7rem minmax(0, 1fr);
+    column-gap: 0.45rem;
+    min-height: 0;
+  }
+
+  .demo-code-lineno {
+    font-size: 0.62rem;
+  }
+
+  /* Component cards stay content-sized inside the growing canvas. */
+  .demo-draggable[data-kind='component'] {
+    flex: 0 0 auto;
   }
 
   .demo-cart {
@@ -3655,8 +3711,9 @@ wui-card,
     letter-spacing: -0.01em;
   }
 
-  .demo-code-panel {
-    font-size: 0.72rem;
+  .demo-code-pre {
+    font-size: 0.68rem;
+    line-height: 1.4;
   }
 
   .demo-pred-actions {
