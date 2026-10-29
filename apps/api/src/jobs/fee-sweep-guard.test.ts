@@ -19,9 +19,12 @@ import {
 import { sha256 } from '@noble/hashes/sha2';
 import { ed25519 } from '@noble/curves/ed25519';
 import bs58 from 'bs58';
-import { Interface, Transaction } from 'ethers';
+import { Interface, Transaction, concat, encodeRlp, toBeArray } from 'ethers';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { loadEnv } from '../env.js';
 import { getKeyVault } from '../keyvault/index.js';
+import { EvmRpc } from '../relayer/evm/rpc.js';
+import { FakeEvmNode } from '../test/fake-evm-node.js';
 import { buildTransaction, functionCallAction, transferAction, TGAS } from '../near/tx.js';
 import { decodeSignedTransaction } from '@near-js/transactions';
 import { associatedTokenAccount } from '../relayer/solana-tx.js';
@@ -33,6 +36,7 @@ import {
   decodeSignedTx,
 } from '../relayer/tron-tx.js';
 import {
+  LiveEvmSweepChain,
   buildEvmSweepTx,
   buildNearSweepTx,
   buildSolanaSweepTx,
@@ -43,6 +47,7 @@ import {
   assertSweepTransaction,
   signSweep,
   sweepKeyAddress,
+  sweepMaxFeePerGas,
   transferCalldata,
   type SweepIntent,
   type SweepTx,
@@ -152,6 +157,74 @@ describe('EVM sweep guard', () => {
     await refused(
       token,
       raw({ type: 0, gasPrice: 1n, maxFeePerGas: undefined, maxPriorityFeePerGas: undefined }),
+    );
+  });
+
+  it('refuses a fee per gas above the chain cap, or a tip above the max fee (R12-l)', async () => {
+    const gwei = 10n ** 9n;
+    // base: the sweep default cap is 5 gwei.
+    await assertSweepTransaction(token, raw({ maxFeePerGas: 5n * gwei }));
+    await refused(token, raw({ maxFeePerGas: 5n * gwei + 1n }), 'transaction.max_fee_per_gas');
+    await refused(token, raw({ maxFeePerGas: 10_000n * gwei }), 'transaction.max_fee_per_gas');
+    // ethers will not serialise a tip above the max fee: hand-encode the RLP (a hostile transport).
+    const q = (n: bigint) => toBeArray(n);
+    const tipAboveMax: SweepTx = {
+      family: 'evm',
+      unsigned: concat([
+        '0x02',
+        encodeRlp([
+          q(8453n),
+          q(0n),
+          q(3n * gwei + 1n),
+          q(3n * gwei),
+          q(200_000n),
+          USDC_BASE,
+          q(0n),
+          transferCalldata(EVM_DEPOSIT, 25_000_000n),
+          [],
+        ]),
+      ]),
+    };
+    await refused(token, tipAboveMax);
+    await refused(token, raw({ maxFeePerGas: 0n, maxPriorityFeePerGas: 0n }));
+    // EVM_MAX_FEE_GWEI_<CHAIN>, when set, is the cap.
+    process.env.EVM_MAX_FEE_GWEI_BASE = '2';
+    loadEnv();
+    try {
+      await refused(token, raw({}), 'transaction.max_fee_per_gas');
+      await assertSweepTransaction(token, raw({ maxFeePerGas: 2n * gwei }));
+      expect(sweepMaxFeePerGas('base')).toBe(2n * gwei);
+    } finally {
+      delete process.env.EVM_MAX_FEE_GWEI_BASE;
+      loadEnv();
+    }
+    // A legacy transaction (its `gasPrice` unbounded by type-2 fields) is refused outright.
+    await refused(
+      token,
+      raw({
+        type: 0,
+        gasPrice: 10n ** 18n,
+        maxFeePerGas: undefined,
+        maxPriorityFeePerGas: undefined,
+      }),
+      'transaction.type',
+    );
+  });
+
+  it('the live EVM transport clamps fees to the cap and reserves gas for 3 token sweeps', async () => {
+    const node = new FakeEvmNode();
+    node.baseFee = 100n * 10n ** 9n; // a spike far above the 5 gwei cap
+    node.tip = 2n * 10n ** 9n;
+    const chain = new LiveEvmSweepChain(() => new EvmRpc('base', 'http://node', node.fetch));
+    const usdc = { assetId: 'x', symbol: 'USDC', decimals: 6, contract: USDC_BASE };
+    const tx = await chain.build('base', from, usdc, EVM_DEPOSIT, 25_000_000n);
+    await assertSweepTransaction(token, tx);
+    const t = Transaction.from((tx as { unsigned: string }).unsigned);
+    expect(t.maxFeePerGas).toBe(sweepMaxFeePerGas('base'));
+    expect(t.maxPriorityFeePerGas).toBe(2n * 10n ** 9n);
+    const fee = await chain.transferFee('base', from, usdc);
+    expect(await chain.nativeReserve('base')).toBeGreaterThanOrEqual(
+      3n * fee + 100_000n * t.maxFeePerGas!,
     );
   });
 

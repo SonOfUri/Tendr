@@ -3,10 +3,11 @@
 // credited to Tendr's fee account (TENDR_FEE_ACCOUNT_NEAR), through a 1Click swap.
 //
 //   planFeeSweeps(livemode, now)  per gas-fee account and token: due when its value is at least
-//                                 FEE_SWEEP_THRESHOLD_USD, or when the last executed sweep of that
-//                                 account and token is 7 days old (or there is none). Live mode
-//                                 only (ruling R12-a): test mode plans nothing. Each due sweep is
-//                                 recorded as the account+token's one open plan (`fee_sweeps`).
+//                                 FEE_SWEEP_THRESHOLD_USD, or (a token worth at least $1, never a
+//                                 native coin) when the last executed sweep of that account and token
+//                                 is 7 days old (or there is none). A failed attempt backs off 6 h.
+//                                 Live mode only (ruling R12-a): test mode plans nothing. Each due
+//                                 sweep is recorded as the account+token's one open plan.
 //   runFeeSweep(now)              the worker job: plans, then, only with FEE_SWEEP_ENABLED=true and
 //                                 TENDR_FEE_ACCOUNT_NEAR set, executes each plan; otherwise one
 //                                 operator notice (per 6 h) says what is waiting and why.
@@ -17,7 +18,9 @@
 // token on its chain; destination: USDC on NEAR; recipient: TENDR_FEE_ACCOUNT_NEAR; refunds to
 // the gas-fee address itself, R12-b), the transport builds the one transfer to the quote's deposit
 // address, `signSweep` checks those exact bytes and signs (R12-c), and the transfer is broadcast.
-// A native-coin sweep sends the balance less a fee reserve for its own transfer.
+// A native-coin sweep (EVM, R12-k) sends only the excess above a reserve: gas for 3 future token
+// sweeps at the chain's fee cap plus its own transfer. The quote must pay at least 95 % of the
+// plan's USD value after slippage, and an execution is time-bounded below its lease.
 import { Prisma } from '@prisma/client';
 import type { FeeSweepStatus } from '@prisma/client';
 import { isValidAddress } from '../checkout/address-format.js';
@@ -40,9 +43,20 @@ import {
 } from './fee-sweep-guard.js';
 
 /** The weekly rule: a token is swept when its last executed sweep is this old. */
-export const FEE_SWEEP_EVERY_MS = 7 * 24 * 60 * 60_000;
+export const FEE_SWEEP_WEEKLY_MS = 7 * 24 * 60 * 60_000;
+/** The weekly rule skips dust: a balance worth less than this (USD) waits for the threshold. */
+export const FEE_SWEEP_WEEKLY_MIN_USD = '1';
+/** A failed attempt: the account and token are not planned again for this long. */
+export const FEE_SWEEP_RETRY_AFTER_MS = 6 * 60 * 60_000;
 /** How long one executor holds a plan. */
 export const FEE_SWEEP_LEASE_MS = 10 * 60_000;
+/**
+ * Time budget of one execution, below the lease: a step still running past it fails the attempt
+ * before anything is signed, and the lease is renewed (still held) just before the broadcast.
+ */
+export const FEE_SWEEP_EXECUTE_MS = 5 * 60_000;
+/** The quote's minimum USD out (after slippage) must be at least this share of the plan (bps). */
+export const FEE_SWEEP_MIN_OUT_BPS = 9_500n;
 /** How long the sweep's 1Click quote stays open. */
 export const FEE_SWEEP_QUOTE_TTL_MS = 30 * 60_000;
 export const FEE_SWEEP_SLIPPAGE_BPS = 100;
@@ -76,6 +90,8 @@ export interface FeeSweepDeps {
   tokens: (livemode: boolean) => Promise<Map<string, TokenInfo>>;
   oneclick: () => OneClickProvider;
   kv: () => KeyVault;
+  /** The execution time budget (FEE_SWEEP_EXECUTE_MS; tests shorten it). */
+  executeMs: number;
 }
 
 const DEFAULT_DEPS: FeeSweepDeps = {
@@ -83,6 +99,7 @@ const DEFAULT_DEPS: FeeSweepDeps = {
   tokens: tokenList,
   oneclick: () => providerFor(true),
   kv: getKeyVault,
+  executeMs: FEE_SWEEP_EXECUTE_MS,
 };
 let deps: FeeSweepDeps = DEFAULT_DEPS;
 
@@ -100,6 +117,21 @@ export function usdValue(amount: bigint, decimals: number, priceUsd: string): st
     .div(new Prisma.Decimal(10).pow(decimals))
     .toDecimalPlaces(6, Prisma.Decimal.ROUND_DOWN)
     .toFixed();
+}
+
+/**
+ * The least USD a quote pays out after slippage: the lower of 1Click's `amountOutUsd` and the USDC
+ * amount itself (6 decimals, ~$1), less FEE_SWEEP_SLIPPAGE_BPS. Null when unreadable.
+ */
+export function quoteMinOutUsd(quote: {
+  amountOut: string;
+  amountOutUsd: string;
+}): Prisma.Decimal | null {
+  if (!/^\d+$/.test(quote.amountOut) || !/^\d+(\.\d+)?$/.test(quote.amountOutUsd)) return null;
+  const usdc = new Prisma.Decimal(quote.amountOut).div(1_000_000);
+  const usd = new Prisma.Decimal(quote.amountOutUsd);
+  const out = usdc.lt(usd) ? usdc : usd;
+  return out.mul(10_000 - FEE_SWEEP_SLIPPAGE_BPS).div(10_000);
 }
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err)).slice(0, 500);
@@ -177,8 +209,11 @@ export async function planFeeSweeps(livemode: boolean, now: Date): Promise<Sweep
           let amount = await chainImpl.balance(chain, account, token);
           if (amount <= 0n) continue;
           if (token.contract === null) {
-            // A native-coin sweep keeps a reserve for its own transfer's fee (R12-d).
-            amount -= await chainImpl.transferFee(chain, account, token);
+            // A native-coin sweep sends only the excess above the gas reserve: future token
+            // sweeps plus its own transfer (R12-d, R12-k).
+            amount -= chainImpl.nativeReserve
+              ? await chainImpl.nativeReserve(chain)
+              : await chainImpl.transferFee(chain, account, token);
             if (amount <= 0n) continue;
           }
           const price = list.get(token.assetId)?.priceUsd;
@@ -187,6 +222,17 @@ export async function planFeeSweeps(livemode: boolean, now: Date): Promise<Sweep
             continue;
           }
           const amountUsd = usdValue(amount, token.decimals, price);
+          const where = { livemode: true, chain, accountAddress: account, assetId: token.assetId };
+          // A failed attempt backs off before the account and token are planned again.
+          const recentFailure = await prisma.feeSweep.findFirst({
+            where: {
+              ...where,
+              status: 'failed',
+              failedAt: { gt: new Date(now.getTime() - FEE_SWEEP_RETRY_AFTER_MS) },
+            },
+            select: { id: true },
+          });
+          if (recentFailure) continue;
           const last = await prisma.feeSweep.findFirst({
             where: {
               livemode: true,
@@ -198,11 +244,13 @@ export async function planFeeSweeps(livemode: boolean, now: Date): Promise<Sweep
             orderBy: { executedAt: 'desc' },
             select: { executedAt: true },
           });
-          const reason = threshold.lte(amountUsd)
-            ? 'threshold'
-            : !last?.executedAt || now.getTime() - last.executedAt.getTime() >= FEE_SWEEP_EVERY_MS
-              ? 'weekly'
-              : null;
+          // The weekly rule never applies to a native coin (its balance is also the sweep gas,
+          // R12-k), nor to dust below FEE_SWEEP_WEEKLY_MIN_USD.
+          const weeklyDue =
+            token.contract !== null &&
+            new Prisma.Decimal(amountUsd).gte(FEE_SWEEP_WEEKLY_MIN_USD) &&
+            (!last?.executedAt || now.getTime() - last.executedAt.getTime() >= FEE_SWEEP_WEEKLY_MS);
+          const reason = threshold.lte(amountUsd) ? 'threshold' : weeklyDue ? 'weekly' : null;
           if (!reason) continue;
           const p = {
             family: chainImpl.family,
@@ -301,15 +349,29 @@ export async function executeSweep(
   const e = env();
   const recipient = e.TENDR_FEE_ACCOUNT_NEAR;
   if (!e.FEE_SWEEP_ENABLED || !recipient) return 'skipped';
+  const lease = new Date(now.getTime() + FEE_SWEEP_LEASE_MS);
   const claimed = await prisma.feeSweep.updateMany({
     where: {
       id: plan.id,
       status: { in: OPEN },
       OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }],
     },
-    data: { leaseUntil: new Date(now.getTime() + FEE_SWEEP_LEASE_MS) },
+    data: { leaseUntil: lease },
   });
   if (claimed.count !== 1) return 'skipped';
+  const started = Date.now();
+  /** A step bounded by the execution budget (FEE_SWEEP_EXECUTE_MS < the lease). */
+  const bounded = <T>(p: Promise<T>): Promise<T> => {
+    const left = deps.executeMs - (Date.now() - started);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error('fee sweep: execution exceeded its time budget')),
+        Math.max(0, left),
+      );
+    });
+    return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+  };
   const chainImpl = deps.chains().find((c) => c.family === plan.family);
   const finish = (status: FeeSweepStatus, data: Prisma.FeeSweepUpdateInput = {}) =>
     prisma.feeSweep.update({ where: { id: plan.id }, data: { status, leaseUntil: null, ...data } });
@@ -322,10 +384,12 @@ export async function executeSweep(
   try {
     // Gas: a receive-only account may hold tokens but no native coin (R12-d).
     if (plan.token.contract !== null) {
-      const [native, fee] = await Promise.all([
-        chainImpl.nativeBalance(plan.chain, plan.account),
-        chainImpl.transferFee(plan.chain, plan.account, plan.token),
-      ]);
+      const [native, fee] = await bounded(
+        Promise.all([
+          chainImpl.nativeBalance(plan.chain, plan.account),
+          chainImpl.transferFee(plan.chain, plan.account, plan.token),
+        ]),
+      );
       if (native < fee) {
         await finish('needs_gas', {
           lastError: `needs ${fee} native units for the transfer, has ${native}`,
@@ -345,25 +409,37 @@ export async function executeSweep(
         return 'needs_gas';
       }
     }
-    const { quote, correlationId } = (await deps.oneclick().quote({
-      dry: false,
-      swapType: 'EXACT_INPUT',
-      slippageTolerance: FEE_SWEEP_SLIPPAGE_BPS,
-      originAsset: plan.token.assetId,
-      depositType: 'ORIGIN_CHAIN',
-      destinationAsset: FEE_SWEEP_DESTINATION_ASSET,
-      amount: plan.amount.toString(),
-      refundTo: plan.account,
-      refundType: 'ORIGIN_CHAIN',
-      recipient,
-      recipientType: 'DESTINATION_CHAIN',
-      deadline: new Date(now.getTime() + FEE_SWEEP_QUOTE_TTL_MS).toISOString(),
-    })) as Awaited<ReturnType<OneClickProvider['quote']>>;
+    const { quote, correlationId } = (await bounded(
+      deps.oneclick().quote({
+        dry: false,
+        swapType: 'EXACT_INPUT',
+        slippageTolerance: FEE_SWEEP_SLIPPAGE_BPS,
+        originAsset: plan.token.assetId,
+        depositType: 'ORIGIN_CHAIN',
+        destinationAsset: FEE_SWEEP_DESTINATION_ASSET,
+        amount: plan.amount.toString(),
+        refundTo: plan.account,
+        refundType: 'ORIGIN_CHAIN',
+        recipient,
+        recipientType: 'DESTINATION_CHAIN',
+        deadline: new Date(now.getTime() + FEE_SWEEP_QUOTE_TTL_MS).toISOString(),
+      }),
+    )) as Awaited<ReturnType<OneClickProvider['quote']>>;
     if (!quote.depositAddress || !isValidAddress(plan.chain, quote.depositAddress)) {
       throw new Error('1Click quote has no valid deposit address');
     }
     if (quote.amountIn !== plan.amount.toString()) {
       throw new Error('1Click quote is for another amount');
+    }
+    const minOutUsd = quoteMinOutUsd(quote);
+    const floor = new Prisma.Decimal(plan.amountUsd)
+      .mul(FEE_SWEEP_MIN_OUT_BPS.toString())
+      .div(10_000);
+    if (minOutUsd === null || minOutUsd.lt(floor)) {
+      throw new Error(
+        `1Click quote pays too little: at least ${minOutUsd?.toFixed() ?? '?'} USD out for ` +
+          `${plan.amountUsd} USD in (floor ${floor.toFixed()})`,
+      );
     }
     depositAddress = quote.depositAddress;
     await prisma.feeSweep.update({
@@ -375,7 +451,7 @@ export async function executeSweep(
         recipient,
       },
     });
-    await chainImpl.prepare?.(plan.chain, plan.token, depositAddress);
+    await bounded(chainImpl.prepare?.(plan.chain, plan.token, depositAddress) ?? Promise.resolve());
     const intent: SweepIntent = {
       family: plan.family,
       chain: plan.chain,
@@ -385,18 +461,23 @@ export async function executeSweep(
       amount: plan.amount,
       depositAddress,
     };
-    const tx = await chainImpl.build(
-      plan.chain,
-      plan.account,
-      plan.token,
-      depositAddress,
-      plan.amount,
+    const tx = await bounded(
+      chainImpl.build(plan.chain, plan.account, plan.token, depositAddress, plan.amount),
     );
-    const signed = await signSweep(deps.kv(), intent, tx);
+    const signed = await bounded(signSweep(deps.kv(), intent, tx));
+    if (Date.now() - started >= deps.executeMs) {
+      throw new Error('fee sweep: execution exceeded its time budget');
+    }
+    // Still ours? Renew the lease for the broadcast and record the hash first, in one statement:
+    // a lost answer still leaves the hash to look up, and no second executor can claim it.
+    const renewed = new Date(now.getTime() + (Date.now() - started) + FEE_SWEEP_LEASE_MS);
+    const held = await prisma.feeSweep.updateMany({
+      where: { id: plan.id, leaseUntil: lease, status: { in: OPEN } },
+      data: { leaseUntil: renewed, txHash: signed.txHash },
+    });
+    if (held.count !== 1) throw new Error('fee sweep: lost the plan lease before broadcast');
     txHash = signed.txHash;
-    // Recorded before the broadcast: a lost answer still leaves the hash to look up.
-    await prisma.feeSweep.update({ where: { id: plan.id }, data: { txHash } });
-    await chainImpl.broadcast(plan.chain, signed);
+    await bounded(chainImpl.broadcast(plan.chain, signed));
     await finish('executed', { executedAt: now, lastError: null });
     try {
       await deps.oneclick().submitDeposit(txHash, depositAddress);
@@ -406,10 +487,10 @@ export async function executeSweep(
     log('info', 'fee sweep executed', { ...planSummary(plan), txHash, depositAddress });
     return 'executed';
   } catch (err) {
-    await finish('failed', { lastError: errText(err) });
+    await finish('failed', { lastError: errText(err), failedAt: now });
     await opsNotice({
       type: FEE_SWEEP_FAILED,
-      key: `fee_sweep_failed:${plan.family}:${plan.chain}:${plan.account}`,
+      key: `fee_sweep_failed:${plan.family}:${plan.chain}:${plan.account}:${plan.token.assetId}`,
       now,
       payload: {
         ...planSummary(plan),

@@ -789,8 +789,12 @@ fee share, 1Click's fee and the spread.
   gas: fund each one an operator-approved trace of native coin for its sweep transfers
   (`gas-fees-evm` ETH/POL/AVAX on each chain, `gas-fees-solana` SOL incl. ~0.00204 SOL rent when a
   deposit token account is new, `gas-fees-near` NEAR, `gas-fees-tron` ~30 TRX of energy); a token
-  sweep without it waits as `needs_gas` and operators are told every 6 h. Note an EVM native
-  balance is itself swept (less a fee reserve) once worth $20 or weekly, so keep top-ups small.
+  sweep without it waits as `needs_gas` and operators are told every 6 h. An EVM native balance
+  (shopper fees paid in the coin) is swept only once its excess is worth $20, and only the excess
+  above a reserve of 3 token sweeps (400k gas each) plus its own transfer at the chain's fee cap
+  (`EVM_MAX_FEE_GWEI_<CHAIN>`, else the sweep's defaults in `fee-sweep-guard.ts`), so a top-up
+  of at least that reserve stays as gas. The guard refuses any sweep paying more per gas than
+  that cap. A sweep is refused when the 1Click quote pays under 95 % of its value after slippage.
   Confirm with 1Click: an EXACT_INPUT quote from each swept asset (incl. USDC on NEAR to the same
   asset) to USDC on NEAR with `recipientType: DESTINATION_CHAIN` into a NEAR account, refunds to
   the origin address; that a NEP-141 `ft_transfer` to a NEAR deposit address (registered by

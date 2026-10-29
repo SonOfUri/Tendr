@@ -33,10 +33,11 @@ import {
   getCompiledTransactionMessageEncoder,
 } from '@solana/kit';
 import bs58 from 'bs58';
-import { Interface, Signature, Transaction, getBytes, hexlify } from 'ethers';
+import { Interface, Signature, Transaction, getBytes, hexlify, parseUnits } from 'ethers';
 import { evmAddress } from '../keyvault/secp256k1.js';
 import type { KeyName, KeyVault } from '../keyvault/types.js';
 import { implicitAccountId } from '../near/tx.js';
+import { envMaxFeeGwei } from '../relayer/evm/sender.js';
 import { EVM_CHAIN_IDS } from '../relayer/evm/tokens.js';
 import {
   ASSOCIATED_TOKEN_PROGRAM,
@@ -109,8 +110,37 @@ export const SWEEP_KEYS: Readonly<Record<SweepFamily, KeyName>> = {
   tron: 'gas-fees-tron',
 };
 
-/** Upper bounds on what a sweep transfer may spend in gas (it only ever wastes its own gas). */
+/**
+ * Upper bounds on what a sweep transfer may spend on gas. Gas is paid to the block producer, so an
+ * unbounded fee would move the account's native coin elsewhere: EVM bounds both the gas limit and
+ * the fee per gas (`sweepMaxFeePerGas`), NEAR the attached gas, Tron the fee limit, and a Solana
+ * sweep carries no priority fee at all (no compute-budget instruction is allowed).
+ */
 export const SWEEP_MAX_EVM_GAS = 300_000n;
+
+/**
+ * The sweep's ceiling on `maxFeePerGas` per EVM chain (gwei) when `EVM_MAX_FEE_GWEI_<CHAIN>` is not
+ * set (ruling R12-l). Set, the env cap applies instead. Above normal fees with headroom for
+ * spikes; a sweep priced out by a spike waits for the next run.
+ */
+export const SWEEP_DEFAULT_MAX_FEE_GWEI: Readonly<Record<string, string>> = {
+  eth: '100',
+  base: '5',
+  arb: '5',
+  op: '5',
+  pol: '1000',
+  bsc: '10',
+  avax: '100',
+  gnosis: '50',
+  bera: '50',
+};
+
+/** The most a sweep transaction on `chain` may pay per gas (wei); throws for an unknown chain. */
+export function sweepMaxFeePerGas(chain: string): bigint {
+  const gwei = envMaxFeeGwei(chain) ?? SWEEP_DEFAULT_MAX_FEE_GWEI[chain];
+  if (gwei === undefined) throw new Error(`no sweep fee cap for ${chain}`);
+  return parseUnits(gwei, 'gwei');
+}
 export const SWEEP_MAX_NEAR_GAS = 30_000_000_000_000n;
 export const SWEEP_MAX_TRON_FEE_LIMIT_SUN = 100_000_000n;
 
@@ -136,6 +166,13 @@ function checkEvm(intent: SweepIntent, unsigned: string): void {
   if (chainId === undefined || t.chainId !== BigInt(chainId)) refuse('transaction.chain_id');
   if (t.accessList && t.accessList.length > 0) refuse('transaction.access_list');
   if (t.gasLimit <= 0n || t.gasLimit > SWEEP_MAX_EVM_GAS) refuse('transaction.gas_limit');
+  // Type 2 only (above), so there is no legacy `gasPrice` to bound.
+  const maxFee = t.maxFeePerGas;
+  const tip = t.maxPriorityFeePerGas;
+  if (maxFee === null || maxFee <= 0n || maxFee > sweepMaxFeePerGas(intent.chain)) {
+    refuse('transaction.max_fee_per_gas');
+  }
+  if (tip === null || tip < 0n || tip > maxFee!) refuse('transaction.max_priority_fee_per_gas');
   if (!t.to) refuse('transaction.to');
   if (intent.token === null) {
     if (lower(t.to!) !== lower(intent.depositAddress)) refuse('transaction.to');

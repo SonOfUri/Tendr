@@ -28,7 +28,9 @@ const DEPOSIT = '0x' + '44'.repeat(20);
 const EVIL = '0x' + '66'.repeat(20);
 const NOW = new Date('2026-10-28T12:00:00Z');
 const DAY = 86_400_000;
-const FEE_RESERVE = 10n ** 15n; // 0.001 ETH
+const FEE_RESERVE = 10n ** 15n; // 0.001 ETH: one token sweep's fee
+/** A native sweep leaves gas for 3 token sweeps plus its own transfer (R12-k). */
+const NATIVE_RESERVE = 4n * FEE_RESERVE;
 
 const LIST = new Map<string, TokenInfo>([
   [USDC, { assetId: USDC, blockchain: 'base', symbol: 'USDC', decimals: 6, priceUsd: '1' }],
@@ -43,6 +45,8 @@ class FakeChain implements SweepChain {
   broadcasts: SignedSweep[] = [];
   /** Overrides the transfer the transport builds (a compromised transport). */
   recipientOverride: string | null = null;
+  /** Runs while the transfer is built (a slow transport, a concurrent executor). */
+  onBuild: () => Promise<void> = async () => {};
   chains() {
     return ['base'];
   }
@@ -61,7 +65,11 @@ class FakeChain implements SweepChain {
   async transferFee() {
     return FEE_RESERVE;
   }
+  async nativeReserve() {
+    return NATIVE_RESERVE;
+  }
   async build(_c: string, _a: string, t: SweepToken, to: string, amount: bigint) {
+    await this.onBuild();
     this.built.push(to);
     return buildEvmSweepTx({
       chain: 'base',
@@ -74,23 +82,34 @@ class FakeChain implements SweepChain {
       maxPriorityFeePerGas: 10n ** 8n,
     });
   }
+  /** Lands the transfer: the native coin pays its value and its gas. */
   async broadcast(_c: string, s: SignedSweep) {
     this.broadcasts.push(s);
+    const t = Transaction.from(s.signed);
+    this.native -= t.value + t.gasLimit * t.maxFeePerGas!;
+    if (t.data !== '0x') this.balances.set(USDC, 0n);
   }
 }
 
 class FakeOneClick implements Partial<OneClickProvider> {
   quotes: QuoteRequest[] = [];
   deposits: string[] = [];
+  /** USDC out per USD in (1 = a fair route). */
+  rate = 1;
+  fail: Error | null = null;
   async quote(req: QuoteRequest) {
     this.quotes.push(req);
+    if (this.fail) throw this.fail;
+    const priced = LIST.get(req.originAsset)!;
+    const usdIn = (Number(req.amount) / 10 ** priced.decimals) * Number(priced.priceUsd);
+    const usdcOut = Math.floor(usdIn * this.rate * 1e6);
     return {
       quote: {
         depositAddress: DEPOSIT,
         amountIn: req.amount,
-        amountInUsd: '0',
-        amountOut: '0',
-        amountOutUsd: '0',
+        amountInUsd: usdIn.toFixed(6),
+        amountOut: String(usdcOut),
+        amountOutUsd: (usdcOut / 1e6).toFixed(6),
       },
       correlationId: `corr-${this.quotes.length}`,
     };
@@ -209,7 +228,7 @@ describe('planFeeSweeps', () => {
     await executedSweep(USDC, new Date(NOW.getTime() - DAY));
     await executedSweep(ETH, new Date(NOW.getTime() - DAY));
     chain.balances.set(USDC, 20_000_000n); // exactly $20
-    chain.native = 10n ** 16n + FEE_RESERVE; // 0.01 ETH ($25) after the reserve
+    chain.native = 10n ** 16n + NATIVE_RESERVE; // 0.01 ETH ($25) above the reserve
     const plans = await planFeeSweeps(true, NOW);
     expect(plans.map((p) => [p.token.symbol, p.reason, p.amount, p.amountUsd])).toEqual([
       ['USDC', 'threshold', 20_000_000n, '20'],
@@ -221,9 +240,51 @@ describe('planFeeSweeps', () => {
     expect(rows.map((r) => r.accountAddress)).toEqual([account, account]);
   });
 
-  it('a native sweep keeps the fee reserve, and a balance below it plans nothing', async () => {
-    chain.native = FEE_RESERVE;
+  it('a native sweep keeps the gas reserve, and a balance at or below it plans nothing', async () => {
+    chain.native = NATIVE_RESERVE;
     expect(await planFeeSweeps(true, NOW)).toEqual([]);
+  });
+
+  it('a native coin is swept only on the threshold rule, never weekly (R12-k)', async () => {
+    chain.native = NATIVE_RESERVE + 2n * 10n ** 15n; // $5 above the reserve, never swept
+    expect(await planFeeSweeps(true, NOW)).toEqual([]);
+    chain.native = NATIVE_RESERVE + 8n * 10n ** 15n; // $20 above it
+    const plans = await planFeeSweeps(true, NOW);
+    expect(plans.map((p) => [p.token.symbol, p.reason, p.amount])).toEqual([
+      ['ETH', 'threshold', 8n * 10n ** 15n],
+    ]);
+  });
+
+  it('the weekly rule skips dust below $1', async () => {
+    chain.native = 0n;
+    chain.balances.set(USDC, 999_999n);
+    expect(await planFeeSweeps(true, NOW)).toEqual([]);
+    chain.balances.set(USDC, 1_000_000n);
+    expect((await planFeeSweeps(true, NOW)).map((p) => p.reason)).toEqual(['weekly']);
+  });
+
+  it('a failed attempt backs off 6 h before the token is planned again', async () => {
+    chain.native = 0n;
+    chain.balances.set(USDC, 50_000_000n);
+    await prisma.feeSweep.create({
+      data: {
+        id: 'fsw_recentfail',
+        livemode: true,
+        family: 'evm',
+        chain: 'base',
+        accountAddress: account,
+        assetId: USDC,
+        symbol: 'USDC',
+        amount: 1,
+        amountUsd: 1,
+        reason: 'threshold',
+        status: 'failed',
+        failedAt: new Date(NOW.getTime() - 5 * 60 * 60_000),
+      },
+    });
+    expect(await planFeeSweeps(true, NOW)).toEqual([]);
+    const later = new Date(NOW.getTime() + 60 * 60_000);
+    expect((await planFeeSweeps(true, later)).map((p) => p.token.symbol)).toEqual(['USDC']);
   });
 
   it('values tokens at the token-list price, rounded down to the micro-dollar', () => {
@@ -344,13 +405,92 @@ describe('runFeeSweep', () => {
     setEnv({ FEE_SWEEP_ENABLED: 'true', TENDR_FEE_ACCOUNT_NEAR: 'fees.tendr.near' });
     chain.balances.set(USDC, 0n);
     await prisma.feeSweep.deleteMany({ where: { assetId: ETH } });
-    chain.native = 10n ** 16n + FEE_RESERVE;
+    chain.native = 10n ** 16n + NATIVE_RESERVE;
     const r = await runFeeSweep(NOW);
     expect(r.executed).toBe(1);
     const t = Transaction.from(chain.broadcasts[0]!.signed);
     expect(t.to?.toLowerCase()).toBe(DEPOSIT);
     expect(t.value).toBe(10n ** 16n);
     expect(t.data).toBe('0x');
+  });
+
+  it('after a native sweep the account still has gas for the next token sweeps (R12-k)', async () => {
+    setEnv({ FEE_SWEEP_ENABLED: 'true', TENDR_FEE_ACCOUNT_NEAR: 'fees.tendr.near' });
+    await prisma.feeSweep.deleteMany({ where: { assetId: ETH } });
+    chain.balances.set(USDC, 0n);
+    chain.native = NATIVE_RESERVE + 10n ** 16n; // $25 of native fees above the reserve
+    expect((await runFeeSweep(NOW)).executed).toBe(1);
+    expect(Transaction.from(chain.broadcasts[0]!.signed).value).toBe(10n ** 16n);
+    expect(chain.native).toBeGreaterThanOrEqual(3n * FEE_RESERVE);
+    // Three token sweeps in a row still find gas: never needs_gas.
+    for (let i = 1; i <= 3; i++) {
+      chain.balances.set(USDC, 25_000_000n);
+      const r = await runFeeSweep(new Date(NOW.getTime() + i * DAY));
+      expect(r).toMatchObject({ executed: 1, needsGas: 0 });
+    }
+    expect(await prisma.feeSweep.count({ where: { status: 'needs_gas' } })).toBe(0);
+  });
+
+  it('refuses a quote paying less than 95 % of the plan after slippage: nothing signed', async () => {
+    setEnv({ FEE_SWEEP_ENABLED: 'true', TENDR_FEE_ACCOUNT_NEAR: 'fees.tendr.near' });
+    oneclick.rate = 0.95; // 0.95 × 0.99 slippage < 0.95
+    const r = await runFeeSweep(NOW);
+    expect(r).toMatchObject({ executed: 0, failed: 1 });
+    expect(chain.built).toHaveLength(0);
+    expect(chain.broadcasts).toHaveLength(0);
+    const row = await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } });
+    expect(row.lastError).toMatch(/pays too little/);
+    expect(row.failedAt).toEqual(NOW);
+    // 0.97 × 0.99 ≥ 0.95: accepted (after the 6 h back-off).
+    oneclick.rate = 0.97;
+    const later = await runFeeSweep(new Date(NOW.getTime() + 6 * 60 * 60_000));
+    expect(later.executed).toBe(1);
+  });
+
+  it('failure notices are throttled per account and token, not per account', async () => {
+    setEnv({ FEE_SWEEP_ENABLED: 'true', TENDR_FEE_ACCOUNT_NEAR: 'fees.tendr.near' });
+    await prisma.feeSweep.deleteMany({ where: { assetId: ETH } });
+    chain.native = NATIVE_RESERVE + 10n ** 16n;
+    oneclick.fail = new Error('1Click down');
+    const r = await runFeeSweep(NOW);
+    expect(r.failed).toBe(2);
+    const ev = await prisma.event.findMany({ where: { type: FEE_SWEEP_FAILED } });
+    expect(ev).toHaveLength(2);
+    expect(ev.some((e) => e.aggregateId.endsWith(`:${ETH}`))).toBe(true);
+    expect(ev.some((e) => e.aggregateId.endsWith(`:${USDC}`))).toBe(true);
+  });
+
+  it('an execution past its time budget fails before signing; nothing is sent', async () => {
+    setEnv({ FEE_SWEEP_ENABLED: 'true', TENDR_FEE_ACCOUNT_NEAR: 'fees.tendr.near' });
+    setFeeSweepDeps({
+      chains: () => [chain],
+      tokens: async () => LIST,
+      oneclick: () => oneclick as unknown as OneClickProvider,
+      executeMs: 50,
+    });
+    chain.onBuild = () => new Promise((done) => setTimeout(done, 150));
+    const r = await runFeeSweep(NOW);
+    expect(r).toMatchObject({ executed: 0, failed: 1 });
+    expect(chain.broadcasts).toHaveLength(0);
+    const row = await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } });
+    expect(row.lastError).toMatch(/time budget/);
+    expect(row.txHash).toBeNull();
+  });
+
+  it('a plan whose lease was taken over during execution is not broadcast', async () => {
+    setEnv({ FEE_SWEEP_ENABLED: 'true', TENDR_FEE_ACCOUNT_NEAR: 'fees.tendr.near' });
+    chain.onBuild = async () => {
+      await prisma.feeSweep.updateMany({
+        where: { assetId: USDC },
+        data: { leaseUntil: new Date(NOW.getTime() + 99 * 60_000) },
+      });
+    };
+    const r = await runFeeSweep(NOW);
+    expect(r.failed).toBe(1);
+    expect(chain.broadcasts).toHaveLength(0);
+    const row = await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } });
+    expect(row.lastError).toMatch(/lost the plan lease/);
+    expect(row.txHash).toBeNull();
   });
 
   it('records no key material or signed bytes (R12-f)', async () => {
@@ -368,6 +508,7 @@ describe('runFeeSweep', () => {
         'depositAddress',
         'destinationAsset',
         'executedAt',
+        'failedAt',
         'family',
         'id',
         'lastError',

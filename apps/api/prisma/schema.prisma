@@ -1870,6 +1870,8 @@ model FeeSweep {
   /// Claimed by one executor until then.
   leaseUntil       DateTime?      @map("lease_until")
   executedAt       DateTime?      @map("executed_at")
+  /// When the attempt failed: the account and token are not planned again for 6 hours.
+  failedAt         DateTime?      @map("failed_at")
   createdAt        DateTime       @default(now()) @map("created_at")
   updatedAt        DateTime       @updatedAt @map("updated_at")
 

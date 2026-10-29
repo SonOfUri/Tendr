@@ -78,7 +78,7 @@ export const SWEEP_CONNECTIONS_JOB = 'sweep-connections';
  * with FEE_SWEEP_ENABLED, executes them; hourly.
  */
 export const FEE_SWEEP_JOB = 'fee-sweep';
-export const FEE_SWEEP_EVERY_MS = 60 * 60_000;
+export const FEE_SWEEP_JOB_EVERY_MS = 60 * 60_000;
 /** Relayer key and Pimlico balances below GAS_LOW_BALANCE_USD alert operators; every 15 min. */
 export const CHECK_GAS_BALANCES_JOB = 'check-gas-balances';
 
@@ -433,7 +433,7 @@ export async function startWorker(
   if (gasOpsJobsScheduled()) {
     await maintenanceQueue.upsertJobScheduler(
       FEE_SWEEP_JOB,
-      { every: FEE_SWEEP_EVERY_MS },
+      { every: FEE_SWEEP_JOB_EVERY_MS },
       { name: FEE_SWEEP_JOB },
     );
     await maintenanceQueue.upsertJobScheduler(

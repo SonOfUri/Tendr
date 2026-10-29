@@ -31,9 +31,14 @@ import { Interface, Transaction } from 'ethers';
 import type { TokenInfo } from '../checkout/oneclick/index.js';
 import { env } from '../env.js';
 import { isNativeToken } from '../gas/fees.js';
-import { relayerNearSender } from '../near/client.js';
+import { relayerNearSender, type RelayerNearSender } from '../near/client.js';
 import { NEAR_GASLESS_TOKENS } from '../near/tokens.js';
-import { buildTransaction, functionCallAction, TGAS } from '../near/tx.js';
+import {
+  RELAYER_NEAR_MAX_STORAGE_DEPOSIT,
+  TGAS,
+  buildTransaction,
+  functionCallAction,
+} from '../near/tx.js';
 import { EvmRpc } from '../relayer/evm/rpc.js';
 import { EVM_CHAIN_IDS, EVM_GASLESS_TOKENS, evmTokenAddress } from '../relayer/evm/tokens.js';
 import { spendableYocto } from '../relayer/near-meta.js';
@@ -44,6 +49,7 @@ import { balanceOfParameter, encodeRaw, refBlockOf, tronToEvm } from '../relayer
 import bs58 from 'bs58';
 import {
   SWEEP_MAX_EVM_GAS,
+  sweepMaxFeePerGas,
   SWEEP_MAX_TRON_FEE_LIMIT_SUN,
   transferCalldata,
   type SignedSweep,
@@ -73,6 +79,11 @@ export interface SweepChain {
   nativeBalance(chain: string, account: string): Promise<bigint>;
   /** What one sweep transfer of `token` costs in the native coin, with headroom. */
   transferFee(chain: string, account: string, token: SweepToken): Promise<bigint>;
+  /**
+   * The native coin a native-coin sweep must leave behind (smallest unit): gas for future token
+   * sweeps plus its own transfer. Only families that sweep their native coin implement it.
+   */
+  nativeReserve?(chain: string): Promise<bigint>;
   /** Readies the deposit address to receive (NEAR: `relayer-near` registers it on the token). */
   prepare?(chain: string, token: SweepToken, depositAddress: string): Promise<void>;
   /** The unsigned bytes of the one transfer `account` → `depositAddress` of `amount`. */
@@ -225,6 +236,12 @@ const ERC20 = new Interface(['function balanceOf(address owner) view returns (ui
 
 /** Headroom on a fee estimate (gas prices move; OP-stack chains add an L1 data fee). */
 const FEE_HEADROOM = 2n;
+/** Gas limits of the EVM sweep transfers. */
+export const EVM_TOKEN_SWEEP_GAS = 200_000n;
+export const EVM_NATIVE_SWEEP_GAS = 100_000n;
+/** A native sweep keeps gas for this many token sweeps of this much gas each (R12-k). */
+export const EVM_RESERVED_TOKEN_SWEEPS = 3n;
+export const EVM_RESERVED_SWEEP_GAS = 400_000n;
 
 export class LiveEvmSweepChain implements SweepChain {
   readonly family = 'evm' as const;
@@ -264,16 +281,29 @@ export class LiveEvmSweepChain implements SweepChain {
     return BigInt(r);
   }
 
+  /** The chain's fees, clamped to the sweep's fee cap (the guard refuses anything above it). */
   private async fees(chain: string) {
     const rpc = this.rpc(chain);
+    const cap = sweepMaxFeePerGas(chain);
     const tip = await rpc.maxPriorityFeePerGas();
-    const maxFeePerGas = (await rpc.baseFeePerGas()) * 2n + tip;
-    return { maxFeePerGas, maxPriorityFeePerGas: tip };
+    const asked = (await rpc.baseFeePerGas()) * 2n + tip;
+    const maxFeePerGas = asked < cap ? asked : cap;
+    return { maxFeePerGas, maxPriorityFeePerGas: tip < maxFeePerGas ? tip : maxFeePerGas };
+  }
+
+  /**
+   * Ruling R12-k: a native sweep leaves gas for EVM_RESERVED_TOKEN_SWEEPS future token sweeps
+   * (EVM_RESERVED_SWEEP_GAS each, at the fee cap) plus its own transfer, also at the cap. A token
+   * sweep's `transferFee` (≤ 200k gas × 2 headroom × a fee ≤ the cap) is at most one of those.
+   */
+  async nativeReserve(chain: string): Promise<bigint> {
+    const cap = sweepMaxFeePerGas(chain);
+    return (EVM_RESERVED_TOKEN_SWEEPS * EVM_RESERVED_SWEEP_GAS + EVM_NATIVE_SWEEP_GAS) * cap;
   }
 
   private gasLimit(token: SweepToken): bigint {
     // Fixed, inside the guard's bound: a USDC transfer is ~65k (Arbitrum counts its L1 part in gas).
-    return token.contract === null ? 100_000n : 200_000n;
+    return token.contract === null ? EVM_NATIVE_SWEEP_GAS : EVM_TOKEN_SWEEP_GAS;
   }
 
   async transferFee(chain: string, _account: string, token: SweepToken): Promise<bigint> {
@@ -309,8 +339,12 @@ export class LiveEvmSweepChain implements SweepChain {
   }
 }
 
+/** What the NEAR transport needs from `relayer-near` (its RPC, and its guarded signer). */
+export type NearSweepSender = Pick<RelayerNearSender, 'rpc' | 'signAndSend'>;
+
 export class LiveNearSweepChain implements SweepChain {
   readonly family = 'near' as const;
+  constructor(private readonly sender: () => NearSweepSender = () => relayerNearSender(true)) {}
   chains(): string[] {
     return ['near'];
   }
@@ -323,7 +357,7 @@ export class LiveNearSweepChain implements SweepChain {
     }));
   }
   private get rpc() {
-    return relayerNearSender(true).rpc;
+    return this.sender().rpc;
   }
   async balance(_chain: string, account: string, token: SweepToken): Promise<bigint> {
     const r = await this.rpc.viewFunction<unknown>(token.contract!, 'ft_balance_of', {
@@ -353,9 +387,11 @@ export class LiveNearSweepChain implements SweepChain {
     );
     const min =
       typeof bounds?.min === 'string' && /^\d+$/.test(bounds.min) ? BigInt(bounds.min) : null;
-    if (min === null) throw new Error('unexpected storage_balance_bounds');
+    if (min === null || min > RELAYER_NEAR_MAX_STORAGE_DEPOSIT) {
+      throw new Error('unexpected storage_balance_bounds');
+    }
     // `relayer-near` may sign exactly this (registration-only, gasless token, capped deposit).
-    const res = await relayerNearSender(true).signAndSend(token.contract!, [
+    const res = await this.sender().signAndSend(token.contract!, [
       functionCallAction(
         'storage_deposit',
         { account_id: depositAddress, registration_only: true },
