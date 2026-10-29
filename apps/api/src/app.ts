@@ -28,6 +28,7 @@ import { pingRoutes } from './routes/ping.js';
 import { proposalRoutes } from './routes/proposals.js';
 import { recoveryRoutes } from './routes/recovery.js';
 import { refundRoutes } from './routes/refunds.js';
+import { relayerRoutes } from './routes/relayers.js';
 import { reviewRoutes } from './routes/review.js';
 import { teamRoutes } from './routes/team.js';
 import { webhookRoutes } from './routes/webhooks.js';
@@ -242,6 +243,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   });
   await app.register(connectRoutes, { tokenRateLimit: limiters.connectToken });
   await app.register(gasRoutes);
+  await app.register(relayerRoutes);
   await app.register(hookRoutes);
   opts.extraRoutes?.(app);
 
