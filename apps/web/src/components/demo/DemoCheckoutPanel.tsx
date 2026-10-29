@@ -20,6 +20,7 @@ import {
 } from '@/app/pay/[sessionId]/components/WalletConnect';
 import { TestModePanel } from '@/app/pay/[sessionId]/components/TestModePanel';
 import type { DemoCheckoutBootstrap, DemoSlug } from '@/lib/demo';
+import { buildDemoUiQuote } from '@/lib/demo-ui-checkout';
 import { DemoAssetModal } from './DemoAssetModal';
 import { DemoStatusCard } from './DemoStatusCard';
 import { DemoTransferDetails } from './DemoTransferDetails';
@@ -36,6 +37,8 @@ type Props = {
   amountHint?: string;
   /** Prefetched session/tokens/quote from /api/demo/checkout — skips cold load. */
   bootstrap?: DemoCheckoutBootstrap | null;
+  /** Pure frontend demo — never call the checkout API. */
+  uiOnly?: boolean;
   successHint?: string;
   onClose: () => void;
   onComplete: () => void;
@@ -69,6 +72,7 @@ export function DemoCheckoutPanel({
   skin,
   amountHint,
   bootstrap,
+  uiOnly = false,
   successHint,
   onClose,
   onComplete,
@@ -86,7 +90,7 @@ export function DemoCheckoutPanel({
   const [quote, setQuote] = useState<Quote | null>(bootstrap?.quote ?? null);
   const [method, setMethod] = useState<PayMethod>('transfer');
   const [phase, setPhase] = useState<'loading' | 'pay' | 'waiting' | 'done' | 'error'>(
-    booted ? 'pay' : 'loading',
+    booted || uiOnly ? 'pay' : 'loading',
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -98,6 +102,7 @@ export function DemoCheckoutPanel({
   const completed = useRef(false);
   const assetOptions = useMemo(() => buildDemoAssetOptions(tokens), [tokens]);
   const selectedToken = tokens.find((t) => t.asset_id === tokenId) ?? null;
+  const amountUsd = view?.amount ?? amountHint ?? '0';
 
   const reporter = useMemo(
     () =>
@@ -111,6 +116,7 @@ export function DemoCheckoutPanel({
   );
 
   const refresh = useCallback(async () => {
+    if (uiOnly) return view;
     const next = await client.session();
     setView(next);
     const screen = screenFor(next, new Date());
@@ -121,10 +127,10 @@ export function DemoCheckoutPanel({
       setPhase('waiting');
     }
     return next;
-  }, [client]);
+  }, [client, uiOnly, view]);
 
   useEffect(() => {
-    if (booted) return;
+    if (uiOnly || booted) return;
     let cancelled = false;
     (async () => {
       try {
@@ -145,15 +151,16 @@ export function DemoCheckoutPanel({
     return () => {
       cancelled = true;
     };
-  }, [booted, client, sessionId]);
+  }, [booted, client, sessionId, uiOnly]);
 
   useEffect(() => {
+    if (uiOnly) return;
     if (phase === 'loading' || phase === 'error' || phase === 'done') return;
     const id = window.setInterval(() => {
       void refresh().catch(() => undefined);
     }, 2000);
     return () => window.clearInterval(id);
-  }, [phase, refresh]);
+  }, [phase, refresh, uiOnly]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -169,6 +176,20 @@ export function DemoCheckoutPanel({
       skipQuoteForToken.current = null;
       return;
     }
+    const token = tokens.find((t) => t.asset_id === tokenId);
+    if (!token) return;
+
+    if (uiOnly) {
+      setBusy(true);
+      setError(null);
+      // Tiny tick so asset switches still feel responsive without a network roundtrip.
+      const t = window.setTimeout(() => {
+        setQuote(buildDemoUiQuote(token, amountUsd));
+        setBusy(false);
+      }, 120);
+      return () => window.clearTimeout(t);
+    }
+
     let cancelled = false;
     (async () => {
       setBusy(true);
@@ -188,11 +209,15 @@ export function DemoCheckoutPanel({
     return () => {
       cancelled = true;
     };
-  }, [tokenId, phase, client]);
+  }, [tokenId, phase, client, uiOnly, tokens, amountUsd]);
 
   const requoteForWallet = useCallback(
     async (address: string): Promise<WalletQuoteResult> => {
       if (!selectedToken) return 'failed';
+      if (uiOnly) {
+        setQuote(buildDemoUiQuote(selectedToken, amountUsd));
+        return 'ok';
+      }
       try {
         const q = await client.quote({
           origin_asset: selectedToken.asset_id,
@@ -205,16 +230,30 @@ export function DemoCheckoutPanel({
         return 'failed';
       }
     },
-    [client, selectedToken],
+    [amountUsd, client, selectedToken, uiOnly],
   );
 
   const onDepositSent = useCallback(
     (result: WalletSendResult) => {
+      if (uiOnly) {
+        setPhase('waiting');
+        return;
+      }
       void reporter.record(result).then(() => refresh()).catch(() => undefined);
       setPhase('waiting');
     },
-    [reporter, refresh],
+    [reporter, refresh, uiOnly],
   );
+
+  const simulateUiPayment = useCallback(() => {
+    if (completed.current) return;
+    setPhase('waiting');
+    window.setTimeout(() => {
+      if (completed.current) return;
+      completed.current = true;
+      setPhase('done');
+    }, 1600);
+  }, []);
 
   useEffect(() => {
     if (phase === 'waiting') onStatusChange?.('confirming');
@@ -366,32 +405,59 @@ export function DemoCheckoutPanel({
                   network={networkName(selectedToken!.blockchain)}
                   deadline={quote!.deadline}
                 />
+                {uiOnly ? (
+                  <button
+                    type="button"
+                    className="demo-checkout-primary"
+                    style={{ marginTop: '0.75rem' }}
+                    onClick={simulateUiPayment}
+                  >
+                    I&apos;ve sent it — continue
+                  </button>
+                ) : null}
               </div>
             ) : null}
 
             {method === 'wallet' && quote && selectedToken ? (
               <div className="demo-wallet-slot demo-checkout-reveal">
-                <WalletConnect
-                  key={selectedToken.asset_id}
-                  quote={quote}
-                  token={selectedToken}
-                  livemode={view?.livemode ?? false}
-                  sessionId={sessionId}
-                  autoOpen
-                  onWalletAddress={requoteForWallet}
-                  onDepositSent={onDepositSent}
-                />
-                {view && !view.livemode ? (
-                  <TestModePanel
-                    client={client}
-                    kind="pay"
-                    onDone={() => {
-                      void refresh()
-                        .then(() => setPhase('waiting'))
-                        .catch(() => undefined);
-                    }}
-                  />
-                ) : null}
+                {uiOnly ? (
+                  <div className="demo-ui-wallet">
+                    <p className="demo-sidebar-note">
+                      UI demo — no wallet connection. Continue to feel the confirmation flow.
+                    </p>
+                    <button
+                      type="button"
+                      className="demo-checkout-primary"
+                      onClick={simulateUiPayment}
+                    >
+                      Continue as paid
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <WalletConnect
+                      key={selectedToken.asset_id}
+                      quote={quote}
+                      token={selectedToken}
+                      livemode={view?.livemode ?? false}
+                      sessionId={sessionId}
+                      autoOpen
+                      onWalletAddress={requoteForWallet}
+                      onDepositSent={onDepositSent}
+                    />
+                    {view && !view.livemode ? (
+                      <TestModePanel
+                        client={client}
+                        kind="pay"
+                        onDone={() => {
+                          void refresh()
+                            .then(() => setPhase('waiting'))
+                            .catch(() => undefined);
+                        }}
+                      />
+                    ) : null}
+                  </>
+                )}
               </div>
             ) : null}
           </>

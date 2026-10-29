@@ -1176,6 +1176,15 @@ wui-card,
   }
 }
 
+.demo-ui-wallet {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.demo-ui-wallet .demo-sidebar-note {
+  margin: 0;
+}
+
 .demo-checkout-footnote {
   margin: 0.35rem 0 0;
   display: flex;

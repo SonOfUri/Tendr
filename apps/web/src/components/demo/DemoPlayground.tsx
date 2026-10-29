@@ -2,12 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEMOS, type DemoCheckoutBootstrap, type DemoSlug } from '@/lib/demo';
+import { buildDemoUiBootstrap, DEMO_UI_ONLY } from '@/lib/demo-ui-checkout';
 import { CodePanel } from './CodePanel';
-import {
-  clientSecretFromCheckout,
-  DemoCheckoutOpening,
-  DemoCheckoutPanel,
-} from './DemoCheckoutPanel';
+import { DemoCheckoutPanel } from './DemoCheckoutPanel';
 import { DemoFlowStepper, type DemoFlowStage } from './DemoFlowStepper';
 import { DraggablePanel } from './DraggablePanel';
 import type { CartPricing } from './EcommerceCart';
@@ -40,7 +37,6 @@ export function DemoPlayground() {
   const [view, setView] = useState<ViewMode>('component');
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [busy, setBusy] = useState(false);
-  const [opening, setOpening] = useState(false);
   const [pendingAmount, setPendingAmount] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accordionOpen, setAccordionOpen] = useState(false);
@@ -54,7 +50,7 @@ export function DemoPlayground() {
   const brand = brands[slug]!;
   const flowStage: DemoFlowStage = settledHint
     ? 'settled'
-    : checkout || opening
+    : checkout
       ? 'checkout'
       : 'idle';
   const sidebarAmount = slug === 'ecommerce' && cartPricing ? cartPricing.total : demo.amount;
@@ -89,58 +85,59 @@ export function DemoPlayground() {
   }, []);
 
   const startCheckout = useCallback(
-    async (amount?: string) => {
+    (amount?: string) => {
+      const payAmount =
+        amount ?? (slug === 'ecommerce' && cartPricing ? cartPricing.total : demo.amount);
       setBusy(true);
-      setPendingAmount(amount ?? (slug === 'ecommerce' && cartPricing ? cartPricing.total : demo.amount));
-      setOpening(true);
+      setPendingAmount(payAmount);
       setError(null);
       setSettledHint(null);
       setView('component');
-      try {
-        const res = await fetch('/api/demo/checkout', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ slug: demo.slug, amount }),
+
+      // UI-only demo: never hit the network. Feel the flow; no "fetch failed" on stage.
+      if (DEMO_UI_ONLY) {
+        const boot = buildDemoUiBootstrap({
+          amount: payAmount,
+          currency: demo.currency,
+          productName: demo.productName,
+          merchantName: brand.name,
+          merchantLogoUrl: brand.logoUrl,
         });
-        const data = (await res.json()) as {
-          url?: string;
-          sessionId?: string;
-          clientSecret?: string;
-          bootstrap?: DemoCheckoutBootstrap | null;
-          error?: { message?: string };
-        };
-        const secret = clientSecretFromCheckout({
-          clientSecret: data.clientSecret,
-          url: data.url,
-        });
-        if (!res.ok || !data.sessionId || !secret) {
-          throw new Error(data.error?.message ?? 'Failed to start checkout');
-        }
         setCheckout({
-          sessionId: data.sessionId,
-          clientSecret: secret,
-          bootstrap: data.bootstrap ?? null,
+          sessionId: boot.sessionId,
+          clientSecret: boot.clientSecret,
+          bootstrap: {
+            session: boot.session,
+            tokens: boot.tokens,
+            tokenId: boot.tokenId,
+            quote: boot.quote,
+          },
         });
-        setOpening(false);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to start checkout');
-        setOpening(false);
-      } finally {
         setBusy(false);
+        return;
       }
+
+      setError('Live checkout API is disabled for this demo build.');
+      setBusy(false);
     },
-    [cartPricing, demo.amount, demo.slug, slug],
+    [
+      brand.logoUrl,
+      brand.name,
+      cartPricing,
+      demo.amount,
+      demo.currency,
+      demo.productName,
+      slug,
+    ],
   );
 
   const closeCheckout = useCallback(() => {
     setCheckout(null);
-    setOpening(false);
     setPendingAmount(null);
   }, []);
 
   const completeCheckout = useCallback(() => {
     setCheckout(null);
-    setOpening(false);
     setPendingAmount(null);
     setSettledHint(demo.successHint);
   }, [demo.successHint]);
@@ -229,12 +226,12 @@ export function DemoPlayground() {
           <DraggablePanel
             key={`component-${demo.slug}`}
             kind="component"
-            visible={view === 'component' && !checkout && !opening}
+            visible={view === 'component' && !checkout}
             anchor="center"
           >
             <ScenarioCard
               demo={demo}
-              busy={busy || opening}
+              busy={busy}
               onFund={startCheckout}
               onCartPricingChange={onCartPricingChange}
             />
@@ -243,7 +240,7 @@ export function DemoPlayground() {
           <DraggablePanel
             key={`code-${demo.slug}`}
             kind="code"
-            visible={view === 'code' && !checkout && !opening}
+            visible={view === 'code' && !checkout}
             anchor="top"
           >
             <CodePanel demo={demo} />
@@ -261,20 +258,11 @@ export function DemoPlayground() {
             skin={demo.slug}
             amountHint={checkoutAmount}
             bootstrap={checkout.bootstrap}
+            uiOnly={DEMO_UI_ONLY}
             successHint={demo.successHint}
             onClose={closeCheckout}
             onComplete={completeCheckout}
             onStatusChange={onCheckoutStatus}
-          />
-        ) : opening ? (
-          <DemoCheckoutOpening
-            productName={demo.productName}
-            merchantName={brand.name}
-            merchantLogoUrl={brand.logoUrl}
-            payEyebrow={demo.branding.payEyebrow}
-            skin={demo.slug}
-            amountHint={checkoutAmount}
-            onClose={closeCheckout}
           />
         ) : null}
       </section>
