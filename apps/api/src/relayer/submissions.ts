@@ -45,7 +45,7 @@ import { chainFamily } from '../checkout/address-format.js';
 import { gasProvider } from '../gas/quote-fee.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
-import { log } from '../lib/logger.js';
+import { log, redactUrls } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { getRedis } from '../lib/redis.js';
 import type { QuoteContext, SignedPayload, SubmissionStatus, SubmitResult } from './types.js';
@@ -278,7 +278,7 @@ export const sponsorshipReleased = () =>
  * failed (a retry makes a new one).
  */
 export async function undoClaim(scope: Scope, id: string, reason: string): Promise<void> {
-  const lastError = reason.slice(0, 500);
+  const lastError = redactUrls(reason).slice(0, 500);
   await tenantTransaction(scope, async (tx) => {
     await tx.gasSponsorship.updateMany({
       where: { ...scope, id, status: 'pending', sponsor: 'merchant' },
@@ -468,7 +468,7 @@ export async function applyRelayOutcome(
         ...(outcome.costUsd !== null ? { costUsd: outcome.costUsd } : {}),
         ...(feeMoved !== null ? { feeCollected: feeMoved.toString() } : {}),
         ...(outcome.relayerTxId ? { relayerTxId: outcome.relayerTxId } : {}),
-        ...(confirmed ? {} : { lastError: outcome.reason?.slice(0, 500) ?? null }),
+        ...(confirmed ? {} : { lastError: outcome.reason ? redactUrls(outcome.reason).slice(0, 500) : null }),
       },
     });
     if (feeMoved !== null && feeMoved > 0n) {

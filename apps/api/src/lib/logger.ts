@@ -39,10 +39,10 @@ function rpcSecretParts(): string[] {
       continue;
     }
     const candidates = [
-      ...u.pathname.split('/').map((p) => decodeURIComponent(p)),
+      ...u.pathname.split('/').map(safeDecode),
       ...u.searchParams.values(),
-      decodeURIComponent(u.username),
-      decodeURIComponent(u.password),
+      safeDecode(u.username),
+      safeDecode(u.password),
     ];
     for (const c of candidates) {
       if (c.length < 12) continue;
@@ -53,6 +53,15 @@ function rpcSecretParts(): string[] {
   // Longest first, so a key is never half-replaced by a shorter one.
   rpcCache = { env: e, parts: [...parts].sort((a, b) => b.length - a.length) };
   return rpcCache.parts;
+}
+
+/** decodeURIComponent that never throws: a malformed escape must not break logging. */
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
 }
 
 const URL_RE = /\bhttps?:\/\/[^\s"'<>`]+/gi;
@@ -94,7 +103,13 @@ export function redactUrls(s: string): string {
         changed = true;
       }
     }
-    return changed ? decodeURI(u.toString()) : raw;
+    if (!changed) return raw;
+    const redacted = u.toString();
+    try {
+      return decodeURI(redacted);
+    } catch {
+      return redacted;
+    }
   });
 }
 
