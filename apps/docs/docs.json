@@ -33,6 +33,13 @@
             ]
           },
           {
+            "group": "Gasless payments",
+            "pages": [
+              "gasless/overview",
+              "gasless/gas-policy"
+            ]
+          },
+          {
             "group": "SDKs",
             "pages": [
               "sdks/typescript"
@@ -42,6 +49,7 @@
             "group": "Integrations",
             "pages": [
               "integrations/ecommerce",
+              "integrations/hooks",
               "integrations/near-intents"
             ]
           },

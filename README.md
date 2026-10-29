@@ -438,7 +438,10 @@ secret (`whsec_...`) is shown once, at creation and on rotation.
     `gas.budget_exhausted` (a payment was not sponsored because the budget is used up), each at
     most once per calendar month (UTC) per mode. `data`: `mode` (`test`/`live`), `month`
     (`YYYY-MM`), `budget_usd`, `reserved_usd`, `spent_usd`, `remaining_usd`, plus
-    `requested_usd` on `gas.budget_exhausted`.
+    `requested_usd` on `gas.budget_exhausted`;
+  - `hook.succeeded` and `hook.failed` for integrator stores (the contract hook call; see
+    [Gasless payments](#gasless-payments)). `data`: `payment_id`, `session_id`, `hook_call_id`,
+    `chain`, `contract`, `attempts`, `tx_hash`, plus `error` on `hook.failed`.
 - `refund.cancelled` means the refund's proposal was rejected by the signers or expired;
   `refund.failed` means it failed when it executed on chain. Either way no money moved for that
   proposal. `data` has `refund_id`, `payment_id`, `session_id`, `external_ref`, `asset`, `amount`
@@ -541,10 +544,11 @@ exists, call `POST /v1/checkout/client/simulate` with `Authorization: Bearer <cl
   - `fee_payer: shopper`: the store receives the order total, and the shopper's amount grows by
     the fees, shown on the quote screen.
 - **Gas.**
-  - `gas_payer: shopper` is the default: no reduction.
-  - `gas_payer: merchant`: the shopper's amount is reduced by the estimated network fee of their
-    send, and that comes out of what the store receives. The reduction is capped by the session's
-    `gas_max_usd`, else `CHECKOUT_GAS_MAX_USD` (default 2 USD).
+  - `gas_payer: shopper` is the default: the shopper pays the network fee, in the token they send
+    or in the chain's coin.
+  - `gas_payer: merchant`: Tendr sponsors the fee within the store's gas policy and takes it from
+    what the store receives for that payment. A payment that fails the policy falls back to
+    shopper-pays. See [Gasless payments](#gasless-payments).
 - **Resolution.** Each setting is resolved once, when the session is created. The order is:
   1. the session's own `fee_payer` / `gas_payer`;
   2. the payment link's setting (links carry only a gas setting for now);
@@ -557,6 +561,73 @@ exists, call `POST /v1/checkout/client/simulate` with `Authorization: Bearer <cl
 - **Tendr's fee** is the store's fee plan, in basis points. It is 50 bps without a plan, and a
   plan may set 0. It is a 1Click `appFees` entry paid to Tendr's fee account, never taken from the
   store's account.
+
+### Gasless payments
+
+A shopper holding a token can pay without the chain's gas coin. The shopper signs a payload bound to
+the deposit address, the amounts, the fee recipient and a deadline; the relayer submits it and pays
+gas. Submitting never marks a payment paid: the watcher does. Docs: `apps/docs/gasless/`,
+`apps/docs/integrations/hooks.mdx`. Handover note for the dashboard:
+`docs/handover/2026-10-27-gasless-relayer.md`.
+
+- **Who pays.** The store sponsors (`gas_payer: merchant`) within its gas policy (`GET`/`PUT
+  /v1/gas-policy`), or the shopper pays the fee from the token they send, or in the chain's coin.
+  Defaults: $1 per payment, $50 per month, every chain except Ethereum mainnet, off until enabled. The
+  fee is the live network fee plus `GAS_FEE_MARGIN_BPS` (default 2000), and a sponsored fee plus any
+  hook estimate over 1 % of the order falls back to shopper-pays.
+- **Methods.** EVM: EIP-3009 or EIP-2612 permit through the TendrForwarder, or Pimlico sponsored
+  calls for Safe smart wallets. Solana: Pimlico Kora (sponsorship only reaches orders of roughly $34
+  and up, because of the new token account's rent). Tron: two signatures through the Tron forwarder,
+  about $15, so shopper-paid by default. NEAR: meta-transactions, which need a wallet that signs
+  delegate actions (Meteor and Intear do not yet). Copy-address payments are never gasless.
+- **Integrator hooks.** `hook_data` on a session of an integrator store makes it call
+  `onTendrDeposit` (EVM) or `on_tendr_deposit` (NEAR) on the settlement contract once the payment is
+  settled. Retried for 3 days, then `hook.failed` and one email; `POST /v1/payments/:id/hook/resend`
+  afterwards. Hook gas comes out of the payment's proceeds (hook alone capped at 10 % of the order).
+  Reference contracts: `onchain/evm/src/reference/TendrDepositReceiver.sol`, `onchain/integrator-near`.
+- **Jobs.** `release-gas-reservations` (60 s), `poll-evm-relays` (15 s), `deliver-hook` and
+  `sweep-hooks`, `fee-sweep` (hourly) and `check-gas-balances` (15 min). The last two run only when
+  `NODE_ENV=production`.
+
+**Live checklist (gasless payments).** Nothing below is done: no contract is deployed, no live Pimlico
+account is used and the sweep is off. The per-chain detail is in the
+[manual checklist](#mainnet-checks-for-checkout); this list is the order to work in.
+
+1. Apply the migrations to the development database
+   (`npm run db:migrate:dev --workspace=@tendr/api`; the live database gets `db:migrate` at deploy).
+2. Create the Pimlico account and a sponsorship policy; store the API key with
+   `putSecret(key, 'pimlico')` and set `PIMLICO_SPONSORSHIP_POLICY_ID` (and `PIMLICO_SOLANA_NETWORK`).
+   Pimlico has no balance API, so fund it and watch the balance in the Pimlico dashboard by hand: its balance reader
+   returns "unknown", so `gas.pimlico_balance_low` never fires yet.
+3. Have the TendrForwarder (EVM and Tron) externally reviewed, then deploy it
+   (`onchain/evm/README.md`; nothing runs the deploy script for you). Set `EVM_FORWARDER_ADDRESS` and
+   `TRON_FORWARDER_ADDRESS` (Tron gasless is off while it is unset).
+4. Create the KMS keys `relayer-evm`, `relayer-near`, `gas-tron` and the receive-only `gas-fees-evm`,
+   `gas-fees-tron`, `gas-fees-near`, `gas-fees-solana`. Fund the relayer keys with working gas, and give
+   each gas-fee account a trace of native coin for its sweep transfers. Alerts fire below
+   `GAS_LOW_BALANCE_USD` (default $50).
+5. Set `TENDR_FEE_ACCOUNT_NEAR`. The sweep does nothing while it is unset.
+6. Set per-chain `EVM_MAX_FEE_GWEI_<CHAIN>` caps for the EVM relayer and the sweep. Without them the
+   relayer uses the chain's own fee and the sweep uses its defaults in gwei: eth 100, base 5, arb 5,
+   op 5, pol 1000, bsc 10, avax 100, gnosis 50, bera 50
+   (`apps/api/src/jobs/fee-sweep-guard.ts`).
+7. Leave `FEE_SWEEP_ENABLED` at its default `false` until step 8 passes. While it is false, due sweeps
+   are planned and operators are told what waits; no gas-fee key signs anything.
+8. Run one small live sweep per chain family (EVM, Solana, NEAR, Tron), then set
+   `FEE_SWEEP_ENABLED=true`. Check the `fee_sweeps` row and the USDC arriving.
+9. Confirm with 1Click that an EXACT_INPUT quote from USDC on NEAR to USDC on NEAR works for the
+   sweep, and that it charges `appFees` on the output (`ONECLICK_APP_FEE_BASE`) before live sponsorship.
+10. Measure the NEAR hook call's gas on chain against `HOOK_GAS_UNITS.near` (30 Tgas) in
+    `apps/api/src/gas/fees.ts`, and the Tron energy against `TRON_ENERGY_UNITS`. Ask 1Click whether
+    NEAR delivery can carry a message (`ft_transfer_call`): if so, NEAR integrators can use an atomic
+    notification and drop the relayer from the trust path.
+11. Publish the relayer addresses integrators must allow in their contracts (`relayer-evm` on each
+    EVM chain, the `relayer-near` account), and tell integrators about the misattribution limit in
+    `apps/docs/integrations/hooks.mdx`.
+12. Route `gas_ops` system events and `OPS ALERT` log lines to the on-call channel. The sweep and
+    balance jobs are scheduled only with `NODE_ENV=production`.
+13. Sponsored live payments wait for the contract review and the checks above. Test mode already
+    simulates all of it.
 
 ### Returns: the return fee and the under-$1 rule
 
