@@ -283,8 +283,9 @@ export function DemoCheckoutPanel({
       demoTimerPauseBegan.current = null;
     }
 
-    const WAIT_AT_MS = 4_000;
-    const DONE_AT_MS = 15_000;
+    // Stay on transfer details long enough to demo; then pending checklist → success.
+    const WAIT_AT_MS = 45_000;
+    const DONE_AT_MS = 56_000;
 
     const tick = () => {
       if (completed.current || demoTimerStartedAt.current === null) return;
