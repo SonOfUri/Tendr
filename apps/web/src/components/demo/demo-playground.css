@@ -1041,7 +1041,8 @@
   border: 0;
   border-radius: 999px;
   background: var(--demo-panel-ink);
-  color: var(--demo-panel);
+  /* Beat globals `.pay-button { color: white !important }` so gaming/light skins stay readable. */
+  color: var(--demo-panel) !important;
   font: inherit;
   font-size: 0.9rem;
   font-weight: 700;
@@ -1053,7 +1054,7 @@
 .demo-wallet-slot .pay-button-secondary,
 .demo-wallet-slot button.pay-button-secondary {
   background: var(--demo-chip);
-  color: var(--demo-panel-ink);
+  color: var(--demo-panel-ink) !important;
   border: 1px solid var(--demo-panel-border);
 }
 
@@ -1092,6 +1093,25 @@
   border-radius: 999px;
 }
 
+.demo-checkout-card[data-skin='gaming'] .demo-wallet-slot .pay-button,
+.demo-checkout-card[data-skin='gaming'] .demo-wallet-slot button.pay-button {
+  border-radius: 3px;
+  border: 3px solid #000;
+  background: #b6f34d;
+  color: #102010 !important;
+  font-size: 0.48rem;
+  letter-spacing: 0.04em;
+  box-shadow: 0 4px 0 #5f8a1f;
+}
+
+.demo-checkout-card[data-skin='gaming'] .demo-wallet-slot .pay-button-secondary,
+.demo-checkout-card[data-skin='gaming'] .demo-wallet-slot button.pay-button-secondary {
+  border-radius: 3px;
+  border: 2px solid #2d3b2e;
+  background: #0d1410;
+  color: #f4ffe8 !important;
+}
+
 .demo-checkout-card[data-skin='gaming'] .demo-wallet-slot .pay-test {
   border-radius: 4px;
   border-color: #2d3b2e;
@@ -1102,6 +1122,8 @@
   border-radius: 3px;
   font-size: 0.42rem;
   letter-spacing: 0.04em;
+  background: #b6f34d;
+  color: #102010 !important;
 }
 
 /* Reown AppKit / WalletConnect modal above the fixed demo playground */
