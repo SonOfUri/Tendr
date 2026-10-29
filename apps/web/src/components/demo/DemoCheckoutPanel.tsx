@@ -89,6 +89,7 @@ export function DemoCheckoutPanel({
   const [tokenId, setTokenId] = useState<string>(bootstrap?.tokenId ?? '');
   const [quote, setQuote] = useState<Quote | null>(bootstrap?.quote ?? null);
   const [method, setMethod] = useState<PayMethod>('transfer');
+  const [assetPickerOpen, setAssetPickerOpen] = useState(false);
   const [phase, setPhase] = useState<'loading' | 'pay' | 'waiting' | 'done' | 'error'>(
     booted || uiOnly ? 'pay' : 'loading',
   );
@@ -100,6 +101,10 @@ export function DemoCheckoutPanel({
   );
 
   const completed = useRef(false);
+  const demoTimerQuoteId = useRef<string | null>(null);
+  const demoTimerStartedAt = useRef<number | null>(null);
+  const demoTimerPausedMs = useRef(0);
+  const demoTimerPauseBegan = useRef<number | null>(null);
   const assetOptions = useMemo(() => buildDemoAssetOptions(tokens), [tokens]);
   const selectedToken = tokens.find((t) => t.asset_id === tokenId) ?? null;
   const amountUsd = view?.amount ?? amountHint ?? '0';
@@ -250,26 +255,53 @@ export function DemoCheckoutPanel({
     if (phase === 'done') onStatusChange?.('success');
   }, [phase, onStatusChange]);
 
-  // UI demo: Transfer → confirming checklist → success at 15s (no backend).
-  // `phase` omitted from deps so confirming does not reset the timer.
+  // UI demo: Transfer → confirming → success at 15s of active time.
+  // Pauses while asset dropdown is open or Connect wallet is selected.
   useEffect(() => {
-    if (method !== 'transfer' || !quote || completed.current) return;
-    if (phase !== 'pay' && phase !== 'waiting') return;
+    if (!quote || completed.current) return;
+    if (phase === 'loading' || phase === 'error' || phase === 'done') return;
 
-    const waiting = window.setTimeout(() => {
-      if (!completed.current) setPhase('waiting');
-    }, 4_000);
-    const done = window.setTimeout(() => {
-      if (completed.current) return;
-      completed.current = true;
-      setPhase('done');
-    }, 15_000);
-    return () => {
-      window.clearTimeout(waiting);
-      window.clearTimeout(done);
+    if (demoTimerQuoteId.current !== quote.id) {
+      demoTimerQuoteId.current = quote.id;
+      demoTimerStartedAt.current = Date.now();
+      demoTimerPausedMs.current = 0;
+      demoTimerPauseBegan.current = null;
+    } else if (demoTimerStartedAt.current === null) {
+      demoTimerStartedAt.current = Date.now();
+    }
+
+    const paused = method === 'wallet' || assetPickerOpen;
+    if (paused) {
+      if (demoTimerPauseBegan.current === null) {
+        demoTimerPauseBegan.current = Date.now();
+      }
+      return;
+    }
+
+    if (demoTimerPauseBegan.current !== null) {
+      demoTimerPausedMs.current += Date.now() - demoTimerPauseBegan.current;
+      demoTimerPauseBegan.current = null;
+    }
+
+    const WAIT_AT_MS = 4_000;
+    const DONE_AT_MS = 15_000;
+
+    const tick = () => {
+      if (completed.current || demoTimerStartedAt.current === null) return;
+      const elapsed = Date.now() - demoTimerStartedAt.current - demoTimerPausedMs.current;
+      if (elapsed >= WAIT_AT_MS) {
+        setPhase((p) => (p === 'pay' ? 'waiting' : p));
+      }
+      if (elapsed >= DONE_AT_MS) {
+        completed.current = true;
+        setPhase('done');
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- start once per transfer quote; ignore phase flips
-  }, [method, quote?.id]);
+
+    tick();
+    const id = window.setInterval(tick, 200);
+    return () => window.clearInterval(id);
+  }, [quote, method, assetPickerOpen, phase]);
 
   const amountLabel = view ? `$${view.amount}` : amountHint ? `$${amountHint}` : '—';
   const sendAmount =
@@ -351,6 +383,7 @@ export function DemoCheckoutPanel({
               value={tokenId || assetOptions.find((o) => o.token)?.value || ''}
               disabled={busy}
               skin={skin}
+              onOpenChange={setAssetPickerOpen}
               onChange={(id) => {
                 setTokenId(id);
                 setPhase('pay');

@@ -11,9 +11,11 @@ type Props = {
   disabled?: boolean;
   skin?: DemoSlug;
   onChange: (value: string) => void;
+  /** Lets the checkout demo timer pause while the picker is open. */
+  onOpenChange?: (open: boolean) => void;
 };
 
-export function DemoAssetModal({ options, value, disabled, skin, onChange }: Props) {
+export function DemoAssetModal({ options, value, disabled, skin, onChange, onOpenChange }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [mounted, setMounted] = useState(false);
@@ -22,6 +24,10 @@ export function DemoAssetModal({ options, value, disabled, skin, onChange }: Pro
   const selected = options.find((o) => o.value === value) ?? options.find((o) => o.token);
 
   useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
 
   useEffect(() => {
     if (!open) return;
