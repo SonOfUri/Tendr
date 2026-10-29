@@ -932,15 +932,14 @@ describe('Tron gasless payments (approve + TendrPayment, just-in-time energy)', 
     const td = await approveTd(p);
     await submitApprove(p, signApprove(td));
     expect(chain.ofType('delegate')).toHaveLength(1);
-    // A re-quote in the same session: no second delegation while the first approve may land.
+    // A re-quote in the same session is refused while the approve may land (final review I3)…
     const qr = await call('POST', 'quote', p.s.client_secret, {
       origin_asset: TOKEN.assetId,
       wallet_address: WALLET,
       gasless_method: 'forwarder',
     });
-    expect(qr.statusCode, qr.body).toBe(201);
-    const { q: q2 } = await gaslessQuote(p.ctx, qr.json().id);
-    expect((await refusal(relayer.prepare(q2, {}))).code).toBe('CONFLICT');
+    expect(qr.statusCode, qr.body).toBe(409);
+    expect(qr.json().error.code).toBe('DEPOSIT_IN_PROGRESS');
     expect(chain.ofType('delegate')).toHaveLength(1);
   });
 

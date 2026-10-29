@@ -13,7 +13,9 @@ import { getKeyVault } from '../../keyvault/index.js';
 import { evmAddress } from '../../keyvault/secp256k1.js';
 import { AppError } from '../../lib/errors.js';
 import { getRedis } from '../../lib/redis.js';
+import { lossCapReached } from '../../gas/loss-cap.js';
 import { planNetworkFee, shopperReason } from '../../gas/quote-fee.js';
+import { log } from '../../lib/logger.js';
 import {
   RelayNotBroadcast,
   assertRelayable,
@@ -33,7 +35,14 @@ import type {
   SubmissionStatus,
   SubmitResult,
 } from '../types.js';
-import { buildToSign, noncesCalldata, verifySigned, type EvmPaymentContext } from './payment.js';
+import {
+  buildToSign,
+  decodeBool,
+  noncesCalldata,
+  usedNonceChecks,
+  verifySigned,
+  type EvmPaymentContext,
+} from './payment.js';
 import { EvmRpc } from './rpc.js';
 import { EvmNotBroadcastError, EvmSender } from './sender.js';
 import { EVM_CHAIN_IDS, EVM_RELAY_METHODS, gaslessToken, type EvmRelayMethod } from './tokens.js';
@@ -73,6 +82,9 @@ export class EvmGasless {
   async options(c: GaslessContext): Promise<GaslessOption[]> {
     const token = gaslessToken(c.origin.blockchain, c.origin.assetId);
     if (!token) return [];
+    // The relayer pays the gas in every mode: none once the day's loss cap is reached (as the
+    // Solana, NEAR, Tron and paymaster paths).
+    if (await lossCapReached(c.shopper.livemode, new Date())) return [];
     const out: GaslessOption[] = [];
     for (const method of token.methods) {
       // Test mode never offers the paymaster: the smart wallet would send a real operation.
@@ -168,8 +180,14 @@ export class EvmGasless {
     }
   }
 
+  /** GASLESS_NOT_AVAILABLE once the mode's daily loss cap is reached. */
+  async assertUnderLossCap(q: QuoteContext): Promise<void> {
+    if (await lossCapReached(q.shopper.livemode, new Date())) throw gaslessNotAvailable();
+  }
+
   async prepare(q: QuoteContext, input: PrepareInput): Promise<PreparePayload> {
     assertRelayable(q, new Date());
+    await this.assertUnderLossCap(q);
     if (input.method && input.method !== q.quote.networkFeeMethod) throw mismatch('method');
     if (
       input.fee_mode &&
@@ -193,9 +211,56 @@ export class EvmGasless {
   }
 
   async verify(q: QuoteContext, signed: SignedPayload): Promise<RelayCall> {
+    return (await this.verifyWithContext(q, signed)).call;
+  }
+
+  /** `verify`, also returning the context the signatures were checked against. */
+  async verifyWithContext(
+    q: QuoteContext,
+    signed: SignedPayload,
+  ): Promise<{ call: RelayCall; ctx: EvmPaymentContext }> {
+    await this.assertUnderLossCap(q);
     const ctx = await this.context(q);
     const call = verifySigned(ctx, signed.signatures);
-    return { chain: ctx.chain, ...call };
+    return { call: { chain: ctx.chain, ...call }, ctx };
+  }
+}
+
+/**
+ * Refuses a relay whose signed authorization was already used or cancelled on chain (final
+ * review I1): the forwarder skips such a 3009 leg without reverting, so the dry run passes and
+ * the relayer would pay gas for a transaction that moves nothing. QUOTE_EXPIRED (a new quote gets
+ * new nonces); PROVIDER_UNAVAILABLE when the node cannot answer (fails closed). A use that lands
+ * after this read (a front-run) is still handled on chain as designed.
+ */
+export async function assertAuthorizationsUnused(
+  rpc: EvmRpc,
+  ctx: EvmPaymentContext,
+): Promise<void> {
+  for (const check of usedNonceChecks(ctx)) {
+    let used: boolean;
+    try {
+      used = decodeBool(await rpc.call({ to: check.to, data: check.data }));
+    } catch (err) {
+      log('warn', 'evm relayer: authorization state unavailable', {
+        quoteId: ctx.quoteId,
+        leg: check.leg,
+        err: err instanceof Error ? err.name : 'error',
+      });
+      throw new AppError(
+        'PROVIDER_UNAVAILABLE',
+        'Gasless payments are unavailable; try again',
+        503,
+      );
+    }
+    if (used) {
+      throw new AppError(
+        'QUOTE_EXPIRED',
+        'This payment authorization was already used or cancelled; request a new quote',
+        409,
+        { leg: check.leg },
+      );
+    }
   }
 }
 
@@ -216,6 +281,13 @@ export class EvmGaslessRelayer implements GaslessRelayer {
     private readonly sender: () => EvmSender = liveEvmSender,
   ) {}
 
+  /** Checks the signatures, then that no signed authorization is already used on chain. */
+  private async verifyLive(q: QuoteContext, signed: SignedPayload): Promise<RelayCall> {
+    const { call, ctx } = await this.gasless.verifyWithContext(q, signed);
+    await assertAuthorizationsUnused(this.sender().rpc(ctx.chain), ctx);
+    return call;
+  }
+
   options(c: GaslessContext): Promise<GaslessOption[]> {
     return this.gasless.options(c);
   }
@@ -228,7 +300,7 @@ export class EvmGaslessRelayer implements GaslessRelayer {
     return submitRelayed(
       q,
       signed,
-      (qq, s) => this.gasless.verify(qq, s),
+      (qq, s) => this.verifyLive(qq, s),
       async (call, submission) => {
         try {
           const res = await this.sender().send({

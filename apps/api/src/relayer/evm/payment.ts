@@ -364,3 +364,51 @@ export function noncesCalldata(owner: string): string {
     [owner],
   );
 }
+
+const STATE_IFACE = new Interface([
+  'function authorizationState(address authorizer, bytes32 nonce) view returns (bool)',
+  'function nonceUsed(address from, bytes32 nonce) view returns (bool)',
+]);
+
+/**
+ * The on-chain reads that tell whether a signed authorization can still move anything (final
+ * review I1): EIP-3009 `authorizationState(wallet, nonce)` on the token for the payment and (when
+ * the shopper pays a fee) the fee leg; for the permit path, the forwarder's
+ * `nonceUsed(wallet, nonce)` of the `TendrPayment`. A used or cancelled 3009 authorization makes
+ * the forwarder skip its leg without reverting, so the dry run would pass and the relayer would
+ * pay gas for a transaction that moves nothing.
+ */
+export function usedNonceChecks(
+  ctx: Pick<EvmPaymentContext, 'method' | 'fee' | 'quoteId' | 'wallet' | 'token' | 'forwarder'>,
+): { leg: string; to: string; data: string }[] {
+  const wallet = getAddress(ctx.wallet);
+  if (ctx.method === 'eip3009') {
+    const legs: ('payment' | 'fee')[] = ctx.fee > 0n ? ['payment', 'fee'] : ['payment'];
+    return legs.map((leg) => ({
+      leg,
+      to: getAddress(ctx.token.address),
+      data: STATE_IFACE.encodeFunctionData('authorizationState', [
+        wallet,
+        gaslessNonce(ctx.quoteId, leg),
+      ]),
+    }));
+  }
+  return [
+    {
+      leg: 'tendr_payment',
+      to: getAddress(ctx.forwarder),
+      data: STATE_IFACE.encodeFunctionData('nonceUsed', [
+        wallet,
+        gaslessNonce(ctx.quoteId, 'tendr_payment'),
+      ]),
+    },
+  ];
+}
+
+/** Decodes a `bool` `eth_call` result; throws on anything else. */
+export function decodeBool(hex: string): boolean {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(hex)) throw new Error('not a bool result');
+  const v = BigInt(hex);
+  if (v > 1n) throw new Error('not a bool result');
+  return v === 1n;
+}

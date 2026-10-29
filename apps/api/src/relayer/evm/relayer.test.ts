@@ -609,4 +609,92 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
     expect(sp.feeCollected!.toFixed()).toBe('48000');
     expect(sp.lossRecognizedAt).toBeNull();
   });
+
+  describe('used or cancelled authorizations and the loss cap (final review I1)', () => {
+    const AUTH_STATE = new Interface([
+      'function authorizationState(address,bytes32) view returns (bool)',
+    ]).getFunction('authorizationState')!.selector;
+    const TRUE = '0x' + '0'.repeat(63) + '1';
+
+    for (const leg of ['payment', 'fee'] as const) {
+      it(`a cancelled ${leg} authorization is refused before any gas: nothing broadcast`, async () => {
+        const { s, q, signatures } = await sponsoredQuote('shopper');
+        const { gaslessNonce } = await import('./payment.js');
+        const nonce = gaslessNonce(q.quote.id, leg).slice(2).toLowerCase();
+        node.ethCall = (_to, data) =>
+          data.startsWith(AUTH_STATE) && data.toLowerCase().endsWith(nonce)
+            ? TRUE
+            : '0x' + '0'.repeat(64);
+        await expect(relayer.submit(q, { signatures })).rejects.toMatchObject({
+          code: 'QUOTE_EXPIRED',
+          status: 409,
+        });
+        expect(node.count('eth_estimateGas')).toBe(0);
+        expect(node.count('eth_sendRawTransaction')).toBe(0);
+        expect(await prisma.gasSponsorship.count({ where: { sessionId: s.id } })).toBe(0);
+      });
+    }
+
+    it('an unreadable authorization state fails closed (503), nothing broadcast', async () => {
+      const { q, signatures } = await sponsoredQuote();
+      node.once('eth_call', () => {
+        throw new Error('connection reset');
+      });
+      await expect(relayer.submit(q, { signatures })).rejects.toMatchObject({
+        code: 'PROVIDER_UNAVAILABLE',
+      });
+      expect(node.count('eth_sendRawTransaction')).toBe(0);
+    });
+
+    it('the daily loss cap stops options, prepare and submit; nothing broadcast', async () => {
+      const { s, q, signatures } = await sponsoredQuote('shopper');
+      await prisma.gasSponsorship.create({
+        data: {
+          id: `gas_capped${Date.now()}`,
+          merchantId: merchant.id,
+          livemode: false,
+          sessionId: s.id,
+          chain: 'base',
+          method: 'eip3009',
+          provider: 'relayer-evm',
+          sponsor: 'tendr',
+          status: 'failed',
+          costUsd: '1000',
+          lossRecognizedAt: new Date(),
+        },
+      });
+      await expect(relayer.prepare(q, {})).rejects.toMatchObject({
+        code: 'GASLESS_NOT_AVAILABLE',
+      });
+      await expect(relayer.submit(q, { signatures })).rejects.toMatchObject({
+        code: 'GASLESS_NOT_AVAILABLE',
+      });
+      expect(node.calls).toHaveLength(0);
+    });
+  });
+
+  it('re-quote is refused while a relay is claimed with an unknown outcome (final review I3)', async () => {
+    const { s, q, signatures, sponsorshipId } = await sponsoredQuote();
+    // The broadcast step dies after the claim without a known outcome (a 5xx to the browser).
+    vi.spyOn(sender, 'send').mockRejectedValueOnce(new Error('database went away'));
+    await expect(relayer.submit(q, { signatures })).rejects.toThrow('database went away');
+    const sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    expect(sp).toMatchObject({ status: 'pending', quoteId: q.quote.id });
+    expect(
+      (await prisma.quote.findUniqueOrThrow({ where: { id: q.quote.id } })).depositTxSubmittedAt,
+    ).toBeNull();
+
+    const qr = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout/client/quote',
+      headers: { authorization: `Bearer ${s.client_secret}` },
+      payload: { origin_asset: USDC_BASE, wallet_address: shopper.address },
+    });
+    expect(qr.statusCode, qr.body).toBe(409);
+    expect(qr.json().error.code).toBe('DEPOSIT_IN_PROGRESS');
+    // The expiry paths treat the claimed relay as a deposit in flight.
+    const { depositInFlight } = await import('../../checkout/in-flight.js');
+    const session = await prisma.session.findUniqueOrThrow({ where: { id: s.id } });
+    expect(await depositInFlight(prisma, session, new Date())).toBe('reported');
+  });
 });

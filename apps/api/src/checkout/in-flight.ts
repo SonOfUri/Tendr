@@ -21,8 +21,9 @@ export type InFlightReason = 'unpolled' | 'payment' | 'reported';
  * - `unpolled`: the session is past `expires_at` and a watched address was not polled after it
  *   (a deposit made in time may not be attributed yet);
  * - `payment`: a payment is DETECTED / PROCESSING / SCREENING_PENDING;
- * - `reported`: the shopper reported a deposit tx that 1Click has not shown yet (no payment row)
- *   and its quote deadline plus SUPERSEDED_GRACE_MS has not passed.
+ * - `reported`: the shopper reported a deposit tx that 1Click has not shown yet (no payment row),
+ *   or a gasless relay for the quote is claimed / broadcast with no known outcome yet
+ *   (`quotesWithRelayInFlight`), and its quote deadline plus SUPERSEDED_GRACE_MS has not passed.
  *
  * Read only: the sweeper polls a due address itself first; the API paths, which never poll,
  * refuse instead.
@@ -48,14 +49,56 @@ export async function depositInFlight(
     where: { ...tenant, sessionId: session.id, status: { in: [...IN_FLIGHT_PAYMENT_STATUSES] } },
   });
   if (payments > 0) return 'payment';
+  const relaying = [...(await quotesWithRelayInFlight(db, tenant, session.id))];
   const reported = await db.quote.count({
     where: {
       ...tenant,
       sessionId: session.id,
-      depositTxSubmittedAt: { not: null },
+      OR: [
+        { depositTxSubmittedAt: { not: null } },
+        ...(relaying.length > 0 ? [{ id: { in: relaying } }] : []),
+      ],
       deadline: { gt: new Date(now.getTime() - SUPERSEDED_GRACE_MS) },
       payments: { none: {} },
     },
   });
   return reported > 0 ? 'reported' : null;
+}
+
+/** Relayed-submission statuses whose outcome is not known yet (a claim, or a broadcast). */
+export const RELAY_IN_FLIGHT_STATUSES = ['pending', 'submitted'] as const;
+
+/**
+ * The session's quotes with a gasless relay that may still move the shopper's money (final review
+ * I3): a `gas_sponsorships` submission claimed for the quote or broadcast without a known outcome
+ * (including an unknown-outcome / 5xx relay, which never set `deposit_tx_submitted_at`), or a
+ * Tron approval in flight. Such a quote is treated as a reported deposit: no re-quote and no
+ * expiry while it can still land.
+ */
+export async function quotesWithRelayInFlight(
+  db: Db,
+  scope: { merchantId: string; livemode: boolean },
+  sessionId: string,
+): Promise<Set<string>> {
+  const tenant = { merchantId: scope.merchantId, livemode: scope.livemode };
+  const [sponsorships, approvals] = await Promise.all([
+    db.gasSponsorship.findMany({
+      where: {
+        ...tenant,
+        sessionId,
+        quoteId: { not: null },
+        status: { in: [...RELAY_IN_FLIGHT_STATUSES] },
+      },
+      select: { quoteId: true },
+    }),
+    db.tronApproval.findMany({
+      where: { ...tenant, sessionId, status: { in: [...RELAY_IN_FLIGHT_STATUSES] } },
+      select: { quoteId: true },
+    }),
+  ]);
+  return new Set(
+    [...sponsorships.map((s) => s.quoteId), ...approvals.map((a) => a.quoteId)].filter(
+      (id): id is string => id !== null,
+    ),
+  );
 }

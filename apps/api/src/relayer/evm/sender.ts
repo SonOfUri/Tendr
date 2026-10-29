@@ -159,6 +159,11 @@ export class EvmSender {
     this.maxFeeGwei = deps.maxFeeGwei ?? envMaxFeeGwei;
   }
 
+  /** The JSON-RPC client the sender uses for `chain` (read-only checks before a relay). */
+  rpc(chain: string): EvmRpc {
+    return this.rpcFor(chain);
+  }
+
   /** The `relayer-evm` address (lower-case), from the KMS public key. */
   async address(): Promise<string> {
     if (this.from) return this.from;

@@ -36,12 +36,14 @@ import {
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
+import { prisma } from '../lib/prisma.js';
 import { toJsonDecimal } from '../lib/serialize.js';
 import { gaslessToken } from '../relayer/evm/tokens.js';
 import { nearGaslessToken } from '../relayer/near-meta.js';
 import { solanaGaslessToken } from '../relayer/solana-tx.js';
 import { tronGaslessToken } from '../relayer/tron.js';
 import { chainFamily, isValidAddress } from './address-format.js';
+import { quotesWithRelayInFlight } from './in-flight.js';
 import {
   OneClickError,
   SIMULATE_SCENARIOS,
@@ -467,7 +469,12 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
   const s = await loadSession(ctx);
   assertOpen(s, new Date());
   // Before any screening or 1Click call; re-checked under the session lock below.
-  await assertQuotable(ctx.db, ctx, s.id, new Date());
+  await assertQuotable(
+    prisma,
+    { merchantId: ctx.merchantId, livemode: ctx.livemode },
+    s.id,
+    new Date(),
+  );
 
   const [origin, settlement] = await Promise.all([
     tokenInfo(ctx.livemode, input.origin_asset),
@@ -815,31 +822,36 @@ async function storeQuote(
 /** Lifetime cap on quotes per session (each allocates a deposit address and calls 1Click). */
 export const MAX_QUOTES_PER_SESSION = 30;
 
-type QuoteReader = Pick<Prisma.TransactionClient, 'quote'> | ShopperCtx['db'];
-
 /**
  * RATE_LIMITED (429) once the session has used its lifetime quota; DEPOSIT_IN_PROGRESS (409)
  * while the current quote has a reported deposit and its deadline has not passed (a new quote
- * would replace the address the money is on its way to). `db` is the scoped client or a
- * transaction client; reads are always filtered by the tenant.
+ * would replace the address the money is on its way to), or while a gasless relay of it is
+ * claimed or broadcast with no known outcome yet (final review I3: an unknown-outcome relay can
+ * still land). `db` is the unscoped client or a transaction client; reads are always filtered by
+ * the tenant.
  */
 async function assertQuotable(
-  db: QuoteReader,
+  db: Prisma.TransactionClient | typeof prisma,
   t: { merchantId: string; livemode: boolean },
   sessionId: string,
   now: Date,
 ): Promise<void> {
   const where = { merchantId: t.merchantId, livemode: t.livemode, sessionId };
   const quotes = db.quote as Prisma.TransactionClient['quote'];
-  const [count, current] = await Promise.all([
+  const [count, current, relaying] = await Promise.all([
     quotes.count({ where }),
     quotes.findFirst({
       where: { ...where, supersededAt: null },
       orderBy: { createdAt: 'desc' },
-      select: { depositTxSubmittedAt: true, deadline: true },
+      select: { id: true, depositTxSubmittedAt: true, deadline: true },
     }),
+    quotesWithRelayInFlight(db, t, sessionId),
   ]);
-  if (current?.depositTxSubmittedAt && current.deadline.getTime() > now.getTime()) {
+  if (
+    current &&
+    (current.depositTxSubmittedAt || relaying.has(current.id)) &&
+    current.deadline.getTime() > now.getTime()
+  ) {
     throw new AppError(
       'DEPOSIT_IN_PROGRESS',
       'Your payment is on its way; wait for it before requesting a new quote',

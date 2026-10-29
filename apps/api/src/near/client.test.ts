@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { getRedis } from '../lib/redis.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ed25519 } from '@noble/curves/ed25519';
@@ -6,7 +7,7 @@ import bs58 from 'bs58';
 import { afterAll, describe, expect, it } from 'vitest';
 import { nearPublicKey } from '../keyvault/keys.js';
 import { LocalKeyVault } from '../keyvault/local.js';
-import { RpcNearClient, type InitConfigJson } from './client.js';
+import { RelayerNearSender, RpcNearClient, type InitConfigJson } from './client.js';
 import {
   JsonRpcTransport,
   NearRpc,
@@ -16,7 +17,7 @@ import {
   toTxResult,
   type RpcTransport,
 } from './rpc.js';
-import { decodeSigned, implicitAccountId } from './tx.js';
+import { NEAR_HOOK_METHOD, decodeSigned, functionCallAction, implicitAccountId } from './tx.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'tendr-near-client-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -587,5 +588,54 @@ describe('RpcNearClient.callAsTestnetAdmin', () => {
       client(t).callAsTestnetAdmin('intents-mock.other.testnet', 'admin_sync_signers', {}),
     ).rejects.toThrow(/sub-account/);
     expect(t.sent).toHaveLength(0);
+  });
+});
+
+describe('RelayerNearSender nonces across processes (final review I2)', () => {
+  it('concurrent signers in different processes get distinct, increasing nonces', async () => {
+    // The node lags: every view answers the same access-key nonce, a little slowly.
+    const rpc = {
+      accessKeyNonce: async () => {
+        await new Promise((r) => setTimeout(r, 15));
+        return 100n;
+      },
+      finalBlockHash: async () => BLOCK_HASH,
+    } as unknown as NearRpc;
+    // Two processes (API and worker): separate senders, no shared memory, one Redis.
+    const api = new RelayerNearSender(rpc, kv);
+    const worker = new RelayerNearSender(rpc, kv);
+    const { raw } = await kv.publicKey('relayer-near');
+    const redis = getRedis();
+    if (redis.status !== 'ready') await new Promise((r) => redis.once('ready', r));
+    await redis.del(`tendr:near-nonce:${implicitAccountId(raw)}:${nearPublicKey(raw)}`);
+    const hookArgs = {
+      amount: '1',
+      hook_data: '',
+      payment_id: 'p',
+      session_id: 's',
+      token: 't',
+      tx_hash: 'h',
+    };
+    const action = () => functionCallAction(NEAR_HOOK_METHOD, hookArgs, 1n, 0n);
+    const signed = await Promise.all(
+      [api, worker, api, worker].map((s) =>
+        s.sign('usdc.near', [action()], { hookReceiver: 'usdc.near' }),
+      ),
+    );
+    const nonces = signed.map((t) => decodeSigned(t.bytes).nonce).sort((a, b) => Number(a - b));
+    expect(nonces).toEqual([101n, 102n, 103n, 104n]);
+  });
+
+  it('fails closed (nothing signed) when the nonce store is unavailable', async () => {
+    const rpc = {
+      accessKeyNonce: async () => 5n,
+      finalBlockHash: async () => BLOCK_HASH,
+    } as unknown as NearRpc;
+    const broken = new RelayerNearSender(rpc, kv, () => {
+      throw new Error('redis down');
+    });
+    await expect(
+      broken.sign('usdc.near', [functionCallAction(NEAR_HOOK_METHOD, {}, 1n, 0n)]),
+    ).rejects.toBeInstanceOf(NotBroadcastError);
   });
 });
