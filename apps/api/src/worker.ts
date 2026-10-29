@@ -43,6 +43,8 @@ import {
   type DeliverHookJobData,
 } from './hooks/deliver.js';
 import { sweepNotificationEmailLinks } from './merchants/notification-email.js';
+import { runFeeSweep } from './jobs/fee-sweep.js';
+import { CHECK_GAS_BALANCES_EVERY_MS, checkGasBalances } from './jobs/gas-alerts.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
 // Registers every event handler; must load before the dispatcher runs (see dispatchOnce).
@@ -71,6 +73,19 @@ export const RETRY_SCREENINGS_JOB = 'retry-pending-screenings';
  * notification-email links (deleting their tokens); every minute.
  */
 export const SWEEP_CONNECTIONS_JOB = 'sweep-connections';
+/**
+ * Gas-fee sweep (live mode only): plans due sweeps of the gas-fee accounts into USDC on NEAR and,
+ * with FEE_SWEEP_ENABLED, executes them; hourly.
+ */
+export const FEE_SWEEP_JOB = 'fee-sweep';
+export const FEE_SWEEP_EVERY_MS = 60 * 60_000;
+/** Relayer key and Pimlico balances below GAS_LOW_BALANCE_USD alert operators; every 15 min. */
+export const CHECK_GAS_BALANCES_JOB = 'check-gas-balances';
+
+/** Whether the worker schedules the gas-fee sweep and the gas balance alerts (production only). */
+export function gasOpsJobsScheduled(): boolean {
+  return env().NODE_ENV === 'production';
+}
 /** The payment watcher's queue: the 5 s scan, one poll job per due address, the expiry sweep. */
 export const CHECKOUT_QUEUE = 'tendr-checkout';
 export const SCAN_DEPOSITS_JOB = 'scan-deposits';
@@ -233,6 +248,16 @@ async function processMaintenanceJob(job: Job): Promise<void> {
     await sweepConnections();
     // C12: expired / orphaned notification-email link tokens, on the same minute tick.
     await sweepNotificationEmailLinks();
+    return;
+  }
+  if (job.name === FEE_SWEEP_JOB) {
+    const r = await runFeeSweep();
+    if (r.planned > 0) log('info', 'fee sweep', { ...r });
+    return;
+  }
+  if (job.name === CHECK_GAS_BALANCES_JOB) {
+    const low = (await checkGasBalances()).filter((x) => x.low).length;
+    if (low > 0) log('warn', 'gas balances low', { count: low });
     return;
   }
   if (job.name !== PURGE_IDEMPOTENCY_JOB) throw new Error(`unknown maintenance job ${job.name}`);
@@ -401,6 +426,25 @@ export async function startWorker(
     { every: 60_000 },
     { name: SWEEP_CONNECTIONS_JOB },
   );
+
+  // The gas-fee sweep and the gas balance alerts read live chains, 1Click and the live key
+  // addresses: scheduled only in production (never in tests or local development, R12-g), and
+  // removed elsewhere in case a shared Redis kept an earlier schedule.
+  if (gasOpsJobsScheduled()) {
+    await maintenanceQueue.upsertJobScheduler(
+      FEE_SWEEP_JOB,
+      { every: FEE_SWEEP_EVERY_MS },
+      { name: FEE_SWEEP_JOB },
+    );
+    await maintenanceQueue.upsertJobScheduler(
+      CHECK_GAS_BALANCES_JOB,
+      { every: CHECK_GAS_BALANCES_EVERY_MS },
+      { name: CHECK_GAS_BALANCES_JOB },
+    );
+  } else {
+    await maintenanceQueue.removeJobScheduler(FEE_SWEEP_JOB);
+    await maintenanceQueue.removeJobScheduler(CHECK_GAS_BALANCES_JOB);
+  }
 
   await accountsQueue.upsertJobScheduler(
     RECONCILE_JOB,

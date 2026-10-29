@@ -783,6 +783,25 @@ fee share, 1Click's fee and the spread.
   from TronLink, merchant-sponsored and shopper-paid, and check: one delegation and one reclaim per
   approve in `tron_delegations`, the watcher marks the payment paid, the poll job records the
   cost, and the fee lands at the `gas-fees-tron` address.
+- Gas-fee sweep (`apps/api/src/jobs/fee-sweep.ts`, hourly, live mode only), before enabling
+  `FEE_SWEEP_ENABLED=true`: set `TENDR_FEE_ACCOUNT_NEAR` (the account receiving the USDC on NEAR;
+  nothing executes while it is unset). Each gas-fee account is receive-only and holds no native
+  gas: fund each one an operator-approved trace of native coin for its sweep transfers
+  (`gas-fees-evm` ETH/POL/AVAX on each chain, `gas-fees-solana` SOL incl. ~0.00204 SOL rent when a
+  deposit token account is new, `gas-fees-near` NEAR, `gas-fees-tron` ~30 TRX of energy); a token
+  sweep without it waits as `needs_gas` and operators are told every 6 h. Note an EVM native
+  balance is itself swept (less a fee reserve) once worth $20 or weekly, so keep top-ups small.
+  Confirm with 1Click: an EXACT_INPUT quote from each swept asset (incl. USDC on NEAR to the same
+  asset) to USDC on NEAR with `recipientType: DESTINATION_CHAIN` into a NEAR account, refunds to
+  the origin address; that a NEP-141 `ft_transfer` to a NEAR deposit address (registered by
+  `relayer-near`) is detected. Then run one sweep per family with small balances and check the
+  `fee_sweeps` row (quote id, deposit address, tx hash) and the USDC arriving.
+- Gas balance alerts (`apps/api/src/jobs/gas-alerts.ts`, every 15 min): `relayer-evm` per EVM
+  chain with an RPC, `gas-tron` (while the forwarder is set) and `relayer-near` below
+  `GAS_LOW_BALANCE_USD` (default $50) alert operators (`gas.relayer_balance_low` event + `OPS ALERT`
+  log, once per 6 h per account). Pimlico documents no balance API: its reader returns "unknown"
+  until one is confirmed, so watch the Pimlico dashboard by hand. Route the `gas_ops` system events
+  and `OPS ALERT` log lines to the on-call channel.
 
 **Live checklist (FX for non-USD stores):** the live FX provider is
 [Open Exchange Rates](https://openexchangerates.org) (`FX_PROVIDER=openexchangerates`,

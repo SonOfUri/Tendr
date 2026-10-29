@@ -301,6 +301,34 @@ describe('loadEnv TENDR_SPONSOR_LOSS_CAP_USD', () => {
   });
 });
 
+describe('loadEnv gas-fee sweep and alerts', () => {
+  it('defaults: sweep off, $20 threshold, no fee account, $50 low-balance alert', () => {
+    const e = loadEnv(base);
+    expect(e.FEE_SWEEP_ENABLED).toBe(false);
+    expect(e.FEE_SWEEP_THRESHOLD_USD).toBe('20');
+    expect(e.TENDR_FEE_ACCOUNT_NEAR).toBeUndefined();
+    expect(e.GAS_LOW_BALANCE_USD).toBe('50');
+  });
+  it('parses the gate, the decimals and the NEAR account; rejects junk', () => {
+    const e = loadEnv({
+      ...base,
+      FEE_SWEEP_ENABLED: 'true',
+      FEE_SWEEP_THRESHOLD_USD: '25.5',
+      TENDR_FEE_ACCOUNT_NEAR: 'fees.tendr.near',
+      GAS_LOW_BALANCE_USD: ' ',
+    });
+    expect(e.FEE_SWEEP_ENABLED).toBe(true);
+    expect(e.FEE_SWEEP_THRESHOLD_USD).toBe('25.5');
+    expect(e.TENDR_FEE_ACCOUNT_NEAR).toBe('fees.tendr.near');
+    expect(e.GAS_LOW_BALANCE_USD).toBe('50');
+    expect(() => loadEnv({ ...base, FEE_SWEEP_ENABLED: 'yes' })).toThrow(/FEE_SWEEP_ENABLED/);
+    expect(() => loadEnv({ ...base, TENDR_FEE_ACCOUNT_NEAR: 'Not An Account' })).toThrow(
+      /TENDR_FEE_ACCOUNT_NEAR/,
+    );
+    expect(() => loadEnv({ ...base, GAS_LOW_BALANCE_USD: '-1' })).toThrow(/GAS_LOW_BALANCE_USD/);
+  });
+});
+
 describe('loadEnv EVM relayer', () => {
   it('defaults the forwarder to the CREATE2 address and leaves fee caps unset', () => {
     const e = loadEnv(base);

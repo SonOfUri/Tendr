@@ -233,6 +233,45 @@ const EnvSchema = z
       z.coerce.number().int().min(0).max(10_000).default(2000),
     ),
     /**
+     * Operator gate for the gas-fee sweep (project 5a, Task 12). Off by default: due sweeps are
+     * planned, recorded and announced to operators, but no gas-fee key signs anything until this
+     * is `true`.
+     */
+    FEE_SWEEP_ENABLED: z.preprocess(
+      blankAsUnset,
+      z
+        .enum(['true', 'false', '1', '0'])
+        .default('false')
+        .transform((v) => v === 'true' || v === '1'),
+    ),
+    /**
+     * A gas-fee account's token is swept once it is worth at least this much (USD), or weekly.
+     * A decimal string, never parsed as a float. Default 20.
+     */
+    FEE_SWEEP_THRESHOLD_USD: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^\d+(\.\d+)?$/, 'must be a non-negative decimal')
+        .default('20'),
+    ),
+    /**
+     * Tendr's NEAR account that receives swept gas fees (as USDC on NEAR). No default: while it is
+     * unset no sweep executes, and operators are told why.
+     */
+    TENDR_FEE_ACCOUNT_NEAR: z.preprocess(blankAsUnset, nearAccountId.optional()),
+    /**
+     * Operators are alerted (once per 6 h per account) when a relayer key's native balance, or
+     * Tendr's Pimlico balance, is worth less than this (USD). A decimal string. Default 50.
+     */
+    GAS_LOW_BALANCE_USD: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^\d+(\.\d+)?$/, 'must be a non-negative decimal')
+        .default('50'),
+    ),
+    /**
      * The TendrForwarder contract (project 5a, onchain/evm) the EVM relayer calls: the same
      * CREATE2 address on every EVM chain and in both modes. Never taken from a request.
      */

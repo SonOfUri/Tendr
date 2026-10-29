@@ -1825,3 +1825,62 @@ model EventOutbox {
   @@index([createdAt])
   @@map("event_outbox")
 }
+
+// ─── Gas-fee sweep and operator alerts (project 5a, Task 12) ─────────────────
+
+enum FeeSweepStatus {
+  planned
+  executed
+  failed
+  needs_gas
+
+  @@map("fee_sweep_status")
+}
+
+/// One sweep of a gas-fee account's token into USDC on NEAR (Tendr's fee account) through a 1Click
+/// swap (prefix `fsw`). Live mode only. A `planned` or `needs_gas` row is the open plan for its
+/// account and token (at most one: a partial unique index); executing it ends in `executed` or
+/// `failed`. The 7-day rule reads the last `executed` row per account and token. No key material
+/// is ever stored here: the `gas-fees-*` keys stay in the key vault.
+model FeeSweep {
+  id               String         @id
+  livemode         Boolean
+  /// `evm` | `solana` | `near` | `tron`.
+  family           String
+  /// 1Click blockchain id.
+  chain            String
+  /// The gas-fee account the tokens leave (the `gas-fees-*` key's address).
+  accountAddress   String         @map("account_address")
+  /// The 1Click asset swept, its symbol, the amount (base units) and its USD value when planned.
+  assetId          String         @map("asset_id")
+  symbol           String
+  amount           Decimal        @db.Decimal(78, 0)
+  amountUsd        Decimal        @map("amount_usd") @db.Decimal(18, 6)
+  /// Why it is due: `threshold` (value ≥ FEE_SWEEP_THRESHOLD_USD) or `weekly`.
+  reason           String
+  status           FeeSweepStatus @default(planned)
+  /// The 1Click quote (its correlation id) and the deposit address the transfer goes to.
+  quoteId          String?        @map("quote_id")
+  depositAddress   String?        @map("deposit_address")
+  /// The destination: USDC on NEAR into TENDR_FEE_ACCOUNT_NEAR.
+  destinationAsset String?        @map("destination_asset")
+  recipient        String?
+  txHash           String?        @map("tx_hash")
+  lastError        String?        @map("last_error")
+  /// Claimed by one executor until then.
+  leaseUntil       DateTime?      @map("lease_until")
+  executedAt       DateTime?      @map("executed_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  @@index([livemode, chain, accountAddress, assetId, status])
+  @@map("fee_sweeps")
+}
+
+/// Operator alerts throttled per key (e.g. `gas_low:evm:base:0x…`): when each was last sent.
+model GasOpsAlert {
+  key            String   @id
+  lastNotifiedAt DateTime @map("last_notified_at")
+
+  @@map("gas_ops_alerts")
+}
