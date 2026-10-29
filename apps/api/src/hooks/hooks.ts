@@ -144,10 +144,17 @@ export async function listHookCalls(db: ScopedDb, query: HookCallListQuery) {
 }
 
 /**
+ * Manual resends allowed per hook call (final review m1): each is an attempt whose gas Tendr pays
+ * beyond the merchant's one estimate, so a contract that passes the dry run but reverts on chain
+ * cannot be looped from an API key.
+ */
+export const HOOK_MAX_MANUAL_RESENDS = 3;
+
+/**
  * Retries a payment's failed hook call now (one attempt; a failure leaves it `failed` without
  * further retries, another event or email). NOT_FOUND for an unknown payment; CONFLICT when the
  * payment has no hook call, when an attempt is in flight, while it is still retrying by itself,
- * or after it succeeded.
+ * after it succeeded, or once it was resent HOOK_MAX_MANUAL_RESENDS times.
  */
 export async function resendHookCall(ctx: ScopeContext & { db: ScopedDb }, paymentId: string) {
   const now = new Date();
@@ -172,17 +179,37 @@ export async function resendHookCall(ctx: ScopeContext & { db: ScopedDb }, payme
       { status: STATUS_OUT[hook.status] },
     );
   }
+  const resendLimit = () =>
+    conflict(
+      `This hook call was already resent ${HOOK_MAX_MANUAL_RESENDS} times; no more resends are allowed. Fix the contract and contact Tendr support to have it called again.`,
+      { max_resends: HOOK_MAX_MANUAL_RESENDS, resends: hook.manualResends },
+    );
+  if (hook.manualResends >= HOOK_MAX_MANUAL_RESENDS) throw resendLimit();
   const { count } = await prisma.hookCall.updateMany({
     where: {
       id: hook.id,
       merchantId: ctx.merchantId,
       livemode: ctx.livemode,
       status: 'failed',
+      manualResends: { lt: HOOK_MAX_MANUAL_RESENDS },
       OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }],
     },
-    data: { status: 'pending', nextRetryAt: now, retryUntil: now, leaseUntil: null },
+    data: {
+      status: 'pending',
+      nextRetryAt: now,
+      retryUntil: now,
+      leaseUntil: null,
+      manualResends: { increment: 1 },
+    },
   });
-  if (count !== 1) throw conflict('A hook call for this payment is in flight');
+  if (count !== 1) {
+    const fresh = await prisma.hookCall.findUnique({
+      where: { id: hook.id },
+      select: { manualResends: true },
+    });
+    if ((fresh?.manualResends ?? 0) >= HOOK_MAX_MANUAL_RESENDS) throw resendLimit();
+    throw conflict('A hook call for this payment is in flight');
+  }
   const after = await attemptHook(hook.id, { now, manual: true });
   return hookCallView(
     after ?? (await prisma.hookCall.findUniqueOrThrow({ where: { id: hook.id } })),

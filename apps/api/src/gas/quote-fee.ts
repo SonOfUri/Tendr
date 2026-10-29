@@ -28,6 +28,7 @@ import {
   estimateNetworkFeeUsd,
   feeInToken,
   gaslessMethodSupported,
+  orderUsd,
   isNativeToken,
   withFeeMargin,
 } from './fees.js';
@@ -62,6 +63,8 @@ export interface PlanInput {
   session: {
     id: string;
     amount: Prisma.Decimal;
+    /** `USD` (default) or the settlement asset the amount is priced in. */
+    amountCurrency?: string;
     gasSponsor: 'merchant' | 'buyer';
     gasMaxUsd: Prisma.Decimal | null;
     delivery: 'WEBHOOK' | 'HOOK';
@@ -76,9 +79,14 @@ export interface PlanInput {
   now?: Date;
 }
 
-/** Whether `usd` is more than `bps` (default MAX_SPONSORED_ORDER_BPS) of the session's order. */
-function overOrderCap(input: PlanInput, usd: string, bps = MAX_SPONSORED_ORDER_BPS): boolean {
-  return new Prisma.Decimal(usd).mul(10_000).gt(input.session.amount.mul(bps));
+/**
+ * Whether `usd` is more than `bps` (default MAX_SPONSORED_ORDER_BPS) of the order's USD value
+ * (`orderUsd`: a settlement-asset-priced session converted at the token-list price). An unpriced
+ * order (null) is over every cap.
+ */
+function overOrderCap(order: string | null, usd: string, bps = MAX_SPONSORED_ORDER_BPS): boolean {
+  if (order === null) return true;
+  return new Prisma.Decimal(usd).mul(10_000).gt(new Prisma.Decimal(order).mul(bps));
 }
 
 function addUsd(a: string, b: string): string {
@@ -126,7 +134,16 @@ async function hookEstimate(input: PlanInput): Promise<string> {
 export async function planNetworkFee(input: PlanInput): Promise<NetworkFeePlan> {
   const chain = input.origin.blockchain;
   const hookUsd = await hookEstimate(input);
-  if (overOrderCap(input, hookUsd, MAX_HOOK_ORDER_BPS)) {
+  const order = await orderUsd(input.session, input.livemode);
+  if (hookUsd !== '0' && order === null) {
+    throw new AppError(
+      'NETWORK_FEE_UNAVAILABLE',
+      'The integrator hook fee cannot be priced right now',
+      503,
+      { reason: 'order unpriced' },
+    );
+  }
+  if (hookUsd !== '0' && overOrderCap(order, hookUsd, MAX_HOOK_ORDER_BPS)) {
     // The hook is always called, so its cost cannot fall back to anyone else: refuse the quote.
     throw new AppError(
       'QUOTE_TOO_SMALL',
@@ -172,7 +189,7 @@ export async function planNetworkFee(input: PlanInput): Promise<NetworkFeePlan> 
         sessionId: input.session.id,
         chain,
         assetId: input.origin.assetId,
-        orderUsd: input.session.amount.toFixed(),
+        orderUsd: order ?? '0',
         shopperAddress: input.walletAddress,
         feeUsd,
         sessionOverride: gasPayerFromDb(input.session.gasSponsor),
@@ -183,7 +200,7 @@ export async function planNetworkFee(input: PlanInput): Promise<NetworkFeePlan> 
   // After the policy's own reasons: sponsorship is collected as whole appFees bps whose charging
   // base is still unconfirmed (ONECLICK_APP_FEE_BASE), so fee + hook is capped at
   // MAX_SPONSORED_ORDER_BPS of the order.
-  if (decision.paidBy === 'merchant' && overOrderCap(input, addUsd(feeUsd, hookUsd))) {
+  if (decision.paidBy === 'merchant' && overOrderCap(order, addUsd(feeUsd, hookUsd))) {
     decision = { paidBy: 'shopper', reason: 'per_payment_cap' };
   }
   if (decision.paidBy === 'merchant') {

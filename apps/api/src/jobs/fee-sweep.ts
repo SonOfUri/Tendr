@@ -21,6 +21,14 @@
 // A native-coin sweep (EVM, R12-k) sends only the excess above a reserve: gas for 3 future token
 // sweeps at the chain's fee cap plus its own transfer. The quote must pay at least 95 % of the
 // plan's USD value after slippage, and an execution is time-bounded below its lease.
+//
+// After the broadcast (final review m2) the row is `broadcast` until the transfer is found final
+// on chain by its hash: `executed` only once confirmed, `failed` if it reverted or never landed
+// (unknown to the node FEE_SWEEP_UNKNOWN_FAIL_MS after it was sent). While a `broadcast` row
+// exists its account and token are not planned again (a still-pending transfer is never doubled).
+// Every run reconciles `broadcast` rows first. A step that fails after the hash was recorded (a
+// broadcast timeout) is reconciled the same way before anything is marked failed. Every write
+// after the claim is conditional on this executor still holding the lease.
 import { Prisma } from '@prisma/client';
 import type { FeeSweepStatus } from '@prisma/client';
 import { isValidAddress } from '../checkout/address-format.js';
@@ -34,7 +42,12 @@ import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { NEAR_GASLESS_TOKENS } from '../near/tokens.js';
-import { liveSweepChains, type SweepChain, type SweepToken } from './fee-sweep-chains.js';
+import {
+  liveSweepChains,
+  type SweepChain,
+  type SweepOutcome,
+  type SweepToken,
+} from './fee-sweep-chains.js';
 import {
   signSweep,
   sweepKeyAddress,
@@ -55,6 +68,8 @@ export const FEE_SWEEP_LEASE_MS = 10 * 60_000;
  * before anything is signed, and the lease is renewed (still held) just before the broadcast.
  */
 export const FEE_SWEEP_EXECUTE_MS = 5 * 60_000;
+/** A sent transfer the node still does not know this long after its broadcast never landed. */
+export const FEE_SWEEP_UNKNOWN_FAIL_MS = 60 * 60_000;
 /** The quote's minimum USD out (after slippage) must be at least this share of the plan (bps). */
 export const FEE_SWEEP_MIN_OUT_BPS = 9_500n;
 /** How long the sweep's 1Click quote stays open. */
@@ -233,6 +248,12 @@ export async function planFeeSweeps(livemode: boolean, now: Date): Promise<Sweep
             select: { id: true },
           });
           if (recentFailure) continue;
+          // A sent transfer whose outcome is not known yet: never planned twice (final review m2).
+          const inFlight = await prisma.feeSweep.findFirst({
+            where: { ...where, status: 'broadcast' },
+            select: { id: true },
+          });
+          if (inFlight) continue;
           const last = await prisma.feeSweep.findFirst({
             where: {
               livemode: true,
@@ -289,7 +310,10 @@ const planSummary = (p: SweepPlan) => ({
 
 export interface SweepRunResult {
   planned: number;
+  /** Confirmed on chain in this run (its own sweeps, or earlier broadcasts reconciled). */
   executed: number;
+  /** Sent in this run, outcome not known yet. */
+  broadcast: number;
   failed: number;
   needsGas: number;
   /** Why nothing was executed (`disabled`, `no_recipient`), or null. */
@@ -298,11 +322,13 @@ export interface SweepRunResult {
 
 /** The worker job: plan (live mode), then execute when the operator gate allows it. */
 export async function runFeeSweep(now: Date = new Date()): Promise<SweepRunResult> {
+  const reconciled = await reconcileBroadcastSweeps(now);
   const plans = await planFeeSweeps(true, now);
   const result: SweepRunResult = {
     planned: plans.length,
-    executed: 0,
-    failed: 0,
+    executed: reconciled.executed,
+    broadcast: 0,
+    failed: reconciled.failed,
     needsGas: 0,
     held: null,
   };
@@ -332,6 +358,7 @@ export async function runFeeSweep(now: Date = new Date()): Promise<SweepRunResul
   for (const plan of plans) {
     const outcome = await executeSweep(plan, now);
     if (outcome === 'executed') result.executed++;
+    else if (outcome === 'broadcast') result.broadcast++;
     else if (outcome === 'failed') result.failed++;
     else if (outcome === 'needs_gas') result.needsGas++;
   }
@@ -345,7 +372,7 @@ export async function runFeeSweep(now: Date = new Date()): Promise<SweepRunResul
 export async function executeSweep(
   plan: SweepPlan,
   now: Date,
-): Promise<'executed' | 'failed' | 'needs_gas' | 'skipped'> {
+): Promise<'executed' | 'broadcast' | 'failed' | 'needs_gas' | 'skipped'> {
   const e = env();
   const recipient = e.TENDR_FEE_ACCOUNT_NEAR;
   if (!e.FEE_SWEEP_ENABLED || !recipient) return 'skipped';
@@ -373,10 +400,24 @@ export async function executeSweep(
     return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
   };
   const chainImpl = deps.chains().find((c) => c.family === plan.family);
-  const finish = (status: FeeSweepStatus, data: Prisma.FeeSweepUpdateInput = {}) =>
-    prisma.feeSweep.update({ where: { id: plan.id }, data: { status, leaseUntil: null, ...data } });
+  /** The lease this executor holds (renewed before the broadcast). */
+  let held = lease;
+  /**
+   * Moves the row on only while this executor still holds it (Task 12: a takeover by another
+   * executor is never overwritten). Returns whether it did.
+   */
+  const finish = async (
+    status: FeeSweepStatus,
+    data: Prisma.FeeSweepUpdateManyMutationInput = {},
+  ): Promise<boolean> => {
+    const { count } = await prisma.feeSweep.updateMany({
+      where: { id: plan.id, leaseUntil: held },
+      data: { status, leaseUntil: null, ...data },
+    });
+    return count === 1;
+  };
   if (!chainImpl) {
-    await finish('failed', { lastError: `no transport for ${plan.family}` });
+    await finish('failed', { lastError: `no transport for ${plan.family}`, failedAt: now });
     return 'failed';
   }
   let depositAddress: string | null = null;
@@ -471,23 +512,35 @@ export async function executeSweep(
     // Still ours? Renew the lease for the broadcast and record the hash first, in one statement:
     // a lost answer still leaves the hash to look up, and no second executor can claim it.
     const renewed = new Date(now.getTime() + (Date.now() - started) + FEE_SWEEP_LEASE_MS);
-    const held = await prisma.feeSweep.updateMany({
+    const kept = await prisma.feeSweep.updateMany({
       where: { id: plan.id, leaseUntil: lease, status: { in: OPEN } },
       data: { leaseUntil: renewed, txHash: signed.txHash },
     });
-    if (held.count !== 1) throw new Error('fee sweep: lost the plan lease before broadcast');
+    if (kept.count !== 1) throw new Error('fee sweep: lost the plan lease before broadcast');
+    held = renewed;
     txHash = signed.txHash;
     await bounded(chainImpl.broadcast(plan.chain, signed));
-    await finish('executed', { executedAt: now, lastError: null });
+    // Sent: `executed` only once the chain confirms it (final review m2).
+    await finish('broadcast', { broadcastAt: now, lastError: null });
     try {
       await deps.oneclick().submitDeposit(txHash, depositAddress);
     } catch (err) {
       log('warn', 'fee sweep: 1Click deposit notice failed', { id: plan.id, err: errText(err) });
     }
-    log('info', 'fee sweep executed', { ...planSummary(plan), txHash, depositAddress });
-    return 'executed';
+    log('info', 'fee sweep broadcast', { ...planSummary(plan), txHash, depositAddress });
+    const settled = await reconcileOne(chainImpl, plan.id, now);
+    return settled === 'executed' ? 'executed' : settled === 'failed' ? 'failed' : 'broadcast';
   } catch (err) {
-    await finish('failed', { lastError: errText(err), failedAt: now });
+    if (txHash !== null) {
+      // The hash is recorded and the transfer may be out (a broadcast timeout, a lost answer):
+      // its outcome is looked up on chain, never assumed failed (Task 12).
+      const moved = await finish('broadcast', { broadcastAt: now, lastError: errText(err) });
+      if (!moved) return 'skipped';
+      const settled = await reconcileOne(chainImpl, plan.id, now);
+      return settled === 'executed' ? 'executed' : settled === 'failed' ? 'failed' : 'broadcast';
+    }
+    // Another executor took the plan over: its state is theirs.
+    if (!(await finish('failed', { lastError: errText(err), failedAt: now }))) return 'skipped';
     await opsNotice({
       type: FEE_SWEEP_FAILED,
       key: `fee_sweep_failed:${plan.family}:${plan.chain}:${plan.account}:${plan.token.assetId}`,
@@ -501,4 +554,89 @@ export async function executeSweep(
     });
     return 'failed';
   }
+}
+
+/**
+ * Looks up one `broadcast` sweep's transfer by its hash and settles the row: `executed` when
+ * confirmed, `failed` when it reverted or the node still does not know it
+ * FEE_SWEEP_UNKNOWN_FAIL_MS after it was sent; otherwise it stays `broadcast`. A lookup that
+ * fails leaves it as it is. Returns the row's status afterwards.
+ */
+async function reconcileOne(
+  chainImpl: SweepChain,
+  id: string,
+  now: Date,
+): Promise<'executed' | 'failed' | 'broadcast'> {
+  const row = await prisma.feeSweep.findUnique({ where: { id } });
+  if (!row || row.status !== 'broadcast' || !row.txHash) return 'broadcast';
+  let outcome: SweepOutcome;
+  try {
+    outcome = await chainImpl.outcome(row.chain, row.txHash, row.accountAddress);
+  } catch (err) {
+    log('warn', 'fee sweep: outcome unavailable', { id, err: errText(err) });
+    return 'broadcast';
+  }
+  const sentAt = row.broadcastAt ?? row.updatedAt;
+  const lost =
+    outcome === 'unknown' && now.getTime() - sentAt.getTime() >= FEE_SWEEP_UNKNOWN_FAIL_MS;
+  if (outcome === 'confirmed') {
+    const { count } = await prisma.feeSweep.updateMany({
+      where: { id, status: 'broadcast' },
+      data: { status: 'executed', executedAt: now },
+    });
+    if (count === 1) log('info', 'fee sweep executed', { id, txHash: row.txHash });
+    return 'executed';
+  }
+  if (outcome === 'failed' || lost) {
+    const lastError =
+      outcome === 'failed'
+        ? 'the transfer failed on chain'
+        : 'the transfer never landed (unknown to the node)';
+    const { count } = await prisma.feeSweep.updateMany({
+      where: { id, status: 'broadcast' },
+      data: { status: 'failed', failedAt: now, lastError },
+    });
+    if (count === 1) {
+      await opsNotice({
+        type: FEE_SWEEP_FAILED,
+        key: `fee_sweep_failed:${row.family}:${row.chain}:${row.accountAddress}:${row.assetId}`,
+        now,
+        payload: {
+          id,
+          chain: row.chain,
+          account: row.accountAddress,
+          asset: row.assetId,
+          deposit_address: row.depositAddress,
+          tx_hash: row.txHash,
+          error: lastError,
+        },
+      });
+    }
+    return 'failed';
+  }
+  return 'broadcast';
+}
+
+/** Every `broadcast` sweep (live mode), settled by its transfer's outcome on chain. */
+export async function reconcileBroadcastSweeps(
+  now: Date,
+): Promise<{ executed: number; failed: number; pending: number }> {
+  const rows = await prisma.feeSweep.findMany({
+    where: { livemode: true, status: 'broadcast' },
+    select: { id: true, family: true },
+  });
+  const out = { executed: 0, failed: 0, pending: 0 };
+  const chains = deps.chains();
+  for (const r of rows) {
+    const chainImpl = chains.find((c) => c.family === r.family);
+    if (!chainImpl) {
+      out.pending++;
+      continue;
+    }
+    const s = await reconcileOne(chainImpl, r.id, now);
+    if (s === 'executed') out.executed++;
+    else if (s === 'failed') out.failed++;
+    else out.pending++;
+  }
+  return out;
 }

@@ -96,7 +96,15 @@ export interface SweepChain {
   ): Promise<SweepTx>;
   /** Broadcasts the signed transfer. */
   broadcast(chain: string, signed: SignedSweep): Promise<void>;
+  /**
+   * The sent transfer's outcome by its hash: `confirmed` / `failed` once final on chain, `pending`
+   * while the node knows it unmined, `unknown` when the node does not know it (never landed, or
+   * dropped). Read only.
+   */
+  outcome(chain: string, txHash: string, account: string): Promise<SweepOutcome>;
 }
+
+export type SweepOutcome = 'confirmed' | 'failed' | 'pending' | 'unknown';
 
 // ---------------------------------------------------------------------------------------------
 // Pure builders (the guard tests build valid transfers with these)
@@ -337,6 +345,13 @@ export class LiveEvmSweepChain implements SweepChain {
   async broadcast(chain: string, signed: SignedSweep): Promise<void> {
     await this.rpc(chain).sendRawTransaction(signed.signed);
   }
+
+  async outcome(chain: string, txHash: string): Promise<SweepOutcome> {
+    const rpc = this.rpc(chain);
+    const r = await rpc.receipt(txHash);
+    if (r) return r.status === 1 ? 'confirmed' : 'failed';
+    return (await rpc.hasTransaction(txHash)) ? 'pending' : 'unknown';
+  }
 }
 
 /** What the NEAR transport needs from `relayer-near` (its RPC, and its guarded signer). */
@@ -424,6 +439,12 @@ export class LiveNearSweepChain implements SweepChain {
     const res = await this.rpc.sendTx(Buffer.from(signed.signed, 'base64'), signed.txHash);
     if (res.topLevelStatus !== 'success') throw new Error('ft_transfer failed on chain');
   }
+  async outcome(_chain: string, txHash: string, account: string): Promise<SweepOutcome> {
+    const s = await this.rpc.txStatus(txHash, account);
+    if (!s) return 'unknown';
+    // A final status: its top-level action (ft_transfer) and every receipt succeeded or not.
+    return s.topLevelOk !== false && s.receipts.every((r) => r.ok) ? 'confirmed' : 'failed';
+  }
 }
 
 /** Tron energy a USDT transfer to a fresh address can use (~130k), and the bandwidth burn. */
@@ -476,6 +497,11 @@ export class LiveTronSweepChain implements SweepChain {
   async broadcast(_chain: string, signed: SignedSweep): Promise<void> {
     const r = await tronApi().broadcastHex(signed.signed);
     if (!r.ok) throw new Error(`tron broadcast refused: ${r.code}`);
+  }
+  async outcome(_chain: string, txHash: string): Promise<SweepOutcome> {
+    const solid = await tronApi().txInfo(txHash, true);
+    if (!solid) return (await tronApi().txInfo(txHash, false)) ? 'pending' : 'unknown';
+    return solid.result !== 'FAILED' && solid.receiptResult === 'SUCCESS' ? 'confirmed' : 'failed';
   }
 }
 
@@ -586,6 +612,14 @@ export class LiveSolanaSweepChain implements SweepChain {
   }
   async broadcast(_chain: string, signed: SignedSweep): Promise<void> {
     await new SolanaRpc().sendTransaction(signed.signed);
+  }
+  async outcome(_chain: string, txHash: string): Promise<SweepOutcome> {
+    const s = await new SolanaRpc().signatureStatus(txHash);
+    if (!s) return 'unknown';
+    if (s.err) return 'failed';
+    return s.confirmationStatus === 'confirmed' || s.confirmationStatus === 'finalized'
+      ? 'confirmed'
+      : 'pending';
   }
 }
 

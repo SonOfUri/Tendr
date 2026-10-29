@@ -418,6 +418,30 @@ export async function solanaComputeUnitPrice(): Promise<bigint> {
 }
 
 /**
+ * A session's order value in USD (the base of the per-payment sponsorship and hook caps): a
+ * USD-priced session's `amount` as is (a non-USD ISO total was converted at creation); a session
+ * priced in its settlement asset (`amount_currency` = `dest_asset`) at the 1Click token-list
+ * price, rounded DOWN to the micro-dollar (a cap base never overstates the order). Null when that
+ * asset is unlisted or unpriced.
+ */
+export async function orderUsd(
+  session: { amount: { toFixed(): string }; amountCurrency?: string; destAsset?: string },
+  livemode: boolean,
+): Promise<string | null> {
+  if (session.amountCurrency === undefined || session.amountCurrency === 'USD') {
+    return session.amount.toFixed();
+  }
+  const token = (await deps.tokens(livemode)).get(session.amountCurrency);
+  const price = token?.priceUsd ? parseDecimal(token.priceUsd) : null;
+  const amount = parseDecimal(session.amount.toFixed());
+  if (!price || price.digits === 0n || !amount) return null;
+  // micro = amount × price × 10^6
+  const micro =
+    (amount.digits * price.digits * pow10(USD_SCALE)) / (pow10(amount.scale) * pow10(price.scale));
+  return microToUsd(micro);
+}
+
+/**
  * USD of `units` of `chain`'s native coin (its smallest unit: wei, lamports, …), rounded up to the
  * micro-dollar, at the 1Click token-list price. Throws NETWORK_FEE_UNAVAILABLE when unpriced.
  */

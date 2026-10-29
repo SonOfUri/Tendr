@@ -81,6 +81,8 @@ describe('hook delivery', () => {
       asset?: string;
       settleTx?: string;
       at?: Date;
+      session?: Record<string, unknown>;
+      quote?: Record<string, unknown>;
     } = {},
   ) {
     const livemode = opts.livemode ?? false;
@@ -94,10 +96,12 @@ describe('hook delivery', () => {
       recipientType: 'DESTINATION_CHAIN',
       externalRef: 'order-7',
       status: 'SETTLED',
+      ...opts.session,
     });
     const quote = await createRow('Quote', merchant.id, livemode, {
       sessionId: session.id,
       hookFeeUsd: '0.048',
+      ...opts.quote,
     });
     const payment = await createRow('Payment', merchant.id, livemode, {
       sessionId: session.id,
@@ -346,7 +350,14 @@ describe('hook delivery', () => {
       expect(loss).toMatchObject({ sponsor: 'tendr', chain: 'base', provider: 'relayer-evm' });
       expect(loss.costUsd!.toFixed()).toBe('0.127');
       expect(loss.estimateUsd!.toFixed()).toBe('0.048');
-      expect(loss.recoveredFromPaymentId).toBe(payment.id); // the shortfall is keyed per payment
+      // The shortfall is keyed per payment on its own column; nothing was recovered from it.
+      expect(loss.hookPaymentId).toBe(payment.id);
+      expect(loss.recoveredFromPaymentId).toBeNull();
+      const { gasSponsorshipView } = await import('../gas/sponsorships.js');
+      expect(gasSponsorshipView(loss)).toMatchObject({
+        recovered_from_payment_id: null,
+        hook_payment_id: payment.id,
+      });
       expect(loss.lossRecognizedAt).not.toBeNull();
       expect(loss.reservationState).toBeNull(); // never against the budget
       expect(await prisma.event.count({ where: { type: 'hook.succeeded' } })).toBe(1);
@@ -446,7 +457,65 @@ describe('hook delivery', () => {
       expect(await attemptHook(hook.id)).toBeNull(); // no automatic retry
     });
 
-    it('the gas ceiling or the 10 % hook budget refused the send: failed at once, alerted once', async () => {
+    it('a session priced in its settlement asset: the hook budget is 10 % of its USD value', async () => {
+      const sent: EvmSendInput[] = [];
+      setHookDeliveryDeps({
+        evmSender: {
+          send: async (input) => {
+            sent.push(input);
+            return { txId: 'rtx_1', txHash: `0x${'11'.repeat(32)}`, broadcast: 'submitted' };
+          },
+        },
+      });
+      // 50 USDC that settled $49: the budget is 10 % of $49 = $4.9 → 0.00196 ETH.
+      await settledHook({
+        livemode: true,
+        session: { amount: '50', amountCurrency: USDC_BASE },
+        quote: { amountOutUsd: '49' },
+      });
+      expect(sent[0]!.maxCostWei).toBe(1_960_000_000_000_000n);
+    });
+
+    it('a settlement-asset session without a settled USD value is valued at the token price', async () => {
+      const sent: EvmSendInput[] = [];
+      setHookDeliveryDeps({
+        evmSender: {
+          send: async (input) => {
+            sent.push(input);
+            return { txId: 'rtx_1', txHash: `0x${'11'.repeat(32)}`, broadcast: 'submitted' };
+          },
+        },
+      });
+      // 0.02 ETH at $2500 = $50 → $5 budget → 0.002 ETH (not 10 % of "0.02" dollars).
+      await settledHook({
+        livemode: true,
+        asset: 'nep141:base.omft.near',
+        session: { amount: '0.02', amountCurrency: 'nep141:base.omft.near' },
+        quote: { amountOutUsd: null },
+      });
+      expect(sent[0]!.maxCostWei).toBe(2_000_000_000_000_000n);
+    });
+
+    it('a gas price spike above the 10 % hook budget is retried, not terminal', async () => {
+      setHookDeliveryDeps({
+        evmSender: {
+          send: async () => {
+            throw new EvmNotBroadcastError(
+              'the call may cost 9 wei (100000 gas), above its 1 wei budget',
+              'gas_budget',
+            );
+          },
+        },
+      });
+      const { hook } = await settledHook({ livemode: true });
+      expect(hook.status).toBe('pending');
+      expect(hook.nextRetryAt).not.toBeNull();
+      expect(hook.lastError).toMatch(/gas price is above the hook budget/);
+      expect(hook.alertedAt).toBeNull();
+      expect(await prisma.event.count({ where: { type: 'hook.failed' } })).toBe(0);
+    });
+
+    it('the gas ceiling refused the send (estimate over bounds): failed at once, alerted once', async () => {
       setHookDeliveryDeps({
         evmSender: {
           send: async () => {

@@ -84,7 +84,10 @@ export async function pollEvmRelays(sender: EvmSender = liveEvmSender()): Promis
         let costUsd: string | null = null;
         if (o.gasUsed !== null && o.effectiveGasPrice !== null) {
           try {
-            costUsd = await nativeUsd(o.chain, o.gasUsed * o.effectiveGasPrice, true);
+            // OP-stack chains charge the L1 data fee on top of L2 gas: part of the actual cost
+            // (and of any loss the daily cap counts).
+            const wei = o.gasUsed * o.effectiveGasPrice + (o.l1Fee ?? 0n);
+            costUsd = await nativeUsd(o.chain, wei, true);
           } catch (err) {
             log('warn', 'evm relayer: cost unpriced', { txId: o.txId, err: String(err) });
           }

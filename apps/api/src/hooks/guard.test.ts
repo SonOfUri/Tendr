@@ -261,10 +261,10 @@ describe('hook signing guards', () => {
         expect(await prisma.relayerTransaction.count()).toBe(0);
       });
 
-      it('refuses (gas_cap) when gas limit × the current gas price is above maxCostWei', async () => {
+      it('refuses (gas_budget) when gas limit × the current gas price is above maxCostWei', async () => {
         const node = new FakeEvmNode(); // 100k estimate → 120k limit; 1.1 gwei → 1.32e14 wei
         const over = await send(node, { maxCostWei: 131_999_999_999_999n });
-        expect((over as EvmNotBroadcastError).reason).toBe('gas_cap');
+        expect((over as EvmNotBroadcastError).reason).toBe('gas_budget');
         expect(node.sent).toHaveLength(0);
         const ok = await send(new FakeEvmNode(), { maxCostWei: 132_000_000_000_000n });
         expect(ok).toMatchObject({ broadcast: 'submitted' });

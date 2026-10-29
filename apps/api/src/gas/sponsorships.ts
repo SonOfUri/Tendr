@@ -30,6 +30,8 @@ export function gasSponsorshipView(g: GasSponsorship) {
     livemode: g.livemode,
     session_id: g.sessionId,
     recovered_from_payment_id: g.recoveredFromPaymentId,
+    /** `method = hook` rows: the payment whose integrator hook gas this is; else null. */
+    hook_payment_id: g.hookPaymentId,
     chain: g.chain,
     method: g.method,
     provider: g.provider,

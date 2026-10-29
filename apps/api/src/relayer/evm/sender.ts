@@ -64,7 +64,8 @@ export const EVM_REVERTED_ON_CHAIN = 'reverted on chain';
 export class EvmNotBroadcastError extends Error {
   constructor(
     message: string,
-    readonly reason: 'simulation_reverted' | 'fee_cap' | 'gas_cap' | 'rejected' | 'unavailable',
+    readonly reason:
+      'simulation_reverted' | 'fee_cap' | 'gas_cap' | 'gas_budget' | 'rejected' | 'unavailable',
     readonly cause?: unknown,
   ) {
     super(message);
@@ -86,7 +87,10 @@ export interface EvmSendInput {
    * it is refused (`gas_cap`), nothing sent. Integrator hooks set it (the contract is not ours).
    */
   maxGasLimit?: bigint;
-  /** Refused (`gas_cap`) when gas limit × the current gas price (base fee + tip) is above this. */
+  /**
+   * Refused (`gas_budget`) when gas limit × the current gas price (base fee + tip) is above this:
+   * a price spike, worth retrying (unlike `gas_cap`, an estimate above the ceiling).
+   */
   maxCostWei?: bigint;
 }
 
@@ -320,7 +324,7 @@ export class EvmSender {
       if (input.maxCostWei !== undefined && gasLimit * (base + tip) > input.maxCostWei) {
         throw new EvmNotBroadcastError(
           `the call may cost ${gasLimit * (base + tip)} wei (${gasLimit} gas), above its ${input.maxCostWei} wei budget`,
-          'gas_cap',
+          'gas_budget',
         );
       }
       return { gasLimit, maxFee, tip, nonce: max(pending, dbNext) };

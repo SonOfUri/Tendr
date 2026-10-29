@@ -8,13 +8,20 @@ import { loadEnv } from '../env.js';
 import { getKeyVault } from '../keyvault/index.js';
 import { prisma } from '../lib/prisma.js';
 import { resetDb } from '../test/helpers.js';
-import { buildEvmSweepTx, type SweepChain, type SweepToken } from './fee-sweep-chains.js';
+import {
+  buildEvmSweepTx,
+  type SweepChain,
+  type SweepOutcome,
+  type SweepToken,
+} from './fee-sweep-chains.js';
 import { sweepKeyAddress, transferCalldata, type SignedSweep } from './fee-sweep-guard.js';
 import {
   FEE_SWEEP_DESTINATION_ASSET,
   FEE_SWEEP_FAILED,
   FEE_SWEEP_NEEDS_GAS,
+  FEE_SWEEP_UNKNOWN_FAIL_MS,
   FEE_SWEEP_WAITING,
+  executeSweep,
   planFeeSweeps,
   runFeeSweep,
   setFeeSweepDeps,
@@ -47,6 +54,11 @@ class FakeChain implements SweepChain {
   recipientOverride: string | null = null;
   /** Runs while the transfer is built (a slow transport, a concurrent executor). */
   onBuild: () => Promise<void> = async () => {};
+  /** What the chain says about a sent transfer (default: it landed and is confirmed). */
+  landed: SweepOutcome = 'confirmed';
+  /** Makes the broadcast call fail after the transfer went out (a timeout, a lost answer). */
+  broadcastError: Error | null = null;
+  outcomes: string[] = [];
   chains() {
     return ['base'];
   }
@@ -88,6 +100,11 @@ class FakeChain implements SweepChain {
     const t = Transaction.from(s.signed);
     this.native -= t.value + t.gasLimit * t.maxFeePerGas!;
     if (t.data !== '0x') this.balances.set(USDC, 0n);
+    if (this.broadcastError) throw this.broadcastError;
+  }
+  async outcome(_c: string, txHash: string): Promise<SweepOutcome> {
+    this.outcomes.push(txHash);
+    return this.broadcasts.some((b) => b.txHash === txHash) ? this.landed : 'unknown';
   }
 }
 
@@ -477,20 +494,113 @@ describe('runFeeSweep', () => {
     expect(row.txHash).toBeNull();
   });
 
-  it('a plan whose lease was taken over during execution is not broadcast', async () => {
+  it('a plan whose lease was taken over during execution is not broadcast, nor overwritten', async () => {
     setEnv({ FEE_SWEEP_ENABLED: 'true', TENDR_FEE_ACCOUNT_NEAR: 'fees.tendr.near' });
+    const takeover = new Date(NOW.getTime() + 99 * 60_000);
     chain.onBuild = async () => {
       await prisma.feeSweep.updateMany({
         where: { assetId: USDC },
-        data: { leaseUntil: new Date(NOW.getTime() + 99 * 60_000) },
+        data: { leaseUntil: takeover },
       });
     };
     const r = await runFeeSweep(NOW);
-    expect(r.failed).toBe(1);
+    expect(r.failed).toBe(0);
     expect(chain.broadcasts).toHaveLength(0);
+    // The catch path is lease-conditional: the other executor's plan is left as it holds it.
     const row = await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } });
-    expect(row.lastError).toMatch(/lost the plan lease/);
+    expect(row).toMatchObject({ status: 'planned', leaseUntil: takeover, lastError: null });
     expect(row.txHash).toBeNull();
+    expect(await events(FEE_SWEEP_FAILED)).toBe(0);
+  });
+
+  describe('executed only once confirmed on chain (final review m2)', () => {
+    beforeEach(() => {
+      setEnv({ FEE_SWEEP_ENABLED: 'true', TENDR_FEE_ACCOUNT_NEAR: 'fees.tendr.near' });
+    });
+
+    it('a pending transfer stays broadcast and blocks re-planning until it confirms', async () => {
+      chain.landed = 'pending';
+      const r = await runFeeSweep(NOW);
+      expect(r).toMatchObject({ executed: 0, broadcast: 1 });
+      let row = await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } });
+      expect(row).toMatchObject({ status: 'broadcast', broadcastAt: NOW, executedAt: null });
+      expect(row.txHash).toBe(chain.broadcasts[0]!.txHash);
+
+      // An hour later the balance looks the same (the transfer is still pending): no second
+      // plan, nothing quoted or sent.
+      chain.balances.set(USDC, 30_000_000n);
+      const later = await runFeeSweep(new Date(NOW.getTime() + 60 * 60_000));
+      expect(later).toMatchObject({ planned: 0, broadcast: 0 });
+      expect(oneclick.quotes).toHaveLength(1);
+      expect(chain.broadcasts).toHaveLength(1);
+
+      // It confirms: the next run reconciles it by hash.
+      chain.landed = 'confirmed';
+      chain.balances.set(USDC, 0n);
+      const done = await runFeeSweep(new Date(NOW.getTime() + 2 * 60 * 60_000));
+      expect(done.executed).toBe(1);
+      row = await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } });
+      expect(row.status).toBe('executed');
+      expect(row.executedAt).toEqual(new Date(NOW.getTime() + 2 * 60 * 60_000));
+    });
+
+    it('a transfer that failed on chain is failed (and notified), never executed', async () => {
+      chain.landed = 'failed';
+      const r = await runFeeSweep(NOW);
+      expect(r).toMatchObject({ executed: 0, failed: 1 });
+      const row = await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } });
+      expect(row).toMatchObject({ status: 'failed', failedAt: NOW, executedAt: null });
+      expect(row.lastError).toMatch(/failed on chain/);
+      expect(await events(FEE_SWEEP_FAILED)).toBe(1);
+    });
+
+    it('a transfer the node never knew is failed only after FEE_SWEEP_UNKNOWN_FAIL_MS', async () => {
+      chain.landed = 'unknown';
+      await runFeeSweep(NOW);
+      let row = await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } });
+      expect(row.status).toBe('broadcast');
+      await runFeeSweep(new Date(NOW.getTime() + FEE_SWEEP_UNKNOWN_FAIL_MS - 1));
+      row = await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } });
+      expect(row.status).toBe('broadcast');
+      await runFeeSweep(new Date(NOW.getTime() + FEE_SWEEP_UNKNOWN_FAIL_MS));
+      row = await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } });
+      expect(row.status).toBe('failed');
+      expect(row.lastError).toMatch(/never landed/);
+    });
+
+    it('a broadcast timeout after the hash was recorded is reconciled on chain, not failed (Task 12)', async () => {
+      chain.broadcastError = new Error('fee sweep: execution exceeded its time budget');
+      chain.landed = 'confirmed';
+      const r = await runFeeSweep(NOW);
+      expect(r).toMatchObject({ executed: 1, failed: 0 });
+      expect(chain.outcomes).toEqual([chain.broadcasts[0]!.txHash]);
+      const row = await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } });
+      expect(row).toMatchObject({ status: 'executed', failedAt: null });
+      expect(await events(FEE_SWEEP_FAILED)).toBe(0);
+
+      // Still unknown at once: stays broadcast (reconciled later), never failed meanwhile.
+      await prisma.feeSweep.deleteMany();
+      chain.balances.set(USDC, 30_000_000n);
+      chain.landed = 'pending';
+      const pending = await runFeeSweep(new Date(NOW.getTime() + DAY));
+      expect(pending).toMatchObject({ broadcast: 1, failed: 0 });
+      expect((await prisma.feeSweep.findFirstOrThrow({ where: { assetId: USDC } })).status).toBe(
+        'broadcast',
+      );
+    });
+
+    it('no transport for the family: failed with failedAt (it backs off)', async () => {
+      const [plan] = await planFeeSweeps(true, NOW);
+      setFeeSweepDeps({
+        chains: () => [],
+        tokens: async () => LIST,
+        oneclick: () => oneclick as unknown as OneClickProvider,
+      });
+      expect(await executeSweep(plan!, NOW)).toBe('failed');
+      const row = await prisma.feeSweep.findUniqueOrThrow({ where: { id: plan!.id } });
+      expect(row).toMatchObject({ status: 'failed', failedAt: NOW });
+      expect(row.lastError).toMatch(/no transport/);
+    });
   });
 
   it('records no key material or signed bytes (R12-f)', async () => {
@@ -503,6 +613,7 @@ describe('runFeeSweep', () => {
         'amount',
         'amountUsd',
         'assetId',
+        'broadcastAt',
         'chain',
         'createdAt',
         'depositAddress',

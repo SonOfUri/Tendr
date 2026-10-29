@@ -254,6 +254,22 @@ describe('EVM gasless relayer (live path, mocked JSON-RPC)', () => {
     expect(await releaseEndedSessionReservations()).toBe(0);
   });
 
+  it('the OP-stack L1 data fee is part of the recorded relay cost (and of a loss)', async () => {
+    const { s, q, signatures, sponsorshipId } = await sponsoredQuote();
+    const res = await relayer.submit(q, { signatures });
+    node.mine(res.txHash!, 1, 80_000n, [tendrPaid(q, 0n)]);
+    // 80 000 gas × 1.1 gwei = 88 000 gwei, plus a 40 000 gwei L1 fee: 128 000 gwei × $2500.
+    node.receipts.get(res.txHash!)!.l1Fee = 40_000_000_000_000n;
+    await pollEvmRelays(sender);
+    let sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    expect(sp.costUsd!.toFixed()).toBe('0.32');
+    await prisma.session.update({ where: { id: s.id }, data: { status: 'REFUNDED' } });
+    await releaseEndedSessionReservations();
+    sp = await prisma.gasSponsorship.findUniqueOrThrow({ where: { id: sponsorshipId } });
+    expect(sp).toMatchObject({ sponsor: 'tendr' });
+    expect(sp.costUsd!.toFixed()).toBe('0.32');
+  });
+
   it('a session that ends refunded after the relay: released, and the gas spent is a Tendr loss', async () => {
     const { s, q, signatures, sponsorshipId } = await sponsoredQuote();
     const res = await relayer.submit(q, { signatures });

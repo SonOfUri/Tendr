@@ -398,6 +398,37 @@ describe('integrator hook routes', () => {
       expect(again.json().error.message).toMatch(/already succeeded/);
     });
 
+    it('at most 3 manual resends per hook call; the 4th is refused with a clear error', async () => {
+      await integrator();
+      const sent: string[] = [];
+      setHookTransport(async (call) => {
+        sent.push(call.hookCallId);
+        return {
+          outcome: 'failed',
+          txHash: null,
+          costUsd: null,
+          error: 'reverted',
+          terminal: true,
+        };
+      });
+      const s = await create(body({ hook_data: { player: 'p-1' } }));
+      const paymentId = await settle(s.json().id);
+      let row = await prisma.hookCall.findUniqueOrThrow({ where: { paymentId } });
+      expect(row.status).toBe('failed');
+      for (let i = 1; i <= 3; i++) {
+        const r = await resend(paymentId);
+        expect(r.statusCode, r.body).toBe(200);
+        expect(r.json().status).toBe('failed');
+      }
+      const refused = await resend(paymentId);
+      expect(refused.statusCode, refused.body).toBe(409);
+      expect(refused.json().error.message).toMatch(/already resent 3 times/);
+      expect(refused.json().error.details).toMatchObject({ max_resends: 3, resends: 3 });
+      expect(sent).toHaveLength(4); // the first attempt + 3 resends, nothing more
+      row = await prisma.hookCall.findUniqueOrThrow({ where: { paymentId } });
+      expect(row.manualResends).toBe(3);
+    });
+
     it('needs a full secret key (sessions:write); unknown payments are 404', async () => {
       await integrator();
       const denied = await resend('pay_01J0000000000000000000000Z', readOnlyKey);

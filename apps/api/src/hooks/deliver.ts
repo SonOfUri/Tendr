@@ -20,8 +20,9 @@
 // unknown: transport / RPC errors, a dry-run revert (the contract may be paused; no gas spent), a
 // transaction given up or never seen. The reason is kept in `last_error`. Terminal at once (fix
 // round 1, Important 1): a call that reverted ON CHAIN (it burnt relayer gas; EVM receipt status
-// 0, NEAR execution failure), and an EVM send refused for gas (estimate above HOOK_GAS_CEILING, or
-// gas limit × gas price above the payment's 10 % hook budget). At or past `retry_until`, or on a
+// 0, NEAR execution failure), and an EVM send whose gas estimate is above HOOK_GAS_CEILING. A gas
+// PRICE spike (gas limit × gas price above the payment's 10 % hook budget) is retried. At or past
+// `retry_until`, or on a
 // terminal failure: `failed`, and the first time also `hook.failed` (webhook-deliverable; one
 // alert email, hooks.ts). A resend (hooks.ts) sets `retry_until` to the resend time: one attempt.
 //
@@ -42,7 +43,7 @@ import { id } from 'ethers';
 import { retryDelayMs } from '../checkout/webhooks.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { recordEvent } from '../events/record.js';
-import { nativeUnitsForUsd, nativeUsd } from '../gas/fees.js';
+import { nativeUnitsForUsd, nativeUsd, orderUsd } from '../gas/fees.js';
 import { MAX_HOOK_ORDER_BPS } from '../gas/quote-fee.js';
 import { alertLossCapReached, lossCapReached, recognizeTendrLoss } from '../gas/loss-cap.js';
 import { newId } from '../lib/ids.js';
@@ -191,15 +192,33 @@ async function priced(chain: string, units: bigint | null | undefined): Promise<
 }
 
 /**
- * The payment's hook budget in the chain's native units: MAX_HOOK_ORDER_BPS (10 %) of the order,
- * the same cap the quote applies to the hook estimate.
+ * The payment's hook budget in the chain's native units: MAX_HOOK_ORDER_BPS (10 %) of the order's
+ * USD value, the same cap the quote applies to the hook estimate. A session priced in its
+ * settlement asset is valued at what the payment settled (its quote's `amount_out_usd`), or else
+ * at the token-list price; never its raw asset amount.
  */
 async function hookBudgetWei(call: ExpectedHookCall): Promise<bigint> {
   const h = await prisma.hookCall.findUniqueOrThrow({
     where: { id: call.hookCallId },
-    select: { session: { select: { amount: true } } },
+    select: {
+      livemode: true,
+      session: { select: { amount: true, amountCurrency: true, destAsset: true } },
+      paymentId: true,
+    },
   });
-  const usd = h.session.amount
+  let order: string | null = null;
+  if (h.session.amountCurrency === 'USD') {
+    order = h.session.amount.toFixed();
+  } else {
+    const q = await prisma.payment.findUnique({
+      where: { id: h.paymentId },
+      select: { quote: { select: { amountOutUsd: true } } },
+    });
+    const settled = q?.quote.amountOutUsd;
+    order = settled && settled.gt(0) ? settled.toFixed() : await orderUsd(h.session, h.livemode);
+  }
+  if (order === null) throw new Error('the order value is unpriced');
+  const usd = new Prisma.Decimal(order)
     .mul(MAX_HOOK_ORDER_BPS)
     .div(10_000)
     .toDecimalPlaces(6, Prisma.Decimal.ROUND_DOWN)
@@ -257,6 +276,16 @@ const liveEvm: HookTransport = async (call) => {
           costUsd: null,
           error: `hook gas above its bound: ${err.message}`,
           terminal: true,
+        };
+      }
+      if (err.reason === 'gas_budget') {
+        // The gas PRICE is above the payment's hook budget right now: transient, retried (only an
+        // estimate above the gas ceiling is terminal).
+        return {
+          outcome: 'failed',
+          txHash: null,
+          costUsd: null,
+          error: `the gas price is above the hook budget right now: ${err.message}`,
         };
       }
       const data = revertData(err.cause);
@@ -589,7 +618,7 @@ async function recognizeShortfall(
   });
   const estimate = payment.quote.hookFeeUsd ?? new Prisma.Decimal(0);
   const booked = await tx.gasSponsorship.aggregate({
-    where: { ...ctx, method: 'hook', recoveredFromPaymentId: row.paymentId },
+    where: { ...ctx, method: 'hook', hookPaymentId: row.paymentId },
     _sum: { costUsd: true },
   });
   const excess = totalCost
@@ -604,7 +633,8 @@ async function recognizeShortfall(
       ...ctx,
       sessionId: row.sessionId,
       quoteId: payment.quoteId,
-      recoveredFromPaymentId: row.paymentId,
+      // Its own key: nothing was recovered from this payment for the shortfall.
+      hookPaymentId: row.paymentId,
       chain: row.chain,
       txHash,
       method: 'hook',
