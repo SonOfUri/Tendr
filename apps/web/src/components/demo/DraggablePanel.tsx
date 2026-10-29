@@ -50,8 +50,17 @@ export function DraggablePanel({ kind, visible, anchor, children }: Props) {
     if (!el || !parent) return;
     userMoved.current = false;
 
+    const isMobile = () =>
+      typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches;
+
     const place = () => {
       if (userMoved.current || dragOrigin.current) return;
+      // Mobile uses document flow — skip absolute offsets (keeps opacity ready).
+      if (isMobile()) {
+        setOffset({ x: 0, y: 0 });
+        setReady(true);
+        return;
+      }
       setOffset(defaultOffset(parent, el, anchor));
       setReady(true);
     };
