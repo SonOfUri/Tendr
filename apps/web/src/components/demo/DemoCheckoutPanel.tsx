@@ -250,20 +250,20 @@ export function DemoCheckoutPanel({
     if (phase === 'done') onStatusChange?.('success');
   }, [phase, onStatusChange]);
 
-  // Demo shortcut: after 45s on Transfer, skip waiting for a real deposit and show success.
-  // `phase` is intentionally omitted from deps so the confirming step does not clear the timer.
+  // UI demo: Transfer → confirming checklist → success at 15s (no backend).
+  // `phase` omitted from deps so confirming does not reset the timer.
   useEffect(() => {
     if (method !== 'transfer' || !quote || completed.current) return;
     if (phase !== 'pay' && phase !== 'waiting') return;
 
     const waiting = window.setTimeout(() => {
       if (!completed.current) setPhase('waiting');
-    }, 40_000);
+    }, 4_000);
     const done = window.setTimeout(() => {
       if (completed.current) return;
       completed.current = true;
       setPhase('done');
-    }, 45_000);
+    }, 15_000);
     return () => {
       window.clearTimeout(waiting);
       window.clearTimeout(done);

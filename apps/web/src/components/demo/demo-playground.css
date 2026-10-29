@@ -867,34 +867,71 @@
   background: var(--demo-chip);
   border: 1px solid var(--demo-panel-border);
   display: grid;
-  gap: 0.65rem;
+  gap: 0;
 }
 
 .demo-status-ticks li {
   position: relative;
-  padding-left: 1.55rem;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  column-gap: 0.7rem;
+  align-items: start;
+  min-height: 2.15rem;
+  padding-bottom: 0.55rem;
   font-size: 0.86rem;
   font-weight: 600;
-  color: var(--demo-panel-muted);
+  color: color-mix(in srgb, var(--demo-panel-muted) 72%, transparent);
 }
 
-.demo-status-ticks li::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0.2rem;
-  width: 14px;
-  height: 14px;
+.demo-status-ticks li:last-child {
+  min-height: 0;
+  padding-bottom: 0;
+}
+
+.demo-status-tick-dot {
+  width: 16px;
+  height: 16px;
+  margin-top: 0.12rem;
   border-radius: 999px;
-  border: 1.5px solid var(--demo-panel-border);
+  border: 1.5px solid color-mix(in srgb, var(--demo-panel-border) 90%, transparent);
   background: transparent;
+  display: grid;
+  place-items: center;
+  color: #111111;
+  z-index: 1;
+  transition:
+    border-color 280ms ease,
+    background 280ms ease,
+    box-shadow 280ms ease;
+}
+
+.demo-status-tick-link {
+  position: absolute;
+  left: 7px;
+  top: 1.15rem;
+  bottom: 0;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--demo-panel-border);
+  z-index: 0;
+  transition: background 320ms ease;
+}
+
+.demo-status-tick-link[data-filled='true'] {
+  background: color-mix(in srgb, #b6f34d 70%, var(--demo-panel-border));
+}
+
+.demo-status-tick-label {
+  padding-top: 0.05rem;
+  line-height: 1.35;
+  transition: color 280ms ease;
 }
 
 .demo-status-ticks li[data-done='true'] {
   color: var(--demo-panel-ink);
 }
 
-.demo-status-ticks li[data-done='true']::before {
+.demo-status-ticks li[data-done='true'] .demo-status-tick-dot {
   border-color: #b6f34d;
   background: #b6f34d;
   box-shadow: inset 0 0 0 2px var(--demo-chip);
@@ -904,7 +941,7 @@
   color: var(--demo-panel-ink);
 }
 
-.demo-status-ticks li[data-pulse='true']::before {
+.demo-status-ticks li[data-pulse='true'] .demo-status-tick-dot {
   border-color: var(--demo-panel-ink);
   animation: demo-status-dot 1.1s ease-in-out infinite;
 }
@@ -916,7 +953,7 @@
     opacity: 1;
   }
   50% {
-    transform: scale(1.2);
+    transform: scale(1.15);
     opacity: 0.55;
   }
 }

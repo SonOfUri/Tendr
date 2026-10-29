@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { DemoSlug } from '@/lib/demo';
 import { TendrLogo } from '@/components/TendrLogo';
 
@@ -15,6 +15,11 @@ type Props = {
   onContinue?: () => void;
   onClose?: () => void;
 };
+
+/** How far through the confirming checklist (1 = first done + second active … 3 = all done). */
+const CONFIRM_STEPS = 3;
+/** Time on each step before advancing (fits under the 15s total checkout timer). */
+const CONFIRM_STEP_MS = 3_500;
 
 const CONFETTI_COLORS = ['#b6f34d', '#111111', '#ffffff', '#6ee7b7', '#93c5fd', '#fbbf24'];
 
@@ -51,13 +56,34 @@ export function DemoStatusCard({
   onClose,
 }: Props) {
   const shellRef = useRef<HTMLDivElement>(null);
+  /** How many steps are complete (1 = payment detected done; 3 = settlement done). */
+  const [progress, setProgress] = useState(1);
 
   useEffect(() => {
     if (variant !== 'success' || !shellRef.current) return;
     burstConfetti(shellRef.current);
   }, [variant]);
 
+  useEffect(() => {
+    if (variant !== 'confirming') {
+      setProgress(1);
+      return;
+    }
+    // Start with step 1 done + step 2 active, then advance to settlement, then all done.
+    setProgress(1);
+    const toConfirmingDone = window.setTimeout(() => setProgress(2), CONFIRM_STEP_MS);
+    const toSettlementDone = window.setTimeout(() => setProgress(3), CONFIRM_STEP_MS * 2);
+    return () => {
+      window.clearTimeout(toConfirmingDone);
+      window.clearTimeout(toSettlementDone);
+    };
+  }, [variant]);
+
   const confirming = variant === 'confirming';
+  const tickLabels =
+    skin === 'gaming'
+      ? (['Payment received', 'Minting unlock', 'Inventory sync'] as const)
+      : (['Payment detected', 'Confirming on-chain', 'Settlement'] as const);
 
   return (
     <div
@@ -136,11 +162,42 @@ export function DemoStatusCard({
       </p>
 
       {confirming ? (
-        <ul className="demo-status-ticks">
-          <li data-done="true">{skin === 'gaming' ? 'Payment received' : 'Payment detected'}</li>
-          <li data-pulse="true">{skin === 'gaming' ? 'Minting unlock' : 'Confirming on-chain'}</li>
-          <li>{skin === 'gaming' ? 'Inventory sync' : 'Settlement'}</li>
-        </ul>
+        <ol className="demo-status-ticks" aria-label="Confirmation progress">
+          {tickLabels.map((label, i) => {
+            // progress = completed count (1..3). Current pulse is at index progress (0-based).
+            const isDone = i < progress || progress >= CONFIRM_STEPS;
+            const isActive = !isDone && i === progress;
+            return (
+              <li
+                key={label}
+                data-done={isDone ? 'true' : 'false'}
+                data-pulse={isActive ? 'true' : 'false'}
+              >
+                {i < CONFIRM_STEPS - 1 ? (
+                  <span
+                    className="demo-status-tick-link"
+                    data-filled={i < progress ? 'true' : 'false'}
+                    aria-hidden
+                  />
+                ) : null}
+                <span className="demo-status-tick-dot" aria-hidden>
+                  {isDone ? (
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="M5 13l4 4L19 7"
+                        stroke="currentColor"
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  ) : null}
+                </span>
+                <span className="demo-status-tick-label">{label}</span>
+              </li>
+            );
+          })}
+        </ol>
       ) : (
         <button type="button" className="demo-status-cta" onClick={onContinue}>
           {skin === 'gaming' ? 'BACK TO GAME' : 'Continue'}
