@@ -182,7 +182,7 @@ describe('public payment links', () => {
     it('returns the hosted url with #cs= and the session has no external_ref', async () => {
       const l = await createLink(ctx(), fixedUsd);
       const out = await createLinkSession('acme', 'tshirt', false, {}, IP);
-      expect(Object.keys(out)).toEqual(['url']);
+      expect(Object.keys(out)).toEqual(['url', 'expires_at']);
       expect(out.url).toMatch(
         /^http:\/\/localhost:3000\/pay\/ses_[0-9A-Z]{26}#cs=ses_[0-9A-Z]{26}_secret_[0-9a-f]{32}$/,
       );
@@ -193,6 +193,8 @@ describe('public payment links', () => {
       expect(s.cancelUrl).toBe(s.successUrl);
       expect(s.amount.toFixed()).toBe('5');
       expect(s.connectionId).toBeNull();
+      // The page keeps the session to offer "Continue your payment" until it expires.
+      expect(out.expires_at).toBe(s.expiresAt.toISOString());
     });
 
     it('link session starts with a 5-minute expiry', async () => {

@@ -11,6 +11,7 @@ import {
   cleanPayerNote,
   feePayerFromDb,
   type PaymentLinkAvailability,
+  type PublicLinkSessionCreated,
   type PublicLinkSessionInput,
   type PublicPaymentLinkView,
 } from '@tendr/contracts';
@@ -145,7 +146,7 @@ const amountInvalid = (message: string) =>
  * own, re-checked against the USD 1.00 floor at the current rate; an open link's typed amount,
  * checked for precision and against the effective minimum), cleans the note, and creates the
  * session through `createSession` with no `external_ref` and the link page as the return address.
- * Returns the hosted checkout URL with the client secret in its fragment.
+ * Returns the hosted checkout URL with the client secret in its fragment, and the session's expiry.
  *
  * NOT_FOUND (404); LINK_UNAVAILABLE (409, `details.availability`); LINK_RESERVED (409);
  * LINK_BUSY (429); AMOUNT_TOO_LOW (400, `details.min_amount`); VALIDATION_ERROR (400);
@@ -157,7 +158,7 @@ export async function createLinkSession(
   livemode: boolean,
   input: PublicLinkSessionInput,
   ip: string,
-): Promise<{ url: string }> {
+): Promise<PublicLinkSessionCreated> {
   const r = await resolve(merchantSlug, linkSlug, livemode);
   const { link } = r;
   const now = new Date();
@@ -191,7 +192,7 @@ export async function createLinkSession(
       { amount, amount_currency: currency, success_url: returnUrl, cancel_url: returnUrl },
       { fromLink: { linkId: link.id, payerNote, returnUrl } },
     );
-    return { url: created.url };
+    return { url: created.url, expires_at: created.expires_at };
   } catch (err) {
     if (err instanceof AppError && err.code === 'LINK_BUSY') {
       log('warn', 'payment link busy', { linkId: link.id, ip });

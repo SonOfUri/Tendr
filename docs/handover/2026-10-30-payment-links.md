@@ -48,8 +48,10 @@ No credential, never cached (`cache-control: no-store`, errors too).
   cannot trade and an unknown link give the same 404.
 - `POST .../sessions` (`{ amount?, note? }`) is "Pay". It re-checks availability, prices the amount
   (floor at the current rate), cleans the note (max 280 chars, plain text), and creates a normal
-  checkout session with the link page as its return address. Response `201 { url }` with the client
-  secret in the URL fragment. Sessions are created only here, never on page load or preview.
+  checkout session with the link page as its return address. Response `201 { url, expires_at }` with
+  the client secret in the URL fragment. The page keeps `{ url, expires_at }` in `sessionStorage`
+  (per store, link and mode) and offers "Continue your payment" while it has not expired, so a payer
+  who comes back is not blocked by their own reservation. Sessions are created only here, never on page load or preview.
 - **Errors**: `NOT_FOUND`, `VALIDATION_ERROR`, `AMOUNT_TOO_LOW` (`details.min_amount`),
   `FX_RATE_UNAVAILABLE` (503), `LINK_UNAVAILABLE` (`details.availability`), `LINK_RESERVED` (409),
   `LINK_BUSY` (429), `LINK_NOT_SUPPORTED`, `RATE_LIMITED`.

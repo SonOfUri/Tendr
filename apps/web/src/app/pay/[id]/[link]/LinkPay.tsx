@@ -2,7 +2,7 @@
 
 import type { PaymentLinkAvailability, PublicPaymentLinkView } from '@tendr/contracts';
 import { PAYER_NOTE_MAX } from '@tendr/contracts';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { safeHttpUrl } from '@/lib/checkout/format';
 import {
   decimalLess,
@@ -27,6 +27,70 @@ const BUSY = 'Too many people are paying right now. Try again in a minute.';
 const NO_PRICES = "Prices can't be loaded right now. Try again in a minute.";
 const TOO_SMALL = 'This amount is too small to pay in crypto right now.';
 const FAILED = "We couldn't start the payment. Try again.";
+
+/** A payment this tab started from the link: its hosted checkout and when the session expires. */
+export interface PendingPayment {
+  url: string;
+  expires_at: string;
+}
+
+/** The sessionStorage key of a link's pending payment: one per store, link and mode. */
+export const pendingPaymentKey = (merchant: string, link: string, test: boolean) =>
+  `tendr:link-pay:${test ? 'test' : 'live'}:${merchant}/${link}`;
+
+/** This tab's sessionStorage, or null where the browser refuses it (the page works without). */
+function tabStorage(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Remembers the session "Pay" created, so a payer who comes back can continue it. */
+export function savePendingPayment(
+  storage: Storage | null,
+  key: string,
+  entry: PendingPayment,
+): void {
+  try {
+    storage?.setItem(key, JSON.stringify(entry));
+  } catch {
+    // Full or blocked storage: no "Continue" action, nothing else changes.
+  }
+}
+
+/** The tab's unexpired pending payment for this link, or null (an expired one is dropped). */
+export function readPendingPayment(
+  storage: Storage | null,
+  key: string,
+  now: number,
+): PendingPayment | null {
+  try {
+    const raw = storage?.getItem(key);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as Partial<PendingPayment> | null;
+    const url = safeHttpUrl(typeof v?.url === 'string' ? v.url : null);
+    const expires = typeof v?.expires_at === 'string' ? Date.parse(v.expires_at) : NaN;
+    if (url && expires > now) return { url, expires_at: v!.expires_at! };
+    storage?.removeItem(key);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The page came back from the browser's back/forward cache (`pageshow` with `persisted`), where it
+ * was frozen mid-"Pay": `onRestore` re-enables the button. Returns the unsubscribe.
+ */
+export function onPageRestored(target: EventTarget, onRestore: () => void): () => void {
+  const listener = (e: Event) => {
+    if ((e as Event & { persisted?: boolean }).persisted) onRestore();
+  };
+  target.addEventListener('pageshow', listener);
+  return () => target.removeEventListener('pageshow', listener);
+}
 
 export interface PayState {
   availability: PaymentLinkAvailability;
@@ -104,13 +168,22 @@ export function applyPayError(
 interface BodyProps {
   view: PublicPaymentLinkView;
   state: PayState;
+  /** The hosted checkout of a payment this tab already started from the link, still open. */
+  continueUrl?: string | null;
   onAmount: (v: string) => void;
   onNote: (v: string) => void;
   onSubmit: () => void;
 }
 
 /** The page itself, from its state (LinkPay owns the state and the request). */
-export function LinkPayBody({ view, state, onAmount, onNote, onSubmit }: BodyProps) {
+export function LinkPayBody({
+  view,
+  state,
+  continueUrl = null,
+  onAmount,
+  onNote,
+  onSubmit,
+}: BodyProps) {
   const logo = view.merchant.logo_url?.startsWith('https://')
     ? safeHttpUrl(view.merchant.logo_url)
     : null;
@@ -147,6 +220,15 @@ export function LinkPayBody({ view, state, onAmount, onNote, onSubmit }: BodyPro
           {view.title}
         </h1>
         {view.description ? <p className="pay-link-description">{view.description}</p> : null}
+
+        {continueUrl ? (
+          <div className="pay-link-continue" role="status">
+            <p className="small">You already started paying this link.</p>
+            <a className="pay-button" href={continueUrl}>
+              Continue your payment
+            </a>
+          </div>
+        ) : null}
 
         {!available ? (
           <p className="pay-alert" role="status">
@@ -263,6 +345,19 @@ export function LinkPay({
   test: boolean;
 }) {
   const [state, setState] = useState<PayState>(() => initialPayState(view));
+  const [pending, setPending] = useState<PendingPayment | null>(null);
+  const key = pendingPaymentKey(merchant, link, test);
+
+  useEffect(() => {
+    // After mount only: the server render has no sessionStorage.
+    const load = () => setPending(readPendingPayment(tabStorage(), key, Date.now()));
+    load();
+    // Back from the checkout through the back/forward cache: the page was frozen with "Pay" busy.
+    return onPageRestored(window, () => {
+      setState((s) => ({ ...s, busy: false }));
+      load();
+    });
+  }, [key]);
 
   const submit = async () => {
     if (state.busy) return;
@@ -287,6 +382,9 @@ export function LinkPay({
     setState((s) => ({ ...s, busy: true, fieldError: null, message: null }));
     const out = await startLinkPayment(merchant, link, test, body);
     if ('url' in out) {
+      if (out.expires_at) {
+        savePendingPayment(tabStorage(), key, { url: out.url, expires_at: out.expires_at });
+      }
       window.location.assign(out.url);
       return;
     }
@@ -297,6 +395,7 @@ export function LinkPay({
     <LinkPayBody
       view={view}
       state={state}
+      continueUrl={pending?.url ?? null}
       onAmount={(amount) => setState((s) => ({ ...s, amount, fieldError: null }))}
       onNote={(note) => setState((s) => ({ ...s, note }))}
       onSubmit={() => void submit()}

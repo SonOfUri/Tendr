@@ -47,7 +47,10 @@ const CreateFields = z.strictObject({
   description: z.string().trim().max(LINK_DESCRIPTION_MAX).optional(),
   slug: z
     .string()
-    .regex(LINK_SLUG_RE, '3-60 lower-case letters, digits or hyphens, not starting or ending with "-"')
+    .regex(
+      LINK_SLUG_RE,
+      '3-60 lower-case letters, digits or hyphens, not starting or ending with "-"',
+    )
     .refine((s) => !RESERVED_LINK_SLUGS.includes(s), 'this slug is reserved')
     .optional(),
   amount_type: z.enum(['fixed', 'open']),
@@ -105,6 +108,12 @@ export const PublicLinkSessionInputSchema = z.object({
   note: z.string().max(2000).optional(),
 });
 export type PublicLinkSessionInput = z.infer<typeof PublicLinkSessionInputSchema>;
+
+/**
+ * "Pay" answered: the hosted checkout (client secret in its fragment) and the session's expiry, so
+ * the page can offer "Continue your payment" to a payer who comes back before it passes.
+ */
+export type PublicLinkSessionCreated = { url: string; expires_at: string };
 
 /** What the public link page may see: no ids, use counts or limits. */
 export type PublicPaymentLinkView = {

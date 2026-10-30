@@ -83,16 +83,17 @@ export interface LinkPayError {
 }
 
 /**
- * "Pay": a checkout session from the link. `{ url }` is the hosted checkout (client secret in its
- * fragment); errors come back in the API's envelope, plus `RATE_LIMITED` for a bare 429 and
- * `NETWORK_ERROR` when the request never completed.
+ * "Pay": a checkout session from the link. `url` is the hosted checkout (client secret in its
+ * fragment) and `expires_at` the session's expiry (null if the API did not say). Errors come back
+ * in the API's envelope, plus `RATE_LIMITED` for a bare 429 and `NETWORK_ERROR` when the request
+ * never completed.
  */
 export async function startLinkPayment(
   merchant: string,
   link: string,
   test: boolean,
   body: { amount?: string; note?: string },
-): Promise<{ url: string } | { error: LinkPayError }> {
+): Promise<{ url: string; expires_at: string | null } | { error: LinkPayError }> {
   const path = `/v1/payment_links/public/${encodeURIComponent(merchant)}/${encodeURIComponent(link)}/sessions`;
   let res: Response;
   try {
@@ -113,8 +114,10 @@ export async function startLinkPayment(
     // Not JSON (a proxy's page): handled by status below.
   }
   if (res.ok) {
-    const url = (json as { url?: unknown } | null)?.url;
-    if (typeof url === 'string' && /^https?:\/\//.test(url)) return { url };
+    const { url, expires_at } = (json ?? {}) as { url?: unknown; expires_at?: unknown };
+    if (typeof url === 'string' && /^https?:\/\//.test(url)) {
+      return { url, expires_at: typeof expires_at === 'string' ? expires_at : null };
+    }
     return { error: { code: 'BAD_RESPONSE', message: 'Unexpected response' } };
   }
   const err = (json as { error?: Partial<LinkPayError> } | null)?.error;

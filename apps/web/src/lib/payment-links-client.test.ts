@@ -59,18 +59,39 @@ describe('startLinkPayment', () => {
   it('posts the amount and note to the public link route and returns the checkout url', async () => {
     const fn = vi.fn(
       async (_url: string, _init?: RequestInit) =>
-        new Response(JSON.stringify({ url: 'http://localhost:3000/pay/ses_x#cs=abc' }), {
-          status: 201,
-        }),
+        new Response(
+          JSON.stringify({
+            url: 'http://localhost:3000/pay/ses_x#cs=abc',
+            expires_at: '2026-10-30T12:05:00.000Z',
+          }),
+          { status: 201 },
+        ),
     );
     vi.stubGlobal('fetch', fn);
     const out = await startLinkPayment('acme', 'tip-jar', true, { amount: '5000', note: 'hi' });
-    expect(out).toEqual({ url: 'http://localhost:3000/pay/ses_x#cs=abc' });
+    expect(out).toEqual({
+      url: 'http://localhost:3000/pay/ses_x#cs=abc',
+      expires_at: '2026-10-30T12:05:00.000Z',
+    });
     const [url, init] = fn.mock.calls[0]!;
     expect(url).toMatch(/\/v1\/payment_links\/public\/acme\/tip-jar\/sessions\?mode=test$/);
     expect(init!.method).toBe('POST');
     expect(init!.credentials).toBe('omit');
     expect(JSON.parse(String(init!.body))).toEqual({ amount: '5000', note: 'hi' });
+  });
+
+  it('an answer without expires_at still returns the url', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ url: 'https://x.example/pay/s' }), { status: 201 }),
+      ),
+    );
+    expect(await startLinkPayment('acme', 'l', false, {})).toEqual({
+      url: 'https://x.example/pay/s',
+      expires_at: null,
+    });
   });
 
   it('returns the API error envelope, and a code for a bare 429 or a network failure', async () => {

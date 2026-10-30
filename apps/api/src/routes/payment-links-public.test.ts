@@ -133,6 +133,7 @@ describe('public payment link routes', () => {
     expect(ok.statusCode, ok.body).toBe(201);
     expect(ok.headers['cache-control']).toBe('no-store');
     expect(ok.json().url).toMatch(/\/pay\/ses_[0-9A-Z]{26}#cs=ses_/);
+    expect(Date.parse(ok.json().expires_at)).toBeGreaterThan(Date.now());
   });
 
   it('the payer page origin may call the session route (CORS, no credentials)', async () => {

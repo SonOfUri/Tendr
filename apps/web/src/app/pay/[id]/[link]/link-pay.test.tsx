@@ -3,7 +3,16 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Checkout } from '../components/Checkout';
 import PayPage from '../page';
-import { LinkPayBody, applyPayError, initialPayState, type PayState } from './LinkPay';
+import {
+  LinkPayBody,
+  applyPayError,
+  initialPayState,
+  onPageRestored,
+  pendingPaymentKey,
+  readPendingPayment,
+  savePendingPayment,
+  type PayState,
+} from './LinkPay';
 
 vi.mock('next/headers', () => ({
   headers: async () => new Headers({ 'x-forwarded-for': '203.0.113.7' }),
@@ -163,6 +172,98 @@ describe('link page', () => {
     expect(low).toContain('The minimum is ₦1,700.00.');
     expect(low).toContain('aria-invalid="true"');
     expect(low).toContain('Pay with crypto');
+  });
+});
+
+/** A Map-backed Storage; `failing` throws on every call, like a blocked one. */
+function memoryStorage(failing = false): Storage {
+  const m = new Map<string, string>();
+  const guard = () => {
+    if (failing) throw new Error('SecurityError');
+  };
+  return {
+    get length() {
+      return m.size;
+    },
+    clear: () => m.clear(),
+    key: (i: number) => [...m.keys()][i] ?? null,
+    getItem: (k: string) => (guard(), m.get(k) ?? null),
+    setItem: (k: string, v: string) => (guard(), void m.set(k, v)),
+    removeItem: (k: string) => (guard(), void m.delete(k)),
+  };
+}
+
+describe('continue a started payment', () => {
+  const NOW = Date.parse('2026-10-30T12:00:00Z');
+  const entry = {
+    url: 'https://usetendr.tech/pay/ses_x#cs=ses_x_secret_y',
+    expires_at: '2026-10-30T12:05:00.000Z',
+  };
+
+  it('keys the entry by store, link and mode', () => {
+    const keys = new Set([
+      pendingPaymentKey('acme', 'tip-jar', false),
+      pendingPaymentKey('acme', 'tip-jar', true),
+      pendingPaymentKey('acme', 'logo', false),
+      pendingPaymentKey('other', 'tip-jar', false),
+    ]);
+    expect(keys.size).toBe(4);
+  });
+
+  it('reads back an unexpired entry and drops an expired one', () => {
+    const storage = memoryStorage();
+    const key = pendingPaymentKey('acme', 'tip-jar', false);
+    savePendingPayment(storage, key, entry);
+    expect(readPendingPayment(storage, key, NOW)).toEqual(entry);
+    expect(readPendingPayment(storage, pendingPaymentKey('acme', 'tip-jar', true), NOW)).toBeNull();
+    expect(readPendingPayment(storage, key, Date.parse(entry.expires_at))).toBeNull();
+    expect(storage.getItem(key)).toBeNull();
+  });
+
+  it('ignores junk and works without storage', () => {
+    const storage = memoryStorage();
+    storage.setItem('k', '{not json');
+    expect(readPendingPayment(storage, 'k', NOW)).toBeNull();
+    storage.setItem(
+      'k',
+      JSON.stringify({ url: 'javascript:alert(1)', expires_at: entry.expires_at }),
+    );
+    expect(readPendingPayment(storage, 'k', NOW)).toBeNull();
+    const blocked = memoryStorage(true);
+    expect(() => savePendingPayment(blocked, 'k', entry)).not.toThrow();
+    expect(readPendingPayment(blocked, 'k', NOW)).toBeNull();
+    expect(() => savePendingPayment(null, 'k', entry)).not.toThrow();
+    expect(readPendingPayment(null, 'k', NOW)).toBeNull();
+  });
+
+  it('shows "Continue your payment" next to the Pay button', () => {
+    const html = renderToStaticMarkup(
+      <LinkPayBody
+        view={FIXED}
+        state={initialPayState(FIXED)}
+        continueUrl={entry.url}
+        onAmount={() => {}}
+        onNote={() => {}}
+        onSubmit={() => {}}
+      />,
+    );
+    expect(html).toContain('Continue your payment');
+    expect(html).toContain(`href="${entry.url}"`);
+    expect(html).toContain('Pay with crypto');
+    expect(render(FIXED)).not.toContain('Continue your payment');
+  });
+
+  it('a page restored from the back/forward cache re-enables Pay', () => {
+    const target = new EventTarget();
+    const restored = vi.fn();
+    const stop = onPageRestored(target, restored);
+    target.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
+    expect(restored).not.toHaveBeenCalled();
+    target.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    expect(restored).toHaveBeenCalledTimes(1);
+    stop();
+    target.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    expect(restored).toHaveBeenCalledTimes(1);
   });
 });
 

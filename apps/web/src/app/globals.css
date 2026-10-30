@@ -1033,6 +1033,21 @@ code {
   width: 100%;
 }
 
+.pay-link-continue {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.pay-link-continue p {
+  margin: 0;
+}
+
+.pay-link-continue .pay-button {
+  width: 100%;
+  text-align: center;
+}
+
 .pay-test {
   display: grid;
   gap: 0.5rem;

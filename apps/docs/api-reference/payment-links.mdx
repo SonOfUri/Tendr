@@ -179,10 +179,15 @@ can build your own page on them. Add `?mode=test` to address a test link.
 characters, and ignored when the link has `note: "off"`. The answer is `201`:
 
 ```json
-{ "url": "https://usetendr.tech/pay/ses_...#cs=ses_..._secret_..." }
+{
+  "url": "https://usetendr.tech/pay/ses_...#cs=ses_..._secret_...",
+  "expires_at": "2026-10-30T12:05:00.000Z"
+}
 ```
 
-Send the payer to `url`. The session has no `external_ref`. Responses are never cached.
+Send the payer to `url`. `expires_at` is the session's expiry at creation (5 minutes until its first
+quote, then the normal session lifetime); the page uses it to offer "Continue your payment" to a payer
+who comes back. The session has no `external_ref`. Responses are never cached.
 
 ## Limits
 

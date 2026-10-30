@@ -1,6 +1,7 @@
 // Public payment link routes (spec §5), no credential:
 // - `GET  /v1/payment_links/public/:merchant/:link`          what the payer's page shows
-// - `POST /v1/payment_links/public/:merchant/:link/sessions` "Pay": a checkout session, `{ url }`
+// - `POST /v1/payment_links/public/:merchant/:link/sessions` "Pay": a checkout session,
+//   `{ url, expires_at }`
 // `?mode=test` addresses a test link; without it only live links resolve. Both bring their own
 // rate limits (rate-limit.ts: per payer IP, a global read ceiling, and per IP per link for "Pay")
 // and are never cached.
