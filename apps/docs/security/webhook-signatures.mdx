@@ -2,10 +2,18 @@
 title: Webhook signatures
 ---
 
-<Note>
-  Webhook delivery is coming in the checkout project. Each webhook endpoint will get its own signing
-  secret, shown once when the endpoint is created. The SDK verification helper is already available.
-</Note>
+Each webhook endpoint has its own signing secret (`whsec_…`), shown once when the endpoint is created
+and again when you rotate it. Every delivery carries a `Tendr-Signature` header:
+
+```
+Tendr-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(signing secret, "<t>.<raw body>")>
+```
+
+The timestamp is the `t` in this header; there is no separate timestamp header. For 24 hours after a
+secret rotation the header carries a second `v1=` signed with the old secret, so accept a match on any
+`v1`.
+
+## Verifying with the SDK
 
 ```ts
 import { verifyWebhookSignature } from '@tendr/sdk/webhook';
@@ -14,8 +22,15 @@ const ok = verifyWebhookSignature({
   payload: rawBody, // the raw request body, not re-serialised JSON
   secret: endpointSigningSecret,
   signatureHeader: req.headers['tendr-signature'] as string,
-  timestampHeader: req.headers['tendr-timestamp'] as string,
 });
 ```
 
-Signatures older than 5 minutes are rejected. Verify before parsing or acting on the body.
+## Verifying by hand
+
+1. Split the header on `,` and read `t` and every `v1` value.
+2. Compute HMAC-SHA256 of `<t>.<raw body>` with your signing secret, hex-encoded.
+3. Compare it with each `v1` using a constant-time comparison. Accept if any matches.
+4. Reject the delivery if `t` is more than 5 minutes from your clock.
+
+Verify before parsing or acting on the body. Deduplicate on the event `id` (also sent as
+`Tendr-Event-Id`), which stays the same on retries and resends.
