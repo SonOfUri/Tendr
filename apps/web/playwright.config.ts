@@ -107,7 +107,7 @@ export default defineConfig({
     },
     {
       // tendr.js is built for this server's origin first (served at /v1/tendr.js).
-      command: `node scripts/build-embed.mjs && npx next dev --port ${WEB_PORT}`,
+      command: `node scripts/build-embed.mjs && node scripts/copy-fonts.mjs && npx next dev --port ${WEB_PORT}`,
       cwd: __dirname,
       url: WEB_URL,
       reuseExistingServer: false,

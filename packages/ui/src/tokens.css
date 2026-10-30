@@ -12,5 +12,27 @@
   --tendr-warning: #f5b942;
   --tendr-font-sans: 'Sora', 'Segoe UI', sans-serif;
   --tendr-font-display: 'Instrument Sans', 'Sora', sans-serif;
+  --tendr-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --tendr-radius: 12px;
+}
+
+/*
+ * The light scheme (a theme's light palette, or `auto` on a light-mode phone). `--tendr-navy` is
+ * the page background and `--tendr-white` the text in both schemes; a theme's palette overrides
+ * those four colour tokens. The state colours (danger, success, warning) are Tendr's own fixed
+ * light values, darker so they stay readable on white; a theme never sets them.
+ */
+[data-scheme='light'] {
+  color-scheme: light;
+  --tendr-navy: #ffffff;
+  --tendr-indigo: #4035f5;
+  --tendr-white: #080d1b;
+  --tendr-cyan: #0a6f94;
+  --tendr-lavender: #4b44c9;
+  --tendr-muted: #5b6275;
+  --tendr-surface: #f3f4fb;
+  --tendr-border: rgba(8, 13, 27, 0.14);
+  --tendr-danger: #c8193f;
+  --tendr-success: #0b7a5e;
+  --tendr-warning: #8a5a00;
 }

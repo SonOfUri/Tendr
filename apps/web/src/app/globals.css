@@ -2,6 +2,15 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@500;600;700&family=Sora:wght@400;500;600;700&display=swap');
 
+/* Tendr's monospace for addresses (copied from @fontsource by scripts/copy-fonts.mjs). */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/jetbrains-mono.woff2') format('woff2');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -633,7 +642,7 @@ code {
   padding: 1.25rem;
   border: 1px solid var(--tendr-border);
   border-radius: calc(var(--tendr-radius) + 4px);
-  background: rgba(15, 22, 41, 0.92);
+  background: color-mix(in srgb, var(--tendr-surface) 92%, transparent);
 }
 
 .pay a {
@@ -937,7 +946,8 @@ code {
   border-radius: var(--tendr-radius);
   border: 1px solid transparent;
   background: var(--tendr-indigo);
-  color: var(--tendr-white) !important;
+  /* Readable on the theme's accent (white unless the accent is light); white without a theme. */
+  color: var(--theme-on-accent, #ffffff) !important;
   font: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -1073,6 +1083,335 @@ code {
 .pay :focus-visible {
   outline: 2px solid var(--tendr-cyan);
   outline-offset: 2px;
+}
+
+/* ─── Checkout themes: canvas, block wrappers, sealed payment block ─────── */
+
+/*
+ * `.tdr-theme` carries the theme variables (ThemeStyles) and `data-scheme`. Merchant CSS is
+ * scoped by the API to `.tdr-scope …`, so it can reach only elements inside a block's
+ * `.tdr-content` (and, for nested blocks, the inner wrappers inside its own box). Tendr owns
+ * every top-level `.tdr-wrap`: its box can't be moved, and nothing drawn inside it can escape
+ * (layout and paint containment, overflow clipped, its own stacking context). Merchant class
+ * names may not start with `tdr-` or `pay-`, and merchant keyframes are renamed `tdrm-…`, so
+ * Tendr never uses that prefix.
+ */
+.tdr-theme {
+  color-scheme: dark;
+}
+
+.tdr-canvas {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  min-width: 0;
+}
+
+.tdr-wrap {
+  position: relative !important;
+  contain: layout paint !important;
+  overflow: clip !important;
+  isolation: isolate !important;
+  z-index: auto !important;
+  inset: auto !important;
+  margin: 0 !important;
+  transform: none !important;
+  translate: none !important;
+  rotate: none !important;
+  scale: none !important;
+  float: none !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  font-family: var(--theme-font, var(--tendr-font-sans));
+  color: var(--theme-text, var(--tendr-white));
+}
+
+.tdr-scope,
+.tdr-content {
+  position: relative !important;
+  inset: auto !important;
+  z-index: auto !important;
+  margin: 0 !important;
+  transform: none !important;
+  translate: none !important;
+  rotate: none !important;
+  scale: none !important;
+  float: none !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+.tdr-content {
+  overflow-wrap: anywhere;
+}
+
+.tdr-content a {
+  color: var(--theme-accent, var(--tendr-cyan));
+  text-decoration: underline;
+}
+
+.tdr-content :is(h2, h3, p) {
+  margin: 0;
+}
+
+.tdr-heading {
+  line-height: 1.25;
+}
+
+.tdr-rich-text {
+  display: grid;
+  gap: 0.6rem;
+  line-height: 1.55;
+}
+
+.tdr-rich-text :is(ul, ol) {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.tdr-image,
+.tdr-custom-html img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--theme-radius, var(--tendr-radius));
+}
+
+.tdr-banner {
+  display: grid;
+  place-items: center;
+  min-height: 7rem;
+  padding: 1.25rem;
+  border-radius: var(--theme-radius, var(--tendr-radius));
+  background-color: var(--theme-surface, var(--tendr-surface));
+  background-size: cover;
+  background-position: center;
+  text-align: center;
+}
+
+.tdr-banner[data-image] {
+  min-height: 10rem;
+}
+
+.tdr-banner-text {
+  max-width: 32rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--theme-radius, var(--tendr-radius));
+  background: color-mix(in srgb, var(--theme-bg, var(--tendr-navy)) 70%, transparent);
+  font-weight: 600;
+}
+
+.tdr-video {
+  aspect-ratio: 16 / 9;
+}
+
+.tdr-video iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: var(--theme-radius, var(--tendr-radius));
+}
+
+.tdr-divider {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--tendr-border);
+}
+
+.tdr-spacer[data-size='sm'] {
+  height: 0.5rem;
+}
+
+.tdr-spacer[data-size='md'] {
+  height: 1.5rem;
+}
+
+.tdr-spacer[data-size='lg'] {
+  height: 3rem;
+}
+
+.tdr-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+}
+
+@media (min-width: 560px) {
+  .tdr-columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.tdr-column,
+.tdr-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  align-content: start;
+}
+
+.tdr-section {
+  padding: 1.25rem;
+  border-radius: var(--theme-radius, var(--tendr-radius));
+  background-size: cover;
+  background-position: center;
+}
+
+.tdr-badges,
+.tdr-social-links,
+.tdr-footer-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+}
+
+.tdr-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.tdr-badge svg {
+  color: var(--theme-accent, var(--tendr-cyan));
+}
+
+.tdr-badge img {
+  display: block;
+  max-height: 2.5rem;
+  width: auto;
+}
+
+.tdr-reviews {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.tdr-review {
+  margin: 0;
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.9rem 1rem;
+  border-radius: var(--theme-radius, var(--tendr-radius));
+  background: var(--theme-surface, var(--tendr-surface));
+}
+
+.tdr-review blockquote {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.tdr-review figcaption {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.tdr-rating {
+  color: var(--theme-accent, var(--tendr-cyan));
+  letter-spacing: 0.1em;
+}
+
+.tdr-faq {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tdr-faq details {
+  padding: 0.7rem 0.9rem;
+  border-radius: var(--theme-radius, var(--tendr-radius));
+  background: var(--theme-surface, var(--tendr-surface));
+}
+
+.tdr-faq summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.tdr-faq details p {
+  margin-top: 0.5rem;
+  line-height: 1.5;
+}
+
+/* A merchant's own countdown: drawn apart from the sealed block's session timer. */
+.tdr-countdown {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px dashed var(--theme-accent, var(--tendr-cyan));
+  border-radius: var(--theme-radius, var(--tendr-radius));
+  text-align: center;
+}
+
+.tdr-countdown-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.tdr-delivery-note {
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--theme-radius, var(--tendr-radius));
+  background: var(--theme-surface, var(--tendr-surface));
+  line-height: 1.5;
+}
+
+.tdr-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tdr-header-logo {
+  display: block;
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.tdr-header-name {
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+/*
+ * The sealed payment block. It sits outside every `.tdr-scope`, so merchant CSS can't match it.
+ * Uploaded fonts never apply here: everything is Tendr's font, a curated theme font may style
+ * only the headings and the Pay button label, and addresses use Tendr's monospace. Warning,
+ * error, success and timer colours come from Tendr's fixed tokens (tokens.css), never the theme.
+ */
+.tdr-payment {
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  color: var(--tendr-white);
+}
+
+.tdr-payment,
+.tdr-payment * {
+  font-family: var(--tendr-font-sans);
+}
+
+.tdr-payment :is(h2, h3, .pay-button-label) {
+  font-family: var(--theme-font-curated, var(--tendr-font-sans));
+}
+
+.tdr-payment :is(.pay-address, .pay-mono, .address, code) {
+  font-family: var(--tendr-font-mono);
+}
+
+.tdr-payment .pay-button {
+  border-radius: var(--theme-radius, var(--tendr-radius));
 }
 
 /* ─── Connect popup ─────────────────────────────────────────────────────── */
