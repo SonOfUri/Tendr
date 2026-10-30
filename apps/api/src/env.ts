@@ -28,6 +28,15 @@ const codeHash = z
   }, 'must be a base58-encoded 32-byte hash')
   .optional();
 
+/** A gas price in gwei: a non-negative decimal string, never parsed as a float. */
+const evmMaxFeeGwei = z.preprocess(
+  blankAsUnset,
+  z
+    .string()
+    .regex(/^\d+(\.\d{1,9})?$/, 'must be a non-negative decimal (gwei, at most 9 decimals)')
+    .optional(),
+);
+
 const EnvSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -123,6 +132,18 @@ const EnvSchema = z
         .default(String(DEFAULT_GAS_MAX_USD)),
     ),
     /**
+     * Tendr-wide daily cap (USD, per mode, UTC day) on unrecovered sponsorship losses
+     * (`gas_sponsorships.sponsor = tendr`). Once reached, new payments are not sponsored (the
+     * shopper pays) and operators are alerted. A decimal string, never parsed as a float.
+     */
+    TENDR_SPONSOR_LOSS_CAP_USD: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^\d+(\.\d+)?$/, 'must be a non-negative decimal')
+        .default('50'),
+    ),
+    /**
      * Underpay top-up ("send the remaining X to the same address" while the quote is live).
      * Unset: on in test mode (the simulator accumulates deposits), off in live mode until the
      * mainnet check confirms 1Click accumulates a top-up. Set: applies to both modes.
@@ -165,6 +186,135 @@ const EnvSchema = z
           }
           return v as Record<string, string>;
         }),
+    ),
+    /**
+     * Live-mode Solana JSON-RPC endpoint: deposit sender lookups and network-fee estimates
+     * (base fee + priority fee). Default: the public mainnet RPC.
+     */
+    SOLANA_RPC_URL: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .url()
+        .regex(/^https?:\/\//i, 'must be an http(s) URL')
+        .default('https://api.mainnet-beta.solana.com'),
+    ),
+    /**
+     * Live-mode Tron HTTP API (TronGrid-compatible): deposit sender lookups and network-fee
+     * estimates (energy price). Default: the public TronGrid endpoint.
+     */
+    TRON_RPC_URL: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .url()
+        .regex(/^https?:\/\//i, 'must be an http(s) URL')
+        .default('https://api.trongrid.io'),
+    ),
+    /**
+     * The TendrForwarder deployed on Tron (base58 `T…`), whose `payWithApproval` `gas-tron` calls
+     * for gasless USDT payments (ruling T9-a). No default: gasless Tron is unavailable while it is
+     * unset (the contract is not deployed yet). Never taken from a request.
+     */
+    TRON_FORWARDER_ADDRESS: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^T[1-9A-HJ-NP-Za-km-z]{33}$/, 'must be a base58 Tron address (T…)')
+        .optional(),
+    ),
+    /**
+     * Safety margin (basis points) on a network fee Tendr quotes and collects: a shopper-paid fee
+     * in a token is `usd × (1 + margin / 10 000) ÷ token price`, and a merchant-sponsored fee is
+     * charged with the same margin. Integer 0–10 000, default 2000 (20 %).
+     */
+    GAS_FEE_MARGIN_BPS: z.preprocess(
+      blankAsUnset,
+      z.coerce.number().int().min(0).max(10_000).default(2000),
+    ),
+    /**
+     * Operator gate for the gas-fee sweep (project 5a, Task 12). Off by default: due sweeps are
+     * planned, recorded and announced to operators, but no gas-fee key signs anything until this
+     * is `true`.
+     */
+    FEE_SWEEP_ENABLED: z.preprocess(
+      blankAsUnset,
+      z
+        .enum(['true', 'false', '1', '0'])
+        .default('false')
+        .transform((v) => v === 'true' || v === '1'),
+    ),
+    /**
+     * A gas-fee account's token is swept once it is worth at least this much (USD), or weekly.
+     * A decimal string, never parsed as a float. Default 20.
+     */
+    FEE_SWEEP_THRESHOLD_USD: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^\d+(\.\d+)?$/, 'must be a non-negative decimal')
+        .default('20'),
+    ),
+    /**
+     * Tendr's NEAR account that receives swept gas fees (as USDC on NEAR). No default: while it is
+     * unset no sweep executes, and operators are told why.
+     */
+    TENDR_FEE_ACCOUNT_NEAR: z.preprocess(blankAsUnset, nearAccountId.optional()),
+    /**
+     * Operators are alerted (once per 6 h per account) when a relayer key's native balance, or
+     * Tendr's Pimlico balance, is worth less than this (USD). A decimal string. Default 50.
+     */
+    GAS_LOW_BALANCE_USD: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^\d+(\.\d+)?$/, 'must be a non-negative decimal')
+        .default('50'),
+    ),
+    /**
+     * The TendrForwarder contract (project 5a, onchain/evm) the EVM relayer calls: the same
+     * CREATE2 address on every EVM chain and in both modes. Never taken from a request.
+     */
+    EVM_FORWARDER_ADDRESS: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^0x[0-9a-fA-F]{40}$/, 'must be a 0x-prefixed 20-byte hex address')
+        .default('0x19BEBC71495490A99cA6F50F107076967380cf09'),
+    ),
+    /**
+     * Optional per-chain ceiling (gwei, decimal) on the EVM relayer's `maxFeePerGas`, for its own
+     * transactions and their replacements. Unset: no cap beyond the fee the chain asks for.
+     */
+    EVM_MAX_FEE_GWEI_ETH: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_BASE: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_ARB: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_OP: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_POL: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_BSC: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_AVAX: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_GNOSIS: evmMaxFeeGwei,
+    EVM_MAX_FEE_GWEI_BERA: evmMaxFeeGwei,
+    /**
+     * Optional Pimlico sponsorship policy id, sent with every paymaster request the checkout's
+     * paymaster proxy forwards (project 5a). The Pimlico API key itself is a stored secret
+     * (`putSecret`, purpose `pimlico`), never an env var.
+     */
+    PIMLICO_SPONSORSHIP_POLICY_ID: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^[A-Za-z0-9_-]{1,128}$/, 'must be a Pimlico sponsorship policy id (sp_…)')
+        .optional(),
+    ),
+    /**
+     * Pimlico's Solana paymaster network (Kora JSON-RPC at
+     * `https://solana.pimlico.io/v1/{network}/rpc`; the API key is the stored `pimlico` secret).
+     * Live mode only; test mode never calls Pimlico. Default `mainnet`.
+     */
+    PIMLICO_SOLANA_NETWORK: z.preprocess(
+      blankAsUnset,
+      z.enum(['mainnet', 'devnet']).default('mainnet'),
     ),
     /**
      * Live-mode FX rate provider for non-USD order totals. `openexchangerates` (with FX_API_KEY)

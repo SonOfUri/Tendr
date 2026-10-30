@@ -1,0 +1,185 @@
+---
+title: Gas policy and usage
+description: Set how much gas your store sponsors, read the month's usage, and list sponsored transactions.
+---
+
+The gas policy decides when Tendr pays the network fee for your shoppers. There is one policy per mode
+(test and live). See [gasless payments](/gasless/overview) for how sponsorship works.
+
+## Endpoints
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v1/gas-policy` | The mode's policy. Defaults (disabled) while none is set. |
+| `PUT /v1/gas-policy` | Change any subset of the fields. |
+| `GET /v1/gas-policy/usage?month=YYYY-MM` | Budget use for a month. Defaults to the current month. |
+| `GET /v1/gas-sponsorships` | Every sponsored or relayed transaction, newest first. |
+
+Each call acts on the mode of the key or dashboard session that makes it.
+
+### Who can call
+
+- Any secret key can read the policy and usage, including keys made by a connected site such as the
+  WooCommerce plugin. `GET /v1/gas-sponsorships` also needs the `payments:read` scope.
+- `PUT /v1/gas-policy` needs a secret key with the `sessions:write` scope. A connected site's key gets
+  `403`: it can read the policy but not change it.
+- In the dashboard, reading needs `account:read`. Changing the policy needs `settings:manage` and a
+  recent step-up confirmation, because the policy decides how much of your money Tendr may spend.
+- Publishable keys and shopper sessions are refused.
+
+## The policy
+
+```json
+{
+  "livemode": false,
+  "enabled": true,
+  "per_payment_cap_usd": "1",
+  "monthly_budget_usd": "50",
+  "min_order_usd": "0",
+  "chains": ["base", "arb", "op", "pol", "bsc", "avax", "gnosis", "bera", "sol", "near", "tron"],
+  "tokens": [],
+  "first_time_only": false,
+  "updated_at": "2026-10-27T09:00:00.000Z"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `enabled` | Sponsorship is on. Default `false`. |
+| `per_payment_cap_usd` | The quoted fee must be at most this. Default `"1"`. Never above the monthly budget. |
+| `monthly_budget_usd` | Reserved plus spent per calendar month (UTC) never exceeds this. Default `"50"`. |
+| `min_order_usd` | The order must be at least this. Default `"0"`. |
+| `chains` | Where sponsorship may happen: any of `eth`, `base`, `arb`, `op`, `pol`, `bsc`, `avax`, `gnosis`, `bera`, `sol`, `near`, `tron`. Default is all except `eth`. |
+| `tokens` | Allowed 1Click asset ids. Empty means any token. |
+| `first_time_only` | Sponsor only the first payment from a shopper address to your store. Default `false`. |
+| `updated_at` | Null while the defaults apply. |
+
+USD amounts are decimal strings with at most 6 decimals.
+
+`PUT` merges the fields you send over the current policy (or the defaults) and validates the result.
+Unknown fields are rejected. A cap above the budget returns `400 VALIDATION_ERROR`.
+
+```bash
+curl -X PUT "$TENDR_API_URL/v1/gas-policy" \
+  -H "Authorization: Bearer $TENDR_SECRET_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "enabled": true, "monthly_budget_usd": "100", "chains": ["base", "sol"] }'
+```
+
+Every change is recorded in the audit log with who made it and the policy before and after.
+
+The store's `default_gas_payer` and a session's `gas_payer` still decide whether Tendr tries to
+sponsor at all. The policy decides whether a particular payment qualifies.
+
+## Usage
+
+```json
+{
+  "month": "2026-10",
+  "reserved_usd": "0.8",
+  "spent_usd": "12.3",
+  "remaining_usd": "36.9",
+  "count": 14
+}
+```
+
+`reserved_usd` is held by sponsorships that have not settled yet. `spent_usd` is settled.
+`remaining_usd` is the monthly budget minus both, never below zero. `count` is the number of
+sponsorships holding budget. The month is a calendar month in UTC.
+
+Budget is reserved when the shopper commits to sign, in one locked update. Two payments that together
+would exceed the budget cannot both be sponsored: one is, the other falls back to shopper-pays. The
+reservation is released if the payment is never submitted or fails.
+
+## Sponsorship records
+
+`GET /v1/gas-sponsorships` filters: `session`, `payment` (the payment's session), `status`
+(`pending`, `submitted`, `confirmed`, `failed`), `month` (`YYYY-MM`, by creation time), `limit`
+(1 to 100, default 50) and `starting_after` (a record id).
+
+```json
+{
+  "gas_sponsorships": [
+    {
+      "id": "gas_...",
+      "livemode": false,
+      "session_id": "ses_...",
+      "recovered_from_payment_id": null,
+      "hook_payment_id": null,
+      "chain": "base",
+      "method": "eip3009",
+      "provider": "relayer-evm",
+      "sponsor": "merchant",
+      "status": "confirmed",
+      "tx_hash": "0x...",
+      "user_op_hash": null,
+      "fee_mode": null,
+      "fee_asset": null,
+      "fee_amount": null,
+      "estimate_usd": "0.04",
+      "cost_usd": "0.031",
+      "gas_used": "88123",
+      "reservation_state": "settled",
+      "created_at": "2026-10-27T09:00:00.000Z",
+      "updated_at": "2026-10-27T09:00:08.000Z"
+    }
+  ],
+  "has_more": false,
+  "next_cursor": null
+}
+```
+
+- `sponsor` is `merchant` when the cost is taken from your payment, or `tendr` when Tendr could not
+  recover it and absorbed the loss. Tendr never charges you later for a loss.
+- `method` is one of `eip3009`, `permit`, `paymaster`, `kora`, `meta_tx`, `forwarder`. A hook call that costs
+  more than its quoted estimate appears with `hook`; the excess is Tendr's loss (`sponsor: tendr`), and
+  `hook_payment_id` names the payment whose hook it was. The stored method type also has
+  `paymaster_verifying`, `paymaster_erc20`, `energy` and `fee_payer`; no record is written with them
+  today, so you can treat them as reserved.
+- `recovered_from_payment_id` is the payment whose proceeds paid a sponsored fee (set when its
+  reservation is settled). It is null on every other record, hook shortfalls included.
+- `estimate_usd` is the quoted cost your payment was charged. `cost_usd` is the actual cost. Tendr keeps
+  or absorbs the difference. Both are shown on shopper-paid and Tendr-loss records too.
+- `reservation_state` is `reserved`, `settled` or `released`, or null when nothing was reserved.
+- `fee_mode`, `fee_asset` and `fee_amount` describe a shopper-paid fee (`fee_amount` in base units).
+- Amounts are strings. `fee_amount` and `gas_used` are integers.
+
+### A sponsored quote paid by copying the address
+
+When you sponsor a quote, the network fee is part of the quote: it comes out of your proceeds through
+1Click's fees on that quote. If the shopper then pays that quote by copying the deposit address and
+sending from their own wallet (paying the gas themselves), the quote's fee is still taken from your
+proceeds and counted against your budget, although Tendr paid no gas. This is a known difference from
+the design, which says the shopper then simply pays their own fee. It is bounded by your per-payment cap
+and monthly budget.
+
+## Why a payment was not sponsored
+
+When you sponsor and a payment falls back to the shopper, `network_fee.reason` on the session and
+payment says why. The checks run in this order and the first failure is reported:
+
+| `reason` | Meaning |
+| --- | --- |
+| `shopper_choice` | The resolved gas payer is `shopper`. |
+| `policy_disabled` | `enabled` is false. |
+| `chain` | The shopper's chain is not in `chains`. |
+| `token` | The token is not in `tokens`. |
+| `min_order` | The order is below `min_order_usd`. |
+| `not_first_time` | `first_time_only` is set and this address paid your store before. |
+| `per_payment_cap` | The fee is above the cap, above the session's `gas_max_usd`, or above 1% of the order (fee plus any hook estimate). |
+| `loss_cap` | Tendr's daily unrecovered-loss limit was reached. |
+| `budget` | The fee does not fit the month's remaining budget. |
+
+Other reasons are `fee_unavailable` (the live fee could not be read, so the shopper's wallet pays gas
+itself) and `fee_token_unpriced` (the token has no price in the token list, so the token option is not
+offered). The shopper sees only a general message.
+
+## Events
+
+- `gas.budget_low`: reserved plus spent crossed 80% of the month's budget. At most once per month and
+  mode.
+- `gas.budget_exhausted`: a payment was not sponsored because the budget is used up. At most once per
+  month and mode.
+
+Both carry `mode`, `month`, `budget_usd`, `reserved_usd`, `spent_usd` and `remaining_usd`;
+`gas.budget_exhausted` also carries `requested_usd`. See [webhooks](/api-reference/webhooks).

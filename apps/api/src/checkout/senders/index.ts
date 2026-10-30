@@ -415,8 +415,8 @@ export class SenderResolvers implements SenderResolver {
 export function liveSenderResolvers(near: () => NearClient, fetchImpl: FetchLike = realFetch) {
   return new SenderResolvers({
     evm: new EvmSenderResolver(() => evmRpcUrls(), fetchImpl),
-    solana: new SolanaSenderResolver(SOLANA_RPC_URL, fetchImpl),
-    tron: new TronSenderResolver(TRONGRID_URL, fetchImpl),
+    solana: new SolanaSenderResolver(env().SOLANA_RPC_URL, fetchImpl),
+    tron: new TronSenderResolver(env().TRON_RPC_URL, fetchImpl),
     bitcoin: new BitcoinSenderResolver(MEMPOOL_URL, fetchImpl),
     near: new NearSenderResolver(near),
   });

@@ -7,6 +7,7 @@ export const PER_MODE_MODELS = [
   'PayoutAllowlistEntry',
   'WebhookEndpoint',
   'GasPolicy',
+  'GasBudgetMonth',
   'PaymentLink',
   'Session',
   'Quote',
@@ -55,6 +56,11 @@ export const INFRA_MODELS = [
   'EventNotice',
   // Connect authorization codes: only the connect flow touches them, by code hash.
   'ConnectAuthCode',
+  // The relayer's own on-chain transactions (nonce, broadcasts); only the relayer touches them.
+  'RelayerTransaction',
+  // Gasless Tron approvals and gas-tron's just-in-time delegations; only the relayer touches them.
+  'TronApproval',
+  'TronDelegation',
 ] as const;
 
 /**

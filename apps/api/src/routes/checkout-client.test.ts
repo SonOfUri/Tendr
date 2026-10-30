@@ -4,6 +4,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { buildApp } from '../app.js';
 import { resetOneClickProviders, SimulatedOneClick } from '../checkout/oneclick/index.js';
 import { resetTokenCache } from '../checkout/tokens.js';
+import { SIMULATED_FEE_USD } from '../gas/fees.js';
+import { putGasPolicy } from '../gas/policy.js';
+import { RESERVATION_GRACE_MS, releaseStaleReservations } from '../gas/quote-fee.js';
 import { env } from '../env.js';
 import { prisma } from '../lib/prisma.js';
 import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
@@ -692,6 +695,431 @@ describe('shopper checkout routes', () => {
       const ids = [await newSession(), await newSession(), await newSession(), await newSession()];
       for (const s of ids.slice(0, 3)) expect((await frameOrigins(s.id)).statusCode).toBe(200);
       expect((await frameOrigins(ids[3]!.id)).statusCode).toBe(429);
+    });
+  });
+
+  describe('network fee', () => {
+    const USDC_BASE = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near';
+    const actor = { by: 'api_key' as const, apiKeyId: 'key_x' };
+
+    /** The merchant sponsors gas in test mode under an enabled default policy. */
+    async function sponsoring(over: Record<string, unknown> = {}) {
+      await prisma.merchant.update({
+        where: { id: merchant.id },
+        data: { defaultGasPayer: 'merchant' },
+      });
+      await putGasPolicy(
+        { merchantId: merchant.id, livemode: false, actor },
+        { enabled: true, ...over },
+      );
+    }
+    const gasless = { wallet_address: WALLET, gasless_method: 'eip3009' };
+    const month = () =>
+      prisma.gasBudgetMonth.findFirst({ where: { merchantId: merchant.id, livemode: false } });
+
+    it('without wallet_address: shopper pays natively, no reservation (copy-address path)', async () => {
+      await sponsoring();
+      const s = await newSession();
+      const res = await call('POST', 'quote', s.client_secret, { origin_asset: USDC_BASE });
+      expect(res.statusCode, res.body).toBe(201);
+      expect(res.json().network_fee).toEqual({
+        paid_by: 'shopper',
+        fee_mode: 'native',
+        amount: null,
+        asset: null,
+        usd: SIMULATED_FEE_USD.base,
+        method: null,
+        reason: null,
+      });
+      expect(res.json().fee_mode).toBe('native');
+      expect(res.json().fee_amount).toBeNull();
+      const row = await prisma.quote.findFirstOrThrow({ where: { sessionId: s.id } });
+      expect(row.gasSponsorshipId).toBeNull();
+      expect(row.networkFeeBps).toBe(0);
+      expect(await prisma.gasSponsorship.count()).toBe(0);
+    });
+
+    it('gasless_method needs wallet_address; a method or wallet the chain cannot use is 400', async () => {
+      const s = await newSession();
+      const a = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        gasless_method: 'eip3009',
+      });
+      expect(a.statusCode, a.body).toBe(400);
+      const b = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        wallet_address: WALLET,
+        gasless_method: 'kora',
+      });
+      expect(b.statusCode, b.body).toBe(400);
+      const c = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        wallet_address: 'alice.near',
+        gasless_method: 'eip3009',
+      });
+      expect(c.statusCode, c.body).toBe(400);
+    });
+
+    for (const feePayer of ['merchant', 'shopper'] as const) {
+      it(`merchant sponsors (${feePayer} pays Tendr's fee): same send, lower proceeds, reserved`, async () => {
+        await sponsoring();
+        const plainS = await newSession({ fee_payer: feePayer });
+        const plain = await call('POST', 'quote', plainS.client_secret, {
+          origin_asset: USDC_BASE,
+        });
+        expect(plain.statusCode, plain.body).toBe(201);
+
+        const s = await newSession({ fee_payer: feePayer });
+        const res = await call('POST', 'quote', s.client_secret, {
+          origin_asset: USDC_BASE,
+          ...gasless,
+        });
+        expect(res.statusCode, res.body).toBe(201);
+        const q = res.json();
+        // $0.04 simulated + the 20 % margin.
+        expect(q.network_fee).toEqual({
+          paid_by: 'merchant',
+          fee_mode: null,
+          amount: null,
+          asset: null,
+          usd: '0.048',
+          method: 'eip3009',
+          reason: null,
+        });
+        expect(q.fee_amount).toBeNull();
+        // The shopper sends exactly what they would without sponsorship, to the base unit.
+        expect(q.amount_in).toBe(plain.json().amount_in);
+        // Their fee line does not include the fee the merchant sponsors.
+        expect(q.fee_lines).toEqual(plain.json().fee_lines);
+        // The merchant receives about $0.048 less.
+        const [a, b] = await Promise.all([
+          prisma.quote.findFirstOrThrow({ where: { sessionId: plainS.id } }),
+          prisma.quote.findFirstOrThrow({ where: { sessionId: s.id } }),
+        ]);
+        const less = a.amountOutUsd!.minus(b.amountOutUsd!).toNumber();
+        expect(less).toBeGreaterThan(0.045);
+        expect(less).toBeLessThan(0.052);
+        expect(b.networkFeeBps).toBeGreaterThan(0);
+        // Reserved on the month's budget.
+        const sp = await prisma.gasSponsorship.findUniqueOrThrow({
+          where: { id: b.gasSponsorshipId! },
+        });
+        expect(sp).toMatchObject({
+          sessionId: s.id,
+          sponsor: 'merchant',
+          reservationState: 'reserved',
+          chain: 'base',
+          method: 'eip3009',
+          provider: 'relayer-evm',
+        });
+        expect(sp.estimateUsd!.toFixed()).toBe('0.048');
+        expect((await month())!.reservedUsd.toFixed()).toBe('0.048');
+      });
+    }
+
+    it('shopper pays in the token by default: fee_amount on top of amount_in', async () => {
+      // The merchant default is the shopper (buyer).
+      const s = await newSession();
+      const res = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      expect(res.json().network_fee).toEqual({
+        paid_by: 'shopper',
+        fee_mode: 'token',
+        amount: '48000', // $0.04 × 1.2 at $1 USDC
+        asset: USDC_BASE,
+        usd: '0.048',
+        method: 'eip3009',
+        reason: 'shopper_choice',
+      });
+      expect(res.json().fee_amount).toBe('48000');
+      expect(await prisma.gasSponsorship.count()).toBe(0);
+    });
+
+    it('fee_mode native: no fee fields', async () => {
+      const s = await newSession();
+      const res = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+        fee_mode: 'native',
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      expect(res.json().network_fee).toMatchObject({
+        paid_by: 'shopper',
+        fee_mode: 'native',
+        amount: null,
+        method: null,
+        reason: 'shopper_choice',
+      });
+      expect(res.json().fee_amount).toBeNull();
+    });
+
+    /** The store's own view of a session (secret key). */
+    const merchantSession = async (id: string) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/v1/checkout/sessions/${id}`,
+        headers: { authorization: `Bearer ${testKey}` },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      return res.json();
+    };
+
+    it('budget refused: the shopper pays; the pay page sees not_sponsored, the store sees budget', async () => {
+      await sponsoring({ monthly_budget_usd: '1', per_payment_cap_usd: '1' });
+      await prisma.gasBudgetMonth.create({
+        data: {
+          id: 'gbm_01J00000000000000000000000',
+          merchantId: merchant.id,
+          livemode: false,
+          month: new Date().toISOString().slice(0, 7),
+          reservedUsd: '0.99',
+        },
+      });
+      const s = await newSession();
+      const res = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      expect(res.json().network_fee).toMatchObject({
+        paid_by: 'shopper',
+        fee_mode: 'token',
+        reason: 'not_sponsored',
+      });
+      const view = (await call('GET', 'session', s.client_secret)).json();
+      expect(view.network_fee.reason).toBe('not_sponsored');
+      expect(view.quote.network_fee.reason).toBe('not_sponsored');
+      expect(res.body).not.toContain('budget');
+      expect((await merchantSession(s.id)).network_fee.reason).toBe('budget');
+      expect(await prisma.gasSponsorship.count()).toBe(0);
+    });
+
+    it('a disabled policy reports its own reason even when the fee is over the 100 bps cap', async () => {
+      await sponsoring({ enabled: false });
+      const s = await newSession({ amount: '3.00' });
+      const res = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      expect((await merchantSession(s.id)).network_fee).toMatchObject({
+        paid_by: 'shopper',
+        reason: 'policy_disabled',
+      });
+    });
+
+    it('sponsored, shopper pays Tendr fee: a merchant output below target requotes, then 409', async () => {
+      await sponsoring();
+      const original = sim.quote.bind(sim);
+      let lowLeft = 1;
+      const spy = vi.spyOn(sim, 'quote').mockImplementation(async (req) => {
+        const res = await original(req);
+        if (!req.dry && lowLeft > 0) {
+          lowLeft--;
+          return { ...res, quote: { ...res.quote, amountOutUsd: '20' } };
+        }
+        return res;
+      });
+      const s = await newSession({ fee_payer: 'shopper' });
+      const ok = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(ok.statusCode, ok.body).toBe(201);
+      expect(spy).toHaveBeenCalledTimes(4); // dry, real (output too low), dry, real
+
+      lowLeft = 2;
+      spy.mockClear();
+      const moved = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(moved.statusCode, moved.body).toBe(409);
+      expect(moved.json().error.code).toBe('QUOTE_PRICE_MOVED');
+      // Nothing new was reserved for the refused quote: the first quote's hold stands.
+      expect(await prisma.gasSponsorship.count({ where: { reservationState: 'reserved' } })).toBe(
+        1,
+      );
+    });
+
+    it('integrator hook: deducted from proceeds; refused when it alone is over the cap', async () => {
+      const s = await newSession();
+      await prisma.session.update({
+        where: { id: s.id },
+        data: { delivery: 'HOOK', destChain: 'base' },
+      });
+      const res = await call('POST', 'quote', s.client_secret, { origin_asset: USDC_BASE });
+      expect(res.statusCode, res.body).toBe(201);
+      const row = await prisma.quote.findFirstOrThrow({ where: { sessionId: s.id } });
+      expect(row.hookFeeUsd!.toFixed()).toBe('0.048'); // simulated base $0.04 + 20 %
+      expect(row.networkFeeBps).toBeGreaterThan(0);
+
+      // The hook alone may take up to 10 % of the order (MAX_HOOK_ORDER_BPS): on eth the
+      // simulated hook ($1.44) is 5.76 % of a $25 order (allowed), 14.4 % of a $10 order (refused).
+      const eth = await newSession();
+      await prisma.session.update({
+        where: { id: eth.id },
+        data: { delivery: 'HOOK', destChain: 'eth' },
+      });
+      const allowed = await call('POST', 'quote', eth.client_secret, { origin_asset: USDC_BASE });
+      expect(allowed.statusCode, allowed.body).toBe(201);
+
+      const small = await newSession({ amount: '10.00' });
+      await prisma.session.update({
+        where: { id: small.id },
+        data: { delivery: 'HOOK', destChain: 'eth' },
+      });
+      const refused = await call('POST', 'quote', small.client_secret, {
+        origin_asset: USDC_BASE,
+      });
+      expect(refused.statusCode, refused.body).toBe(400);
+      expect(refused.json().error.code).toBe('QUOTE_TOO_SMALL');
+      expect(refused.json().error.details).toMatchObject({ max_bps_of_order: 1000 });
+    });
+
+    it('sponsorship above 100 bps of the order: the shopper pays (per_payment_cap)', async () => {
+      await sponsoring();
+      // $0.048 is 1.6 % of a $3 order.
+      const s = await newSession({ amount: '3.00' });
+      const res = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      expect(res.json().network_fee).toMatchObject({
+        paid_by: 'shopper',
+        fee_mode: 'token',
+        reason: 'not_sponsored',
+      });
+      expect((await merchantSession(s.id)).network_fee).toMatchObject({
+        paid_by: 'shopper',
+        reason: 'per_payment_cap',
+      });
+      expect(await prisma.gasSponsorship.count()).toBe(0);
+      // $5: $0.048 is under 1 %, so the merchant sponsors.
+      const ok = await newSession({ amount: '5.00' });
+      const q = await call('POST', 'quote', ok.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(q.json().network_fee.paid_by).toBe('merchant');
+    });
+
+    it('sponsored, shopper pays Tendr fee: the fee line excludes the sponsored fee', async () => {
+      await sponsoring();
+      const s = await newSession({ fee_payer: 'shopper' });
+      const res = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const q = res.json();
+      expect(q.network_fee.paid_by).toBe('merchant');
+      const row = await prisma.quote.findFirstOrThrow({ where: { sessionId: s.id } });
+      // What the shopper sends minus the $25 order: the merchant's deduction is not in it.
+      const expected = row.amountInUsd!.minus(25).toDecimalPlaces(2, 0).toFixed(2);
+      expect(q.fee_lines).toEqual([
+        { kind: 'network_and_service', label: 'Network & service fee', amount_usd: expected },
+      ]);
+      // Under the sponsored out (in − out), the line would have been larger.
+      expect(row.amountInUsd!.minus(row.amountOutUsd!).toNumber()).toBeGreaterThan(
+        Number(expected) + 0.04,
+      );
+    });
+
+    it('a re-quote releases the previous reservation', async () => {
+      await sponsoring();
+      const s = await newSession();
+      const first = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(first.statusCode, first.body).toBe(201);
+      const firstRow = await prisma.quote.findFirstOrThrow({ where: { sessionId: s.id } });
+
+      // Sponsored again: the first reservation is released, one held.
+      const second = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        wallet_address: WALLET,
+        gasless_method: 'permit',
+      });
+      expect(second.statusCode, second.body).toBe(201);
+      const r1 = await prisma.gasSponsorship.findUniqueOrThrow({
+        where: { id: firstRow.gasSponsorshipId! },
+      });
+      expect(r1.reservationState).toBe('released');
+      let m = await month();
+      expect(m!.reservedUsd.toFixed()).toBe('0.048');
+      expect(m!.count).toBe(1);
+
+      // A copy-address quote releases it too and reserves nothing.
+      const third = await call('POST', 'quote', s.client_secret, { origin_asset: USDC_BASE });
+      expect(third.statusCode, third.body).toBe(201);
+      m = await month();
+      expect(m!.reservedUsd.toFixed()).toBe('0');
+      expect(m!.count).toBe(0);
+      expect(await prisma.gasSponsorship.count({ where: { reservationState: 'reserved' } })).toBe(
+        0,
+      );
+    });
+
+    it('the expired-quote sweep releases an unused reservation', async () => {
+      await sponsoring();
+      const s = await newSession();
+      const res = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const row = await prisma.quote.findFirstOrThrow({ where: { sessionId: s.id } });
+      // Not yet: the quote is live.
+      expect(await releaseStaleReservations(new Date())).toBe(0);
+      const later = new Date(row.deadline.getTime() + RESERVATION_GRACE_MS + 1);
+      expect(await releaseStaleReservations(later)).toBe(1);
+      const sp = await prisma.gasSponsorship.findUniqueOrThrow({
+        where: { id: row.gasSponsorshipId! },
+      });
+      expect(sp.reservationState).toBe('released');
+      expect((await month())!.reservedUsd.toFixed()).toBe('0');
+      expect(await releaseStaleReservations(later)).toBe(0);
+    });
+
+    it('a quote with a reported deposit keeps its reservation in the sweep', async () => {
+      await sponsoring();
+      const s = await newSession();
+      const res = await call('POST', 'quote', s.client_secret, {
+        origin_asset: USDC_BASE,
+        ...gasless,
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const row = await prisma.quote.findFirstOrThrow({ where: { sessionId: s.id } });
+      await prisma.quote.update({
+        where: { id: row.id },
+        data: { depositTxHash: '0xabc', depositTxSubmittedAt: new Date() },
+      });
+      const later = new Date(row.deadline.getTime() + RESERVATION_GRACE_MS + 1);
+      expect(await releaseStaleReservations(later)).toBe(0);
+    });
+
+    it('the shopper view and the merchant session view expose network_fee', async () => {
+      await sponsoring();
+      const s = await newSession();
+      expect((await call('GET', 'session', s.client_secret)).json().network_fee).toBeNull();
+      await call('POST', 'quote', s.client_secret, { origin_asset: USDC_BASE, ...gasless });
+      const shopper = (await call('GET', 'session', s.client_secret)).json();
+      expect(shopper.network_fee).toMatchObject({ paid_by: 'merchant', usd: '0.048' });
+      expect(shopper.quote.network_fee).toEqual(shopper.network_fee);
+
+      const merchantView = await app.inject({
+        method: 'GET',
+        url: `/v1/checkout/sessions/${s.id}`,
+        headers: { authorization: `Bearer ${testKey}` },
+      });
+      expect(merchantView.statusCode, merchantView.body).toBe(200);
+      expect(merchantView.json().network_fee).toEqual(shopper.network_fee);
     });
   });
 

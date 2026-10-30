@@ -74,7 +74,6 @@ export function ScenarioToggle({ value, onChange }: Props) {
             type="button"
             role="tab"
             aria-selected={active}
-            aria-pressed={active}
             title={item.title}
             className="demo-scenario-opt"
             onClick={() => onChange(item.slug)}

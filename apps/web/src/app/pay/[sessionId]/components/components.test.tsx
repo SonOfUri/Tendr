@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { SessionView, Token } from '@/lib/checkout/api';
+import type { NetworkFee as NetworkFeeView, SessionView, Token } from '@/lib/checkout/api';
 import { CheckoutHeader } from './CheckoutHeader';
 import { CopyButton } from './CopyButton';
 import { PayFlow, QuotePending, leftoversNotice, refundToCarry } from './PayFlow';
@@ -8,6 +8,8 @@ import { CONFIRM_NOT_SENT_COPY } from './WalletConnect';
 import { WalletConnect } from './WalletConnect';
 import { StatusScreen } from './StatusScreens';
 import { canPay } from './WalletPanel';
+import { NetworkFee, showFeeChoice } from './NetworkFee';
+import { SendDetails } from './SendDetails';
 
 const VIEW = {
   id: 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0',
@@ -315,5 +317,132 @@ describe('StatusScreen: the extra paid (C42)', () => {
 
   it('a return in progress is being sent back', () => {
     expect(settled('processing')).toContain('being sent back to you');
+  });
+});
+
+describe('NetworkFee (Global Constraints copy)', () => {
+  const USDC = { symbol: 'USDC', decimals: 6 };
+  const fee = (over: Partial<NetworkFeeView>): NetworkFeeView => ({
+    paid_by: 'shopper',
+    fee_mode: 'token',
+    amount: '96000',
+    asset: 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near',
+    usd: '0.096',
+    method: 'eip3009',
+    reason: 'not_sponsored',
+    ...over,
+  });
+  const render = (props: Partial<Parameters<typeof NetworkFee>[0]>) =>
+    renderToStaticMarkup(
+      <NetworkFee
+        networkFee={null}
+        merchantName="Bean Shop"
+        token={USDC}
+        coin="ETH"
+        choice={null}
+        {...props}
+      />,
+    );
+
+  it('merchant sponsors: "Network fee: paid by {merchant}", and no choice', () => {
+    const html = render({
+      networkFee: fee({ paid_by: 'merchant', fee_mode: null, amount: null, reason: null }),
+    });
+    expect(html).toContain('Network fee: paid by Bean Shop');
+    expect(html).not.toContain('Pay the fee in');
+  });
+
+  it('shopper pays in the token without a choice: "Network fee: +0.096 USDC"', () => {
+    expect(render({ networkFee: fee({}) })).toContain('Network fee: +0.096 USDC');
+  });
+
+  it('the choice: "Pay the fee in USDC" (+0.096 USDC) / "Pay the fee in ETH", the selection checked', () => {
+    const html = render({
+      networkFee: fee({}),
+      choice: { mode: 'token', tokenFeeAmount: '96000', onChoose: () => {} },
+    });
+    expect(html).toContain('Pay the fee in USDC');
+    expect(html).toContain('+0.096 USDC');
+    expect(html).toContain('Pay the fee in ETH');
+    const input = (h: string, v: string) =>
+      h.match(new RegExp(`<input[^>]*value="${v}"[^>]*>`))![0];
+    expect(input(html, 'token')).toContain('checked');
+    expect(input(html, 'native')).not.toContain('checked');
+    const native = render({
+      networkFee: fee({ fee_mode: 'native', amount: null }),
+      choice: { mode: 'native', tokenFeeAmount: '96000', onChoose: () => {} },
+    });
+    expect(input(native, 'native')).toContain('checked');
+    expect(native).toContain('+0.096 USDC');
+  });
+
+  it('no gasless method: "You\'ll need {coin} for the network fee"', () => {
+    expect(
+      render({ networkFee: fee({ fee_mode: 'native', amount: null, method: 'native' }) }),
+    ).toContain('You&#x27;ll need ETH for the network fee');
+    expect(render({ networkFee: null })).toContain('You&#x27;ll need ETH for the network fee');
+  });
+
+  it('the shopper only ever sees "not sponsored"-style reasons, never budget wording', () => {
+    // Even a merchant-side reason leaking through the API is never rendered (m2).
+    for (const reason of ['budget_exhausted', 'per_payment_cap', 'loss_cap', 'not_sponsored']) {
+      for (const choice of [
+        null,
+        { mode: 'token' as const, tokenFeeAmount: '96000', onChoose() {} },
+      ]) {
+        const html = render({ networkFee: fee({ reason }), choice });
+        expect(html).not.toMatch(/budget|cap|loss|sponsor/i);
+      }
+      expect(
+        render({ networkFee: fee({ reason, paid_by: 'merchant', fee_mode: null }) }),
+      ).not.toMatch(/budget|cap|loss/i);
+    }
+  });
+
+  it('the choice appears only when the shopper pays and both ways exist', () => {
+    const shopper = {
+      method: 'eip3009' as const,
+      paid_by: 'shopper' as const,
+      reason: 'not_sponsored',
+      fee_modes: ['token', 'native'] as ('token' | 'native')[],
+      token_fee: { amount: '96000', symbol: 'USDC', decimals: 6, usd: '0.096' },
+    };
+    expect(showFeeChoice(shopper, fee({}))).toBe(true);
+    // The merchant sponsors: no choice to make.
+    expect(
+      showFeeChoice(
+        { ...shopper, paid_by: 'merchant', fee_modes: [] },
+        fee({ paid_by: 'merchant' }),
+      ),
+    ).toBe(false);
+    // The quote came back sponsored after all.
+    expect(showFeeChoice(shopper, fee({ paid_by: 'merchant' }))).toBe(false);
+    expect(showFeeChoice({ ...shopper, fee_modes: ['token'] }, fee({}))).toBe(false);
+    expect(showFeeChoice(null, fee({}))).toBe(false);
+  });
+
+  it('the copy-address path says the shopper pays the network fee', () => {
+    const html = renderToStaticMarkup(
+      <SendDetails address="0xabc" amount="25" symbol="USDC" network="Base" />,
+    );
+    expect(html).toContain('You pay the network fee from your wallet');
+  });
+
+  it('a gasless quote is payable in test mode too (nothing is sent on chain there)', () => {
+    const q = {
+      refund_address: '0x1111111111111111111111111111111111111111',
+      deadline: '2026-10-26T12:10:00Z',
+    };
+    const base = {
+      family: 'evm' as const,
+      address: q.refund_address,
+      quote: q,
+      now: Date.parse('2026-10-26T12:00:00Z'),
+      livemode: false,
+      paymentSent: false,
+      busy: false,
+    };
+    expect(canPay(base)).toBe(false);
+    expect(canPay({ ...base, gasless: true })).toBe(true);
   });
 });

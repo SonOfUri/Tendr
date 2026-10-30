@@ -145,12 +145,23 @@ describe('NearRpc.txStatus', () => {
           },
           transaction_outcome: {
             id: 'H',
-            outcome: { logs: [], status: { SuccessReceiptId: 'r1' } },
+            outcome: {
+              logs: [],
+              status: { SuccessReceiptId: 'r1' },
+              tokens_burnt: '300',
+              gas_burnt: 3,
+            },
           },
           receipts_outcome: [
             {
               id: 'r1',
-              outcome: { logs: ['a'], status: { SuccessValue: '' }, executor_id: INTENTS },
+              outcome: {
+                logs: ['a'],
+                status: { SuccessValue: '' },
+                executor_id: INTENTS,
+                tokens_burnt: '45',
+                gas_burnt: '4',
+              },
             },
             { id: 'r2', outcome: { logs: ['b'], status: { Failure: {} }, executor_id: 'x.near' } },
             // Neither SuccessValue nor SuccessReceiptId: never trusted as a success.
@@ -164,6 +175,9 @@ describe('NearRpc.txStatus', () => {
     const rpc = new NearRpc(transport);
     await expect(rpc.txStatus('H', INTENTS)).resolves.toEqual({
       hash: 'H',
+      tokensBurnt: 345n,
+      gasBurnt: 7n,
+      topLevelOk: true,
       signerId: 'relayer.near',
       receiverId: INTENTS,
       delegateSenderIds: ['shopper.near'],

@@ -24,6 +24,7 @@ import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
 import { transitionPayment, transitionSession } from '../events/transitions.js';
+import { networkFeeView } from '../gas/quote-fee.js';
 import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
@@ -40,6 +41,7 @@ import {
   type StatusResponse,
 } from './oneclick/index.js';
 import { keptSmallNetOfFee } from './return-fee.js';
+import { onPaymentCollected, onQuotePaymentDetected } from '../relayer/submissions.js';
 import { recordRevenue } from './revenue.js';
 import { liveSenderResolvers } from './senders/index.js';
 import { onScreeningAllowed, screenAddress, type ScreeningOutcome } from './screening.js';
@@ -538,6 +540,8 @@ async function detect(q: QuoteRow, status: StatusResponse): Promise<Payment | nu
         type: 'payment.processing',
         payload: base,
       });
+      // Confirmed shopper fee legs become revenue once the payment exists.
+      await onQuotePaymentDetected(tx, ctx, q, p.id);
       if (s.status === 'PENDING_DEPOSIT') {
         await transitionSession(tx, ctx, s.id, 'PROCESSING', { payment_id: p.id });
       } else if (s.status === 'EXPIRED') {
@@ -1377,6 +1381,8 @@ async function settle(
       }
       await transitionSession(tx, ctx, s.id, 'SETTLED', { payment_id: p.id });
       await recordRevenue(tx, ctx, p.id);
+      // The proceeds are collected here: a held gas sponsorship is charged at its estimate.
+      await onPaymentCollected(tx, ctx, q, p.id);
       await recordEvent(tx, ctx, {
         aggregateType: 'payment',
         aggregateId: p.id,
@@ -1394,6 +1400,7 @@ async function settle(
           verified_by: v.verifiedBy,
           overpaid_amount: overpaid ? refunded.toString() : null,
           kept_small_overpayment: keptSmall,
+          network_fee: networkFeeView(q),
         },
       });
       return 'settled';

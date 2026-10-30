@@ -212,13 +212,41 @@ enum SponsorshipMethod {
   paymaster_erc20
   energy
   fee_payer
+  /// The Tendr payment forwarder (EIP-2612 permit, or Tron exact approve, + signed TendrPayment).
+  forwarder
+  /// NEAR NEP-366 meta-transaction (signed delegate action) relayed by `relayer-near`.
+  meta_tx
+  /// Pimlico's Solana paymaster (Kora).
+  kora
+  /// An integrator hook call (`onTendrDeposit`) whose actual gas exceeded the quoted hook estimate:
+  /// the shortfall, recognised as Tendr's loss (`cost_usd` is the shortfall, not the whole cost).
+  hook
 
   @@map("sponsorship_method")
+}
+
+/// How a shopper-paid network fee is paid: in the payment token (gasless) or the chain's coin.
+enum FeeMode {
+  token
+  native
+
+  @@map("fee_mode")
+}
+
+/// A sponsorship's hold on the merchant's monthly gas budget.
+enum GasReservationState {
+  reserved
+  settled
+  released
+
+  @@map("gas_reservation_state")
 }
 
 enum Sponsor {
   merchant
   tendr
+  /// A relayed payment whose network fee the shopper paid in the payment token (project 5a).
+  shopper
 
   @@map("sponsor")
 }
@@ -496,6 +524,7 @@ model Merchant {
   payoutAllowlist             PayoutAllowlistEntry[]
   webhookEndpoints            WebhookEndpoint[]
   gasPolicies                 GasPolicy[]
+  gasBudgetMonths             GasBudgetMonth[]
   paymentLinks                PaymentLink[]
   sessions                    Session[]
   quotes                      Quote[]
@@ -864,8 +893,31 @@ model GasPolicy {
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
 
+  @@unique([merchantId, livemode])
   @@index([merchantId])
   @@map("gas_policies")
+}
+
+/// A merchant's gas budget use for one calendar month (UTC) in one mode (spec 5a §2.2).
+/// `reservedUsd` is held by sponsorships not yet settled, `spentUsd` is settled; a reservation
+/// only succeeds while reserved + spent + the new amount stays within the policy's budget.
+model GasBudgetMonth {
+  id          String   @id
+  merchantId  String   @map("merchant_id")
+  livemode    Boolean
+  /// `YYYY-MM`
+  month       String
+  reservedUsd Decimal  @default(0) @map("reserved_usd") @db.Decimal(18, 6)
+  spentUsd    Decimal  @default(0) @map("spent_usd") @db.Decimal(18, 6)
+  /// Sponsorships charged to this month (reserved or settled).
+  count       Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@unique([merchantId, livemode, month])
+  @@map("gas_budget_months")
 }
 
 // ─── Payments core ──────────────────────────────────────────────────────────
@@ -972,47 +1024,84 @@ model Session {
 }
 
 model Quote {
-  id                   String           @id
-  merchantId           String           @map("merchant_id")
+  id                   String              @id
+  merchantId           String              @map("merchant_id")
   livemode             Boolean
-  sessionId            String           @map("session_id")
-  originAssetId        String           @map("origin_asset_id")
-  depositAddress       String           @map("deposit_address")
-  amountIn             Decimal          @map("amount_in") @db.Decimal(78, 0)
-  amountOut            Decimal          @map("amount_out") @db.Decimal(78, 0)
-  refundTo             String           @map("refund_to")
+  sessionId            String              @map("session_id")
+  originAssetId        String              @map("origin_asset_id")
+  depositAddress       String              @map("deposit_address")
+  amountIn             Decimal             @map("amount_in") @db.Decimal(78, 0)
+  amountOut            Decimal             @map("amount_out") @db.Decimal(78, 0)
+  refundTo             String              @map("refund_to")
   deadline             DateTime
-  oneclickQuoteRef     String?          @map("oneclick_quote_ref")
+  oneclickQuoteRef     String?             @map("oneclick_quote_ref")
   /// Set when a newer quote replaced this one for the session.
-  supersededAt         DateTime?        @map("superseded_at")
-  amountInUsd          Decimal?         @map("amount_in_usd") @db.Decimal(18, 6)
+  supersededAt         DateTime?           @map("superseded_at")
+  amountInUsd          Decimal?            @map("amount_in_usd") @db.Decimal(18, 6)
   /// 1Click's USD value of `amount_out` at quote time (the shopper's fee line is in − out).
-  amountOutUsd         Decimal?         @map("amount_out_usd") @db.Decimal(18, 6)
+  amountOutUsd         Decimal?            @map("amount_out_usd") @db.Decimal(18, 6)
   /// How 1Click returns money for this quote: to `refund_to` on the origin chain (direct), or
   /// into the merchant's intents account (`INTENTS`, signer-approved return-to-sender).
-  refundType           QuoteRefundType? @map("refund_type")
+  refundType           QuoteRefundType?    @map("refund_type")
   /// The shopper reported a deposit transaction for this quote (`POST …/client/deposit`).
-  depositTxHash        String?          @map("deposit_tx_hash")
-  depositTxSubmittedAt DateTime?        @map("deposit_tx_submitted_at")
+  depositTxHash        String?             @map("deposit_tx_hash")
+  depositTxSubmittedAt DateTime?           @map("deposit_tx_submitted_at")
   /// The payment watcher: when the next 1Click status poll is due (also a running poll's claim
   /// lease). A partial index (migration payment_watcher) covers rows still being watched.
-  watchNextAt          DateTime?        @map("watch_next_at")
+  watchNextAt          DateTime?           @map("watch_next_at")
   /// Polling stopped for good (terminal payment, 24 h after creation, or a superseded quote past
   /// its deadline + 30 min with no deposit).
-  watchStoppedAt       DateTime?        @map("watch_stopped_at")
+  watchStoppedAt       DateTime?           @map("watch_stopped_at")
   /// When the last poll of this address completed (the expiry sweep waits for one after expiry).
-  watchPolledAt        DateTime?        @map("watch_polled_at")
-  createdAt            DateTime         @default(now()) @map("created_at")
+  watchPolledAt        DateTime?           @map("watch_polled_at")
+  /// Who pays the network fee (spec §2.6): `merchant` (sponsored) or `buyer` (the shopper). Null
+  /// on quotes made before gasless payments.
+  networkFeePaidBy     ResolvedGasSponsor? @map("network_fee_paid_by")
+  /// Shopper pays: in the payment token (`token`, gasless) or the chain's coin (`native`). Null
+  /// when the merchant sponsors.
+  networkFeeMode       FeeMode?            @map("network_fee_mode")
+  /// The quoted network fee (USD): with Tendr's margin when Tendr collects it (sponsored, or the
+  /// shopper's token fee); the shopper's own estimate for a native send.
+  networkFeeUsd        Decimal?            @map("network_fee_usd") @db.Decimal(18, 6)
+  /// Shopper-paid token fee: base units of the origin asset, sent on top of `amount_in`.
+  networkFeeAmount     Decimal?            @map("network_fee_amount") @db.Decimal(78, 0)
+  /// The gasless method the fee was quoted for; null for a native (copy-address or wallet) send.
+  networkFeeMethod     SponsorshipMethod?  @map("network_fee_method")
+  /// Why the shopper pays (`shopper_choice`, `budget`, …); null when the merchant sponsors.
+  networkFeeReason     String?             @map("network_fee_reason")
+  /// Basis points added to Tendr's 1Click `appFees` to collect the merchant-sponsored fee and the
+  /// integrator hook estimate from the merchant's proceeds (recorded as `gas_reimbursement`).
+  networkFeeBps        Int                 @default(0) @map("network_fee_bps")
+  /// The integrator hook call's estimated cost (USD), deducted from the merchant's proceeds.
+  hookFeeUsd           Decimal?            @map("hook_fee_usd") @db.Decimal(18, 6)
+  /// The budget reservation for a merchant-sponsored fee (released when the quote is replaced or
+  /// expires unused).
+  gasSponsorshipId     String?             @map("gas_sponsorship_id")
+  /// The connected wallet the quote was made for (`wallet_address`): the only address whose
+  /// signatures the relayer accepts for this quote. Null for a copy-address quote.
+  walletAddress        String?             @map("wallet_address")
+  /// SHA-256 (hex) of the quote's paymaster URL token (`/v1/checkout/paymaster/:token`, method
+  /// `paymaster`): the URL a smart wallet calls for sponsorship of exactly this quote's calls.
+  /// Requests are looked up by this hash.
+  paymasterTokenHash   String?             @unique @map("paymaster_token_hash")
+  /// The token itself as a stored secret (`secrets`, envelope-encrypted, purpose `paymaster-url`),
+  /// so a repeated gasless/prepare returns the same URL instead of minting a new one.
+  paymasterTokenRef    String?             @map("paymaster_token_ref")
+  createdAt            DateTime            @default(now()) @map("created_at")
 
-  merchant Merchant  @relation(fields: [merchantId], references: [id])
-  session  Session   @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
-  payments Payment[]
+  merchant          Merchant         @relation(fields: [merchantId], references: [id])
+  session           Session          @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  gasSponsorship    GasSponsorship?  @relation("QuoteReservation", fields: [gasSponsorshipId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  /// Relayed submissions of this quote (gasless payments).
+  relaySponsorships GasSponsorship[] @relation("RelayedQuote")
+  payments          Payment[]
 
   // Lets payments pin their quote to the same session (payments FK below).
   @@unique([id, sessionId, merchantId, livemode])
   @@unique([livemode, depositAddress])
   @@index([merchantId])
   @@index([sessionId])
+  @@index([gasSponsorshipId])
   @@map("quotes")
 }
 
@@ -1075,6 +1164,8 @@ model Payment {
   refunds                  Refund[]
   revenueEntries           RevenueEntry[]
   recoveredGasSponsorships GasSponsorship[]
+  hookShortfalls           GasSponsorship[]   @relation("HookShortfall")
+  hookCalls                HookCall[]
   settlementClaims         SettlementClaim[]
 
   @@unique([id, merchantId, livemode])
@@ -1199,47 +1290,272 @@ model HookCall {
   merchantId     String           @map("merchant_id")
   livemode       Boolean
   sessionId      String           @map("session_id")
+  /// The settled payment this call notifies the integrator's contract of.
+  paymentId      String           @map("payment_id")
   chain          String
   targetContract String           @map("target_contract")
+  /// The session's `hook_data`, as sent in the call.
+  hookData       Json             @map("hook_data")
   txHash         String?          @map("tx_hash")
   attempt        Int              @default(0)
   status         ExternalTxStatus @default(pending)
+  /// When the next attempt is due (retry backoff); null once the call is done.
+  nextRetryAt    DateTime?        @map("next_retry_at")
+  /// A worker's claim on the call (at most one attempt in flight).
+  leaseUntil     DateTime?        @map("lease_until")
+  /// The last failure (e.g. the revert reason).
+  lastError      String?          @map("last_error")
+  /// Automatic retries stop here (3 days after the call was created). A manual resend sets it to
+  /// the resend time: that attempt is one-off.
+  retryUntil     DateTime         @map("retry_until")
+  /// When `hook.failed` was recorded (and the merchant alerted): once per call, never again.
+  alertedAt      DateTime?        @map("alerted_at")
+  /// The actual gas cost of every attempt so far (USD), when priced.
+  costUsd        Decimal?         @map("cost_usd") @db.Decimal(18, 6)
+  /// When the call succeeded.
+  succeededAt    DateTime?        @map("succeeded_at")
+  /// Manual resends so far (at most HOOK_MAX_MANUAL_RESENDS: each is an attempt Tendr pays for).
+  manualResends  Int              @default(0) @map("manual_resends")
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
   session  Session  @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  payment  Payment  @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
 
+  /// One hook call per payment.
+  @@unique([paymentId])
   @@index([merchantId])
   @@index([sessionId])
+  @@index([status, nextRetryAt])
   @@map("hook_calls")
 }
 
 model GasSponsorship {
-  id                     String            @id
-  merchantId             String            @map("merchant_id")
+  id                     String               @id
+  merchantId             String               @map("merchant_id")
   livemode               Boolean
-  sessionId              String            @map("session_id")
+  sessionId              String               @map("session_id")
   chain                  String
-  txHash                 String?           @map("tx_hash")
+  txHash                 String?              @map("tx_hash")
   method                 SponsorshipMethod
   provider               String
-  userOpHash             String?           @map("user_op_hash")
+  userOpHash             String?              @map("user_op_hash")
   sponsor                Sponsor
-  gasUsed                Decimal?          @map("gas_used") @db.Decimal(78, 0)
-  costUsd                Decimal?          @map("cost_usd") @db.Decimal(18, 6)
-  recoveredFromPaymentId String?           @map("recovered_from_payment_id")
-  status                 ExternalTxStatus  @default(pending)
-  createdAt              DateTime          @default(now()) @map("created_at")
-  updatedAt              DateTime          @updatedAt @map("updated_at")
+  gasUsed                Decimal?             @map("gas_used") @db.Decimal(78, 0)
+  costUsd                Decimal?             @map("cost_usd") @db.Decimal(18, 6)
+  recoveredFromPaymentId String?              @map("recovered_from_payment_id")
+  /// `method = hook` rows: the payment whose integrator hook gas this shortfall is (never
+  /// `recovered_from_payment_id`: nothing was recovered from that payment for it).
+  hookPaymentId          String?              @map("hook_payment_id")
+  status                 ExternalTxStatus     @default(pending)
+  /// Shopper-paid fee: how it was paid; null when the merchant sponsors.
+  feeMode                FeeMode?             @map("fee_mode")
+  /// Shopper-paid token fee: the asset (1Click id) and amount (base units) signed.
+  feeAsset               String?              @map("fee_asset")
+  feeAmount              Decimal?             @map("fee_amount") @db.Decimal(78, 0)
+  /// The quoted network cost (USD): what the merchant is charged when it sponsors (spec §8.1).
+  estimateUsd            Decimal?             @map("estimate_usd") @db.Decimal(18, 6)
+  /// The hold on the monthly gas budget; null when nothing was reserved (shopper-paid).
+  reservationState       GasReservationState? @map("reservation_state")
+  /// When Tendr recognised the cost as its own loss (`sponsor = tendr`, `recognizeTendrLoss`);
+  /// the daily loss cap counts by this time.
+  lossRecognizedAt       DateTime?            @map("loss_recognized_at")
+  /// The quote a relayed submission paid (set when the relayer accepts the shopper's signatures).
+  quoteId                String?              @map("quote_id")
+  /// The address that signed the relayed payment (the quote's `wallet_address`).
+  signerAddress          String?              @map("signer_address")
+  /// The relayer's on-chain transaction (EVM: `relayer_transactions`).
+  relayerTxId            String?              @map("relayer_tx_id")
+  /// Why a relayed submission failed.
+  lastError              String?              @map("last_error")
+  /// Shopper-paid fee leg: the fee the relayed transaction actually moved to the gas-fee address
+  /// (its `TendrPaid` event; 0 when the authorization was cancelled or skipped). Revenue is booked
+  /// from this, never from the quote.
+  feeCollected           Decimal?             @map("fee_collected") @db.Decimal(78, 0)
+  /// Pimlico paymaster submission: `{ entryPoint, chainId, result }`, the ERC-7677
+  /// `pm_getPaymasterData` result handed to the wallet (returned again for the same user operation).
+  paymasterData          Json?                @map("paymaster_data")
+  /// The part of the actual cost Tendr did not recover (cost − collected fee, or cost − the
+  /// merchant's estimate), recognised when the receipt arrives; counted by the daily loss cap
+  /// while the row is not itself a Tendr loss (`sponsor = tendr`).
+  unrecoveredUsd         Decimal?             @map("unrecovered_usd") @db.Decimal(18, 6)
+  unrecoveredAt          DateTime?            @map("unrecovered_at")
+  createdAt              DateTime             @default(now()) @map("created_at")
+  updatedAt              DateTime             @updatedAt @map("updated_at")
 
-  merchant             Merchant @relation(fields: [merchantId], references: [id])
-  session              Session  @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
-  recoveredFromPayment Payment? @relation(fields: [recoveredFromPaymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  merchant             Merchant            @relation(fields: [merchantId], references: [id])
+  session              Session             @relation(fields: [sessionId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  recoveredFromPayment Payment?            @relation(fields: [recoveredFromPaymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  hookPayment          Payment?            @relation("HookShortfall", fields: [hookPaymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  /// Quotes holding this sponsorship as their budget reservation.
+  quotes               Quote[]             @relation("QuoteReservation")
+  quote                Quote?              @relation("RelayedQuote", fields: [quoteId, sessionId, merchantId, livemode], references: [id, sessionId, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  relayerTx            RelayerTransaction? @relation(fields: [relayerTxId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
+  // Lets quotes pin their reservation to the same merchant and mode (quotes FK).
+  @@unique([id, merchantId, livemode])
   @@index([merchantId])
   @@index([sessionId])
+  @@index([livemode, lossRecognizedAt])
+  @@index([livemode, unrecoveredAt])
+  @@index([quoteId])
+  @@index([hookPaymentId])
   @@map("gas_sponsorships")
+}
+
+/// A transaction the relayer signs and pays gas for (project 5a §3.1). Owned by the EVM sender:
+/// it records the nonce and every broadcast (replacements included) before it is sent, so an
+/// unknown outcome is reconciled from the chain, never by signing a new nonce blindly.
+model RelayerTransaction {
+  id                   String           @id
+  /// 1Click blockchain id (`base`, `arb`, …) and the EIP-155 chain id.
+  chain                String
+  chainId              Int              @map("chain_id")
+  fromAddress          String           @map("from_address")
+  nonce                BigInt
+  toAddress            String           @map("to_address")
+  data                 String
+  gasLimit             Decimal          @map("gas_limit") @db.Decimal(78, 0)
+  maxFeePerGas         Decimal          @map("max_fee_per_gas") @db.Decimal(78, 0)
+  maxPriorityFeePerGas Decimal          @map("max_priority_fee_per_gas") @db.Decimal(78, 0)
+  /// The latest signed transaction (0x RLP) and its hash; `tx_hashes` holds every hash broadcast
+  /// at this nonce (replacements and the deadline cancel), oldest first.
+  rawTx                String           @map("raw_tx")
+  txHash               String           @map("tx_hash")
+  txHashes             String[]         @map("tx_hashes")
+  /// The 0-value self-transfer that freed the nonce after `give_up_at` (null until sent).
+  cancelTxHash         String?          @map("cancel_tx_hash")
+  status               ExternalTxStatus @default(pending)
+  /// What the transaction is for (`gasless_payment`) and the record it belongs to.
+  purpose              String
+  refId                String           @map("ref_id")
+  broadcastAt          DateTime?        @map("broadcast_at")
+  /// After this the transaction is no longer worth mining: the nonce is freed with a cancel.
+  giveUpAt             DateTime         @map("give_up_at")
+  attempts             Int              @default(0)
+  minedHash            String?          @map("mined_hash")
+  gasUsed              Decimal?         @map("gas_used") @db.Decimal(78, 0)
+  effectiveGasPrice    Decimal?         @map("effective_gas_price") @db.Decimal(78, 0)
+  /// OP-stack chains: the receipt's L1 data fee (wei), charged on top of gas.
+  l1Fee                Decimal?         @map("l1_fee") @db.Decimal(78, 0)
+  lastError            String?          @map("last_error")
+  /// Logs of the mined receipt emitted by `to_address` (the purpose decodes them).
+  receiptLogs          Json?            @map("receipt_logs")
+  leaseUntil           DateTime?        @map("lease_until")
+  /// The outcome was handed to the purpose's handler (gasless: sponsorship updated).
+  outcomeHandledAt     DateTime?        @map("outcome_handled_at")
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  gasSponsorships GasSponsorship[]
+
+  @@index([chain, fromAddress, nonce])
+  @@index([status, leaseUntil])
+  @@index([purpose, refId])
+  @@map("relayer_transactions")
+}
+
+/// A gasless Tron payment's first step (project 5a, spec §2.3 Tron; rulings T9-b … T9-e): the
+/// shopper's signed exact-amount `approve(forwarder, amount + fee)` for one quote, which Tendr
+/// verifies, funds with just-in-time `gas-tron` delegations (`tron_delegations`) and broadcasts.
+/// The relayer's own record (infra): ids of the merchant, session and quote are kept for lookups.
+model TronApproval {
+  id                 String           @id
+  merchantId         String           @map("merchant_id")
+  livemode           Boolean
+  sessionId          String           @map("session_id")
+  quoteId            String           @map("quote_id")
+  /// The shopper (base58): the approve's owner and the delegations' receiver.
+  wallet             String
+  /// sha256 of the signed raw data (hex); stored before anything is broadcast.
+  txId               String           @map("tx_id")
+  /// The signed `Transaction` (protobuf, hex): re-broadcast as is until it lands or cannot.
+  signedTx           String           @map("signed_tx")
+  expiration         DateTime
+  /// pending: delegations in flight, approve not sent yet; submitted: approve sent.
+  status             ExternalTxStatus @default(pending)
+  broadcastAt        DateTime?        @map("broadcast_at")
+  /// First look that found the approve unknown with the solidified head past its expiration.
+  expiredSeenAt      DateTime?        @map("expired_seen_at")
+  /// Energy the approve took from the shopper's own and delegated energy (its receipt).
+  energyUsed         BigInt?          @map("energy_used")
+  /// Value (sun) of the `gas-tron` resources this approval used: its delegations' transactions
+  /// and the delegated energy the approve consumed (see relayer/tron-energy.ts, cost model).
+  costSun            BigInt?          @map("cost_sun")
+  /// Where `cost_sun` is counted: the payment submission (`gas_sponsorships.id`) whose cost
+  /// includes it, or a `sponsor = tendr` row of its own. Null until counted.
+  costBookedTo       String?          @map("cost_booked_to")
+  /// The part of `cost_sun` the payment submission carries (set when it is booked to one); any
+  /// cost measured later (energy the shopper spent elsewhere) is Tendr's at close.
+  costBookedSun      BigInt?          @map("cost_booked_sun")
+  /// The `sponsor = tendr` row holding this approval's provisional cost: the most its
+  /// delegations can cost, recognised when they are made (the daily loss cap sees it at once),
+  /// set to the actual unrecovered cost at close.
+  provisionalCostId  String?          @map("provisional_cost_id")
+  /// How many delegations the claim planned (0: the shopper had the resources); an approval
+  /// whose rows never appeared is failed, never sent without its energy.
+  plannedDelegations Int              @default(0) @map("planned_delegations")
+  /// The `TendrPayment` issued for this approval (step 2): its deadline. The nonce is the quote's.
+  paymentDeadline    DateTime?        @map("payment_deadline")
+  lastError          String?          @map("last_error")
+  /// Final: the approve's outcome is known, every delegation is reclaimed, the cost is counted.
+  closedAt           DateTime?        @map("closed_at")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  delegations TronDelegation[]
+
+  @@index([wallet, createdAt])
+  @@index([quoteId])
+  @@index([sessionId])
+  @@index([livemode, status, updatedAt])
+  @@map("tron_approvals")
+}
+
+/// One just-in-time delegation of `gas-tron`'s energy or bandwidth to a shopper, for one approve
+/// (ruling T9-d): recorded before it is broadcast, reclaimed with `undelegateResource` once the
+/// approve's outcome is known or ten minutes after it was delegated. The reclaim job resumes from
+/// these rows (idempotent across restarts).
+model TronDelegation {
+  id                   String    @id
+  approvalId           String    @map("approval_id")
+  livemode             Boolean
+  /// `energy` | `bandwidth`.
+  resource             String
+  receiver             String
+  /// TRX (sun) whose resource is lent, and the resource units it gave when delegated.
+  balanceSun           BigInt    @map("balance_sun")
+  units                BigInt
+  /// `delegating` → `delegated` → `reclaiming` → `reclaimed`; `failed` when it never took effect.
+  status               String
+  delegateTxId         String    @map("delegate_tx_id")
+  delegateTx           String    @map("delegate_tx")
+  delegateExpiration   DateTime  @map("delegate_expiration")
+  delegatedAt          DateTime? @map("delegated_at")
+  /// Energy delegations: the receiver's `EnergyUsed` when delegated and just before the reclaim;
+  /// the difference (capped at `units`) is the lent energy actually consumed, by anything.
+  energyUsedBefore     BigInt?   @map("energy_used_before")
+  energyUsedAfter      BigInt?   @map("energy_used_after")
+  /// sun the delegate / undelegate transactions burned (their receipts).
+  delegateFeeSun       BigInt?   @map("delegate_fee_sun")
+  undelegateTxId       String?   @map("undelegate_tx_id")
+  undelegateTx         String?   @map("undelegate_tx")
+  undelegateExpiration DateTime? @map("undelegate_expiration")
+  undelegateFeeSun     BigInt?   @map("undelegate_fee_sun")
+  /// First look that found the current transaction unknown past its expiration (solidified).
+  expiredSeenAt        DateTime? @map("expired_seen_at")
+  reclaimedAt          DateTime? @map("reclaimed_at")
+  lastError            String?   @map("last_error")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  approval TronApproval @relation(fields: [approvalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([approvalId])
+  @@index([livemode, status, updatedAt])
+  @@index([receiver, status])
+  @@map("tron_delegations")
 }
 
 model ScreeningResult {
@@ -1313,12 +1629,15 @@ model RevenueEntry {
   /// USD value at quote prices.
   amountUsd  Decimal?      @map("amount_usd") @db.Decimal(18, 6)
   txHash     String?       @map("tx_hash")
+  /// Tells apart several rows of one source on a payment: '' for the settlement lines; the
+  /// sponsorship id for a shopper-paid gasless fee leg (`gas_reimbursement`, project 5a).
+  reference  String        @default("")
   createdAt  DateTime      @default(now()) @map("created_at")
 
   merchant Merchant @relation(fields: [merchantId], references: [id])
   payment  Payment  @relation(fields: [paymentId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
 
-  @@unique([paymentId, source])
+  @@unique([paymentId, source, reference])
   @@index([merchantId])
   @@index([paymentId])
   @@map("revenue_entries")
@@ -1513,4 +1832,72 @@ model EventOutbox {
   // The dispatcher reads the oldest rows first (ORDER BY created_at LIMIT 100).
   @@index([createdAt])
   @@map("event_outbox")
+}
+
+// ─── Gas-fee sweep and operator alerts (project 5a, Task 12) ─────────────────
+
+enum FeeSweepStatus {
+  planned
+  /// Sent, its outcome not known yet: blocks re-planning of the account and token until the
+  /// transfer is found confirmed (`executed`) or failed, by its hash.
+  broadcast
+  executed
+  failed
+  needs_gas
+
+  @@map("fee_sweep_status")
+}
+
+/// One sweep of a gas-fee account's token into USDC on NEAR (Tendr's fee account) through a 1Click
+/// swap (prefix `fsw`). Live mode only. A `planned` or `needs_gas` row is the open plan for its
+/// account and token (at most one: a partial unique index); executing it ends in `broadcast` (sent,
+/// awaiting confirmation; no new plan for the account and token meanwhile), then `executed` once
+/// confirmed on chain, or `failed`. The 7-day rule reads the last `executed` row per account and
+/// token. No key material
+/// is ever stored here: the `gas-fees-*` keys stay in the key vault.
+model FeeSweep {
+  id               String         @id
+  livemode         Boolean
+  /// `evm` | `solana` | `near` | `tron`.
+  family           String
+  /// 1Click blockchain id.
+  chain            String
+  /// The gas-fee account the tokens leave (the `gas-fees-*` key's address).
+  accountAddress   String         @map("account_address")
+  /// The 1Click asset swept, its symbol, the amount (base units) and its USD value when planned.
+  assetId          String         @map("asset_id")
+  symbol           String
+  amount           Decimal        @db.Decimal(78, 0)
+  amountUsd        Decimal        @map("amount_usd") @db.Decimal(18, 6)
+  /// Why it is due: `threshold` (value ≥ FEE_SWEEP_THRESHOLD_USD) or `weekly`.
+  reason           String
+  status           FeeSweepStatus @default(planned)
+  /// The 1Click quote (its correlation id) and the deposit address the transfer goes to.
+  quoteId          String?        @map("quote_id")
+  depositAddress   String?        @map("deposit_address")
+  /// The destination: USDC on NEAR into TENDR_FEE_ACCOUNT_NEAR.
+  destinationAsset String?        @map("destination_asset")
+  recipient        String?
+  txHash           String?        @map("tx_hash")
+  lastError        String?        @map("last_error")
+  /// Claimed by one executor until then.
+  leaseUntil       DateTime?      @map("lease_until")
+  executedAt       DateTime?      @map("executed_at")
+  /// When the transfer was broadcast (its outcome is reconciled by `tx_hash` from then on).
+  broadcastAt      DateTime?      @map("broadcast_at")
+  /// When the attempt failed: the account and token are not planned again for 6 hours.
+  failedAt         DateTime?      @map("failed_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  @@index([livemode, chain, accountAddress, assetId, status])
+  @@map("fee_sweeps")
+}
+
+/// Operator alerts throttled per key (e.g. `gas_low:evm:base:0x…`): when each was last sent.
+model GasOpsAlert {
+  key            String   @id
+  lastNotifiedAt DateTime @map("last_notified_at")
+
+  @@map("gas_ops_alerts")
 }

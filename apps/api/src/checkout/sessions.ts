@@ -10,6 +10,7 @@ import { Prisma } from '@prisma/client';
 import {
   FeePayerSchema,
   GasPayerSchema,
+  HookDataSchema,
   SESSION_TTL_MS,
   feePayerFromDb,
   feePayerToDb,
@@ -23,6 +24,8 @@ import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
 import { transitionSession } from '../events/transitions.js';
+import { networkFeeView } from '../gas/quote-fee.js';
+import { hookDeliveryFor } from '../hooks/destination.js';
 import { sha256 } from '../lib/crypto.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
@@ -82,6 +85,13 @@ export const CreateSessionSchema = z
       .optional(),
     fee_payer: FeePayerSchema.optional(),
     gas_payer: GasPayerSchema.optional(),
+    /**
+     * Integrator stores settling into their own contract (NEAR or a supported EVM chain): the
+     * store's reference (e.g. a player or order id), any JSON up to 1 KB serialized. It is passed
+     * to the contract's `onTendrDeposit` / `on_tendr_deposit` once the payment settles; giving it
+     * sets `delivery = HOOK`.
+     */
+    hook_data: HookDataSchema.optional(),
     payment_link_id: z.string().min(1).max(64).optional(),
     /** Seconds until the session expires (60–1800); default 30 minutes. */
     expires_in: z
@@ -230,11 +240,20 @@ export async function createSession(
   const [readiness, merchant] = await Promise.all([
     readinessFor(ctx),
     db.merchant.findFirstOrThrow({
-      select: { defaultFeePayer: true, defaultGasPayer: true },
+      select: { defaultFeePayer: true, defaultGasPayer: true, kind: true },
     }),
   ]);
   if (!readiness.ready) throw accountNotReady(readiness.message);
   const { account, settlement, recipient } = readiness;
+  // Integrator hooks (gasless spec §4.1): before any FX call, so a refused hook costs nothing.
+  const hook = await hookDeliveryFor({
+    livemode: ctx.livemode,
+    merchantKind: merchant.kind,
+    payoutMode: settlement.payoutMode,
+    chain: settlement.destChain,
+    recipient,
+    hookData: input.hook_data,
+  });
 
   // Currency and amount precision. A non-USD ISO total is converted to USD now, once; the session
   // is then priced in USD like any other.
@@ -333,7 +352,8 @@ export async function createSession(
           recipient,
           recipientType: settlement.payoutMode === 'intents' ? 'INTENTS' : 'DESTINATION_CHAIN',
           intentsAccount: account.nearAccountId,
-          delivery: 'WEBHOOK',
+          delivery: hook.delivery,
+          hookData: hook.hookData ?? Prisma.DbNull,
           metadata: input.metadata ?? {},
           feeBps: plan?.feeBps ?? DEFAULT_FEE_BPS,
           feePayer: feePayerToDb(payers.feePayer),
@@ -384,8 +404,9 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
     include: {
       payments: {
         orderBy: { createdAt: 'asc' },
-        include: { refunds: { orderBy: { createdAt: 'asc' } } },
+        include: { refunds: { orderBy: { createdAt: 'asc' } }, quote: true },
       },
+      quotes: { where: { supersededAt: null }, orderBy: { createdAt: 'desc' }, take: 1 },
     },
   });
   if (!s || !(await connectionMayAct(ctx.connectionId, ctx.merchantId, s.connectionId))) {
@@ -443,8 +464,13 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
     cancel_url: s.cancelUrl,
     fee_payer: feePayerFromDb(s.feePayer),
     gas_payer: gasPayerFromDb(s.gasSponsor),
+    /** `hook`: the settlement contract is called (`onTendrDeposit`) once a payment settles. */
+    delivery: s.delivery === 'HOOK' ? 'hook' : 'webhook',
+    hook_data: s.hookData ?? null,
     fee_bps: s.feeBps,
     gas_max_usd: toJsonDecimal(s.gasMaxUsd),
+    /** The current quote's network fee (who pays it, how, why); null without a quote. */
+    network_fee: s.quotes[0] ? networkFeeView(s.quotes[0]) : null,
     payment_link_id: s.paymentLinkId,
     url: hostedUrl(s.id),
     expires_at: s.expiresAt.toISOString(),
@@ -462,6 +488,8 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
       kept_small_overpayment: p.keptSmallOverpayment,
       origin_tx_hash: p.originTxHash,
       sender_chain: p.senderChain,
+      /** The paid quote's network fee; null for payments quoted before gasless payments. */
+      network_fee: networkFeeView(p.quote),
       settled_at: iso(p.settledAt),
       created_at: p.createdAt.toISOString(),
       refunds: p.refunds.map((r) => ({

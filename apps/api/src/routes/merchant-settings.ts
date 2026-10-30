@@ -32,7 +32,7 @@ type Caller = { merchantId: string; livemode: boolean; actor: SettingsActor };
  * `'step_up_required'`). The principal is then dropped from the request so the gateway's
  * `onResponse` does not log the same request again as `ok`. Returns `err` to throw.
  */
-function denied(req: FastifyRequest, err: AppError): AppError {
+export function denied(req: FastifyRequest, err: AppError): AppError {
   const p = req.principal;
   if (p && p.kind !== 'user_session') {
     log('info', 'request', {
@@ -51,7 +51,7 @@ function denied(req: FastifyRequest, err: AppError): AppError {
 }
 
 /** Runs a check, logging and re-throwing its denial (403 / 401 step-up) the gateway way. */
-function check(req: FastifyRequest, fn: () => void): void {
+export function check(req: FastifyRequest, fn: () => void): void {
   try {
     fn();
   } catch (err) {

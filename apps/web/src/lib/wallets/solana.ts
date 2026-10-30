@@ -7,6 +7,7 @@ import {
   SystemProgram,
   Transaction,
   type TransactionInstruction,
+  type VersionedTransaction,
 } from '@solana/web3.js';
 import {
   createAssociatedTokenAccountIdempotentInstruction,
@@ -17,15 +18,19 @@ import { WalletError, afterSignError, toWalletError } from './errors';
 import type { DepositRequest, PayTarget, WalletAdapter } from './index';
 import { assertDepositMatches } from './match';
 import type { AppKitSession } from './appkit';
+import { createSolanaGasless } from './gasless/solana';
 
 const SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
 
 export interface SolanaProviderLike {
   sendTransaction(tx: Transaction, connection: never): Promise<string>;
+  /** Signs without sending (gasless: Tendr relays it through the paymaster). */
+  signTransaction?(tx: VersionedTransaction): Promise<VersionedTransaction>;
 }
 
 export interface SolanaConnectionLike {
   getLatestBlockhash(): Promise<{ blockhash: string; lastValidBlockHeight: number }>;
+  getBalance?(pk: PublicKey): Promise<number>;
 }
 
 function publicKey(s: string): PublicKey {
@@ -80,6 +85,11 @@ export function createSolanaAdapter(
   let address: string | null = null;
   return {
     chainFamily: 'solana',
+    gasless: createSolanaGasless(target, {
+      provider: () => deps.session.provider(),
+      address: () => address,
+      connection: async () => deps.connection(),
+    }),
     async connect() {
       try {
         const r = await deps.session.connect();

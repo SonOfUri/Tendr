@@ -286,6 +286,144 @@ describe('loadEnv checkout base url', () => {
   });
 });
 
+describe('loadEnv TENDR_SPONSOR_LOSS_CAP_USD', () => {
+  it('defaults to $50, treats blank as unset, accepts a decimal and rejects junk', () => {
+    expect(loadEnv(base).TENDR_SPONSOR_LOSS_CAP_USD).toBe('50');
+    expect(loadEnv({ ...base, TENDR_SPONSOR_LOSS_CAP_USD: ' ' }).TENDR_SPONSOR_LOSS_CAP_USD).toBe(
+      '50',
+    );
+    expect(
+      loadEnv({ ...base, TENDR_SPONSOR_LOSS_CAP_USD: '12.5' }).TENDR_SPONSOR_LOSS_CAP_USD,
+    ).toBe('12.5');
+    expect(() => loadEnv({ ...base, TENDR_SPONSOR_LOSS_CAP_USD: '-1' })).toThrow(
+      /TENDR_SPONSOR_LOSS_CAP_USD/,
+    );
+  });
+});
+
+describe('loadEnv gas-fee sweep and alerts', () => {
+  it('defaults: sweep off, $20 threshold, no fee account, $50 low-balance alert', () => {
+    const e = loadEnv(base);
+    expect(e.FEE_SWEEP_ENABLED).toBe(false);
+    expect(e.FEE_SWEEP_THRESHOLD_USD).toBe('20');
+    expect(e.TENDR_FEE_ACCOUNT_NEAR).toBeUndefined();
+    expect(e.GAS_LOW_BALANCE_USD).toBe('50');
+  });
+  it('parses the gate, the decimals and the NEAR account; rejects junk', () => {
+    const e = loadEnv({
+      ...base,
+      FEE_SWEEP_ENABLED: 'true',
+      FEE_SWEEP_THRESHOLD_USD: '25.5',
+      TENDR_FEE_ACCOUNT_NEAR: 'fees.tendr.near',
+      GAS_LOW_BALANCE_USD: ' ',
+    });
+    expect(e.FEE_SWEEP_ENABLED).toBe(true);
+    expect(e.FEE_SWEEP_THRESHOLD_USD).toBe('25.5');
+    expect(e.TENDR_FEE_ACCOUNT_NEAR).toBe('fees.tendr.near');
+    expect(e.GAS_LOW_BALANCE_USD).toBe('50');
+    expect(() => loadEnv({ ...base, FEE_SWEEP_ENABLED: 'yes' })).toThrow(/FEE_SWEEP_ENABLED/);
+    expect(() => loadEnv({ ...base, TENDR_FEE_ACCOUNT_NEAR: 'Not An Account' })).toThrow(
+      /TENDR_FEE_ACCOUNT_NEAR/,
+    );
+    expect(() => loadEnv({ ...base, GAS_LOW_BALANCE_USD: '-1' })).toThrow(/GAS_LOW_BALANCE_USD/);
+  });
+});
+
+describe('loadEnv EVM relayer', () => {
+  it('defaults the forwarder to the CREATE2 address and leaves fee caps unset', () => {
+    const e = loadEnv(base);
+    expect(e.EVM_FORWARDER_ADDRESS).toBe('0x19BEBC71495490A99cA6F50F107076967380cf09');
+    expect(e.EVM_MAX_FEE_GWEI_BASE).toBeUndefined();
+    expect(e.EVM_MAX_FEE_GWEI_ETH).toBeUndefined();
+    expect(loadEnv({ ...base, EVM_MAX_FEE_GWEI_ARB: ' ' }).EVM_MAX_FEE_GWEI_ARB).toBeUndefined();
+  });
+
+  it('accepts overrides and rejects junk', () => {
+    const e = loadEnv({
+      ...base,
+      EVM_FORWARDER_ADDRESS: '0x1234567890abcdef1234567890abcdef12345678',
+      EVM_MAX_FEE_GWEI_BASE: '0.5',
+      EVM_MAX_FEE_GWEI_ETH: '80',
+    });
+    expect(e.EVM_FORWARDER_ADDRESS).toBe('0x1234567890abcdef1234567890abcdef12345678');
+    expect(e.EVM_MAX_FEE_GWEI_BASE).toBe('0.5');
+    expect(e.EVM_MAX_FEE_GWEI_ETH).toBe('80');
+    expect(() => loadEnv({ ...base, EVM_FORWARDER_ADDRESS: '0x1234' })).toThrow(
+      /EVM_FORWARDER_ADDRESS/,
+    );
+    expect(() => loadEnv({ ...base, EVM_MAX_FEE_GWEI_POL: '-1' })).toThrow(/EVM_MAX_FEE_GWEI_POL/);
+    expect(() => loadEnv({ ...base, EVM_MAX_FEE_GWEI_BSC: 'lots' })).toThrow(
+      /EVM_MAX_FEE_GWEI_BSC/,
+    );
+  });
+
+  it('takes an optional Pimlico sponsorship policy id', () => {
+    expect(loadEnv(base).PIMLICO_SPONSORSHIP_POLICY_ID).toBeUndefined();
+    expect(
+      loadEnv({ ...base, PIMLICO_SPONSORSHIP_POLICY_ID: ' ' }).PIMLICO_SPONSORSHIP_POLICY_ID,
+    ).toBeUndefined();
+    expect(
+      loadEnv({ ...base, PIMLICO_SPONSORSHIP_POLICY_ID: 'sp_sharp_wolf' })
+        .PIMLICO_SPONSORSHIP_POLICY_ID,
+    ).toBe('sp_sharp_wolf');
+    expect(() => loadEnv({ ...base, PIMLICO_SPONSORSHIP_POLICY_ID: 'sp_x&apikey=evil' })).toThrow(
+      /PIMLICO_SPONSORSHIP_POLICY_ID/,
+    );
+  });
+
+  it('picks the Pimlico Solana network (mainnet unless devnet)', () => {
+    expect(loadEnv(base).PIMLICO_SOLANA_NETWORK).toBe('mainnet');
+    expect(loadEnv({ ...base, PIMLICO_SOLANA_NETWORK: ' ' }).PIMLICO_SOLANA_NETWORK).toBe(
+      'mainnet',
+    );
+    expect(loadEnv({ ...base, PIMLICO_SOLANA_NETWORK: 'devnet' }).PIMLICO_SOLANA_NETWORK).toBe(
+      'devnet',
+    );
+    expect(() => loadEnv({ ...base, PIMLICO_SOLANA_NETWORK: 'testnet' })).toThrow(
+      /PIMLICO_SOLANA_NETWORK/,
+    );
+  });
+});
+
+describe('loadEnv gas fee pricing and chain RPCs', () => {
+  it('defaults the margin to 2000 bps and the Solana and Tron RPCs to public mainnet', () => {
+    const e = loadEnv(base);
+    expect(e.GAS_FEE_MARGIN_BPS).toBe(2000);
+    expect(e.SOLANA_RPC_URL).toBe('https://api.mainnet-beta.solana.com');
+    expect(e.TRON_RPC_URL).toBe('https://api.trongrid.io');
+    expect(loadEnv({ ...base, GAS_FEE_MARGIN_BPS: ' ' }).GAS_FEE_MARGIN_BPS).toBe(2000);
+  });
+
+  it('accepts overrides and rejects junk', () => {
+    const e = loadEnv({
+      ...base,
+      GAS_FEE_MARGIN_BPS: '500',
+      SOLANA_RPC_URL: 'https://sol.example/rpc',
+      TRON_RPC_URL: 'https://tron.example',
+    });
+    expect(e.GAS_FEE_MARGIN_BPS).toBe(500);
+    expect(e.SOLANA_RPC_URL).toBe('https://sol.example/rpc');
+    expect(e.TRON_RPC_URL).toBe('https://tron.example');
+    expect(() => loadEnv({ ...base, GAS_FEE_MARGIN_BPS: '-1' })).toThrow(/GAS_FEE_MARGIN_BPS/);
+    expect(() => loadEnv({ ...base, GAS_FEE_MARGIN_BPS: '1.5' })).toThrow(/GAS_FEE_MARGIN_BPS/);
+    expect(() => loadEnv({ ...base, GAS_FEE_MARGIN_BPS: '10001' })).toThrow(/GAS_FEE_MARGIN_BPS/);
+    expect(() => loadEnv({ ...base, SOLANA_RPC_URL: 'not a url' })).toThrow(/SOLANA_RPC_URL/);
+    expect(() => loadEnv({ ...base, TRON_RPC_URL: 'ftp://x' })).toThrow(/TRON_RPC_URL/);
+  });
+
+  it('has no Tron forwarder by default and accepts only a base58 Tron address', () => {
+    expect(loadEnv(base).TRON_FORWARDER_ADDRESS).toBeUndefined();
+    expect(
+      loadEnv({ ...base, TRON_FORWARDER_ADDRESS: ' ' }).TRON_FORWARDER_ADDRESS,
+    ).toBeUndefined();
+    const t = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+    expect(loadEnv({ ...base, TRON_FORWARDER_ADDRESS: t }).TRON_FORWARDER_ADDRESS).toBe(t);
+    expect(() =>
+      loadEnv({ ...base, TRON_FORWARDER_ADDRESS: '0x19BEBC71495490A99cA6F50F107076967380cf09' }),
+    ).toThrow(/TRON_FORWARDER_ADDRESS/);
+  });
+});
+
 describe('loadEnv checkout pricing', () => {
   it('defaults slippage to 100 bps and the gas cap to $2', () => {
     const e = loadEnv(base);

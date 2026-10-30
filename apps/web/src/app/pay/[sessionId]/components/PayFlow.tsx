@@ -16,12 +16,20 @@ import {
   showManualSend,
   type PaymentBlock,
 } from '@/lib/wallets/block';
+import { payTargetFor } from '@/lib/wallets/index';
 import {
   PaymentSentNotice,
   WalletConnect,
+  type WalletGaslessParams,
   type WalletQuoteResult,
   type WalletSendResult,
 } from './WalletConnect';
+
+/** The wallet path's quote fields, kept so an automatic re-quote stays on the wallet path. */
+interface WalletQuoteFields extends WalletGaslessParams {
+  asset: string;
+  wallet: string;
+}
 
 type Reason = 'choose' | 'auto' | 'refund' | 'retry' | 'wallet';
 
@@ -138,20 +146,42 @@ export function PayFlow({
   const freshRequested = useRef(false);
   // The latest quote's return address: a fresh quote and "Try again" keep it (C35).
   const knownRefund = useRef<KnownRefund>(null);
+  // The connected wallet's quote fields (wallet, gasless method, fee choice): a price that runs
+  // out is renewed for the same wallet path, never silently turned into a manual-send quote.
+  const walletFields = useRef<WalletQuoteFields | null>(null);
 
   const quote =
     view.quote && token && view.quote.origin_asset === token.asset_id ? view.quote : null;
 
   const requote = useCallback(
-    async (t: Token, refund: string | null, reason: Reason): Promise<WalletQuoteResult> => {
+    async (
+      t: Token,
+      refund: string | null,
+      reason: Reason,
+      gasless?: WalletGaslessParams,
+    ): Promise<WalletQuoteResult> => {
       setLoading(true);
       setFailure(null);
       if (reason !== 'auto') setPriceChanged(false);
       const previous = view.quote?.origin_asset === t.asset_id ? view.quote.amount_in : null;
+      if (reason === 'wallet' && refund) {
+        walletFields.current = { asset: t.asset_id, wallet: refund, ...gasless };
+      } else if (reason === 'refund' || reason === 'choose') {
+        walletFields.current = null;
+      }
+      const w = walletFields.current;
+      const wallet = w && w.asset === t.asset_id && w.wallet === refund ? w : null;
       try {
         const q = await client.quote({
           origin_asset: t.asset_id,
           ...(refund ? { refund_address: refund, refund_chain: t.blockchain } : {}),
+          ...(wallet
+            ? {
+                wallet_address: wallet.wallet,
+                ...(wallet.gasless_method ? { gasless_method: wallet.gasless_method } : {}),
+                ...(wallet.fee_mode ? { fee_mode: wallet.fee_mode } : {}),
+              }
+            : {}),
         });
         setRefundError(null);
         if (reason === 'auto' && previous !== null && previous !== q.amount_in)
@@ -242,6 +272,11 @@ export function PayFlow({
   }
 
   const network = networkName(token.blockchain);
+  // The chain's coin in the token list (its price sizes the coin fee for the fee choice).
+  const nativeToken =
+    tokens.find(
+      (t) => t.blockchain === token.blockchain && payTargetFor(t.asset_id)?.kind === 'native',
+    ) ?? null;
   const amount = quote ? formatUnits(quote.amount_in, token.decimals) : null;
   const usd = quote?.amount_in_usd ? formatUsd(quote.amount_in_usd) : null;
   // Blocked and past the deadline: the deposit address is expired, so only the notice remains.
@@ -343,7 +378,8 @@ export function PayFlow({
               openWalletWindow={openWalletWindow}
               checkBeforeSend={checkBeforeSend}
               onSendingChange={setWalletSending}
-              onWalletAddress={(address) => requote(token, address, 'wallet')}
+              onWalletAddress={(address, gasless) => requote(token, address, 'wallet', gasless)}
+              gasless={{ api: client, merchantName: view.merchant.name, nativeToken }}
               onDepositSent={onDepositSent}
             />
           )}

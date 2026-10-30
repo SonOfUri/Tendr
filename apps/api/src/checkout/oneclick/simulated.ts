@@ -15,7 +15,9 @@ import { nearClient, type NearClient, type TxStatusResult } from '../../near/cli
 import { eventLog } from '../../near/events.js';
 import { RedisSimStore, type SimDeposit, type SimStore } from './sim-store.js';
 import {
+  ONECLICK_APP_FEE_BASE,
   OneClickError,
+  type AppFeeBase,
   type OneClickProvider,
   type QuoteRequest,
   type QuoteResponse,
@@ -152,6 +154,29 @@ export const SIM_TOKENS: readonly FixtureToken[] = [
     decimals: 9,
     priceMicroUsd: usd(150),
   },
+  {
+    // USDC on Solana (mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v).
+    assetId: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
+    symbol: 'USDC',
+    blockchain: 'sol',
+    decimals: 6,
+    priceMicroUsd: usd(1),
+  },
+  {
+    assetId: 'nep141:tron.omft.near',
+    symbol: 'TRX',
+    blockchain: 'tron',
+    decimals: 6,
+    priceMicroUsd: usd(0.25),
+  },
+  {
+    // USDT on Tron (contract TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t).
+    assetId: 'nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near',
+    symbol: 'USDT',
+    blockchain: 'tron',
+    decimals: 6,
+    priceMicroUsd: usd(1),
+  },
 ];
 
 const EVM_CHAINS = new Set(['eth', 'base', 'arb', 'op', 'pol', 'bsc', 'avax', 'gnosis', 'bera']);
@@ -159,9 +184,25 @@ const EVM_CHAINS = new Set(['eth', 'base', 'arb', 'op', 'pol', 'bsc', 'avax', 'g
 const sha256 = (s: string): Buffer => createHash('sha256').update(s).digest();
 const hex = (s: string, bytes: number): string => sha256(s).subarray(0, bytes).toString('hex');
 
-/** Deterministic destination (NEAR) tx hash of a simulated settlement, base58 like a real one. */
-export function simulatedDestinationTxHash(depositAddress: string): string {
-  return bs58.encode(sha256(`sim-dest:${depositAddress}`));
+/**
+ * Deterministic destination tx hash of a simulated settlement, shaped like a real one on the chain
+ * the settlement lands on: `0x` + 64 hex on an EVM chain (a wallet payout there), base58 elsewhere
+ * (NEAR: intents credits and NEAR wallet payouts).
+ */
+export function simulatedDestinationTxHash(depositAddress: string, chain = 'near'): string {
+  const digest = sha256(`sim-dest:${depositAddress}`);
+  return EVM_CHAINS.has(chain) ? `0x${digest.toString('hex')}` : bs58.encode(digest);
+}
+
+/** The chain a simulated settlement lands on: NEAR for intents credits, else the asset's chain. */
+function destinationChainOf(req: QuoteRequest): string {
+  if (req.recipientType === 'INTENTS') return 'near';
+  const listed = SIM_TOKENS.find((t) => t.assetId === req.destinationAsset);
+  if (listed) return listed.blockchain;
+  return (
+    /^nep141:([a-z0-9]+)(?:-0x[0-9a-fA-F]{40})?\.omft\.near$/.exec(req.destinationAsset)?.[1] ??
+    'near'
+  );
 }
 
 /** Deterministic origin-chain tx hash of the n-th simulated deposit to an address. */
@@ -172,6 +213,13 @@ export function simulatedOriginTxHash(depositAddress: string, n: number): string
 /** Deterministic sender of simulated deposits to an address (EVM-shaped). */
 export function simulatedSenderAddress(depositAddress: string): string {
   return `0x${hex(`sim-sender:${depositAddress}`, 20)}`;
+}
+
+/** 20 bytes → base58check Tron address (`0x41` prefix). */
+function tronAddressFrom(body: Uint8Array): string {
+  const payload = Buffer.concat([Buffer.from([0x41]), Buffer.from(body)]);
+  const check = createHash('sha256').update(createHash('sha256').update(payload).digest()).digest();
+  return bs58.encode(Buffer.concat([payload, check.subarray(0, 4)]));
 }
 
 const ceilDiv = (a: bigint, b: bigint): bigint => (a + b - 1n) / b;
@@ -192,6 +240,14 @@ export interface SimulatedOneClickOptions {
   intentsContract?: string;
   /** Defaults to Redis (shared across processes). */
   store?: SimStore;
+  /** What `appFees` are charged on; defaults to ONECLICK_APP_FEE_BASE (tests try the other). */
+  appFeeBase?: AppFeeBase;
+  /**
+   * EXACT_OUTPUT quotes carry the slippage buffer: `amountIn` = what the swap needs ×
+   * (1 + slippageTolerance), `minAmountIn` = what it needs (the excess is refunded). Off by
+   * default (`minAmountIn` = `amountIn`); tests turn it on to model that 1Click semantics.
+   */
+  exactOutputSlippageBuffer?: boolean;
 }
 
 export class SimulatedOneClick implements OneClickProvider {
@@ -199,8 +255,12 @@ export class SimulatedOneClick implements OneClickProvider {
   private readonly near: () => NearClient;
   private readonly intentsContract: () => string;
   private readonly store: SimStore;
+  private readonly appFeeBase: AppFeeBase;
+  private readonly exactOutputSlippageBuffer: boolean;
 
   constructor(opts: SimulatedOneClickOptions = {}) {
+    this.appFeeBase = opts.appFeeBase ?? ONECLICK_APP_FEE_BASE;
+    this.exactOutputSlippageBuffer = opts.exactOutputSlippageBuffer ?? false;
     this.now = opts.now ?? (() => new Date());
     this.near = opts.near ?? (() => nearClient(false));
     const intents = opts.intentsContract;
@@ -243,15 +303,31 @@ export class SimulatedOneClick implements OneClickProvider {
 
     const amount = BigInt(req.amount);
     let amountIn: bigint, amountOut: bigint, inUsd: bigint, outUsd: bigint;
+    let minAmountIn: bigint | null = null;
+    // Fees on the output: in = out × (1e4 + bps) / 1e4. On the input: out = in × (1e4 − bps) / 1e4.
+    const onOutput = this.appFeeBase === 'output';
+    if (!onOutput && feeBps >= 10_000n) {
+      throw new OneClickError('fees take the whole amount', 400, 'INVALID_APP_FEE');
+    }
     if (req.swapType === 'EXACT_OUTPUT') {
       amountOut = amount;
       outUsd = (amountOut * dest.priceMicroUsd) / pow10(dest.decimals);
-      inUsd = ceilDiv(outUsd * (10_000n + feeBps), 10_000n);
+      inUsd = onOutput
+        ? ceilDiv(outUsd * (10_000n + feeBps), 10_000n)
+        : ceilDiv(outUsd * 10_000n, 10_000n - feeBps);
       amountIn = ceilDiv(inUsd * pow10(origin.decimals), origin.priceMicroUsd);
+      if (this.exactOutputSlippageBuffer) {
+        minAmountIn = amountIn;
+        const slip = BigInt(req.slippageTolerance);
+        amountIn = ceilDiv(amountIn * (10_000n + slip), 10_000n);
+        inUsd = ceilDiv(inUsd * (10_000n + slip), 10_000n);
+      }
     } else {
       amountIn = amount;
       inUsd = (amountIn * origin.priceMicroUsd) / pow10(origin.decimals);
-      outUsd = (inUsd * 10_000n) / (10_000n + feeBps);
+      outUsd = onOutput
+        ? (inUsd * 10_000n) / (10_000n + feeBps)
+        : (inUsd * (10_000n - feeBps)) / 10_000n;
       amountOut = (outUsd * pow10(dest.decimals)) / dest.priceMicroUsd;
     }
 
@@ -260,7 +336,13 @@ export class SimulatedOneClick implements OneClickProvider {
       ? undefined
       : EVM_CHAINS.has(origin.blockchain)
         ? `0x${hex(`sim-deposit:${fingerprint}`, 20)}`
-        : hex(`sim-deposit:${fingerprint}`, 32);
+        : origin.blockchain === 'sol'
+          ? // A Solana address (base58 of 32 bytes), so token accounts can be derived from it.
+            bs58.encode(sha256(`sim-deposit:${fingerprint}`))
+          : origin.blockchain === 'tron'
+            ? // A base58check Tron address (`T…`), as a real Tron deposit address is.
+              tronAddressFrom(sha256(`sim-deposit:${fingerprint}`).subarray(0, 20))
+            : hex(`sim-deposit:${fingerprint}`, 32);
     // The address is a hash of the request, so an identical request gets the same address; it
     // keeps whatever state its deposit already reached.
     if (depositAddress) {
@@ -284,7 +366,7 @@ export class SimulatedOneClick implements OneClickProvider {
         amountInUsd: formatUsd(inUsd),
         amountOut: amountOut.toString(),
         amountOutUsd: formatUsd(outUsd),
-        minAmountIn: amountIn.toString(),
+        minAmountIn: (minAmountIn ?? amountIn).toString(),
         deadline: deadline.toISOString(),
         timeWhenInactive: deadline.toISOString(),
       },
@@ -375,7 +457,10 @@ export class SimulatedOneClick implements OneClickProvider {
       // Credits are saved on the stored (pre-deposit) state as they happen, so a retry after a
       // partial failure skips recipients already credited.
       await this.settle(depositAddress, d);
-      await this.store.putDestination(simulatedDestinationTxHash(depositAddress), depositAddress);
+      await this.store.putDestination(
+        simulatedDestinationTxHash(depositAddress, destinationChainOf(d.req)),
+        depositAddress,
+      );
       next.credited = d.credited;
       next.status = 'SUCCESS';
       next.settled = true;
@@ -383,6 +468,18 @@ export class SimulatedOneClick implements OneClickProvider {
     }
     await this.store.put(depositAddress, next);
     return view(depositAddress, next);
+  }
+
+  /**
+   * One `appFees` entry's credit in the settlement asset: `out × bps` on the output, or
+   * `in × bps` (= `out × bps / (1e4 − Σbps)`) on the input.
+   */
+  private appFeeCredit(d: SimDeposit, bps: number): bigint {
+    if (this.appFeeBase === 'output') return (d.amountOut * BigInt(bps)) / 10_000n;
+    const total = BigInt(
+      SIM_ONECLICK_FEE_BPS + (d.req.appFees ?? []).reduce((sum, f) => sum + f.fee, 0),
+    );
+    return (d.amountOut * BigInt(bps)) / (10_000n - total);
   }
 
   /** `d` is the stored state; each successful credit is recorded on it and saved at once. */
@@ -393,7 +490,7 @@ export class SimulatedOneClick implements OneClickProvider {
       ...(d.req.appFees ?? []).map((f, i) => ({
         id: `fee:${i}`,
         account: f.recipient,
-        amount: (d.amountOut * BigInt(f.fee)) / 10_000n,
+        amount: this.appFeeCredit(d, f.fee),
       })),
     ].filter((c) => c.amount > 0n && !d.credited.includes(c.id));
     const client = this.near();
@@ -433,7 +530,7 @@ export class SimulatedOneClick implements OneClickProvider {
         { account: d.req.recipient, amount: d.amountOut },
         ...(d.req.appFees ?? []).map((f) => ({
           account: f.recipient,
-          amount: (d.amountOut * BigInt(f.fee)) / 10_000n,
+          amount: this.appFeeCredit(d, f.fee),
         })),
       ].filter((c) => c.amount > 0n);
       return {
@@ -516,7 +613,7 @@ function view(depositAddress: string, d: SimDeposit): StatusResponse {
     swapDetails: {
       originChainTxHashes: d.origin.map((h) => ({ ...h })),
       destinationChainTxHashes: d.settled
-        ? [{ hash: simulatedDestinationTxHash(depositAddress) }]
+        ? [{ hash: simulatedDestinationTxHash(depositAddress, destinationChainOf(d.req)) }]
         : [],
       ...(started
         ? {

@@ -1,7 +1,14 @@
 import { z } from 'zod';
 import type { ResolvedGasSponsor, StoredFeePayer } from './enums.js';
 
-/** Webhook event types, exactly the checkout spec §8 list. */
+/**
+ * Webhook event types: the checkout spec §8 list, plus the gas budget events (gasless spec §5):
+ * `gas.budget_low` (reserved + spent crossed 80 % of the month's budget) and
+ * `gas.budget_exhausted` (a sponsorship was refused for budget), each at most once a month; and
+ * the integrator hook events (gasless spec §4.3): `hook.succeeded` (the contract's
+ * `onTendrDeposit` / `on_tendr_deposit` call succeeded) and `hook.failed` (still failing after the
+ * 3-day retry window; once per payment).
+ */
 export const WebhookEventTypeValues = [
   'checkout.session.expired',
   'payment.detected',
@@ -15,6 +22,10 @@ export const WebhookEventTypeValues = [
   'refund.needs_address',
   'refund.cancelled',
   'refund.failed',
+  'gas.budget_low',
+  'gas.budget_exhausted',
+  'hook.succeeded',
+  'hook.failed',
 ] as const;
 export type WebhookEventType = (typeof WebhookEventTypeValues)[number];
 export const WebhookEventTypeSchema = z.enum(WebhookEventTypeValues);
@@ -66,6 +77,27 @@ export const DEFAULT_SLIPPAGE_BPS = 100;
 export const DEFAULT_GAS_MAX_USD = 2;
 /** Webhook retries back off exponentially and give up after this long. */
 export const WEBHOOK_RETRY_WINDOW_MS = 3 * 24 * 3600_000;
+
+/** The most `hook_data` an integrator session may carry: its JSON serialization, in UTF-8 bytes. */
+export const HOOK_DATA_MAX_BYTES = 1024;
+
+/**
+ * An integrator session's `hook_data` (gasless spec §4.1): any JSON value except null, at most
+ * HOOK_DATA_MAX_BYTES serialized. It reaches the integrator's contract as that serialization
+ * (`bytes hookData` on EVM, the `hook_data` string on NEAR).
+ */
+export const HookDataSchema = z
+  .unknown()
+  .refine((v) => v !== null && v !== undefined, 'hook_data must be a JSON value (not null)')
+  .refine((v) => {
+    let json: string | undefined;
+    try {
+      json = JSON.stringify(v);
+    } catch {
+      return false;
+    }
+    return json !== undefined && new TextEncoder().encode(json).length <= HOOK_DATA_MAX_BYTES;
+  }, `hook_data must be JSON of at most ${HOOK_DATA_MAX_BYTES} bytes`);
 
 /**
  * The non-custodial hold notice, verbatim (spec "Changes after external plan review" #3): shown on

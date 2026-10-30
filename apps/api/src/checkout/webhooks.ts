@@ -111,9 +111,26 @@ const DATA_KEYS = [
 ] as const;
 
 /** Keys a merchant may see only on the named event types (on top of DATA_KEYS). */
+const GAS_BUDGET_KEYS = [
+  'mode',
+  'month',
+  'budget_usd',
+  'reserved_usd',
+  'spent_usd',
+  'remaining_usd',
+] as const;
+const HOOK_KEYS = ['hook_call_id', 'chain', 'contract', 'attempts'] as const;
 const TYPE_DATA_KEYS: Readonly<Partial<Record<string, readonly string[]>>> = {
+  /** Who paid the network fee and how (`NetworkFeeView`; null for older quotes). */
+  'payment.succeeded': ['network_fee'],
   'refund.cancelled': ['status'],
   'refund.failed': ['status'],
+  'gas.budget_low': GAS_BUDGET_KEYS,
+  'gas.budget_exhausted': [...GAS_BUDGET_KEYS, 'requested_usd'],
+  /** Integrator hooks: the call, the contract it notified and how many attempts it took. */
+  'hook.succeeded': HOOK_KEYS,
+  /** …and the last error (the contract's revert reason). */
+  'hook.failed': [...HOOK_KEYS, 'error'],
 };
 
 /**

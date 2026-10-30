@@ -65,7 +65,11 @@ describe('merchant payment and refund emails', () => {
 
   /** A settled 49 USD payment paid in ETH, settled as 48.75 USDC on NEAR. */
   async function settledPayment(
-    opts: { livemode?: boolean; session?: Record<string, unknown> } = {},
+    opts: {
+      livemode?: boolean;
+      session?: Record<string, unknown>;
+      quote?: Record<string, unknown>;
+    } = {},
   ) {
     const livemode = opts.livemode ?? false;
     const session = await createRow('Session', merchant.id, livemode, {
@@ -81,6 +85,7 @@ describe('merchant payment and refund emails', () => {
       amountOut: '48750000',
       amountInUsd: '50.00',
       amountOutUsd: '49.50',
+      ...opts.quote,
     });
     const payment = await prisma.payment.create({
       data: {
@@ -189,6 +194,31 @@ describe('merchant payment and refund emails', () => {
     const p = await settledPayment();
     await onPaymentReceivedNotice(await succeeded(p.id), deps);
     expect(received().map((m) => m.to)).toEqual([ownerEmail]);
+  });
+
+  it('payment_received says who paid the network fee', async () => {
+    const sponsored = await settledPayment({
+      quote: {
+        networkFeePaidBy: 'merchant',
+        networkFeeUsd: '0.036',
+        networkFeeMethod: 'eip3009',
+      },
+    });
+    await onPaymentReceivedNotice(await succeeded(sponsored.id), deps);
+    expect(received()[0]!.text).toContain('Network fee: paid by you ($0.04)');
+    expect(received()[0]!.data.network_fee).toBe('paid by you ($0.04)');
+
+    const shopper = await settledPayment({
+      session: { externalRef: 'order-1002' },
+      quote: { networkFeePaidBy: 'buyer', networkFeeMode: 'native', networkFeeUsd: '0.5' },
+    });
+    await onPaymentReceivedNotice(await succeeded(shopper.id), deps);
+    expect(received()[1]!.text).toContain('Network fee: paid by the shopper');
+
+    // A payment quoted before gasless payments has no line.
+    const old = await settledPayment({ session: { externalRef: 'order-1003' } });
+    await onPaymentReceivedNotice(await succeeded(old.id), deps);
+    expect(received()[2]!.text).not.toContain('Network fee: paid');
   });
 
   it('payment_received lists original currency and fx rate for an NGN payment', async () => {

@@ -77,3 +77,55 @@ describe('checkout API client', () => {
     });
   });
 });
+
+describe('gasless routes', () => {
+  it('posts options, prepare and submit, and reads a submission, with the Bearer header', async () => {
+    const fetchFn = okFetch({});
+    const c = createCheckoutClient({ baseUrl: BASE, secret: SECRET, fetchFn });
+    await c.gaslessOptions({ origin_asset: 'nep141:x', wallet_address: '0x1' });
+    await c.gaslessPrepare({ quote_id: 'quo_1', fee_mode: 'token' });
+    await c.gaslessSubmit({ quote_id: 'quo_1', transaction: 'AAA=' });
+    await c.gaslessSubmission('gas_1');
+    const urls = fetchFn.mock.calls.map(([u, i]) => `${i!.method} ${u.slice(BASE.length)}`);
+    expect(urls).toEqual([
+      'POST /v1/checkout/client/gasless/options',
+      'POST /v1/checkout/client/gasless/prepare',
+      'POST /v1/checkout/client/gasless/submit',
+      'GET /v1/checkout/client/gasless/submissions/gas_1',
+    ]);
+    expect(JSON.parse(String(fetchFn.mock.calls[2]![1]!.body))).toEqual({
+      quote_id: 'quo_1',
+      transaction: 'AAA=',
+    });
+    for (const [, init] of fetchFn.mock.calls) {
+      expect(new Headers(init!.headers).get('authorization')).toBe(`Bearer ${SECRET}`);
+    }
+  });
+
+  it('encodes the submission id into the path', async () => {
+    const fetchFn = okFetch({});
+    const c = createCheckoutClient({ baseUrl: BASE, secret: SECRET, fetchFn });
+    await c.gaslessSubmission('tap_1/../x');
+    expect(fetchFn.mock.calls[0]![0]).toBe(
+      `${BASE}/v1/checkout/client/gasless/submissions/tap_1%2F..%2Fx`,
+    );
+  });
+
+  it('sends the gasless quote fields', async () => {
+    const fetchFn = okFetch({});
+    const c = createCheckoutClient({ baseUrl: BASE, secret: SECRET, fetchFn });
+    await c.quote({
+      origin_asset: 'nep141:x',
+      refund_address: '0x1',
+      refund_chain: 'base',
+      wallet_address: '0x1',
+      gasless_method: 'eip3009',
+      fee_mode: 'token',
+    });
+    expect(JSON.parse(String(fetchFn.mock.calls[0]![1]!.body))).toMatchObject({
+      wallet_address: '0x1',
+      gasless_method: 'eip3009',
+      fee_mode: 'token',
+    });
+  });
+});

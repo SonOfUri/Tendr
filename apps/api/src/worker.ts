@@ -17,6 +17,17 @@ import {
 import { retryPendingScreenings } from './checkout/screening.js';
 import { sweepReturns } from './checkout/refunds.js';
 import { expireSessions, pollDeposit, scanDueDeposits } from './checkout/watcher.js';
+import { releaseStaleReservations } from './gas/quote-fee.js';
+import { pollEvmRelays } from './relayer/index.js';
+import { pollPaymasterOps } from './relayer/evm/pimlico.js';
+import { pollNearMetaRelays } from './relayer/near-meta.js';
+import { pollSolanaRelays } from './relayer/solana.js';
+import { pollTronRelays } from './relayer/tron.js';
+import {
+  releaseEndedSessionReservations,
+  releaseStuckConfirmedHolds,
+} from './relayer/submissions.js';
+import { sweepExpiredPaymasterUrls } from './relayer/evm/pimlico.js';
 import {
   attemptDelivery,
   DELIVER_WEBHOOK_JOB,
@@ -26,7 +37,18 @@ import {
   type DeliverJobData,
 } from './checkout/webhooks.js';
 import { sweepConnections } from './connect/authorize.js';
+import {
+  attemptHook,
+  DELIVER_HOOK_JOB,
+  pollNearHooks,
+  setHookQueue,
+  SWEEP_HOOKS_JOB,
+  sweepDueHooks,
+  type DeliverHookJobData,
+} from './hooks/deliver.js';
 import { sweepNotificationEmailLinks } from './merchants/notification-email.js';
+import { runFeeSweep } from './jobs/fee-sweep.js';
+import { CHECK_GAS_BALANCES_EVERY_MS, checkGasBalances } from './jobs/gas-alerts.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { getEventHandler } from './jobs/handlers.js';
 // Registers every event handler; must load before the dispatcher runs (see dispatchOnce).
@@ -55,6 +77,19 @@ export const RETRY_SCREENINGS_JOB = 'retry-pending-screenings';
  * notification-email links (deleting their tokens); every minute.
  */
 export const SWEEP_CONNECTIONS_JOB = 'sweep-connections';
+/**
+ * Gas-fee sweep (live mode only): plans due sweeps of the gas-fee accounts into USDC on NEAR and,
+ * with FEE_SWEEP_ENABLED, executes them; hourly.
+ */
+export const FEE_SWEEP_JOB = 'fee-sweep';
+export const FEE_SWEEP_JOB_EVERY_MS = 60 * 60_000;
+/** Relayer key and Pimlico balances below GAS_LOW_BALANCE_USD alert operators; every 15 min. */
+export const CHECK_GAS_BALANCES_JOB = 'check-gas-balances';
+
+/** Whether the worker schedules the gas-fee sweep and the gas balance alerts (production only). */
+export function gasOpsJobsScheduled(): boolean {
+  return env().NODE_ENV === 'production';
+}
 /** The payment watcher's queue: the 5 s scan, one poll job per due address, the expiry sweep. */
 export const CHECKOUT_QUEUE = 'tendr-checkout';
 export const SCAN_DEPOSITS_JOB = 'scan-deposits';
@@ -65,11 +100,24 @@ export const SWEEP_RETURNS_JOB = 'sweep-returns';
 export const SWEEP_RETURNS_EVERY_MS = 60_000;
 export const SCAN_DEPOSITS_EVERY_MS = 5_000;
 export const EXPIRE_SESSIONS_EVERY_MS = 60_000;
-/** Merchant webhook sends (one job per attempt, delayed for retries) and the due-retry sweep. */
+/** Releases gas-budget reservations of replaced or expired, unused quotes. */
+export const RELEASE_GAS_RESERVATIONS_JOB = 'release-gas-reservations';
+export const RELEASE_GAS_RESERVATIONS_EVERY_MS = 60_000;
+/**
+ * The EVM relayer's transactions (receipts, stuck replacements, give-ups, outcomes), Pimlico
+ * paymaster user operations (receipts, give-ups) and Solana Kora payments (statuses, outcomes),
+ * live only.
+ */
+export const POLL_EVM_RELAYS_JOB = 'poll-evm-relays';
+export const POLL_EVM_RELAYS_EVERY_MS = 15_000;
+/**
+ * Merchant webhook sends and integrator hook calls (one job per attempt, delayed for retries) and
+ * their due-retry sweeps.
+ */
 export const WEBHOOKS_QUEUE = 'tendr-webhooks';
 export const SWEEP_WEBHOOKS_EVERY_MS = 60_000;
 
-/** Runs one webhooks-queue job. */
+/** Runs one webhooks-queue job (merchant webhooks and integrator hook calls). */
 export async function processWebhookJob(job: Pick<Job, 'name' | 'data'>): Promise<void> {
   if (job.name === DELIVER_WEBHOOK_JOB) {
     await attemptDelivery((job.data as DeliverJobData).deliveryId);
@@ -78,6 +126,15 @@ export async function processWebhookJob(job: Pick<Job, 'name' | 'data'>): Promis
   if (job.name === SWEEP_WEBHOOKS_JOB) {
     const n = await sweepDueDeliveries();
     if (n > 0) log('info', 'webhook sweep queued due deliveries', { count: n });
+    return;
+  }
+  if (job.name === DELIVER_HOOK_JOB) {
+    await attemptHook((job.data as DeliverHookJobData).hookCallId);
+    return;
+  }
+  if (job.name === SWEEP_HOOKS_JOB) {
+    const n = await sweepDueHooks();
+    if (n > 0) log('info', 'hook sweep queued due calls', { count: n });
     return;
   }
   throw new Error(`unknown webhooks job ${job.name}`);
@@ -119,6 +176,65 @@ export async function processCheckoutJob(
     if (n > 0) log('info', 'return sweep', { count: n });
     return;
   }
+  if (job.name === RELEASE_GAS_RESERVATIONS_JOB) {
+    const n =
+      (await releaseStaleReservations()) +
+      (await releaseEndedSessionReservations()) +
+      (await releaseStuckConfirmedHolds());
+    const swept = await sweepExpiredPaymasterUrls();
+    if (swept > 0) log('info', 'expired paymaster URLs swept', { count: swept });
+    if (n > 0) log('info', 'released gas reservations', { count: n });
+    return;
+  }
+  if (job.name === POLL_EVM_RELAYS_JOB) {
+    let failed: unknown = null;
+    try {
+      const n = await pollEvmRelays();
+      if (n > 0) log('info', 'evm relay outcomes applied', { count: n });
+    } catch (err) {
+      failed = err;
+    }
+    // Smart-wallet user operations sponsored through Pimlico (receipts from Pimlico).
+    try {
+      const m = await pollPaymasterOps();
+      if (m > 0) log('info', 'paymaster outcomes applied', { count: m });
+    } catch (err) {
+      failed ??= err;
+    }
+    // Solana payments sent through Pimlico's Kora paymaster (outcomes from SOLANA_RPC_URL).
+    try {
+      const k = await pollSolanaRelays();
+      if (k > 0) log('info', 'solana relay outcomes applied', { count: k });
+    } catch (err) {
+      failed ??= err;
+    }
+    // NEAR meta-transactions relayed by relayer-near (outcomes from the live NEAR RPC).
+    try {
+      const n = await pollNearMetaRelays();
+      if (n > 0) log('info', 'near relay outcomes applied', { count: n });
+    } catch (err) {
+      failed ??= err;
+    }
+    // NEAR integrator hook calls whose outcome was unknown when sent.
+    try {
+      const h = await pollNearHooks();
+      if (h > 0) log('info', 'near hook outcomes applied', { count: h });
+    } catch (err) {
+      failed ??= err;
+    }
+    // Tron: gas-tron's just-in-time delegations (sent approves, reclaims) and payWithApproval
+    // outcomes (from TRON_RPC_URL). Only while the Tron forwarder is configured.
+    if (env().TRON_FORWARDER_ADDRESS) {
+      try {
+        const t = await pollTronRelays();
+        if (t > 0) log('info', 'tron relay outcomes applied', { count: t });
+      } catch (err) {
+        failed ??= err;
+      }
+    }
+    if (failed) throw failed;
+    return;
+  }
   throw new Error(`unknown checkout job ${job.name}`);
 }
 
@@ -141,6 +257,16 @@ async function processMaintenanceJob(job: Job): Promise<void> {
     await sweepConnections();
     // C12: expired / orphaned notification-email link tokens, on the same minute tick.
     await sweepNotificationEmailLinks();
+    return;
+  }
+  if (job.name === FEE_SWEEP_JOB) {
+    const r = await runFeeSweep();
+    if (r.planned > 0) log('info', 'fee sweep', { ...r });
+    return;
+  }
+  if (job.name === CHECK_GAS_BALANCES_JOB) {
+    const low = (await checkGasBalances()).filter((x) => x.low).length;
+    if (low > 0) log('warn', 'gas balances low', { count: low });
     return;
   }
   if (job.name !== PURGE_IDEMPOTENCY_JOB) throw new Error(`unknown maintenance job ${job.name}`);
@@ -266,6 +392,7 @@ export async function startWorker(
   // Merchant webhooks: each send waits up to 10 s on the merchant's server, so many at once.
   const webhooksQueue = new Queue(WEBHOOKS_QUEUE, setup);
   setWebhookQueue(webhooksQueue);
+  setHookQueue(webhooksQueue);
   const webhooksWorker = new Worker(WEBHOOKS_QUEUE, processWebhookJob, {
     ...setup,
     concurrency: 20,
@@ -309,6 +436,25 @@ export async function startWorker(
     { name: SWEEP_CONNECTIONS_JOB },
   );
 
+  // The gas-fee sweep and the gas balance alerts read live chains, 1Click and the live key
+  // addresses: scheduled only in production (never in tests or local development, R12-g), and
+  // removed elsewhere in case a shared Redis kept an earlier schedule.
+  if (gasOpsJobsScheduled()) {
+    await maintenanceQueue.upsertJobScheduler(
+      FEE_SWEEP_JOB,
+      { every: FEE_SWEEP_JOB_EVERY_MS },
+      { name: FEE_SWEEP_JOB },
+    );
+    await maintenanceQueue.upsertJobScheduler(
+      CHECK_GAS_BALANCES_JOB,
+      { every: CHECK_GAS_BALANCES_EVERY_MS },
+      { name: CHECK_GAS_BALANCES_JOB },
+    );
+  } else {
+    await maintenanceQueue.removeJobScheduler(FEE_SWEEP_JOB);
+    await maintenanceQueue.removeJobScheduler(CHECK_GAS_BALANCES_JOB);
+  }
+
   await accountsQueue.upsertJobScheduler(
     RECONCILE_JOB,
     { every: ACCOUNT_JOB_EVERY_MS },
@@ -329,6 +475,16 @@ export async function startWorker(
     { name: EXPIRE_SESSIONS_JOB },
   );
   await checkoutQueue.upsertJobScheduler(
+    RELEASE_GAS_RESERVATIONS_JOB,
+    { every: RELEASE_GAS_RESERVATIONS_EVERY_MS },
+    { name: RELEASE_GAS_RESERVATIONS_JOB },
+  );
+  await checkoutQueue.upsertJobScheduler(
+    POLL_EVM_RELAYS_JOB,
+    { every: POLL_EVM_RELAYS_EVERY_MS },
+    { name: POLL_EVM_RELAYS_JOB },
+  );
+  await checkoutQueue.upsertJobScheduler(
     SWEEP_RETURNS_JOB,
     { every: SWEEP_RETURNS_EVERY_MS },
     { name: SWEEP_RETURNS_JOB },
@@ -338,6 +494,11 @@ export async function startWorker(
     SWEEP_WEBHOOKS_JOB,
     { every: SWEEP_WEBHOOKS_EVERY_MS },
     { name: SWEEP_WEBHOOKS_JOB },
+  );
+  await webhooksQueue.upsertJobScheduler(
+    SWEEP_HOOKS_JOB,
+    { every: SWEEP_WEBHOOKS_EVERY_MS },
+    { name: SWEEP_HOOKS_JOB },
   );
 
   const stopDispatcher =
@@ -368,6 +529,7 @@ export async function startWorker(
       );
       setAccountJobs(null);
       setWebhookQueue(null);
+      setHookQueue(null);
       await closeConnection(connection);
       await health.close();
     },

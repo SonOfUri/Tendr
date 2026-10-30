@@ -8,6 +8,7 @@ import { createRateLimiters, type RateLimitKind } from './gateway/rate-limit.js'
 import { closeClient, closeRedis, createRedis, getRedis, whenReady } from './lib/redis.js';
 import { AppError, prismaErrorFor } from './lib/errors.js';
 import { log } from './lib/logger.js';
+import { PAYMASTER_URL_PREFIX } from './relayer/evm/pimlico.js';
 import { accountRoutes } from './routes/accounts.js';
 import { authRoutes } from './routes/auth.js';
 import {
@@ -17,6 +18,8 @@ import {
 } from './routes/checkout-client.js';
 import { checkoutSessionRoutes } from './routes/checkout-sessions.js';
 import { connectRoutes } from './routes/connect.js';
+import { gasRoutes } from './routes/gas.js';
+import { hookRoutes } from './routes/hooks.js';
 import { healthRoutes } from './routes/health.js';
 import { merchantSettingsRoutes } from './routes/merchant-settings.js';
 import { merchantRoutes } from './routes/merchants.js';
@@ -25,6 +28,7 @@ import { pingRoutes } from './routes/ping.js';
 import { proposalRoutes } from './routes/proposals.js';
 import { recoveryRoutes } from './routes/recovery.js';
 import { refundRoutes } from './routes/refunds.js';
+import { relayerRoutes } from './routes/relayers.js';
 import { reviewRoutes } from './routes/review.js';
 import { teamRoutes } from './routes/team.js';
 import { webhookRoutes } from './routes/webhooks.js';
@@ -93,7 +97,15 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(cors, {
     delegator: (req, cb) => {
       const url = req.url ?? '';
-      if (
+      if (url.startsWith(PAYMASTER_URL_PREFIX)) {
+        // A wallet (any origin) calls the per-quote paymaster URL; its token is the credential.
+        cb(null, {
+          origin: '*',
+          credentials: false,
+          methods: ['POST'],
+          allowedHeaders: ['content-type'],
+        });
+      } else if (
         url.startsWith(CHECKOUT_CLIENT_PREFIX) ||
         url.split('?')[0] === CHECKOUT_REFUND_ADDRESS_PATH
       ) {
@@ -230,6 +242,9 @@ export async function buildApp(opts: BuildAppOptions = {}) {
     verifyRateLimit: limiters.notificationEmailVerify,
   });
   await app.register(connectRoutes, { tokenRateLimit: limiters.connectToken });
+  await app.register(gasRoutes);
+  await app.register(relayerRoutes);
+  await app.register(hookRoutes);
   opts.extraRoutes?.(app);
 
   return app;

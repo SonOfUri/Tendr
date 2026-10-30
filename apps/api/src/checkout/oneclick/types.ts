@@ -14,6 +14,28 @@ export interface AppFee {
   fee: number;
 }
 
+/** What 1Click charges `appFees` basis points on: the swap's output, or its input. */
+export type AppFeeBase = 'input' | 'output';
+
+/**
+ * The one place the `appFees` charging base is assumed. UNCONFIRMED against live 1Click: confirm
+ * it before enabling live gas sponsorship (README live checklist).
+ *
+ * - `output`: `in = out × (1 + Σbps / 10 000)` and each fee is `out × bps / 10 000`.
+ * - `input`: `out = in × (1 − Σbps / 10 000)` and each fee is `in × bps / 10 000`.
+ *
+ * Pricing (`pricing.ts`), revenue (`revenue.ts`) and the simulator (`simulated.ts`) all follow it.
+ */
+export const ONECLICK_APP_FEE_BASE: AppFeeBase = 'output';
+
+/** The value (`input` or `output`, in one unit) that `appFees` basis points are charged on. */
+export function appFeeBaseValue<T>(
+  values: { input: T; output: T },
+  base: AppFeeBase = ONECLICK_APP_FEE_BASE,
+): T {
+  return base === 'input' ? values.input : values.output;
+}
+
 export interface QuoteRequest {
   /** `true`: price only, no deposit address is allocated. */
   dry: boolean;

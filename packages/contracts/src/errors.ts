@@ -88,6 +88,40 @@ export const ErrorCodes = [
    * dashboard instead.
    */
   'NO_ONE_TO_NOTIFY',
+  /**
+   * A shopper-paid network fee cannot be priced in the payment token: the 1Click token list has no
+   * price for it. The "pay the fee in the token" option is unavailable for that token.
+   */
+  'FEE_TOKEN_UNPRICED',
+  /** The live network fee for a chain could not be estimated (RPC or price unavailable). */
+  'NETWORK_FEE_UNAVAILABLE',
+  /**
+   * Gasless submit: a signed field (destination, amount, fee, fee recipient, deadline, nonce) or
+   * the signer does not match the quote. `details.field` names the first difference. No gas spent.
+   */
+  'GASLESS_PAYLOAD_MISMATCH',
+  /** Gasless prepare/submit: the quote's deadline passed or a newer quote replaced it; re-quote. */
+  'QUOTE_EXPIRED',
+  /**
+   * Gasless prepare/submit: the quote has no gasless method for this wallet and token (a
+   * copy-address quote, `fee_mode: native`, or a token off the allow-list).
+   */
+  'GASLESS_NOT_AVAILABLE',
+  /**
+   * Gasless submit: the merchant-sponsored quote's budget hold was released (replaced, expired or
+   * failed); re-quote to see who pays the fee now.
+   */
+  'SPONSORSHIP_RELEASED',
+  /**
+   * Gasless submit: the chain refused the payment before any gas was spent (its dry run reverted:
+   * e.g. the balance is too low or the authorization was already used). `details.reason`.
+   */
+  'GASLESS_SUBMIT_FAILED',
+  /**
+   * Gasless submit (Solana): the signed transaction's blockhash is too old (over 60 s since it
+   * was prepared) or was not issued for this quote. Nothing spent; call prepare again and re-sign.
+   */
+  'GASLESS_EXPIRED',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

@@ -128,8 +128,22 @@ describe('LocalKeyVault', () => {
     expect(bytesToHex(raw)).not.toBe(bytesToHex(other.raw));
   });
 
+  it('curveOf: the gas-fee keys (receive-only, swept by the fee job) have their chain curves', () => {
+    expect(curveOf('gas-fees-evm')).toBe('secp256k1');
+    expect(curveOf('gas-fees-tron')).toBe('secp256k1');
+    expect(curveOf('gas-fees-near')).toBe('ed25519');
+    expect(curveOf('gas-fees-solana')).toBe('ed25519');
+  });
+
+  it('a gas-fee key is distinct from the relayer key of its chain', async () => {
+    const fees = await kv.publicKey('gas-fees-evm');
+    const relayer = await kv.publicKey('relayer-evm');
+    expect(fees.curve).toBe('secp256k1');
+    expect(bytesToHex(fees.raw)).not.toBe(bytesToHex(relayer.raw));
+  });
+
   it('curveOf: relayer-evm and gas-tron are secp256k1, the other four are ed25519', () => {
-    expect(KEY_NAMES).toHaveLength(6);
+    expect(KEY_NAMES).toHaveLength(10);
     expect(curveOf('relayer-accounts')).toBe('ed25519');
     expect(curveOf('relayer-evm')).toBe('secp256k1');
     expect(curveOf('gas-tron')).toBe('secp256k1');

@@ -2,10 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export function loadRootEnv() {
-  const candidates = [
-    resolve(process.cwd(), '../../.env'),
-    resolve(process.cwd(), '.env'),
-  ];
+  const candidates = [resolve(process.cwd(), '../../.env'), resolve(process.cwd(), '.env')];
   for (const path of candidates) {
     if (!existsSync(path)) continue;
     const text = readFileSync(path, 'utf8');

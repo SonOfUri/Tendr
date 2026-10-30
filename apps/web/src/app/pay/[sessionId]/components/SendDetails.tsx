@@ -2,6 +2,7 @@
 
 import { QrImage } from '@/components/QrImage';
 import { CopyButton } from './CopyButton';
+import { COPY_ADDRESS_FEE_NOTE } from './NetworkFee';
 
 /**
  * Where and how much to send by hand: the QR of the deposit address, the address and the exact
@@ -49,6 +50,8 @@ export function SendDetails({
         </strong>
         . Money sent on another network can be lost.
       </p>
+      {/* Sending it yourself is never gasless, whoever sponsors the wallet path (spec §2.4). */}
+      <p className="muted small">{COPY_ADDRESS_FEE_NOTE}</p>
     </div>
   );
 }

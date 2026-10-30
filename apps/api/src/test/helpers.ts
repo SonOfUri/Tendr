@@ -236,6 +236,10 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         ...o,
       },
     }),
+  GasBudgetMonth: (merchantId, livemode, o) =>
+    prisma.gasBudgetMonth.create({
+      data: { id: newId('gbm'), merchantId, livemode, month: '2026-10', ...o },
+    }),
   PaymentLink: (merchantId, livemode, o) =>
     prisma.paymentLink.create({
       data: {
@@ -309,18 +313,23 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         ...o,
       },
     }),
-  HookCall: async (merchantId, livemode, o) =>
-    prisma.hookCall.create({
+  HookCall: async (merchantId, livemode, o) => {
+    const payment = await builders.Payment(merchantId, livemode, {});
+    return prisma.hookCall.create({
       data: {
         id: newId('hook'),
         merchantId,
         livemode,
-        sessionId: (await builders.Session(merchantId, livemode, {})).id,
+        sessionId: payment.sessionId as string,
+        paymentId: payment.id,
         chain: 'base',
         targetContract: '0x0000000000000000000000000000000000000001',
+        hookData: { order: 'A-1' },
+        retryUntil: new Date(Date.now() + 3 * 24 * 3600_000),
         ...o,
       },
-    }),
+    });
+  },
   GasSponsorship: async (merchantId, livemode, o) =>
     prisma.gasSponsorship.create({
       data: {

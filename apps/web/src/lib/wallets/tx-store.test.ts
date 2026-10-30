@@ -261,4 +261,22 @@ describe('deposit reporting survives failures and reloads', () => {
     expect(loadPendingTx(storage, SID)).toBeNull();
     expect(reporter.pending()).toBeNull();
   });
+
+  it('a gasless relay is kept as a block but never POSTed (Tendr reported it), not even after a reload', async () => {
+    const storage = memoryStorage();
+    const deposit = vi.fn(async () => ({ submitted: true }));
+    const reporter = createDepositReporter({ sessionId: SID, storage: () => storage, deposit });
+    await reporter.record({ txHash: HASH, quoteId: 'quo_1', state: 'sent', alreadyReported: true });
+    expect(deposit).not.toHaveBeenCalled();
+    expect(loadPendingTx(storage, SID)).toEqual({
+      txHash: HASH,
+      quoteId: 'quo_1',
+      reported: true,
+      state: 'sent',
+      acknowledged: false,
+    });
+    const again = createDepositReporter({ sessionId: SID, storage: () => storage, deposit });
+    await again.resume();
+    expect(deposit).not.toHaveBeenCalled();
+  });
 });

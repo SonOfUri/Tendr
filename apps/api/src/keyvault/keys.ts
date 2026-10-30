@@ -12,6 +12,12 @@ const REGISTRY: Record<KeyName, Curve> = {
   'funding-near': 'ed25519', // pays storage deposits for merchant NEAR accounts (spend-capped)
   'solver-hot': 'ed25519', // phase 2
   'relayer-accounts': 'ed25519', // gas-only relayer for merchant account contracts; never a signer
+  // Gas-fee accounts: where shopper-paid network fees land (spec 5a §2.5), kept apart from the hot
+  // relayer keys so a stolen relayer key never reaches collected fees.
+  'gas-fees-evm': 'secp256k1', // receive-only; used only by the fee sweep job (one address, all EVM chains)
+  'gas-fees-tron': 'secp256k1', // receive-only; used only by the fee sweep job
+  'gas-fees-near': 'ed25519', // receive-only; used only by the fee sweep job
+  'gas-fees-solana': 'ed25519', // receive-only; used only by the fee sweep job
 };
 
 export const KEY_NAMES = Object.keys(REGISTRY) as KeyName[];

@@ -7,6 +7,7 @@ import { toHexQuantity } from './amount';
 import { WalletError, afterSignError, toWalletError } from './errors';
 import type { DepositRequest, PayTarget, WalletAdapter } from './index';
 import { assertDepositMatches } from './match';
+import { createEvmGasless } from './gasless/evm';
 
 export interface Eip1193 {
   request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;
@@ -73,6 +74,25 @@ async function chainIdOf(provider: Eip1193): Promise<number | null> {
   return null;
 }
 
+/**
+ * An injected EIP-1193 wallet (`window.ethereum`) as an EVM session. Used by the end-to-end tests
+ * only (NEXT_PUBLIC_E2E_INJECTED_WALLET): deployed pages connect through Reown AppKit.
+ */
+export function injectedEvmSession(win: { ethereum?: Eip1193 }): EvmSession {
+  return {
+    async connect() {
+      const eth = win.ethereum;
+      if (!eth) throw new WalletError('unavailable', { detail: 'no injected wallet' });
+      const accounts = await eth.request({ method: 'eth_requestAccounts' });
+      const a = Array.isArray(accounts) ? accounts[0] : undefined;
+      if (typeof a !== 'string') throw new WalletError('failed', { detail: 'no account' });
+      return { address: a };
+    },
+    provider: () => win.ethereum,
+    async disconnect() {},
+  };
+}
+
 /** Puts the wallet on `chainId`, or throws chain_mismatch. */
 export async function ensureEvmChain(provider: Eip1193, chainId: number, network: string) {
   if ((await chainIdOf(provider)) === chainId) return;
@@ -87,7 +107,17 @@ export async function ensureEvmChain(provider: Eip1193, chainId: number, network
   if ((await chainIdOf(provider)) !== chainId) throw new WalletError('chain_mismatch', { network });
 }
 
-export function createEvmAdapter(target: PayTarget, session: EvmSession): WalletAdapter {
+/** Gasless config (the page's env): the pinned forwarder and the API's paymaster URL prefix. */
+export interface EvmGaslessConfig {
+  forwarder: string;
+  paymasterUrlPrefix: string;
+}
+
+export function createEvmAdapter(
+  target: PayTarget,
+  session: EvmSession,
+  gasless?: EvmGaslessConfig,
+): WalletAdapter {
   if (target.family !== 'evm' || target.chainId === undefined) {
     throw new WalletError('failed', { detail: 'not an EVM asset' });
   }
@@ -97,6 +127,15 @@ export function createEvmAdapter(target: PayTarget, session: EvmSession): Wallet
 
   return {
     chainFamily: 'evm',
+    ...(gasless && target.kind === 'token'
+      ? {
+          gasless: createEvmGasless(target, {
+            provider: () => session.provider(),
+            address: () => address,
+            ...gasless,
+          }),
+        }
+      : {}),
     async connect() {
       try {
         const r = await session.connect();

@@ -20,7 +20,8 @@ provider "google" {
 
 locals {
   # Named signing keys. EVM and Solana gas sponsorship go through Pimlico (an API key stored
-  # as a secret), so there are no EVM/Solana gas keys; `gas-tron` is the only self-run gas key.
+  # as a secret), so there are no EVM/Solana gas-paying keys; `gas-tron` is the only self-run gas
+  # key. The `gas-fees-*` keys only receive collected fees.
   signing_keys = {
     "relayer-near"     = "EC_SIGN_ED25519"          # NEAR notify-only relayer (project 5)
     "funding-near"     = "EC_SIGN_ED25519"          # storage deposits for merchant NEAR accounts (project 3)
@@ -28,6 +29,12 @@ locals {
     "solver-hot"       = "EC_SIGN_ED25519"          # solver hot wallet, phase 2 (project 7)
     "relayer-evm"      = "EC_SIGN_SECP256K1_SHA256" # EVM relayer + EIP-3009 submitter (project 5)
     "gas-tron"         = "EC_SIGN_SECP256K1_SHA256" # Tron energy/bandwidth sponsorship (project 5)
+    # Gas-fee accounts (project 5a): receive shopper-paid network fees; receive-only, used only by
+    # the fee sweep job. Kept apart from the relayer keys so a stolen relayer key never reaches them.
+    "gas-fees-evm"    = "EC_SIGN_SECP256K1_SHA256" # one address on every EVM chain
+    "gas-fees-tron"   = "EC_SIGN_SECP256K1_SHA256"
+    "gas-fees-near"   = "EC_SIGN_ED25519"
+    "gas-fees-solana" = "EC_SIGN_ED25519"
   }
 
   kek_name = "tendr-kek"

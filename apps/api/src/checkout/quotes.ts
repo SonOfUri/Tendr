@@ -7,16 +7,43 @@
 // WALLET_NOT_ALLOWED before 1Click is called. Then dry → real (pricing.ts), the merchant-pays
 // post-check (`assertWithinTarget`, one retry on QUOTE_PRICE_MOVED), the minimum, and the new
 // `quotes` row replaces (supersedes) the session's previous one in one transaction.
+//
+// Network fee (project 5a): the quote plans who pays the network fee (`gas/quote-fee.ts`). A
+// merchant-sponsored fee is reserved on the merchant's budget in the quote's transaction and taken
+// from the merchant's proceeds (pricing.ts `merchantDeductionUsd`); a reservation refused there
+// (a concurrent payment took the budget) re-prices the quote with the shopper paying. Replacing a
+// quote releases its reservation.
 import { Prisma } from '@prisma/client';
-import { SMALL_OVERPAY_USD, feePayerFromDb, gasPayerFromDb, type FeePayer } from '@tendr/contracts';
+import {
+  FeeModeSchema,
+  GaslessMethodSchema,
+  SMALL_OVERPAY_USD,
+  feePayerFromDb,
+  gasPayerFromDb,
+  type FeePayer,
+} from '@tendr/contracts';
 import { z } from 'zod';
 import { tenantTransaction } from '../db/tenant-transaction.js';
+import { reserveBudget } from '../gas/budget.js';
+import { releaseReplacedHold } from '../relayer/submissions.js';
+import {
+  gasProvider,
+  networkFeeView,
+  planColumns,
+  planNetworkFee,
+  type NetworkFeePlan,
+} from '../gas/quote-fee.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
+import { prisma } from '../lib/prisma.js';
 import { toJsonDecimal } from '../lib/serialize.js';
-import { isValidAddress } from './address-format.js';
-import { gasEstimateUsd } from './gas-estimates.js';
+import { gaslessToken } from '../relayer/evm/tokens.js';
+import { nearGaslessToken } from '../relayer/near-meta.js';
+import { solanaGaslessToken } from '../relayer/solana-tx.js';
+import { tronGaslessToken } from '../relayer/tron.js';
+import { chainFamily, isValidAddress } from './address-format.js';
+import { quotesWithRelayInFlight } from './in-flight.js';
 import {
   OneClickError,
   SIMULATE_SCENARIOS,
@@ -27,7 +54,12 @@ import {
   type QuoteResponse,
   type StatusResponse,
 } from './oneclick/index.js';
-import { assertWithinMinimum, assertWithinTarget, buildQuoteRequests } from './pricing.js';
+import {
+  assertOutputWithinTarget,
+  assertWithinMinimum,
+  assertWithinTarget,
+  buildQuoteRequests,
+} from './pricing.js';
 import { emailWaitingReturns, shopperRefunds } from './refunds.js';
 import { screenAddress } from './screening.js';
 import type { CheckoutCtx } from './sessions.js';
@@ -48,8 +80,24 @@ export const QuoteInputSchema = z
     refund_address: z.string().trim().min(1).max(128).optional(),
     /** The refund address's chain; when given it must be the origin asset's chain. */
     refund_chain: z.string().min(1).max(64).optional(),
+    /**
+     * The connected wallet the shopper pays from (the gasless path). Without it the quote is for
+     * a normal send (copy address): the shopper pays their own network fee.
+     */
+    wallet_address: z.string().trim().min(1).max(128).optional(),
+    /** The gasless method the wallet can use on this chain; needs `wallet_address`. */
+    gasless_method: GaslessMethodSchema.optional(),
+    /**
+     * When the shopper pays the fee: in the payment token (`token`, default with a gasless method)
+     * or the chain's coin (`native`, a normal wallet send).
+     */
+    fee_mode: FeeModeSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((v) => v.gasless_method === undefined || v.wallet_address !== undefined, {
+    message: 'gasless_method needs wallet_address',
+    path: ['wallet_address'],
+  });
 export type QuoteInput = z.infer<typeof QuoteInputSchema>;
 
 export const DepositInputSchema = z
@@ -138,10 +186,19 @@ function currentQuote(ctx: ShopperCtx) {
 
 type QuoteRow = NonNullable<Awaited<ReturnType<typeof currentQuote>>>;
 
-/** "Network & service fee" = what the shopper sends minus what the store receives (USD). */
-function feeLines(feePayer: FeePayer, q: Pick<QuoteRow, 'amountInUsd' | 'amountOutUsd'>) {
+/**
+ * "Network & service fee" = what the shopper sends minus what the store receives (USD). When the
+ * store gives up part of its output for the network (a sponsored fee or an integrator hook
+ * estimate, `network_fee_bps` > 0), the line is what the shopper sends minus the order total
+ * instead: the store's deduction is never the shopper's fee.
+ */
+function feeLines(
+  feePayer: FeePayer,
+  q: Pick<QuoteRow, 'amountInUsd' | 'amountOutUsd' | 'networkFeeBps'>,
+  orderUsd: Prisma.Decimal,
+) {
   if (feePayer !== 'shopper' || !q.amountInUsd || !q.amountOutUsd) return [];
-  const fee = q.amountInUsd.minus(q.amountOutUsd);
+  const fee = q.amountInUsd.minus(q.networkFeeBps > 0 ? orderUsd : q.amountOutUsd);
   if (fee.lte(0)) return [];
   return [
     {
@@ -153,15 +210,22 @@ function feeLines(feePayer: FeePayer, q: Pick<QuoteRow, 'amountInUsd' | 'amountO
   ];
 }
 
-function quoteView(q: QuoteRow, feePayer: FeePayer, now = new Date()) {
+/** `orderUsd`: the session's order total (USD, or the settlement stablecoin 1:1). */
+function quoteView(q: QuoteRow, feePayer: FeePayer, orderUsd: Prisma.Decimal, now = new Date()) {
   const direct = q.refundType === 'ORIGIN_CHAIN';
+  const networkFee = networkFeeView(q, 'shopper');
   return {
     id: q.id,
     origin_asset: q.originAssetId,
     deposit_address: q.depositAddress,
-    /** Exact base units the shopper must send. */
+    /** Exact base units the shopper must send (a token network fee is sent on top: `fee_amount`). */
     amount_in: q.amountIn.toFixed(),
     amount_in_usd: toJsonDecimal(q.amountInUsd),
+    /** Who pays the network fee and how; null on quotes made before gasless payments. */
+    network_fee: networkFee,
+    fee_mode: networkFee?.fee_mode ?? null,
+    /** Shopper pays in the token: base units of `origin_asset` sent in addition to `amount_in`. */
+    fee_amount: networkFee?.fee_mode === 'token' ? networkFee.amount : null,
     deadline: q.deadline.toISOString(),
     expired: q.deadline.getTime() <= now.getTime(),
     /**
@@ -170,7 +234,7 @@ function quoteView(q: QuoteRow, feePayer: FeePayer, now = new Date()) {
      */
     refund: direct ? ('origin_chain' as const) : ('store' as const),
     refund_address: direct ? q.refundTo : null,
-    fee_lines: feeLines(feePayer, q),
+    fee_lines: feeLines(feePayer, q, orderUsd),
     /** Show the notice that leftovers worth under `small_overpay_usd` are not returned. */
     small_overpay_notice: true,
     small_overpay_usd: SMALL_OVERPAY_USD,
@@ -333,7 +397,9 @@ export async function shopperSessionView(ctx: ShopperCtx) {
     gas_payer: gasPayerFromDb(s.gasSponsor),
     success_url: s.successUrl,
     cancel_url: s.cancelUrl,
-    quote: quote ? quoteView(quote, feePayer) : null,
+    quote: quote ? quoteView(quote, feePayer, s.amount) : null,
+    /** The current quote's network fee (who pays, how, why); null without a quote. */
+    network_fee: quote ? networkFeeView(quote, 'shopper') : null,
     payments: payments.map((p) => ({
       id: p.id,
       state: shopperState(p),
@@ -403,7 +469,12 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
   const s = await loadSession(ctx);
   assertOpen(s, new Date());
   // Before any screening or 1Click call; re-checked under the session lock below.
-  await assertQuotable(ctx.db, ctx, s.id, new Date());
+  await assertQuotable(
+    prisma,
+    { merchantId: ctx.merchantId, livemode: ctx.livemode },
+    s.id,
+    new Date(),
+  );
 
   const [origin, settlement] = await Promise.all([
     tokenInfo(ctx.livemode, input.origin_asset),
@@ -474,10 +545,73 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
   const feePayer = feePayerFromDb(s.feePayer);
   const provider = providerFor(ctx.livemode);
 
-  let real: QuoteResponse | null = null;
-  let realReq: QuoteRequest | null = null;
-  for (let attempt = 1; attempt <= PRICE_MOVED_ATTEMPTS && !real; attempt++) {
-    const reqs = buildQuoteRequests({
+  const walletAddress = input.wallet_address;
+  if (walletAddress !== undefined && !isValidAddress(origin.blockchain, walletAddress)) {
+    throw new AppError(
+      'VALIDATION_ERROR',
+      `wallet_address is not a valid ${origin.blockchain} address`,
+      400,
+      { field: 'wallet_address' },
+    );
+  }
+  // EVM: only allow-listed tokens are relayed or sponsored (no fee-on-transfer or rebasing tokens).
+  const method = input.gasless_method;
+  if (
+    (method === 'eip3009' || method === 'permit' || method === 'paymaster') &&
+    chainFamily(origin.blockchain) === 'evm' &&
+    !gaslessToken(origin.blockchain, origin.assetId)?.methods.includes(method)
+  ) {
+    throw new AppError('VALIDATION_ERROR', `${method} is not available for this token`, 400, {
+      field: 'gasless_method',
+    });
+  }
+  // Solana: only allow-listed SPL Token program mints (never native SOL, never Token-2022).
+  if (
+    method === 'kora' &&
+    chainFamily(origin.blockchain) === 'solana' &&
+    !solanaGaslessToken(origin.assetId)
+  ) {
+    throw new AppError('VALIDATION_ERROR', `${method} is not available for this token`, 400, {
+      field: 'gasless_method',
+    });
+  }
+  // NEAR: only allow-listed NEP-141 USDC / USDT (never wNEAR).
+  if (
+    method === 'meta_tx' &&
+    chainFamily(origin.blockchain) === 'near' &&
+    !nearGaslessToken(origin.assetId)
+  ) {
+    throw new AppError('VALIDATION_ERROR', `${method} is not available for this token`, 400, {
+      field: 'gasless_method',
+    });
+  }
+  // Tron: USDT-TRC20 only, through the forwarder (never TRX, never another TRC-20).
+  if (
+    method === 'forwarder' &&
+    chainFamily(origin.blockchain) === 'tron' &&
+    !tronGaslessToken(origin.assetId)
+  ) {
+    throw new AppError('VALIDATION_ERROR', `${method} is not available for this token`, 400, {
+      field: 'gasless_method',
+    });
+  }
+  const planFor = (forceShopper?: NetworkFeePlan['reason']) =>
+    planNetworkFee({
+      livemode: ctx.livemode,
+      merchantId: ctx.merchantId,
+      session: s,
+      origin,
+      ...(walletAddress !== undefined ? { walletAddress } : {}),
+      ...(input.gasless_method ? { method: input.gasless_method } : {}),
+      ...(input.fee_mode ? { feeMode: input.fee_mode } : {}),
+      ...(forceShopper ? { forceShopper } : {}),
+    });
+
+  let plan = await planFor();
+  // A sponsored quote whose reservation is refused (a concurrent payment took the budget) is
+  // re-priced once with the shopper paying.
+  for (let pass = 1; pass <= 2; pass++) {
+    const priced = await priceQuote(provider, {
       orderAmount: s.amount,
       amountCurrency: s.amountCurrency,
       settlementAsset: s.destAsset,
@@ -486,9 +620,7 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
       originDecimals: origin.decimals,
       feeBps: s.feeBps,
       feePayer,
-      gasPayer: gasPayerFromDb(s.gasSponsor),
-      gasEstimateUsd: gasEstimateUsd(origin.blockchain),
-      gasMaxUsd: s.gasMaxUsd,
+      merchantDeductionUsd: addUsd(plan.sponsoredUsd, plan.hookUsd),
       recipient: s.recipient,
       recipientType,
       refundTo,
@@ -496,11 +628,52 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
       feeAccount: feeAccountFor(ctx.livemode),
       sessionExpiresAt: s.expiresAt,
     });
+    const writtenId = await storeQuote(ctx, s.id, origin, refundTo, refundType, priced, plan, {
+      walletAddress: walletAddress ?? null,
+    });
+    if (writtenId) {
+      // The row this request wrote (a concurrent quote may already have superseded it).
+      const stored = await ctx.db.quote.findFirstOrThrow({ where: { id: writtenId } });
+      return quoteView(stored, feePayer, s.amount);
+    }
+    if (pass < 2) plan = await planFor('budget');
+  }
+  throw new Error('unreachable: a shopper-paid quote never needs a reservation');
+}
+
+/** Sum of two USD decimal strings (exact, via Prisma.Decimal). */
+function addUsd(a: string, b: string): string {
+  return new Prisma.Decimal(a).plus(b).toFixed();
+}
+
+interface Priced {
+  real: QuoteResponse;
+  req: QuoteRequest;
+  networkFeeBps: number;
+  depositAddress: string;
+  deadline: Date;
+}
+
+/**
+ * Dry → real quote (pricing.ts), the QUOTE_PRICE_MOVED retry (merchant-pays send target, or the
+ * sponsored shopper-pays merchant output), the minimum.
+ */
+async function priceQuote(
+  provider: ReturnType<typeof providerFor>,
+  pricing: Parameters<typeof buildQuoteRequests>[0],
+): Promise<Priced> {
+  let real: QuoteResponse | null = null;
+  let realReq: QuoteRequest | null = null;
+  let networkFeeBps = 0;
+  for (let attempt = 1; attempt <= PRICE_MOVED_ATTEMPTS && !real; attempt++) {
+    const reqs = buildQuoteRequests(pricing);
+    networkFeeBps = reqs.networkFeeBps;
     try {
       const dry = await provider.quote(reqs.dry);
       const req = reqs.real(dry);
       const res = await provider.quote(req);
-      if (feePayer === 'merchant') assertWithinTarget(res, reqs.targetUsd);
+      if (pricing.feePayer === 'merchant') assertWithinTarget(res, reqs.targetUsd);
+      if (reqs.expectedOutUsd) assertOutputWithinTarget(res, reqs.expectedOutUsd);
       real = res;
       realReq = req;
     } catch (err) {
@@ -525,23 +698,75 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
   const requested = new Date(realReq.deadline);
   const returned = real.quote.deadline ? new Date(real.quote.deadline) : requested;
   const deadline = Number.isNaN(returned.getTime()) || returned > requested ? requested : returned;
+  return { real, req: realReq, networkFeeBps, depositAddress, deadline };
+}
 
-  let writtenId = newId('quo');
+/**
+ * Stores the quote (with the wallet it was made for: the only signer the relayer accepts),
+ * superseding the session's previous one, in one transaction under the session lock. A
+ * merchant-sponsored plan reserves its fee first; when the reservation is refused nothing is
+ * stored (the transaction still commits, keeping `gas.budget_exhausted`) and null is returned.
+ * Replaced quotes' reservations are released. Returns the id of the row written.
+ */
+async function storeQuote(
+  ctx: ShopperCtx,
+  sessionId: string,
+  origin: { assetId: string; blockchain: string },
+  refundTo: string,
+  refundType: QuoteRequest['refundType'],
+  priced: Priced,
+  plan: NetworkFeePlan,
+  extra: { walletAddress: string | null },
+): Promise<string | null> {
+  const { real, depositAddress, deadline } = priced;
+  let writtenId: string | null = newId('quo');
   await tenantTransaction(ctx, async (tx, t) => {
     const tenant = { merchantId: t.merchantId, livemode: t.livemode };
     // Serialise quotes for this session and re-check it is still open.
     const locked = await tx.$queryRaw<{ status: string; expires_at: Date }[]>`
       SELECT status::text AS status, expires_at FROM sessions
-      WHERE id = ${s.id} AND merchant_id = ${t.merchantId} AND livemode = ${t.livemode}
+      WHERE id = ${sessionId} AND merchant_id = ${t.merchantId} AND livemode = ${t.livemode}
       FOR UPDATE`;
     const row = locked[0];
     if (!row) throw notFound('Session not found');
     const now = new Date();
     assertOpen({ status: row.status, expiresAt: row.expires_at }, now);
-    await assertQuotable(tx, t, s.id, now);
+    await assertQuotable(tx, t, sessionId, now);
+
+    // Release every hold of the session's earlier quotes (current or superseded): gas a failed
+    // relay of theirs spent is Tendr's loss. A relay still in flight keeps its hold until its
+    // outcome (released at collection of another quote, or at session end).
+    const held = await tx.gasSponsorship.findMany({
+      where: { ...tenant, sessionId, reservationState: 'reserved' },
+      select: { id: true },
+    });
+    for (const h of held) await releaseReplacedHold(tx, tenant, h.id, now);
+
+    let gasSponsorshipId: string | null = null;
+    if (plan.paidBy === 'merchant') {
+      const reserved = await reserveBudget(tx, {
+        ...tenant,
+        sessionId,
+        usd: plan.sponsoredUsd,
+        at: now,
+        chain: origin.blockchain,
+        method: plan.method!,
+        provider: gasProvider(origin.blockchain, plan.method!),
+      });
+      if (!reserved) {
+        writtenId = null;
+        return;
+      }
+      gasSponsorshipId = reserved.sponsorshipId;
+    }
+    const fee = {
+      ...planColumns(plan, priced.networkFeeBps),
+      gasSponsorshipId,
+      walletAddress: extra.walletAddress,
+    };
 
     await tx.quote.updateMany({
-      where: { ...tenant, sessionId: s.id, supersededAt: null },
+      where: { ...tenant, sessionId, supersededAt: null },
       data: { supersededAt: now },
     });
     const clash = await tx.quote.findFirst({
@@ -551,7 +776,7 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
     if (clash) {
       // 1Click handed back an address we already hold (the simulator does for an identical
       // request). Only this session's own quote may be revived; anything else is refused.
-      if (clash.sessionId !== s.id || clash.merchantId !== t.merchantId) {
+      if (clash.sessionId !== sessionId || clash.merchantId !== t.merchantId) {
         throw conflict('The swap provider returned a deposit address already in use');
       }
       await tx.quote.updateMany({
@@ -566,6 +791,7 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
           refundType,
           deadline,
           oneclickQuoteRef: real.correlationId,
+          ...fee,
         },
       });
       writtenId = clash.id;
@@ -573,9 +799,9 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
     }
     await tx.quote.create({
       data: {
-        id: writtenId,
+        id: writtenId!,
         ...tenant,
-        sessionId: s.id,
+        sessionId,
         originAssetId: origin.assetId,
         depositAddress,
         amountIn: real.quote.amountIn,
@@ -586,43 +812,46 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
         refundType,
         deadline,
         oneclickQuoteRef: real.correlationId,
+        ...fee,
       },
     });
   });
-
-  // The row this request wrote (a concurrent quote may already have superseded it).
-  const stored = await ctx.db.quote.findFirstOrThrow({ where: { id: writtenId } });
-  return quoteView(stored, feePayer);
+  return writtenId;
 }
 
 /** Lifetime cap on quotes per session (each allocates a deposit address and calls 1Click). */
 export const MAX_QUOTES_PER_SESSION = 30;
 
-type QuoteReader = Pick<Prisma.TransactionClient, 'quote'> | ShopperCtx['db'];
-
 /**
  * RATE_LIMITED (429) once the session has used its lifetime quota; DEPOSIT_IN_PROGRESS (409)
  * while the current quote has a reported deposit and its deadline has not passed (a new quote
- * would replace the address the money is on its way to). `db` is the scoped client or a
- * transaction client; reads are always filtered by the tenant.
+ * would replace the address the money is on its way to), or while a gasless relay of it is
+ * claimed or broadcast with no known outcome yet (final review I3: an unknown-outcome relay can
+ * still land). `db` is the unscoped client or a transaction client; reads are always filtered by
+ * the tenant.
  */
 async function assertQuotable(
-  db: QuoteReader,
+  db: Prisma.TransactionClient | typeof prisma,
   t: { merchantId: string; livemode: boolean },
   sessionId: string,
   now: Date,
 ): Promise<void> {
   const where = { merchantId: t.merchantId, livemode: t.livemode, sessionId };
   const quotes = db.quote as Prisma.TransactionClient['quote'];
-  const [count, current] = await Promise.all([
+  const [count, current, relaying] = await Promise.all([
     quotes.count({ where }),
     quotes.findFirst({
       where: { ...where, supersededAt: null },
       orderBy: { createdAt: 'desc' },
-      select: { depositTxSubmittedAt: true, deadline: true },
+      select: { id: true, depositTxSubmittedAt: true, deadline: true },
     }),
+    quotesWithRelayInFlight(db, t, sessionId),
   ]);
-  if (current?.depositTxSubmittedAt && current.deadline.getTime() > now.getTime()) {
+  if (
+    current &&
+    (current.depositTxSubmittedAt || relaying.has(current.id)) &&
+    current.deadline.getTime() > now.getTime()
+  ) {
     throw new AppError(
       'DEPOSIT_IN_PROGRESS',
       'Your payment is on its way; wait for it before requesting a new quote',

@@ -23,6 +23,7 @@ import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
+import { ensureDefaultGasPolicy } from '../gas/policy.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { LOCAL_DEV_HOSTS } from '../lib/local-hosts.js';
 import { prisma } from '../lib/prisma.js';
@@ -220,6 +221,9 @@ export async function updateCheckoutSettings(
       },
       select: SELECT,
     });
+    // Merchant-paid gas needs a policy (gasless spec §8.4, ruling R1-3): the caller's mode gets the
+    // enabled defaults unless it already has one.
+    if (input.default_gas_payer === 'merchant') await ensureDefaultGasPolicy(tx, ctx, actor);
     await recordEvent(tx, ctx, {
       aggregateType: 'merchant',
       aggregateId: ctx.merchantId,

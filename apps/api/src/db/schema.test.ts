@@ -12,6 +12,7 @@ import {
   RefundReasonValues,
   SessionExpiredReasonValues,
   SessionStatusValues,
+  SponsorshipMethodValues,
   type SessionStatus,
 } from '@tendr/contracts';
 import { ulid } from 'ulid';
@@ -184,6 +185,7 @@ describe('foundation schema', () => {
       const values = (name: string) =>
         Prisma.dmmf.datamodel.enums.find((e) => e.name === name)?.values.map((v) => v.name);
       expect(values('ProposalKind')).toEqual([...ProposalKindValues]);
+      expect(values('SponsorshipMethod')).toEqual([...SponsorshipMethodValues]);
       expect(values('ProposalStatus')).toEqual([...ProposalStatusValues]);
       expect(values('MerchantAccountStatus')).toEqual([...MerchantAccountStatusValues]);
       expect(values('RecoveryStatus')).toEqual([...RecoveryStatusValues]);

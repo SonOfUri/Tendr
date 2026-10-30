@@ -1,0 +1,224 @@
+---
+title: Integrator hooks
+description: Tell your own smart contract that a payment settled, with onTendrDeposit on EVM chains and on_tendr_deposit on NEAR.
+---
+
+If you run a game or an on-chain app, you can have payments settle into your own contract. Once a
+payment has settled there, Tendr's relayer calls a function on that contract with the payment details
+and your own order or player reference. The contract then credits the right player without watching
+transfers.
+
+Hooks are for integrator stores (`kind = integrator`) on NEAR and the EVM chains Tendr supports
+(`eth`, `base`, `arb`, `op`, `pol`, `bsc`, `avax`, `gnosis`, `bera`). Solana and Tron have no hooks.
+
+## Setup
+
+1. Deploy a contract that implements the hook. Start from the reference contracts below.
+2. Make the contract the store's payout destination: set its address as the settlement destination
+   through the saved-address and settlement-proposal flow, like any other payout address. The store must
+   use wallet payout mode.
+3. Create sessions with `hook_data`: any JSON value except null, at most 1,024 bytes serialized. It is
+   your reference, for example a player id.
+
+```bash
+curl -X POST "$TENDR_API_URL/v1/checkout/sessions" \
+  -H "Authorization: Bearer $TENDR_SECRET_KEY" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{ "amount": "25", "currency": "USD", "hook_data": { "player": "p_8812" } }'
+```
+
+Giving `hook_data` sets the session's delivery to `HOOK`. The call is refused with `400
+VALIDATION_ERROR` (`field: hook_data`) when the store is not an integrator, is not in wallet payout
+mode, settles on a chain without hooks, or (in live mode) the settlement address holds no contract code.
+Sessions without `hook_data` keep normal webhook delivery. You still get webhooks for hook sessions if
+you have endpoints.
+
+## The call
+
+When a payment is **settled**, meaning the funds reached your contract, the relayer calls your contract
+once. The webhook event `payment.succeeded` fires at the same point.
+
+### EVM
+
+```solidity
+function onTendrDeposit(
+    bytes32 paymentId,
+    bytes32 sessionId,
+    bytes calldata hookData,
+    address token,
+    uint256 amount,
+    bytes32 txHash
+) external returns (uint256);
+```
+
+The reference contract returns the amount it credited. Tendr does not read the return value.
+
+- `paymentId`, `sessionId`: the Tendr ids (`pay_...`, `ses_...`) as UTF-8 bytes, right-padded to 32.
+- `hookData`: the session's `hook_data` as JSON text, UTF-8.
+- `token`: the settlement token. `address(0)` is the chain's native coin.
+- `amount`: the settled amount in the token's base units.
+- `txHash`: the settlement transaction, the transfer into your contract.
+
+### NEAR
+
+```
+on_tendr_deposit({ payment_id, session_id, hook_data, token, amount, tx_hash })
+```
+
+All arguments are strings. `hook_data` is the JSON text, `token` is the NEP-141 contract, `amount` is
+a U128 decimal string in base units. The call attaches 50 Tgas and no deposit.
+
+### What Tendr will and will not send
+
+Right before signing, `relayer-evm` and `relayer-near` rebuild the call from Tendr's own records and
+refuse anything else. They only call the contract the session settled into, with that session's own
+data. The relayer cannot be made to notify another contract or to send other arguments.
+
+## Gas
+
+Hook gas comes out of that payment's proceeds. The quote deducts an estimate: 90,000 gas on EVM chains,
+30 Tgas on NEAR. It does not count against your sponsorship budget.
+
+- Tendr never sends an EVM hook that needs more than 300,000 gas. Such a call fails at once.
+- While gas prices make the call cost more than 10% of the order, the attempt is not sent and is
+  retried later on the normal schedule.
+- A hook estimate above 10% of the order makes the quote fail with `QUOTE_TOO_SMALL`.
+- If the network fee plus the hook estimate is above 1% of the order, the network fee falls back to
+  shopper-paid. The hook is still sent and still paid from proceeds.
+- If a call costs more than the estimate, the excess is Tendr's loss, never charged to you.
+
+Keep your hook function small. The reference contract measures 85,200 gas for a typical call, 104,800
+for a token's first deposit and 126,900 with 1 KB of `hook_data`.
+
+## Retries, failure and resend
+
+- A call that cannot be sent or whose outcome is unknown is retried with the webhook schedule: 1 minute,
+  then doubling, for up to 3 days. A call your contract rejects in Tendr's pre-send check, for example
+  because it is paused, spends no gas and is retried the same way.
+- A call that reverts **on chain** is not retried, because it burned gas. It fails at once.
+- After the window, or on an on-chain revert, the hook call is `failed`. Tendr sends one `hook.failed`
+  event and one alert email to the store's notification email. The payment itself stays settled: the
+  funds are in your contract.
+- `POST /v1/payments/{id}/hook/resend` retries a failed call once, now. It returns `409 CONFLICT` while
+  an attempt is in flight, while Tendr is still retrying by itself, after the call succeeded, or when the
+  payment has no hook call. A resend that fails again leaves the call `failed` without another event or
+  email.
+- Each hook call can be resent at most 3 times. A fourth resend returns `409 CONFLICT` with
+  `details: { max_resends: 3, resends: 3 }`. Fix the contract before you resend, and contact Tendr
+  support if it still needs to be called after that.
+- If your contract reverts on a repeated `txHash` with `AlreadyNotified(bytes32)` (EVM) or a panic
+  with exactly `already notified` (NEAR), Tendr reads that on a retry or resend as "an earlier attempt
+  landed" and marks the call succeeded. Use those exact errors.
+
+### Hook calls API
+
+`GET /v1/hook-calls` lists calls newest first. Filters: `payment`, `session`, `status` (`pending`,
+`submitted`, `succeeded`, `failed`), `limit` (1 to 100, default 50), `starting_after`. A secret key with
+`payments:read`, or a dashboard user with `account:read`, can read. Resend needs a secret key with
+`sessions:write`, or a dashboard user with `webhooks:resend`. Keys made by a connected site are refused.
+
+```json
+{
+  "hook_calls": [
+    {
+      "id": "hook_...",
+      "livemode": true,
+      "payment_id": "pay_...",
+      "session_id": "ses_...",
+      "chain": "base",
+      "contract": "0x...",
+      "hook_data": { "player": "p_8812" },
+      "status": "failed",
+      "attempts": 11,
+      "tx_hash": null,
+      "last_error": "execution reverted: paused",
+      "next_retry_at": null,
+      "retry_until": "2026-10-30T09:00:00.000Z",
+      "succeeded_at": null,
+      "created_at": "2026-10-27T09:00:00.000Z",
+      "updated_at": "2026-10-30T09:00:00.000Z"
+    }
+  ],
+  "has_more": false,
+  "next_cursor": null
+}
+```
+
+### Events
+
+`hook.succeeded` and `hook.failed` are webhook events. Their `data` has `payment_id`, `session_id`,
+`external_ref`, `hook_call_id`, `chain`, `contract`, `attempts` and `tx_hash`; `hook.failed` also has
+`error`. `hook.failed` is sent once per call.
+
+## Relayer addresses
+
+`GET /v1/relayers` lists the address that calls hooks on each chain. It needs no key and returns
+addresses only. Use it to set the allowed sender in your contract (the reference contracts take it
+as their `relayer`).
+
+```json
+{
+  "relayers": [
+    {
+      "chain": "base",
+      "family": "evm",
+      "chain_id": 8453,
+      "address": "0x...",
+      "calls": "onTendrDeposit"
+    },
+    {
+      "chain": "near",
+      "family": "near",
+      "chain_id": null,
+      "address": "<64 hex>",
+      "calls": "on_tendr_deposit"
+    }
+  ]
+}
+```
+
+On EVM chains it is one address (`relayer-evm`) on every chain. On NEAR it is the `relayer-near`
+implicit account. The same addresses serve test and live mode; test mode never sends a transaction.
+
+## Reference contracts
+
+Both are examples for you to copy. Tendr never deploys them.
+
+- EVM: `onchain/evm/src/reference/TendrDepositReceiver.sol`
+- NEAR: `onchain/integrator-near`
+
+## Checks your contract must keep
+
+The call is only as trustworthy as your contract's checks. Keep all of them.
+
+1. **Sender.** Accept the call only from Tendr's published relayer address for that chain (the
+   `relayer-evm` address on EVM, the `relayer-near` account on NEAR; see `GET /v1/relayers` above).
+   Without this, anyone can call your function.
+2. **Balance.** Credit at most what has arrived and is not yet accounted for:
+   `min(amount, balance(token) - accounted[token])`, then add the credited amount to `accounted[token]`.
+   Even a compromised relayer key then cannot make your contract credit money that never arrived. On
+   NEAR the contract cannot read a balance synchronously, so it asks the token and credits in a callback;
+   the reference does this.
+3. **Duplicates.** Credit each `txHash` once.
+4. **Outflows.** Anything that moves tokens out of the contract must lower `accounted[token]` by the same
+   amount, in the same transaction. Never lower it without moving tokens out.
+
+### The misattribution limit
+
+These checks stop a stolen relayer key from crediting money that never arrived. They do **not** stop it
+from crediting the wrong reference. With two deposits pending, one for player A and one for player B, a
+forged call naming player A and both amounts credits A with B's deposit, and B's own call then credits
+nothing. The settlement transfer carries no reference, so the contract cannot tell the deposits apart.
+
+If you need a stronger guarantee, reconcile each credit against Tendr's signed `payment.succeeded` or
+`hook.succeeded` webhook, which names the same payment, amount and transaction, or check `txHash`
+against the actual transfer before you release value. An atomic path where the settlement transfer
+itself carries `hook_data` to a NEAR contract would remove the relayer from the trust path. It is not
+available yet.
+
+## Storage on NEAR
+
+The reference contract keeps one entry per settlement transaction forever, about 100 bytes each, paid
+from the contract's own balance. Keep enough NEAR in it, or calls start failing once it cannot cover
+storage.

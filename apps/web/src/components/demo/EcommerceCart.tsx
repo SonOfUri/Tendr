@@ -99,6 +99,7 @@ export function EcommerceCart({ busy, onCheckout, onPricingChange }: Props) {
         {ITEMS.map((item) => (
           <li key={item.id} className="demo-cart-item">
             <div className="demo-cart-thumb">
+              {/* eslint-disable-next-line @next/next/no-img-element -- small static demo thumbnails */}
               <img src={item.image} alt={item.alt} />
               <span className="demo-cart-qty" aria-label={`Quantity ${item.qty}`}>
                 {item.qty}

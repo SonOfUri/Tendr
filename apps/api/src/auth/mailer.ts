@@ -33,6 +33,8 @@ export const MailTemplateValues = [
   'notification_email_changed',
   'payment_received',
   'refund_sent',
+  // Integrator hooks (gasless spec §4.3): the contract call still failing after 3 days.
+  'hook_failed',
 ] as const;
 export type MailTemplate = (typeof MailTemplateValues)[number];
 

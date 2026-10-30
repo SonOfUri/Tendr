@@ -88,11 +88,20 @@ export const SponsorshipMethodValues = [
   'paymaster_erc20',
   'energy',
   'fee_payer',
+  /** The Tendr payment forwarder (EIP-2612 permit or Tron approve + signed `TendrPayment`). */
+  'forwarder',
+  /** A NEAR NEP-366 meta-transaction (signed delegate action). */
+  'meta_tx',
+  /** Pimlico's Solana paymaster (Kora). */
+  'kora',
+  /** An integrator hook call's gas above its quoted estimate: Tendr's loss (cost = the excess). */
+  'hook',
 ] as const;
 export type SponsorshipMethod = (typeof SponsorshipMethodValues)[number];
 export const SponsorshipMethodSchema = z.enum(SponsorshipMethodValues);
 
-export const SponsorValues = ['merchant', 'tendr'] as const;
+/** `shopper`: a relay whose network fee the shopper paid in the payment token (project 5a). */
+export const SponsorValues = ['merchant', 'tendr', 'shopper'] as const;
 export type Sponsor = (typeof SponsorValues)[number];
 export const SponsorSchema = z.enum(SponsorValues);
 

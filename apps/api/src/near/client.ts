@@ -4,11 +4,14 @@
 //     account) from the mode's parent account.
 // `nearClient(livemode)` picks the mode's RPC / parent / intents / code hash and wraps the driver
 // (RPC, or the in-memory fake in dev/test) in the funding caps.
+import type { Redis } from 'ioredis';
+import { randomUUID } from 'node:crypto';
 import { env, type Env } from '../env.js';
 import { getKeyVault } from '../keyvault/index.js';
 import { nearPublicKey } from '../keyvault/keys.js';
 import type { KeyVault } from '../keyvault/types.js';
 import { providerNotConfigured } from '../lib/errors.js';
+import { getRedis } from '../lib/redis.js';
 import { FakeNearClient } from './fake.js';
 import {
   CappedNearClient,
@@ -28,6 +31,8 @@ import {
 } from './rpc.js';
 import {
   DEFAULT_CALL_GAS,
+  NEAR_HOOK_ATTACHED_GAS,
+  NEAR_HOOK_METHOD,
   buildTransaction,
   decodeHash,
   functionCallAction,
@@ -36,10 +41,19 @@ import {
   signTransaction,
   transferAction,
   type NearSigningKey,
+  type SignOptions,
   type SignedTx,
 } from './tx.js';
+import { assertHookTransaction, type HookArgs } from '../hooks/guard.js';
 import type { Action } from '@near-js/transactions';
 import type { TxReceipt } from './events.js';
+
+/** `relayer-near` nonce lock: held at most this long (one view call + two Redis calls). */
+export const NEAR_NONCE_LOCK_TTL_MS = 15_000;
+/** How long a signer waits for the nonce lock. */
+export const NEAR_NONCE_LOCK_WAIT_MS = 10_000;
+/** How long the last handed-out nonce is remembered (the chain's own nonce catches up first). */
+export const NEAR_NONCE_RECORD_TTL_S = 24 * 3600;
 
 /** contract `SignerKey` JSON (serde `rename_all = "snake_case"`), standard padded base64. */
 export type SignerKeyJson = { p256: string } | { ed25519: string };
@@ -83,6 +97,8 @@ export interface TxResult {
   status: 'success' | 'failure';
   topLevelStatus: 'success' | 'failure';
   failure?: string;
+  /** yoctoNEAR burnt for gas by the transaction and all its receipts (when the RPC reports it). */
+  tokensBurnt?: bigint;
 }
 
 export interface ProvisionParams {
@@ -114,6 +130,11 @@ export interface TxStatusResult {
   delegateSenderIds?: string[];
   /** Every receipt (not the transaction outcome itself), with its executor and logs. */
   receipts: TxReceipt[];
+  /** yoctoNEAR / gas burnt by the transaction and all its receipts (RPC lookups only). */
+  tokensBurnt?: bigint;
+  gasBurnt?: bigint;
+  /** The transaction's own result (`FinalExecutionOutcome.status`) succeeded. */
+  topLevelOk?: boolean;
 }
 
 export interface CallOptions {
@@ -348,6 +369,162 @@ export class RpcNearClient implements NearClient {
   }
 }
 
+/**
+ * `relayer-near`'s sender (gasless NEAR payments and integrator hooks, project 5a): signs from its
+ * implicit account only what `assertRelayerNearTransaction` allows (one signed delegate, one
+ * registration-only `storage_deposit`, or one records-checked `on_tendr_deposit`). Signing and sending are separate steps, so a caller can record a
+ * transaction's hash before it is broadcast. Never used by `NearClient.call`, provisioning or
+ * top-ups.
+ *
+ * Nonces (final review I2): the key signs from the API (meta-tx relays, `storage_deposit`) and the
+ * worker (hooks, fee-sweep registrations) at once, so the next nonce is taken under a Redis lock
+ * per (account, public key): a fresh on-chain nonce read under the lock, next = max(that, the last
+ * nonce any process handed out (Redis), this process's last) + 1, recorded before the lock is
+ * released. Two signers never get the same nonce. Fails closed (NotBroadcastError).
+ */
+export class RelayerNearSender {
+  private lastNonce = 0n;
+  private key: { raw: Uint8Array; accountId: string } | null = null;
+
+  constructor(
+    readonly rpc: NearRpc,
+    private readonly kv: KeyVault = getKeyVault(),
+    private readonly redis: () => Redis = getRedis,
+  ) {}
+
+  /** The next nonce for the key, under the cross-process nonce lock. */
+  private async nextNonce(accountId: string, publicKey: string): Promise<bigint> {
+    const redis = this.redis();
+    // A fresh process's client may still be connecting (commands fail fast, no offline queue).
+    if (redis.status === 'connecting' || redis.status === 'connect' || redis.status === 'wait') {
+      await Promise.race([
+        new Promise((r) => redis.once('ready', r)),
+        new Promise((r) => setTimeout(r, NEAR_NONCE_LOCK_WAIT_MS)),
+      ]);
+    }
+    const lockKey = `tendr:near-nonce-lock:${accountId}:${publicKey}`;
+    const lastKey = `tendr:near-nonce:${accountId}:${publicKey}`;
+    const token = randomUUID();
+    const waitUntil = Date.now() + NEAR_NONCE_LOCK_WAIT_MS;
+    while ((await redis.set(lockKey, token, 'PX', NEAR_NONCE_LOCK_TTL_MS, 'NX')) !== 'OK') {
+      if (Date.now() > waitUntil) throw new Error('the relayer-near nonce lock is busy');
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    try {
+      const fetched = await this.rpc.accessKeyNonce(accountId, publicKey);
+      const stored = BigInt((await redis.get(lastKey)) ?? '0');
+      let base = fetched > stored ? fetched : stored;
+      if (this.lastNonce > base) base = this.lastNonce;
+      const nonce = base + 1n;
+      // Recorded only while the lock is still ours: another signer reads it next.
+      const ok = await redis.eval(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then redis.call('set', KEYS[2], ARGV[2], 'EX', ARGV[3]) return 1 else return 0 end",
+        2,
+        lockKey,
+        lastKey,
+        token,
+        nonce.toString(),
+        String(NEAR_NONCE_RECORD_TTL_S),
+      );
+      if (Number(ok) !== 1) throw new Error('the relayer-near nonce lock expired');
+      this.lastNonce = nonce;
+      return nonce;
+    } finally {
+      try {
+        await redis.eval(
+          "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+          1,
+          lockKey,
+          token,
+        );
+      } catch {
+        // Expires on its own (NEAR_NONCE_LOCK_TTL_MS).
+      }
+    }
+  }
+
+  private async publicKey(): Promise<{ raw: Uint8Array; accountId: string }> {
+    if (this.key) return this.key;
+    const { curve, raw } = await this.kv.publicKey('relayer-near');
+    if (curve !== 'ed25519') throw new Error('relayer-near is not an ed25519 key');
+    this.key = { raw, accountId: implicitAccountId(raw) };
+    return this.key;
+  }
+
+  /** The relayer's implicit account (it pays the gas). */
+  async accountId(): Promise<string> {
+    return (await this.publicKey()).accountId;
+  }
+
+  /**
+   * Builds and vault-signs an integrator hook call (`on_tendr_deposit`) to `receiverId`, only
+   * after the records check (`assertHookTransaction`: the receiver is the session's settlement
+   * contract and `args` are exactly the hook's), and only with the hook allowance for that
+   * receiver. NotBroadcastError on any failure (nothing sent).
+   */
+  async signHook(hookCallId: string, receiverId: string, args: HookArgs): Promise<SignedTx> {
+    try {
+      await assertHookTransaction({ hookCallId, chain: 'near', receiverId, args: { ...args } });
+    } catch (err) {
+      throw new NotBroadcastError(err);
+    }
+    const action = functionCallAction(NEAR_HOOK_METHOD, args, NEAR_HOOK_ATTACHED_GAS, 0n);
+    return this.sign(receiverId, [action], { hookReceiver: receiverId });
+  }
+
+  /** Builds and vault-signs one transaction; NotBroadcastError on any failure (nothing sent). */
+  async sign(receiverId: string, actions: Action[], opts: SignOptions = {}): Promise<SignedTx> {
+    try {
+      const { raw, accountId } = await this.publicKey();
+      const nonce = await this.nextNonce(accountId, nearPublicKey(raw));
+      const tx = buildTransaction({
+        signerId: accountId,
+        publicKey: raw,
+        nonce,
+        receiverId,
+        blockHash: await this.rpc.finalBlockHash(),
+        actions,
+      });
+      return await signTransaction(this.kv, 'relayer-near', tx, opts);
+    } catch (err) {
+      throw new NotBroadcastError(err);
+    }
+  }
+
+  /**
+   * Sends a signed transaction and waits until it is final. NotBroadcastError when the node
+   * rejected it as invalid (never executed); any other failure resends the identical bytes once,
+   * and if that fails too, OutcomeUnknownError (it may still execute: same hash, at most once).
+   */
+  async send(signed: SignedTx): Promise<TxResult> {
+    try {
+      return await this.rpc.sendTx(signed.bytes, signed.hash);
+    } catch (err) {
+      if (isInvalidTransaction(err)) throw new NotBroadcastError(err);
+      try {
+        return await this.rpc.sendTx(signed.bytes, signed.hash);
+      } catch (resendErr) {
+        throw new OutcomeUnknownError(err, resendErr);
+      }
+    }
+  }
+
+  /** `sign` then `send`; a stale nonce at the first send re-signs once with a fresh one. */
+  async signAndSend(receiverId: string, actions: Action[]): Promise<TxResult> {
+    for (let attempt = 0; ; attempt++) {
+      const signed = await this.sign(receiverId, actions);
+      try {
+        return await this.send(signed);
+      } catch (err) {
+        if (attempt === 0 && err instanceof NotBroadcastError && isInvalidNonce(err.cause)) {
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+}
+
 export function nearModeConfig(livemode: boolean, e: Env = env()): NearModeConfig {
   const hash = livemode ? e.MERCHANT_ACCOUNT_CODE_HASH_LIVE : e.MERCHANT_ACCOUNT_CODE_HASH_TEST;
   return {
@@ -402,7 +579,23 @@ export function fakeNearClient(livemode: boolean): FakeNearClient {
   return fake;
 }
 
+const relayerSenders = new Map<boolean, RelayerNearSender>();
+
+/** The process-wide `relayer-near` sender for a mode (its RPC is the mode's NEAR_RPC_URL_*). */
+export function relayerNearSender(livemode: boolean): RelayerNearSender {
+  let s = relayerSenders.get(livemode);
+  if (!s) {
+    const e = env();
+    s = new RelayerNearSender(
+      new NearRpc(new JsonRpcTransport(livemode ? e.NEAR_RPC_URL_LIVE : e.NEAR_RPC_URL_TEST)),
+    );
+    relayerSenders.set(livemode, s);
+  }
+  return s;
+}
+
 /** Drops the cached clients (tests: fresh fakes per test). */
 export function resetNearClients(): void {
   clients.clear();
+  relayerSenders.clear();
 }

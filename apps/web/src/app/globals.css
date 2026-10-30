@@ -893,6 +893,41 @@ code {
   text-align: center;
 }
 
+/* The network-fee choice: one radio per line, full width on phones. */
+.pay-fee-choice {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.pay-fee-choice legend {
+  padding: 0;
+  margin-bottom: 0.25rem;
+  color: var(--tendr-muted);
+}
+
+.pay-fee-choice label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.pay-fee-choice[disabled] label {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.pay-test-label {
+  border-left: 3px solid var(--tendr-warning);
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+}
+
 .pay-button {
   display: inline-flex;
   align-items: center;
