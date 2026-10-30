@@ -510,6 +510,26 @@ export function verifyTendrSignature(rawBody, header, secrets, now = Date.now() 
 }
 ```
 
+### Payment links
+
+Design: `docs/superpowers/specs/2026-10-30-payment-links-design.md`. A merchant makes a reusable link,
+fixed or open amount, in USD or an ISO 4217 currency, and shares `CHECKOUT_BASE_URL/pay/<store>/<link>`
+(`?mode=test` for test links) or its QR code. The payer presses Pay and the normal checkout takes over.
+
+- Merchant API: `POST|GET /v1/payment_links`, `GET|PATCH|DELETE /v1/payment_links/:id`, with scopes
+  `payment_links:read` / `payment_links:write`. `slug` is immutable; `PATCH` clears optional fields
+  with `null`; `DELETE` archives. Minimum $1.00 USD equivalent per payment.
+- Public API (no key): `GET /v1/payment_links/public/:merchant/:link` and
+  `POST .../sessions`, rate-limited per payer IP.
+- `max_uses`: each open session reserves a use under a row lock (`LINK_RESERVED`); late deposits are
+  refunded and do not count. Link sessions start with a 5-minute expiry until the first quote.
+- Web: `/pay/<store>/<link>`, `/qr` (PNG, `?format=svg`) and `/opengraph-image` preview cards.
+- Webhook events of link sessions carry `payment_link_id` and `payer_note`.
+- Deploy settings: `WEB_INTERNAL_TOKEN` (API and web, 32+ characters), `TENDR_ASSET_ORIGIN` (web, logo
+  origin for preview cards) and `CHECKOUT_BASE_URL` (the canonical base, the same in API and web).
+- Docs: `apps/docs/payment-links/`, `apps/docs/api-reference/payment-links.mdx`; handover for the
+  dashboard: `docs/handover/2026-10-30-payment-links.md`.
+
 ### Test mode
 
 Test keys (`tdr_test_`) use a simulated 1Click and the mock intents verifier. No real swap runs.
@@ -551,7 +571,7 @@ exists, call `POST /v1/checkout/client/simulate` with `Authorization: Bearer <cl
     shopper-pays. See [Gasless payments](#gasless-payments).
 - **Resolution.** Each setting is resolved once, when the session is created. The order is:
   1. the session's own `fee_payer` / `gas_payer`;
-  2. the payment link's setting (links carry only a gas setting for now);
+  2. the payment link's setting (`fee_payer` / `gas_payer`);
   3. the store default.
 
   Set store defaults under Settings → Checkout, or with `default_fee_payer` / `default_gas_payer`
@@ -922,7 +942,6 @@ USD amount matches `amount / rate` rounded up.
   statically import optional `@x402` packages, which breaks the Next build through Reown AppKit's
   optional Coinbase dependency. Check that before lifting the pin.
 - Pricing currency is USD or the settlement asset only, because there is no FX source yet.
-- Payment links carry no fee-payer setting yet.
 - The 1Click wire format comes from its public docs until the mainnet checks run.
   `apps/api/src/checkout/oneclick/http.ts` is the only place that maps it.
 - Underpay top-ups are off in live mode until the mainnet check confirms that 1Click accumulates

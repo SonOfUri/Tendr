@@ -1,0 +1,131 @@
+---
+title: Payment links
+description: Share a link or a QR code and get paid, with no website or code on your side.
+---
+
+A payment link is a reusable page at `https://usetendr.tech/pay/<your-store>/<link>`. The payer opens it,
+sees what they are paying for, and presses **Pay**. Tendr then opens the normal checkout, so everything
+else works as it does for a session your own site creates: quotes, gasless payments, refunds, webhooks
+and payouts to your account. Tendr never holds the money.
+
+Make links with the API (`POST /v1/payment_links`, see the [reference](/api-reference/payment-links)),
+the [TypeScript SDK](/sdks/typescript#payment-links) or the dashboard.
+
+## Kinds of link
+
+| Kind | Payer sees | Use it for |
+| --- | --- | --- |
+| `fixed` | The price you set. | An invoice, a product, a deposit. |
+| `open` | A box to type an amount. | Donations, tips, "pay what you owe". |
+
+An open link can set `min_amount` to raise its floor. It cannot lower it.
+
+## Currencies and the $1 minimum
+
+A link is priced in `USD` or in an ISO 4217 currency Tendr has a rate for (for example `EUR`, `NGN`,
+`JPY`). The order is converted to USD when the payer presses Pay, and the currency's own decimals apply
+(`JPY` has none).
+
+Every link takes at least **$1.00 USD equivalent**, checked on the link amount before fees:
+
+- A fixed amount is checked when you create or edit the link, and again when the payer presses Pay,
+  because rates move. A link priced near the floor can start refusing payments later.
+- An open amount is checked when the payer presses Pay. The page shows the effective minimum: the larger
+  of your `min_amount` and the $1.00 floor in the link's currency.
+- Below the minimum the API answers `400 AMOUNT_TOO_LOW` with `details.min_amount`.
+- When a non-USD rate is not available the API answers `503 FX_RATE_UNAVAILABLE`. Try again shortly.
+
+## Who pays the fees
+
+`fee_payer` and `gas_payer` are optional on a link. Leave them unset (`null`) and the link follows your
+store defaults. Set them and they apply to every payment through that link. `gas_max_usd` caps the
+network fee Tendr will sponsor for the link. A session's own setting still wins when your code creates
+the session. See [gasless payments](/gasless/overview) and the [gas policy](/gasless/gas-policy).
+
+## The payer's note
+
+With `note: "optional"` (the default) the payer can leave a short message with the payment. Set
+`note: "off"` to hide the box.
+
+- At most 280 characters of plain text. Control characters are removed and whitespace is collapsed.
+- It is stored on the session and returned as `payer_note` on every session event (see
+  [webhooks](/api-reference/webhooks#payment-link-fields)). It is always shown as text and links in it
+  are never clickable.
+- The email you get for a payment names the link and quotes the note.
+
+## Test mode
+
+Test and live links are separate. A link made with a test key has a `url` that ends in `?mode=test`.
+Without `?mode=test` only live links resolve, so a test link never answers on the live address. Test
+links use test checkout: no real money moves.
+
+## QR codes and preview cards
+
+Each link has a QR code at its `qr_url`: `/pay/<store>/<link>/qr` (PNG, 1024 px). Add `format=svg` for
+SVG. It encodes the link's address, including `?mode=test` for a test link.
+
+Pasting the link into a chat or a social post shows a 1200 x 630 preview card with your store name, the
+title, the price and your logo. The logo appears only when Tendr hosts it; otherwise the card shows your
+store's initial.
+
+## Switching off, archiving, limits
+
+| Action | How | Result |
+| --- | --- | --- |
+| Switch off | `PATCH` with `status: "inactive"` | The page says the link is not taking payments. Switch it back on any time. |
+| Archive | `DELETE`, or `PATCH` with `archived: true` | Hidden from the default list and unavailable. The payer sees it as switched off. `archived: false` restores it. |
+| Expire | `expires_at` | After this time the link is `expired`. |
+| Limit | `max_uses` | The link stops once that many payments have settled. |
+
+A link is never deleted: its payments and totals stay. The `slug` is part of the shared address and
+**cannot be changed** after creation. To retire an address, archive the link and make a new one.
+
+`PATCH` accepts `null` to clear `expires_at`, `max_uses`, `description`, `min_amount`, `fee_payer`,
+`gas_payer` and `gas_max_usd`. Omit a key to leave it as it is. Unknown keys are rejected.
+
+### How `max_uses` works
+
+`max_uses` is safe for single-use invoices. Every **open session reserves one use** until it settles or
+expires, so two payers cannot both start paying a link that has one use left.
+
+- While a payer is mid-payment on the last use, a second payer gets `409 LINK_RESERVED`: "Someone is
+  paying this link right now, try again shortly." If that session expires, the use is free again.
+- When every use has settled, new payers get `409 LINK_UNAVAILABLE` with `availability: "used_up"`.
+- A session started from the page lives 5 minutes until the payer gets a quote, then the normal session
+  lifetime. A payer who walks away frees the use after those 5 minutes.
+- **Late deposits** (money that arrives after the session is marked expired) are refunded and never
+  count as a use.
+- **Refunds do not free a use.** A refunded payment stays used.
+- `use_count` can exceed `max_uses` in one narrow case: a session that is past its expiry but not yet
+  swept receives a deposit that settles.
+
+A link accepts at most 200 open sessions that have a quote. Past that the page answers
+`429 LINK_BUSY`. Sessions that have no quote yet do not count: they expire within minutes.
+
+## Totals
+
+Every link read returns:
+
+| Field | Meaning |
+| --- | --- |
+| `use_count` | Settled payments. |
+| `total_paid`, `total_refunded` | In the link's currency. |
+| `total_paid_usd`, `total_refunded_usd` | In USD, as charged. |
+
+Only settled payments count towards `total_paid`. A refund counts towards `total_refunded` once it has
+executed on chain. To list the payments of one link, use `GET /v1/payments?payment_link_id=<id>`.
+
+## Who cannot use links
+
+A store that settles into its own contract (an integrator with payout mode `wallet`) takes payments
+through [hooks](/integrations/hooks) instead. Creating a link for it returns `409 LINK_NOT_SUPPORTED`.
+
+## What the payer sees
+
+1. Your store name and logo, the title, the description, and the price (or an amount box).
+2. If the link is not available, a short reason (switched off, expired, used up) and no Pay button.
+3. A note box when `note` is `optional`.
+4. **Pay** creates the session and sends the payer to the hosted checkout to choose a token and send.
+5. After payment, the success screen links back to the payment link page.
+
+Nothing is created until the payer presses Pay: opening or previewing a link makes no session.
