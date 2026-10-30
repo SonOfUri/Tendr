@@ -98,8 +98,12 @@ const FORBIDDEN_FUNCTIONS: ReadonlyMap<string, string> = new Map([
   ['attr', "`attr()` isn't allowed — CSS can't put text on the page"],
 ]);
 
-/** Properties whose string values are drawn on screen; their strings are kept icon-sized. */
-const DISPLAYED_STRING_PROPERTIES = new Set([
+/**
+ * Properties that can draw text. CSS may not add text at all (an address can be built from any
+ * number of short strings across pseudo-elements or keyframes), so these accept only the values
+ * below; anything else gets {@link NO_TEXT}.
+ */
+const TEXT_DRAWING_PROPERTIES = new Set([
   'content',
   'quotes',
   'list-style',
@@ -109,12 +113,20 @@ const DISPLAYED_STRING_PROPERTIES = new Set([
   'text-emphasis-style',
   'hyphenate-character',
 ]);
-/** Longest string (in code points) a displayed-string property may carry: an icon or a quote mark. */
-export const THEME_CSS_CONTENT_MAX_CHARS = 4;
+const CONTENT_KEYWORDS = new Set([
+  'none',
+  'normal',
+  'open-quote',
+  'close-quote',
+  'no-open-quote',
+  'no-close-quote',
+]);
+/** Functions that could put text (or a value standing in for text) into a drawing property. */
+const TEXT_FUNCTIONS = new Set(['var', 'env', 'attr', 'counter', 'counters', 'symbols', 'string']);
+const NO_TEXT = "CSS can't add text — put words in a text block instead";
 
 const BREAKS_STYLE_ELEMENT = /<\/style|<!--|<\/?script/i;
 const ANGLE_BRACKET = "CSS text and links can't contain `<`";
-const TEXT_IN_CSS = `CSS text can be at most ${THEME_CSS_CONTENT_MAX_CHARS} characters (an icon or quote mark) — put words in your blocks instead`;
 
 const TEXT_PROBLEM = "Text can't contain wallet addresses or payment instructions";
 const UNREADABLE = "This part of the CSS couldn't be read — check for a missing `{`, `}` or `;`";
@@ -294,21 +306,15 @@ class Checker {
       return;
     }
     if (name === 'position') this.position(decl, line);
-    // All strings in one declaration are drawn together (`content: "0x52" "9084" …`), so the cap
-    // and the text checks apply to their concatenation, not to each string alone.
+    if (TEXT_DRAWING_PROPERTIES.has(name) && !this.drawsNoText(name, decl.value)) {
+      this.add(line, NO_TEXT);
+    }
+    // Strings anywhere else are checked together too, in case they are ever shown.
     const strings: string[] = [];
-    let usesVariable = false;
     csstree.walk(decl.value, (n) => {
       if (n.type === 'String') strings.push(n.value);
-      if (n.type === 'Function' && ['var', 'env'].includes(unprefixed(n.name))) usesVariable = true;
     });
     const joined = strings.join('');
-    if (DISPLAYED_STRING_PROPERTIES.has(name)) {
-      if ([...joined].length > THEME_CSS_CONTENT_MAX_CHARS) this.add(line, TEXT_IN_CSS);
-      // A variable could carry text past the cap (`--a: "Send USDC"; content: var(--a)`).
-      if (usesVariable)
-        this.add(line, `\`${raw}\` can't use \`var()\` or \`env()\` — write the value directly`);
-    }
     if (strings.length > 1 && (containsAddressLike(joined) || containsSendInstruction(joined))) {
       this.add(line, TEXT_PROBLEM);
     }
@@ -320,6 +326,52 @@ class Checker {
         }
       });
     }
+  }
+
+  /** Whether a text-drawing property's value is one of the text-free forms it allows. */
+  private drawsNoText(name: string, value: csstree.Value | csstree.Raw): boolean {
+    if (value.type !== 'Value') return false;
+    const parts = value.children.toArray();
+    const ident = (n: csstree.CssNode, allowed: readonly string[]) =>
+      n.type === 'Identifier' && allowed.includes(n.name.toLowerCase());
+    switch (name) {
+      case 'content':
+        return parts.every(
+          (n) =>
+            (n.type === 'Identifier' && CONTENT_KEYWORDS.has(n.name.toLowerCase())) ||
+            (n.type === 'String' && n.value === '') ||
+            n.type === 'Url' ||
+            (n.type === 'Function' && n.name.toLowerCase() === 'counter' && this.plainCounter(n)),
+        );
+      case 'quotes':
+        return parts.length === 1 && ident(parts[0]!, ['none', 'auto']);
+      case 'text-overflow':
+        return parts.length >= 1 && parts.every((n) => ident(n, ['clip', 'ellipsis']));
+      case 'hyphenate-character':
+        return parts.length === 1 && ident(parts[0]!, ['auto']);
+      default: {
+        // list-style(-type), text-emphasis(-style): keywords (and colours / images), no text.
+        let ok = true;
+        csstree.walk(value, (n) => {
+          if (n.type === 'String') ok = false;
+          if (n.type === 'Function' && TEXT_FUNCTIONS.has(unprefixed(n.name))) ok = false;
+        });
+        return ok;
+      }
+    }
+  }
+
+  /** `counter(<ident>)` or `counter(<ident>, <ident>)`: a number, never a string. */
+  private plainCounter(fn: csstree.FunctionNode): boolean {
+    const args = fn.children.toArray();
+    if (args.length === 1) return args[0]!.type === 'Identifier';
+    return (
+      args.length === 3 &&
+      args[0]!.type === 'Identifier' &&
+      args[1]!.type === 'Operator' &&
+      args[1]!.value === ',' &&
+      args[2]!.type === 'Identifier'
+    );
   }
 
   private position(decl: csstree.Declaration, line: number): void {

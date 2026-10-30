@@ -180,37 +180,92 @@ describe('scopeThemeCss', () => {
       .map((c) => `"${c}"`)
       .join(' ');
     expectRejected(`p::before{content:${chunks}}`, 'wallet addresses');
-    expectRejected(`p::before{content:${chunks}}`, 'at most 4 characters');
     const send = 'p::before{content:"Send" " USD" "C to" " thi" "s wa" "llet"}';
     expectRejected(send, 'wallet addresses or payment instructions');
-    expectRejected(send, 'at most 4 characters');
-    expectRejected('p::before{content:"“" "”" "«" "»" "★"}', 'at most 4 characters');
-    expect(scopeThemeCss('q::before{content:"“" "→"}', ORIGIN).ok).toBe(true);
-    // Strings outside drawn properties are still checked together.
+    // Strings outside text-drawing properties are still checked together.
     expectRejected(`p{font-family:${chunks}}`, 'wallet addresses');
   });
 
-  it('displayed-string properties cannot use variables', () => {
-    expectRejected('p::before{content:var(--a)}', "can't use `var()`");
-    expectRejected('li{list-style-type:env(x)}', "can't use `var()`");
+  it('CSS cannot add text', () => {
+    const NO_TEXT = "CSS can't add text";
+    for (const css of [
+      'p::before{content:"Send!"}',
+      'p::before{content:"→"}',
+      'p::before{content:"0x5290" "8400"}',
+      'p::before{content:"" "a"}',
+      'p::before{content:"" / "alt text"}',
+      'p::before{content:counters(item, ".")}',
+      'p::before{content:counter(item, "x")}',
+      'p::before{content:attr(class)}',
+      'p::before{content:var(--a)}',
+      'p::before{content:env(x)}',
+      'q{quotes:"«" "»"}',
+      'q{quotes:none "x"}',
+      'li{list-style-type:"Pay here "}',
+      'li{list-style:"★" inside}',
+      'li{list-style-type:symbols(cyclic "*")}',
+      'li{list-style-type:env(x)}',
+      'p{text-overflow:"click me"}',
+      'p{text-overflow:ellipsis "x"}',
+      'p{text-emphasis:"Pay" red}',
+      'p{text-emphasis-style:"x"}',
+      'p{hyphenate-character:"Pay"}',
+      'p{-webkit-hyphenate-character:"-"}',
+    ]) {
+      expectRejected(css, NO_TEXT);
+    }
+  });
+
+  it('CSS cannot build an address across many pseudo-elements', () => {
+    const evm = '0x52908400098527886E0F7030069857D2E4169EE7';
+    const pieces = evm.match(/.{1,4}/g)!;
+    expect(pieces).toHaveLength(11);
+    const css = pieces.map((c, i) => `.a${i}::before{content:"${c}"}`).join('\n');
+    const problems = problemsOf(css);
+    expect(problems).toHaveLength(11);
+    for (const p of problems)
+      expect(p.message).toBe("CSS can't add text — put words in a text block instead");
+  });
+
+  it('CSS cannot step text through keyframes', () => {
+    const css = [
+      '@keyframes spell {',
+      '  0% { content: "0x52" }',
+      '  50% { content: "9084" }',
+      '  100% { content: "0009" }',
+      '}',
+      'p::before { content: ""; animation: spell 3s steps(1) infinite }',
+    ].join('\n');
+    const problems = problemsOf(css);
+    expect(problems.map((p) => p.line)).toEqual([2, 3, 4]);
+    for (const p of problems)
+      expect(p.message).toBe("CSS can't add text — put words in a text block instead");
+  });
+
+  it('text-free content values pass', () => {
+    const r = scopeThemeCss(
+      [
+        'p::before{content:""}',
+        '.logo::before{content:url(https://assets.tendr.test/a/star.png)}',
+        'li::before{content:counter(item)}',
+        'li::marker{content:counter(item, upper-roman)}',
+        'q::before{content:open-quote} q::after{content:close-quote}',
+        'p::after{content:none} p::before{content:normal}',
+        'q{quotes:auto} blockquote{quotes:none}',
+        'ul{list-style:disc inside} ol{list-style-type:decimal}',
+        'ul{list-style:url(https://assets.tendr.test/a/dot.png) square}',
+        'p{text-overflow:ellipsis} p{text-overflow:clip ellipsis}',
+        'em{text-emphasis:filled circle red} em{text-emphasis-style:open dot}',
+        'p{hyphenate-character:auto}',
+      ].join('\n'),
+      ORIGIN,
+    );
+    expect(r.ok, r.ok ? '' : JSON.stringify(r.problems)).toBe(true);
   });
 
   it('rejects attr() so CSS cannot copy text onto the page', () => {
     expectRejected('p::after{content:attr(class)}', "`attr()` isn't allowed");
     expectRejected('p{width:attr(data-w px)}', "`attr()` isn't allowed");
-  });
-
-  it('keeps displayed CSS strings icon-sized', () => {
-    expectRejected('p::before{content:"Send!"}', 'at most 4 characters');
-    expectRejected('p::before{content:"0x5290" "8400"}', 'at most 4 characters');
-    expectRejected('li{list-style-type:"Pay here "}', 'at most 4 characters');
-    expectRejected('p{text-overflow:"click me"}', 'at most 4 characters');
-    expectRejected('q{quotes:"«««««" "»"}', 'at most 4 characters');
-    const ok = scopeThemeCss(
-      'q::before{content:"“"} li::marker{content:"★ "} .x::after{content:"→"}',
-      ORIGIN,
-    );
-    expect(ok.ok).toBe(true);
   });
 
   it('allows asset-origin urls and keyframes', () => {

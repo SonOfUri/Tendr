@@ -57,6 +57,9 @@ const REJECTED_TAGS: ReadonlyMap<string, string> = new Map([
   ['base', EMBED],
 ]);
 
+/** Longest run of consecutive text nodes checked as one string (base58 addresses are ≤ 44). */
+const RUN_MAX_CHARS = 60;
+
 const TEXT_PROBLEM = "Text can't contain wallet addresses or payment instructions";
 
 /** Tags whose boundaries break a line, so text either side of them isn't read as one run. */
@@ -85,6 +88,15 @@ function decodeBasicEntities(s: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&amp;/g, '&');
+}
+
+/**
+ * Joins two text nodes with nothing between them, except after a node that ends in sentence
+ * punctuation: "See you soon." + "near the tree" must not read as the NEAR name `soon.near`.
+ * Address pieces never end in punctuation, so a split address is still joined whole.
+ */
+function glue(a: string, b: string): string {
+  return a !== '' && /[.!?,;:]\s*$/.test(a) ? `${a} ${b}` : a + b;
 }
 
 /** Visible text of sanitised HTML: inline tags join their text, block tags break it. */
@@ -182,18 +194,30 @@ export function sanitizeThemeHtml(html: string, assetOrigin: string): SanitizedH
 
   // The whole block with every tag removed and nothing in its place, so an address split across
   // `<br>` or elements is seen as one run; it gets the full check (including base58).
-  const joined = decodeBasicEntities(clean.replace(/<[^>]*>/g, ''));
-  // Each pair of neighbouring text nodes on its own, so a base58 address split across two
-  // elements is found even when other words sit in the blocks around it.
+  const joined = clean
+    .split(/<[^>]*>/)
+    .map(decodeBasicEntities)
+    .reduce((acc, t) => glue(acc, t), '');
+  // Every run of consecutive text nodes (up to RUN_MAX_CHARS combined) on its own, so an address
+  // split across any number of elements is found even when other words sit in the blocks around
+  // it: the run that is exactly the address pieces is checked with the full anchored patterns.
   const nodes = clean
     .split(/<[^>]*>/)
     .map((t) => decodeBasicEntities(t).trim())
     .filter((t) => t !== '');
-  const pairs = nodes.slice(1).map((t, i) => nodes[i]! + t);
-  const text = [visibleText(clean), joined, ...pairs, ...altTexts];
-  // With whitespace removed too, only the distinctive shapes are checked (unanchored, as glued-on
-  // words remove word boundaries): prose with its spaces removed can look like base58, but never
-  // like `0x…`, `bc1…` or `….near`.
+  const runs: string[] = [];
+  for (let i = 0; i < nodes.length; i += 1) {
+    let run = nodes[i]!;
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      run = glue(run, nodes[j]!);
+      if (run.length > RUN_MAX_CHARS) break;
+      runs.push(run);
+    }
+  }
+  const text = [visibleText(clean), joined, ...runs, ...altTexts];
+  // With whitespace removed too, only shapes prose never forms are checked (unanchored, as
+  // glued-on words remove word boundaries): EVM, bech32 and NEAR implicit. Base58 and NEAR names
+  // are left to the run check above, since prose with its spaces removed can form them.
   const compact = joined.replace(/\s+/g, '');
   if (
     text.some((t) => containsAddressLike(t) || containsSendInstruction(t)) ||

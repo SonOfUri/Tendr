@@ -73,14 +73,14 @@ describe('theme text rules', () => {
     expect(
       containsDistinctiveAddressLike('Hello' + 'a'.repeat(32) + 'b'.repeat(32) + 'World'),
     ).toBe(true);
-    expect(containsDistinctiveAddressLike('Askkola.nearToday')).toBe(true);
+    expect(containsDistinctiveAddressLike('Pickupfrom9a.m.nearthemarket')).toBe(false);
     expect(containsDistinctiveAddressLike('Comein.Nearbyshopsopenat9')).toBe(false);
   });
 
-  it('containsDistinctiveAddressLike skips base58', () => {
+  it('containsDistinctiveAddressLike skips base58 and NEAR names', () => {
     expect(containsDistinctiveAddressLike(EVM)).toBe(true);
     expect(containsDistinctiveAddressLike('bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq')).toBe(true);
-    expect(containsDistinctiveAddressLike('kola.near')).toBe(true);
+    expect(containsDistinctiveAddressLike('kola.near')).toBe(false);
     expect(containsDistinctiveAddressLike('a'.repeat(32) + 'b'.repeat(32))).toBe(true);
     expect(containsDistinctiveAddressLike('1BoatSLRHtKNngkdXEeobR76b53LETtpyT')).toBe(false);
     expect(containsDistinctiveAddressLike('Shipsin2daysfromLagosandAbujatoKano')).toBe(false);

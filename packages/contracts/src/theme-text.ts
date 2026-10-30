@@ -103,23 +103,18 @@ export function containsAddressLike(input: string): boolean {
 }
 
 /**
- * Unanchored versions of the distinctive address shapes (EVM, bech32, NEAR implicit and named),
- * never base58. For text whose tags and whitespace were removed: neighbouring words get glued on,
- * so a `\b` boundary can't be relied on. NEAR names are lower-case only here, so prose such as
- * "in. Nearby" doesn't match once its spaces are gone.
+ * Unanchored versions of the shapes that ordinary prose never forms, even with its spaces
+ * removed: EVM, bech32 and NEAR implicit (64-hex). For text whose tags and whitespace were
+ * removed, where neighbouring words get glued on so a `\b` boundary can't be relied on. Base58
+ * and NEAR names are left out: prose like "9 a.m. near the market" forms them once its spaces go.
  */
 function distinctivePatterns(): RegExp[] {
-  return [
-    /0x[0-9a-fA-F]{40}/,
-    /(?:bc1|tb1)[02-9ac-hj-np-z]{11,87}/i,
-    /[0-9a-f]{64}/,
-    /[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.(?:near|testnet|tg)/,
-  ];
+  return [/0x[0-9a-fA-F]{40}/, /(?:bc1|tb1)[02-9ac-hj-np-z]{11,87}/i, /[0-9a-f]{64}/];
 }
 
 /**
- * Only the distinctive address shapes, unanchored, never base58. Safe to run on text with tags
- * and whitespace removed, where ordinary prose can look like base58.
+ * Only EVM, bech32 and NEAR-implicit shapes, unanchored. Safe to run on text with tags and
+ * whitespace removed (base58 and NEAR names are not checked: prose forms them).
  */
 export function containsDistinctiveAddressLike(input: string): boolean {
   const s = stripFormatChars(input);

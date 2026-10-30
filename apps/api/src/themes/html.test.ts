@@ -156,6 +156,27 @@ describe('sanitizeThemeHtml', () => {
     }
   });
 
+  it('rejects base58 split into three or more pieces next to other words', () => {
+    for (const html of [
+      '<p>Hello</p><p>1BoatSLRHt</p><p>KNngkdXEeo</p><p>bR76b53LETtpyT</p>',
+      '<p>Hello</p><p>1BoatSLRHt</p><p>KNngkdXEeo</p><p>bR76b53LETtpyT</p><p>thanks</p>',
+      '<p>Hi</p><p>1Boat</p><p>SLRHt</p><p>KNngk</p><p>dXEeo</p><p>bR76b</p><p>53LETtpyT</p><p>ok</p>',
+    ]) {
+      expect(problemsOf(html).join(' '), html).toMatch(/wallet addresses or payment instructions/);
+    }
+  });
+
+  it('prose with "near" passes', () => {
+    for (const html of [
+      '<p>Pickup from 9 a.m. near the market</p>',
+      '<p>Open daily. near Yaba bus stop</p>',
+      '<p>See you soon.</p><p>near the big tree</p>',
+    ]) {
+      const r = sanitizeThemeHtml(html, ORIGIN);
+      expect(r.ok, `${html} → ${r.ok ? '' : r.problems.join(' | ')}`).toBe(true);
+    }
+  });
+
   it('rejects a <br>-split base58 address', () => {
     expect(problemsOf('<p>1BoatSLRHtKNng<br>kdXEeobR76b53LETtpyT</p>').join(' ')).toMatch(
       /wallet addresses or payment instructions/,
