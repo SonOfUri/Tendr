@@ -135,6 +135,18 @@ export const ErrorCodes = [
   'LINK_RESERVED',
   /** The link has too many open quoted sessions; try again later. */
   'LINK_BUSY',
+  /** A theme document failed validation; `details.problems` is `[{ path, message }]`. */
+  'THEME_INVALID',
+  /** A theme cannot be deleted: links use it (`details.links`) or it is the default (`details.reason: 'default'`). */
+  'THEME_IN_USE',
+  /** The store already has the maximum number of themes. */
+  'THEME_LIMIT',
+  /** An uploaded theme asset is not an accepted image or font, or is too large or unsafe. */
+  'ASSET_INVALID',
+  /** A theme asset cannot be deleted while a theme uses it. */
+  'ASSET_IN_USE',
+  /** The brand pull could not read the site or store; `details.reason` says why. */
+  'BRAND_FETCH_FAILED',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

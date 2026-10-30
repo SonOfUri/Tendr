@@ -10,3 +10,6 @@ export * from './gas.js';
 export * from './forwarder.js';
 export * from './gasless-test.js';
 export * from './payment-links.js';
+export * from './theme-text.js';
+export * from './themes.js';
+export * from './theme-presets.js';

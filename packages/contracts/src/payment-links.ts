@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { FeePayerSchema, GasPayerSchema } from './checkout.js';
+import { containsAddressLike, containsSendInstruction } from './theme-text.js';
 
 /** Smallest amount a link can take, in USD (the Intents routes' practical floor). */
 export const LINK_MIN_USD = '1.00';
@@ -40,11 +41,19 @@ export const PaymentLinkAvailabilitySchema = z.enum([
 ]);
 export type PaymentLinkAvailability = z.infer<typeof PaymentLinkAvailabilitySchema>;
 
+const NO_PAYMENT_TEXT = "Payment link text can't contain wallet addresses or payment instructions";
+const isPlainText = (s: string): boolean => !containsAddressLike(s) && !containsSendInstruction(s);
+
 const AMOUNT_STR = z.string().regex(/^\d+(?:\.\d+)?$/, 'must be a decimal string like "25.10"');
 
 const CreateFields = z.strictObject({
-  title: z.string().trim().min(1).max(LINK_TITLE_MAX),
-  description: z.string().trim().max(LINK_DESCRIPTION_MAX).optional(),
+  title: z.string().trim().min(1).max(LINK_TITLE_MAX).refine(isPlainText, NO_PAYMENT_TEXT),
+  description: z
+    .string()
+    .trim()
+    .max(LINK_DESCRIPTION_MAX)
+    .refine(isPlainText, NO_PAYMENT_TEXT)
+    .optional(),
   slug: z
     .string()
     .regex(
@@ -64,6 +73,7 @@ const CreateFields = z.strictObject({
   fee_payer: FeePayerSchema.optional(),
   gas_payer: GasPayerSchema.optional(),
   gas_max_usd: AMOUNT_STR.optional(),
+  theme_id: z.string().min(1).nullable().optional(),
 });
 
 type Amounts = {

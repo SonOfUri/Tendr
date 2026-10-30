@@ -138,3 +138,26 @@ describe('strict bodies', () => {
     expect(PaymentLinkUpdateSchema.safeParse({ title: 'ok' }).success).toBe(true);
   });
 });
+
+describe('link text', () => {
+  it('link title with an address is rejected', () => {
+    const addr = '0x' + 'ab12'.repeat(10);
+    expect(
+      PaymentLinkCreateSchema.safeParse({ ...base, amount_type: 'open', title: addr }).success,
+    ).toBe(false);
+    expect(
+      PaymentLinkCreateSchema.safeParse({
+        ...base,
+        amount_type: 'open',
+        description: 'Please send USDC to this wallet',
+      }).success,
+    ).toBe(false);
+    expect(PaymentLinkUpdateSchema.safeParse({ title: addr }).success).toBe(false);
+  });
+  it('accepts theme_id including null', () => {
+    expect(
+      PaymentLinkCreateSchema.safeParse({ ...base, amount_type: 'open', theme_id: 'th_1' }).success,
+    ).toBe(true);
+    expect(PaymentLinkUpdateSchema.safeParse({ theme_id: null }).success).toBe(true);
+  });
+});
