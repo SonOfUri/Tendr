@@ -1,7 +1,7 @@
 // Test-only DB helpers. Never import from application code.
 import { createHash, randomBytes } from 'node:crypto';
-import type { ApiKey, Merchant, Prisma, User, WebauthnCredential } from '@prisma/client';
-import { ALL_SCOPES, type Scope } from '@tendr/contracts';
+import { Prisma, type ApiKey, type Merchant, type User, type WebauthnCredential } from '@prisma/client';
+import { ALL_SCOPES, TENDR_DEFAULT_THEME, type Scope } from '@tendr/contracts';
 import { ulid } from 'ulid';
 import { PER_MODE_MODELS, READ_ONLY_PER_MODE_MODELS, SHARED_MODELS } from '../db/models.js';
 import { newId } from '../lib/ids.js';
@@ -415,30 +415,36 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         id: newId('thm'),
         merchantId,
         name: 'Default',
-        displayName: 'Test Merchant',
-        accent: '#000000',
-        background: '#ffffff',
-        text: '#111111',
-        font: 'Inter',
-        cornerRadius: 8,
-        layout: 'modal',
-        blocks: [],
-        schemaVersion: 1,
-        tokenPreferences: {},
+        draft: TENDR_DEFAULT_THEME('Test Merchant') as unknown as Prisma.InputJsonValue,
+        published: Prisma.JsonNull,
+        status: 'draft',
         ...o,
       },
     }),
-  ThemeAsset: async (merchantId, livemode, o) =>
-    prisma.themeAsset.create({
+  ThemeAsset: async (merchantId, _livemode, o) => {
+    const id = newId('tasset');
+    return prisma.themeAsset.create({
       data: {
-        id: newId('tasset'),
+        id,
         merchantId,
-        themeId: (await builders.CheckoutTheme(merchantId, livemode, {})).id,
         kind: 'logo',
-        url: 'https://example.com/logo.png',
+        key: `assets/${id}`,
+        url: `https://assets.test/assets/${id}`,
         mime: 'image/png',
         sizeBytes: 1024,
         checksum: sha256('logo'),
+        ...o,
+      },
+    });
+  },
+  ProductImage: async (merchantId, _livemode, o) =>
+    prisma.productImage.create({
+      data: {
+        id: newId('pimg'),
+        merchantId,
+        urlHash: sha256(unique('img')),
+        sourceUrl: 'https://shop.test/p.jpg',
+        status: 'pending',
         ...o,
       },
     }),

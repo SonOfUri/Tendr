@@ -28,6 +28,7 @@ import { scopedDb } from '../db/scoped.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
+import { publishedDisplayName } from '../checkout/theme-name.js';
 import { assertAboveFloor, linkAvailability, linkUrls } from './links.js';
 
 export { LINK_MAX_QUOTED_SESSIONS };
@@ -112,11 +113,11 @@ export async function getPublicLink(
       where: link.themeId
         ? { id: link.themeId, status: 'published' }
         : { isDefault: true, status: 'published' },
-      select: { displayName: true, logoUrl: true },
+      select: { published: true },
     }),
   ]);
   return {
-    merchant: { name: theme?.displayName ?? r.merchant.name, logo_url: theme?.logoUrl ?? null },
+    merchant: { name: publishedDisplayName(theme?.published) ?? r.merchant.name, logo_url: null },
     title: link.title,
     description: link.description,
     amount_type: link.openAmount ? 'open' : 'fixed',

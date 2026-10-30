@@ -15,7 +15,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
-import { ALL_SCOPES, type Scope } from '@tendr/contracts';
+import type { Prisma } from '@prisma/client';
+import { ALL_SCOPES, TENDR_DEFAULT_THEME, type Scope } from '@tendr/contracts';
 import { scopedDb } from '../src/db/scoped.js';
 import { generateApiKey } from '../src/lib/crypto.js';
 import { newId } from '../src/lib/ids.js';
@@ -195,6 +196,7 @@ export async function seed(opts: SeedOptions = {}): Promise<SeedResult> {
   }
 
   if ((await testDb.checkoutTheme.count({ where: { isDefault: true } })) === 0) {
+    const doc = TENDR_DEFAULT_THEME(DEMO_MERCHANT_NAME) as unknown as Prisma.InputJsonValue;
     await testDb.checkoutTheme.create({
       data: {
         id: newId('thm'),
@@ -202,17 +204,9 @@ export async function seed(opts: SeedOptions = {}): Promise<SeedResult> {
         name: 'Default',
         isDefault: true,
         status: 'published',
-        displayName: DEMO_MERCHANT_NAME,
-        accent: '#4f46e5',
-        background: '#ffffff',
-        text: '#111827',
-        mode: 'auto',
-        font: 'Inter',
-        cornerRadius: 12,
-        layout: 'modal',
-        blocks: [],
-        schemaVersion: 1,
-        tokenPreferences: {},
+        draft: doc,
+        published: doc,
+        publishedAt: new Date(),
       },
     });
   }

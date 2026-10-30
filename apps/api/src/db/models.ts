@@ -34,6 +34,7 @@ export const SHARED_MODELS = [
   'FeePlan',
   'CheckoutTheme',
   'ThemeAsset',
+  'ProductImage',
   'Connection',
 ] as const;
 

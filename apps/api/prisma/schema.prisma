@@ -282,20 +282,12 @@ enum ThemeStatus {
   @@map("theme_status")
 }
 
-enum ThemeMode {
-  light
-  dark
-  auto
+enum ProductImageStatus {
+  pending
+  ok
+  failed
 
-  @@map("theme_mode")
-}
-
-enum ThemeLayout {
-  modal
-  inline
-  page
-
-  @@map("theme_layout")
+  @@map("product_image_status")
 }
 
 enum ThemeAssetKind {
@@ -547,6 +539,7 @@ model Merchant {
   settlementClaims            SettlementClaim[]
   checkoutThemes              CheckoutTheme[]
   themeAssets                 ThemeAsset[]
+  productImages               ProductImage[]
   idempotencyKeys             IdempotencyKey[]
   invites                     MerchantInvite[]
   merchantAccounts            MerchantAccount[]
@@ -1014,6 +1007,8 @@ model Session {
   fxRate           Decimal?              @map("fx_rate") @db.Decimal(38, 18)
   fxSource         String?               @map("fx_source")
   fxAsOf           DateTime?             @map("fx_as_of")
+  /// Cart lines shown on the checkout page (validated `LineItem[]`, max 50).
+  lineItems        Json?                 @map("line_items")
   createdAt        DateTime              @default(now()) @map("created_at")
   updatedAt        DateTime              @updatedAt @map("updated_at")
 
@@ -1658,33 +1653,25 @@ model RevenueEntry {
 }
 
 model CheckoutTheme {
-  id               String      @id
-  merchantId       String      @map("merchant_id")
-  name             String
-  isDefault        Boolean     @default(false) @map("is_default")
-  version          Int         @default(1)
-  status           ThemeStatus @default(draft)
-  displayName      String      @map("display_name")
-  logoUrl          String?     @map("logo_url")
-  accent           String
-  background       String
-  text             String
-  mode             ThemeMode   @default(auto)
-  font             String
-  cornerRadius     Int         @map("corner_radius")
-  layout           ThemeLayout
-  blocks           Json
-  schemaVersion    Int         @map("schema_version")
-  customCss        String?     @map("custom_css")
-  cssHash          String?     @map("css_hash")
-  cssValidation    Json?       @map("css_validation")
-  buttonLabel      String?     @map("button_label")
-  successMessage   String?     @map("success_message")
-  supportUrl       String?     @map("support_url")
-  termsUrl         String?     @map("terms_url")
-  tokenPreferences Json        @map("token_preferences")
-  createdAt        DateTime    @default(now()) @map("created_at")
-  updatedAt        DateTime    @updatedAt @map("updated_at")
+  id           String      @id
+  merchantId   String      @map("merchant_id")
+  name         String
+  isDefault    Boolean     @default(false) @map("is_default")
+  version      Int         @default(1)
+  status       ThemeStatus @default(draft)
+  /// The editable theme document (`ThemeDocument` in @tendr/contracts).
+  draft        Json
+  /// The live theme document; null until first published.
+  published    Json?
+  publishedAt  DateTime?   @map("published_at")
+  /// Scoped CSS compiled from `published`.
+  publishedCss String?     @map("published_css")
+  /// Scoped CSS compiled from `draft`.
+  draftCss     String?     @map("draft_css")
+  /// Hash of `publishedCss`.
+  cssHash      String?     @map("css_hash")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
 
   merchant     Merchant      @relation(fields: [merchantId], references: [id])
   assets       ThemeAsset[]
@@ -1699,20 +1686,44 @@ model CheckoutTheme {
 model ThemeAsset {
   id         String         @id
   merchantId String         @map("merchant_id")
-  themeId    String         @map("theme_id")
+  /// Assets belong to the merchant; any theme may use them.
+  themeId    String?        @map("theme_id")
   kind       ThemeAssetKind
+  /// Object-store key.
+  key        String         @unique
+  /// Public URL.
   url        String
   mime       String
   sizeBytes  Int            @map("size_bytes")
   checksum   String
   createdAt  DateTime       @default(now()) @map("created_at")
 
-  merchant Merchant      @relation(fields: [merchantId], references: [id])
-  theme    CheckoutTheme @relation(fields: [themeId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
+  merchant Merchant       @relation(fields: [merchantId], references: [id])
+  theme    CheckoutTheme? @relation(fields: [themeId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([merchantId])
   @@index([themeId])
   @@map("theme_assets")
+}
+
+/// A product image fetched, validated and re-encoded by Tendr (cache keyed by source URL hash).
+model ProductImage {
+  id         String             @id
+  merchantId String             @map("merchant_id")
+  /// sha256 hex of `sourceUrl`.
+  urlHash    String             @map("url_hash")
+  sourceUrl  String             @map("source_url")
+  status     ProductImageStatus
+  key        String?
+  url        String?
+  fetchedAt  DateTime?          @map("fetched_at")
+  createdAt  DateTime           @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@unique([merchantId, urlHash])
+  @@index([merchantId])
+  @@map("product_images")
 }
 
 // ─── Infrastructure ─────────────────────────────────────────────────────────
@@ -1765,6 +1776,9 @@ model Connection {
   /// sessions made with this connection's keys follow the chain to the live successor's endpoints.
   /// Null on a disconnect, a dashboard removal or a sweep: such events reach no bound endpoint.
   replacedById      String?            @map("replaced_by_id")
+  /// Brand pulled from the connected site (name, logo, colours); refreshed on demand.
+  brand             Json?
+  brandUpdatedAt    DateTime?          @map("brand_updated_at")
   createdAt         DateTime           @default(now()) @map("created_at")
   updatedAt         DateTime           @updatedAt @map("updated_at")
 

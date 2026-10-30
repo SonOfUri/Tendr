@@ -37,6 +37,7 @@ import {
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { linkUrls } from '../payment-links/links.js';
+import { publishedDisplayName } from './theme-name.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { toJsonDecimal } from '../lib/serialize.js';
@@ -281,11 +282,11 @@ async function storeInfo(ctx: ShopperCtx, s: SessionRow) {
       where: s.themeId
         ? { id: s.themeId, status: 'published' }
         : { isDefault: true, status: 'published' },
-      select: { displayName: true, logoUrl: true },
+      select: { published: true },
     }),
   ]);
   return {
-    display: { name: theme?.displayName ?? merchant.name, logo_url: theme?.logoUrl ?? null },
+    display: { name: publishedDisplayName(theme?.published) ?? merchant.name, logo_url: null },
     checkoutDomains: [...merchant.checkoutDomains],
     slug: merchant.slug,
   };

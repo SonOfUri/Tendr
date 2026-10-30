@@ -125,6 +125,47 @@ describe('foundation schema', () => {
     ).rejects.toThrow(/Foreign key constraint/);
   });
 
+  it('only one default theme per merchant', async () => {
+    const m = await createMerchant();
+    const other = await createMerchant();
+    await createRow('CheckoutTheme', m.id, false, { isDefault: true });
+    await expect(createRow('CheckoutTheme', m.id, false, { isDefault: true })).rejects.toSatisfy(
+      isUniqueViolation,
+    );
+    await expect(createRow('CheckoutTheme', m.id, false, { isDefault: false })).resolves.toBeTruthy();
+    await expect(
+      createRow('CheckoutTheme', other.id, false, { isDefault: true }),
+    ).resolves.toBeTruthy();
+  });
+
+  it('theme asset may exist without a theme', async () => {
+    const m = await createMerchant();
+    const asset = await createRow('ThemeAsset', m.id, false);
+    expect(asset.themeId).toBeNull();
+    expect(asset.key).toBe(`assets/${asset.id}`);
+  });
+
+  it('product_images unique per merchant and url hash', async () => {
+    const m = await createMerchant();
+    const other = await createMerchant();
+    await createRow('ProductImage', m.id, false, { urlHash: 'h1' });
+    await expect(createRow('ProductImage', m.id, false, { urlHash: 'h1' })).rejects.toSatisfy(
+      isUniqueViolation,
+    );
+    await expect(createRow('ProductImage', other.id, false, { urlHash: 'h1' })).resolves.toBeTruthy();
+  });
+
+  it('cross-merchant session theme still rejected', async () => {
+    const a = await createMerchant();
+    const b = await createMerchant();
+    const themeB = await createRow('CheckoutTheme', b.id, false);
+    await expect(
+      prisma.session.create({
+        data: minimalSession({ merchantId: a.id, livemode: false, themeId: themeB.id }),
+      }),
+    ).rejects.toThrow(/Foreign key constraint/);
+  });
+
   it('a live session cannot reference a test-mode payment link', async () => {
     const m = await createMerchant();
     const testLink = await createRow('PaymentLink', m.id, false);

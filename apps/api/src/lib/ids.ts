@@ -27,6 +27,7 @@ export type IdPrefix =
   | 'scl' // settlement_claims
   | 'thm'
   | 'tasset'
+  | 'pimg'
   | 'sec'
   | 'idem'
   | 'per' // person (users); also their signer id on account contracts
