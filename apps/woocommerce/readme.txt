@@ -4,7 +4,7 @@ Tags: woocommerce, payments, crypto, stablecoin, checkout
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.0
-Stable tag: 0.1.0
+Stable tag: 0.2.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -52,6 +52,10 @@ tendr closes their open checkouts. A payment already on its way still lands in y
 Uninstalling deletes the plugin's settings, stored keys and its table of processed payment updates from WordPress. It does not contact tendr, so click **Disconnect** first to revoke this site's keys, or remove the site later under Settings → Connected sites on your tendr dashboard.
 
 == Changelog ==
+
+= 0.2.0 =
+* Sends the order's products (name, quantity, price, image) to the checkout page.
+* Sends your store's name, logo and colours to tendr, with a "Refresh brand from my store" button.
 
 = 0.1.0 =
 * Plugin scaffold, settings page and one-click Connect.

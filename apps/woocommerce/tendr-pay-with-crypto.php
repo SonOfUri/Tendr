@@ -3,7 +3,7 @@
  * Plugin Name:          tendr: Pay with crypto
  * Plugin URI:           https://usetendr.tech
  * Description:          Take crypto payments in WooCommerce. They settle into your own tendr account; connect in one click, no keys to copy.
- * Version:              0.1.0
+ * Version:              0.2.0
  * Requires at least:    6.4
  * Requires PHP:         8.0
  * Requires Plugins:     woocommerce
@@ -20,7 +20,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'TENDR_VERSION', '0.1.0' );
+define( 'TENDR_VERSION', '0.2.0' );
 define( 'TENDR_PLUGIN_FILE', __FILE__ );
 define( 'TENDR_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -41,6 +41,7 @@ require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-plugin.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-credentials.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-api-client.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-connect.php';
+require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-brand.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-settings.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-order-status.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-webhooks.php';

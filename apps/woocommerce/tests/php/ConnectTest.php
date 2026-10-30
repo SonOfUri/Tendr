@@ -235,7 +235,8 @@ class ConnectTest extends Tendr_Test_Case {
 		$this->assertStringContainsString( 'Corner Shop a', $out['message'] );
 
 		// The exchange: server to server, unauthenticated, with the verifier and the same site_url.
-		$this->assertCount( 1, $this->requests );
+		$this->assertCount( 2, $this->requests, 'the token exchange, then the store brand' );
+		$this->assertSame( 'https://api.usetendr.tech/v1/connection/brand', $this->requests[1]['url'] );
 		$req = $this->requests[0];
 		$this->assertSame( 'https://api.usetendr.tech/v1/connect/token', $req['url'] );
 		$this->assertSame( 'POST', $req['args']['method'] );
@@ -269,7 +270,7 @@ class ConnectTest extends Tendr_Test_Case {
 			)
 		);
 		$this->assertSame( 'error', $again['status'] );
-		$this->assertCount( 1, $this->requests );
+		$this->assertCount( 2, $this->requests, 'a second use sends nothing more' );
 	}
 
 	public function test_callback_access_denied_is_cancelled(): void {

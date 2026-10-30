@@ -61,6 +61,7 @@ final class Tendr_Plugin {
 		add_filter( 'woocommerce_payment_gateways', array( self::class, 'register_gateway' ) );
 		Tendr_Connect::register();
 		Tendr_Settings::register();
+		Tendr_Brand::register();
 		Tendr_Order_Status::register();
 		Tendr_Webhooks::register();
 		Tendr_Order_Sync::register();

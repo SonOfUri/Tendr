@@ -321,6 +321,8 @@ final class Tendr_Connect {
 		} catch ( InvalidArgumentException $e ) {
 			return self::result( 'error', __( 'tendr sent a response this plugin could not read. Close this window and click Connect again.', 'tendr' ) );
 		}
+		// The store's look, for themed checkouts. A failure leaves a notice and never fails Connect.
+		Tendr_Brand::send_after_connect();
 
 		/* translators: %s: the tendr store name. */
 		$result = self::result( 'connected', sprintf( __( 'Connected to %s', 'tendr' ), $issued['store']['name'] ) );

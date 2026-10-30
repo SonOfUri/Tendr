@@ -557,6 +557,9 @@ final class Tendr_Settings {
 		}
 		$html .= '</td></tr>';
 		$html .= self::settings_rows( $post );
+		$html .= '<tr><th scope="row">' . esc_html__( 'Checkout look', 'tendr' ) . '</th><td>' . wp_nonce_field( Tendr_Brand::NONCE, 'tendr_brand_nonce', false, false )
+			. '<button type="submit" class="button" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', Tendr_Brand::ACTION, $post ) ) . '">' . esc_html__( 'Refresh brand from my store', 'tendr' ) . '</button>'
+			. '<p class="description">' . esc_html__( 'Sends your store name, logo and theme colours to tendr, to start a checkout theme from.', 'tendr' ) . '</p></td></tr>';
 		$html .= '</tbody></table>';
 
 		$html .= '<p>'

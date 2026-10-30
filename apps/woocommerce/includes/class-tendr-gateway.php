@@ -305,7 +305,93 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 			'order_key'    => $order->get_order_key(),
 			'site_url'     => home_url(),
 		);
+
+		$body += self::line_items_part( $order );
 		return $body;
+	}
+
+	/** Most line items a session takes; the rest are left out (the order total still covers them). */
+	const MAX_LINE_ITEMS = 50;
+
+	/**
+	 * `array( 'line_items' => … )`, or nothing for an order with no products.
+	 *
+	 * @param WC_Order $order Order.
+	 */
+	private static function line_items_part( WC_Order $order ): array {
+		$items = self::line_items( $order );
+		return array() === $items ? array() : array( 'line_items' => $items );
+	}
+
+	/**
+	 * The order's products for the checkout page: name, quantity, unit price and (https) image.
+	 * Display only: the session's amount is the order total.
+	 *
+	 * @param WC_Order $order Order.
+	 * @return array<int, array<string, mixed>>
+	 */
+	public static function line_items( WC_Order $order ): array {
+		$decimals = max( 0, wc_get_price_decimals() );
+		$out      = array();
+		foreach ( $order->get_items() as $item ) {
+			if ( count( $out ) >= self::MAX_LINE_ITEMS ) {
+				break;
+			}
+			if ( ! $item instanceof WC_Order_Item_Product ) {
+				continue;
+			}
+			$quantity = (int) $item->get_quantity();
+			$name     = mb_substr( trim( wp_strip_all_tags( (string) $item->get_name() ) ), 0, 200 );
+			if ( $quantity < 1 || $quantity > 10000 || '' === $name ) {
+				continue;
+			}
+			$line  = array(
+				'name'        => $name,
+				'quantity'    => $quantity,
+				'unit_amount' => self::unit_amount( (float) $item->get_total(), $quantity, $decimals ),
+			);
+			$image = self::item_image( $item );
+			if ( null !== $image ) {
+				$line['image_url'] = $image;
+			}
+			$out[] = $line;
+		}//end foreach
+		return $out;
+	}
+
+	/**
+	 * A line's total divided by its quantity, to the store's price decimals, without trailing
+	 * fraction zeros (as amount(): the API checks against the currency's own decimals).
+	 *
+	 * @param float $total    Line total.
+	 * @param int   $quantity Quantity.
+	 * @param int   $decimals Store price decimals.
+	 */
+	private static function unit_amount( float $total, int $quantity, int $decimals ): string {
+		$unit = number_format( max( 0.0, $total ) / $quantity, $decimals, '.', '' );
+		if ( str_contains( $unit, '.' ) ) {
+			$unit = rtrim( rtrim( $unit, '0' ), '.' );
+		}
+		return '' === $unit ? '0' : $unit;
+	}
+
+	/**
+	 * The product's featured image URL, only when it is https.
+	 *
+	 * @param WC_Order_Item_Product $item Item.
+	 */
+	private static function item_image( WC_Order_Item_Product $item ): ?string {
+		$product = $item->get_product();
+		if ( ! $product instanceof WC_Product ) {
+			return null;
+		}
+		$image_id = (int) $product->get_image_id();
+		if ( $image_id <= 0 && $product->get_parent_id() > 0 ) {
+			$parent   = wc_get_product( $product->get_parent_id() );
+			$image_id = $parent instanceof WC_Product ? (int) $parent->get_image_id() : 0;
+		}
+		$url = $image_id > 0 ? wp_get_attachment_image_url( $image_id, 'full' ) : false;
+		return Tendr_Brand::is_https_url( $url ) ? (string) $url : null;
 	}
 
 	/**
