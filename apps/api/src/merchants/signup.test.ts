@@ -158,6 +158,10 @@ describe('signup', () => {
     ]) {
       expect(isReservedLabel(label), label).toBe(true);
     }
+    // Session ids live under /pay/[id]: no store label may look like one.
+    expect(isReservedLabel('ses_01jabc')).toBe(true);
+    expect(isReservedLabel('ses-01jabc')).toBe(true);
+    expect(slugBase('ses_01J9ZK')).toMatch(/^store-/);
     for (const label of ['acme', 'coffee', 'feesh', 'gasket', 'store-fees', 'store-tendr-2']) {
       expect(isReservedLabel(label), label).toBe(false);
     }

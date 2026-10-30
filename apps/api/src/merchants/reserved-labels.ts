@@ -82,8 +82,8 @@ const STATIC: ReadonlySet<string> = new Set([
   'bridge',
 ]);
 
-/** Prefixes Tendr keeps for families of system accounts (`gas-tron`, `fee-usdc`, `intents-…`). */
-const PREFIXES = ['gas-', 'fee-', 'fees-', 'intents', 'tendr'] as const;
+/** Prefixes Tendr keeps for families of system accounts (`gas-tron`, `fee-usdc`, `intents-…`) and session ids (`ses_…`, `ses-…`, which route under /pay/[id]). */
+const PREFIXES = ['gas-', 'fee-', 'fees-', 'intents', 'tendr', 'ses_', 'ses-'] as const;
 
 /**
  * The direct sub-account labels of Tendr's parents named by the env's account ids: the fee

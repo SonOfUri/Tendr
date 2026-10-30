@@ -79,6 +79,13 @@ enum AllowlistStatus {
   @@map("allowlist_status")
 }
 
+enum PaymentLinkNoteMode {
+  off
+  optional
+
+  @@map("payment_link_note_mode")
+}
+
 enum PaymentLinkStatus {
   active
   inactive
@@ -923,25 +930,30 @@ model GasBudgetMonth {
 // ─── Payments core ──────────────────────────────────────────────────────────
 
 model PaymentLink {
-  id             String            @id
-  merchantId     String            @map("merchant_id")
+  id             String              @id
+  merchantId     String              @map("merchant_id")
   livemode       Boolean
-  themeId        String?           @map("theme_id")
+  themeId        String?             @map("theme_id")
   slug           String
   title          String
-  amount         Decimal?          @db.Decimal(38, 18)
-  amountCurrency String            @map("amount_currency")
-  openAmount     Boolean           @default(false) @map("open_amount")
-  destAsset      String            @map("dest_asset")
-  destChain      String            @map("dest_chain")
-  gasSponsor     GasSponsor        @default(default) @map("gas_sponsor")
-  gasMaxUsd      Decimal?          @map("gas_max_usd") @db.Decimal(18, 6)
-  maxUses        Int?              @map("max_uses")
-  useCount       Int               @default(0) @map("use_count")
-  expiresAt      DateTime?         @map("expires_at")
-  status         PaymentLinkStatus @default(active)
-  createdAt      DateTime          @default(now()) @map("created_at")
-  updatedAt      DateTime          @updatedAt @map("updated_at")
+  amount         Decimal?            @db.Decimal(38, 18)
+  amountCurrency String              @map("amount_currency")
+  openAmount     Boolean             @default(false) @map("open_amount")
+  description    String?
+  /// Open links only: the lowest amount the payer may enter, in `amountCurrency`.
+  minAmount      Decimal?            @map("min_amount") @db.Decimal(38, 18)
+  noteMode       PaymentLinkNoteMode @default(optional) @map("note_mode")
+  /// Null = the merchant's default fee payer.
+  feePayer       FeePayer?           @map("fee_payer")
+  archivedAt     DateTime?           @map("archived_at")
+  gasSponsor     GasSponsor          @default(default) @map("gas_sponsor")
+  gasMaxUsd      Decimal?            @map("gas_max_usd") @db.Decimal(18, 6)
+  maxUses        Int?                @map("max_uses")
+  useCount       Int                 @default(0) @map("use_count")
+  expiresAt      DateTime?           @map("expires_at")
+  status         PaymentLinkStatus   @default(active)
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @updatedAt @map("updated_at")
 
   merchant Merchant       @relation(fields: [merchantId], references: [id])
   theme    CheckoutTheme? @relation(fields: [themeId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
@@ -977,6 +989,8 @@ model Session {
   metadata         Json                  @default("{}")
   feeBps           Int                   @map("fee_bps")
   feePayer         FeePayer              @map("fee_payer")
+  /// Free-text note from the payer (payment links), cleaned by `cleanPayerNote`.
+  payerNote        String?               @map("payer_note") @db.VarChar(280)
   /// The resolved gas payer (API `gas_payer`; `buyer` is the shopper).
   gasSponsor       ResolvedGasSponsor    @map("gas_sponsor")
   gasMaxUsd        Decimal?              @map("gas_max_usd") @db.Decimal(18, 6)
@@ -1164,7 +1178,7 @@ model Payment {
   refunds                  Refund[]
   revenueEntries           RevenueEntry[]
   recoveredGasSponsorships GasSponsorship[]
-  hookShortfalls           GasSponsorship[]   @relation("HookShortfall")
+  hookShortfalls           GasSponsorship[]  @relation("HookShortfall")
   hookCalls                HookCall[]
   settlementClaims         SettlementClaim[]
 
