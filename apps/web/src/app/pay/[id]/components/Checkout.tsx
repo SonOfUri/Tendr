@@ -23,7 +23,11 @@ import {
 } from '@/lib/wallets/popup';
 import { walletModalOpen } from '@/lib/wallets/modal-state';
 import { createDepositReporter, type PendingTx } from '@/lib/wallets/tx-store';
+import { ThemedPage } from '@/components/theme/ThemedPage';
+import { formatOrderAmount } from '@/lib/checkout/format';
+import { parseShopperThemeCached } from '@/lib/theme/parse';
 import { EmailPanel, NeedsAddressPanel } from './ActionPanels';
+import { CheckoutCanvas, successBackBlock } from './CheckoutCanvas';
 import { CheckoutHeader } from './CheckoutHeader';
 import { PayFlow } from './PayFlow';
 import type { WalletSendResult } from './WalletConnect';
@@ -310,11 +314,15 @@ export function Checkout({ sessionId }: { sessionId: string }) {
 
   const settlementSymbol =
     view.amount_currency === 'USD' ? null : (tokenOf(view.amount_currency)?.symbol ?? null);
+  // A theme that doesn't parse is the Tendr default look; payment never depends on the theme.
+  const theme = parseShopperThemeCached(view.theme, view.merchant.name);
 
-  return (
-    <div className="pay-card">
+  // The sealed payment block: everything about the money stays Tendr's, whatever the theme says.
+  const sealed = (
+    <>
       <CheckoutHeader
         view={view}
+        tradingAs={theme.trading_as}
         settlementSymbol={settlementSymbol}
         now={now}
         showTimer={screen.kind === 'pay'}
@@ -371,6 +379,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
           client={client}
           now={now}
           onRefresh={refresh}
+          showBackLink={screen.kind !== 'complete' || successBackBlock(theme) === null}
         />
       )}
 
@@ -378,9 +387,23 @@ export function Checkout({ sessionId }: { sessionId: string }) {
       {screen.action === 'needs_address' && screen.refundNeedingAddress ? (
         <NeedsAddressPanel client={client} refund={screen.refundNeedingAddress} onDone={refresh} />
       ) : null}
+    </>
+  );
 
-      <p className="pay-foot muted small">Payments by Tendr</p>
-    </div>
+  return (
+    <ThemedPage theme={theme}>
+      <div className="pay-card">
+        <CheckoutCanvas
+          view={view}
+          theme={theme}
+          screen={screen.kind}
+          sealed={sealed}
+          amountText={formatOrderAmount(view.amount, view.amount_currency, settlementSymbol)}
+          settlementSymbol={settlementSymbol}
+        />
+        <p className="pay-foot muted small">Payments by Tendr</p>
+      </div>
+    </ThemedPage>
   );
 }
 

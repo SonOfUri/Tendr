@@ -54,6 +54,12 @@ const API_HOST = process.env.E2E_API_HOST ?? '127.0.0.1';
 /** The web server's payment-link credential (x-tendr-internal), the same in both servers. */
 const WEB_INTERNAL_TOKEN = 'e2e-web-internal-token-0123456789abcdef';
 
+/**
+ * Where theme assets would be served from. The e2e API keeps uploads in memory (nothing listens
+ * here), so asset images simply don't load; the web server puts the origin in the checkout CSP.
+ */
+const ASSET_ORIGIN = 'http://localhost:9100/tendr-assets';
+
 export default defineConfig({
   testDir: './e2e',
   // The WooCommerce spec needs WordPress in Docker (wp-env): its own config and CI job.
@@ -103,6 +109,9 @@ export default defineConfig({
         KEYVAULT_DRIVER: 'local',
         LOG_LEVEL: 'warn',
         WEB_INTERNAL_TOKEN,
+        // Theme uploads stay in memory: no object store in the e2e stack.
+        ASSET_STORE_DRIVER: 'memory',
+        TENDR_ASSET_ORIGIN: ASSET_ORIGIN,
       },
     },
     {
@@ -124,6 +133,7 @@ export default defineConfig({
         // EVM wallets come from the test wallet the gasless spec injects as window.ethereum.
         NEXT_PUBLIC_E2E_INJECTED_WALLET: '1',
         WEB_INTERNAL_TOKEN,
+        TENDR_ASSET_ORIGIN: ASSET_ORIGIN,
       },
     },
     {

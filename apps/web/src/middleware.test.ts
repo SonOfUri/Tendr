@@ -120,3 +120,24 @@ describe('middleware payment link pages', () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 });
+
+describe('middleware theme preview (/preview/theme/*)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('gets the checkout policy, uncached and framed by Tendr only', async () => {
+    vi.stubEnv('TENDR_ASSET_ORIGIN', 'https://assets.usetendr.tech/tendr-assets');
+    const fetchFn = fetchStub();
+    const res = await middleware(
+      new NextRequest('http://localhost:3000/preview/theme/abcdefghijklmnopqrstuvwxyz012345', {
+        headers: { 'sec-fetch-dest': 'iframe' },
+      }),
+    );
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(ancestors(res)).toBe("'self'");
+    expect(csp).toMatch(/frame-src [^;]*https:\/\/www\.youtube-nocookie\.com/);
+    expect(csp).toMatch(/img-src [^;]*https:\/\/assets\.usetendr\.tech/);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(config.matcher).toEqual(expect.arrayContaining(['/preview/theme/:path*']));
+  });
+});

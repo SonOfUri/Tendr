@@ -1,8 +1,10 @@
 // The 1200×630 preview card (rendered by `next/og`): logo (or the merchant's initial), merchant
-// name, link title and price. Only inline styles with flex layout, which is all Satori supports.
-import type { PublicPaymentLinkView } from '@tendr/contracts';
+// name, link title and price, in the theme's background and accent colours. Only inline styles
+// with flex layout, which is all Satori supports.
+import type { PublicPaymentLinkView, ShopperTheme } from '@tendr/contracts';
 import { themeDisplayName } from './checkout/brand';
-import { linkCardPrice } from './link-preview';
+import { linkCardPrice, linkTheme } from './link-preview';
+import { themePalette, themeVars } from './theme/vars';
 
 export const CARD_SIZE = { width: 1200, height: 630 } as const;
 
@@ -10,6 +12,23 @@ function dataUrl(logo: ArrayBuffer): string {
   const bytes = new Uint8Array(logo);
   const svg = bytes[0] === 0x3c; // '<'
   return `data:${svg ? 'image/svg+xml' : 'image/png'};base64,${Buffer.from(bytes).toString('base64')}`;
+}
+
+/** The card's colours: the theme's palette (light for a light-mode theme, else dark). */
+export function linkCardColors(theme: ShopperTheme): {
+  background: string;
+  text: string;
+  accent: string;
+  onAccent: string;
+} {
+  const scheme = theme.document.settings.mode === 'light' ? 'light' : 'dark';
+  const p = themePalette(theme, scheme);
+  return {
+    background: p.background,
+    text: p.text,
+    accent: p.accent,
+    onAccent: themeVars(theme, scheme)['--theme-on-accent'] ?? '#FFFFFF',
+  };
 }
 
 export function LinkCard({
@@ -22,7 +41,9 @@ export function LinkCard({
   test: boolean;
 }) {
   const price = linkCardPrice(view);
-  const name = themeDisplayName(view.theme);
+  const theme = linkTheme(view);
+  const colors = linkCardColors(theme);
+  const name = themeDisplayName(theme);
   const initial = Array.from(name.trim())[0]?.toUpperCase() ?? '?';
   return (
     <div
@@ -33,8 +54,8 @@ export function LinkCard({
         flexDirection: 'column',
         justifyContent: 'space-between',
         padding: 72,
-        background: '#080D1B',
-        color: '#FFFFFF',
+        background: colors.background,
+        color: colors.text,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -56,7 +77,8 @@ export function LinkCard({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              background: '#2D5BFF',
+              background: colors.accent,
+              color: colors.onAccent,
               fontSize: 52,
               fontWeight: 700,
             }}
@@ -64,7 +86,7 @@ export function LinkCard({
             {initial}
           </div>
         )}
-        <div style={{ display: 'flex', marginLeft: 28, fontSize: 44, color: '#C9D1E8' }}>{name}</div>
+        <div style={{ display: 'flex', marginLeft: 28, fontSize: 44, opacity: 0.8 }}>{name}</div>
         {test ? (
           <div
             style={{
@@ -93,7 +115,7 @@ export function LinkCard({
       >
         {view.title}
       </div>
-      <div style={{ display: 'flex', fontSize: 56, color: '#7FA0FF' }}>{price ?? ' '}</div>
+      <div style={{ display: 'flex', fontSize: 56, color: colors.accent }}>{price ?? ' '}</div>
     </div>
   );
 }

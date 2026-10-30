@@ -1,16 +1,30 @@
 'use client';
 
 import type { SessionView } from '@/lib/checkout/api';
-import { themeDisplayName, themeLogoUrl } from '@/lib/checkout/brand';
 import { formatOrderAmount, safeHttpUrl } from '@/lib/checkout/format';
 import { Countdown } from './Countdown';
 
 /**
- * The store's name and logo, the order total, the time left, and a close control when the page
- * is framed by a registered store page (the bridge has somewhere to send `tendr:close`).
+ * Who the shopper pays: the ACCOUNT's name (`merchant.name`), never the theme's display name.
+ * When the theme shows a different store name, it says so: "<account> · trading as <name>".
+ */
+export function PayeeLine({ payee, tradingAs }: { payee: string; tradingAs: string | null }) {
+  return (
+    <p className="pay-payee">
+      You&apos;re paying <strong>{payee}</strong>
+      {tradingAs ? <span className="muted"> · trading as {tradingAs}</span> : null}
+    </p>
+  );
+}
+
+/**
+ * The top of the sealed payment block: who is paid, the order total, the time left, and a close
+ * control when the page is framed by a registered store page (the bridge has somewhere to send
+ * `tendr:close`). The store's logo and name are the theme's header block, outside this block.
  */
 export function CheckoutHeader({
   view,
+  tradingAs = null,
   settlementSymbol,
   now,
   showTimer,
@@ -18,6 +32,8 @@ export function CheckoutHeader({
   onClose,
 }: {
   view: SessionView;
+  /** The theme's display name when it differs from the account name (`theme.trading_as`). */
+  tradingAs?: string | null;
   settlementSymbol: string | null;
   now: number;
   showTimer: boolean;
@@ -25,8 +41,6 @@ export function CheckoutHeader({
   canClose: boolean;
   onClose: () => void;
 }) {
-  const logoUrl = themeLogoUrl(view.theme);
-  const logo = logoUrl?.startsWith('https://') ? safeHttpUrl(logoUrl) : null;
   // A session from a payment link goes back to the link's page, named by its title.
   const link = view.payment_link ?? null;
   const back = safeHttpUrl(link ? link.url : view.cancel_url);
@@ -34,13 +48,7 @@ export function CheckoutHeader({
   return (
     <header className="pay-header">
       <div className="pay-row">
-        <div className="pay-store">
-          {logo ? (
-            // eslint-disable-next-line @next/next/no-img-element -- the store's own logo, any host
-            <img src={logo} alt="" width={28} height={28} className="pay-logo" />
-          ) : null}
-          <span className="pay-store-name">{themeDisplayName(view.theme)}</span>
-        </div>
+        <PayeeLine payee={view.merchant.name} tradingAs={tradingAs} />
         {canClose ? (
           <button type="button" className="pay-close" onClick={onClose} aria-label="Close checkout">
             ×

@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { TENDR_DEFAULT_THEME, type ShopperTheme } from '@tendr/contracts';
+import { act, cleanup, render } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NetworkFee as NetworkFeeView, SessionView, Token } from '@/lib/checkout/api';
 import { CheckoutHeader } from './CheckoutHeader';
 import { CopyButton } from './CopyButton';
@@ -11,6 +14,8 @@ import { canPay } from './WalletPanel';
 import { NetworkFee, showFeeChoice } from './NetworkFee';
 import { SendDetails } from './SendDetails';
 import { tendrShopperTheme } from '@/lib/checkout/brand';
+import { Celebration } from '@/components/theme/Celebration';
+import { CheckoutCanvas } from './CheckoutCanvas';
 
 const VIEW = {
   id: 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0',
@@ -525,5 +530,214 @@ describe('NetworkFee (Global Constraints copy)', () => {
     };
     expect(canPay(base)).toBe(false);
     expect(canPay({ ...base, gasless: true })).toBe(true);
+  });
+});
+
+// ─── Themed checkout (checkout themes) ───────────────────────────────────────
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+/** `window.matchMedia` answering `matches` for the queries in `on`. */
+function stubMedia(on: string[]) {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: on.includes(query),
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+}
+
+/** An IntersectionObserver reporting each observed element as `visible` (0–1) on screen. */
+function stubObserver(visible: number) {
+  vi.stubGlobal(
+    'IntersectionObserver',
+    class {
+      constructor(private cb: IntersectionObserverCallback) {}
+      observe(el: Element) {
+        const height = 1000;
+        this.cb(
+          [
+            {
+              target: el,
+              isIntersecting: visible > 0,
+              intersectionRatio: visible,
+              boundingClientRect: { height } as DOMRectReadOnly,
+              intersectionRect: { height: height * visible } as DOMRectReadOnly,
+              rootBounds: { height: 812 } as DOMRectReadOnly,
+            } as unknown as IntersectionObserverEntry,
+          ],
+          this as unknown as IntersectionObserver,
+        );
+      }
+      disconnect() {}
+      unobserve() {}
+    },
+  );
+}
+
+function shopperTheme(patch: Partial<ShopperTheme['document']['settings']> = {}): ShopperTheme {
+  const document = TENDR_DEFAULT_THEME('Kola Kicks');
+  return {
+    id: 'thm_1',
+    version: 1,
+    document: { ...document, settings: { ...document.settings, ...patch } },
+    rendered: {},
+    assets: {},
+    css: null,
+    payee: 'Lagos Leather Co.',
+    trading_as: 'Kola Kicks',
+  };
+}
+
+const textOf = (html: string) => html.replace(/<[^>]+>/g, '').replace(/&#x27;/g, "'");
+
+describe('themed checkout', () => {
+  it('payee line uses account name and trading as', () => {
+    const view = { ...VIEW, merchant: { name: 'Lagos Leather Co.' } } as SessionView;
+    const draw = (tradingAs: string | null) =>
+      renderToStaticMarkup(
+        <CheckoutHeader
+          view={view}
+          tradingAs={tradingAs}
+          settlementSymbol={null}
+          now={Date.parse('2026-10-26T12:00:00Z')}
+          showTimer
+          canClose={false}
+          onClose={() => {}}
+        />,
+      );
+    const html = draw('Kola Kicks');
+    expect(textOf(html)).toContain("You're paying Lagos Leather Co. · trading as Kola Kicks");
+    // The theme's display name never stands in for the payee.
+    expect(textOf(html)).not.toContain('paying Kola Kicks');
+    // Logo and store name live in the theme's header block now, not the sealed block.
+    expect(html).not.toContain('pay-store-name');
+    const same = textOf(draw(null));
+    expect(same).toContain("You're paying Lagos Leather Co.");
+    expect(same).not.toContain('trading as');
+  });
+
+  it('pay bar hidden on status screens', () => {
+    stubMedia(['(max-width: 640px)']);
+    stubObserver(0);
+    const draw = (screen: 'pay' | 'expired' | 'complete' | 'held') =>
+      render(
+        <CheckoutCanvas
+          view={VIEW}
+          theme={shopperTheme()}
+          screen={screen}
+          sealed={<p>sealed</p>}
+          amountText="$84.00"
+        />,
+      );
+    const pay = draw('pay');
+    const bar = pay.container.querySelector('[data-pay-bar]');
+    expect(bar).not.toBeNull();
+    expect(bar!.textContent).toContain('$84.00');
+    expect(bar!.textContent).toContain('Bean Shop');
+    cleanup();
+    for (const screen of ['expired', 'complete', 'held'] as const) {
+      const r = draw(screen);
+      expect(r.container.querySelector('[data-pay-bar]')).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('pay bar shows only on a phone while the payment block is mostly off screen', () => {
+    const draw = () =>
+      render(
+        <CheckoutCanvas
+          view={VIEW}
+          theme={shopperTheme()}
+          screen="pay"
+          sealed={<button type="button">Choose</button>}
+          amountText="$84.00"
+        />,
+      );
+    stubMedia([]);
+    stubObserver(0);
+    expect(draw().container.querySelector('[data-pay-bar]')).toBeNull();
+    cleanup();
+    stubMedia(['(max-width: 640px)']);
+    stubObserver(0.5);
+    expect(draw().container.querySelector('[data-pay-bar]')).toBeNull();
+    cleanup();
+    stubObserver(0.1);
+    const r = draw();
+    const sealed = r.container.querySelector('.tdr-payment') as HTMLElement;
+    const scroll = vi.fn();
+    sealed.scrollIntoView = scroll;
+    act(() => {
+      (r.container.querySelector('[data-pay-bar] button') as HTMLButtonElement).click();
+    });
+    expect(scroll).toHaveBeenCalled();
+    expect(document.activeElement?.textContent).toBe('Choose');
+    expect(r.container.querySelector('[data-pay-bar]')).toBeNull();
+  });
+
+  it('success canvas renders thank you and back to store', () => {
+    const draw = (theme: ShopperTheme) =>
+      render(
+        <CheckoutCanvas
+          view={VIEW}
+          theme={theme}
+          screen="complete"
+          sealed={<h2>Payment complete</h2>}
+          amountText="$84.00"
+        />,
+      ).container;
+    const plain = draw(shopperTheme());
+    expect(plain.textContent).toContain('Payment received — thank you.');
+    const back = plain.querySelector('a[href="https://shop.example/thanks"]');
+    expect(back?.textContent).toBe('Return to store');
+    // Thank-you and back-to-store are merchant blocks; the payment status stays sealed.
+    expect(back!.closest('.tdr-wrap')).not.toBeNull();
+    expect(plain.querySelector('.tdr-payment')?.textContent).toBe('Payment complete');
+    cleanup();
+    const custom = draw(shopperTheme({ success_message: 'Merci, see you soon!' }));
+    expect(custom.textContent).toContain('Merci, see you soon!');
+    expect(custom.textContent).not.toContain('Payment received — thank you.');
+  });
+
+  it('the complete screen keeps its own way back only when asked to', () => {
+    const draw = (showBackLink: boolean) =>
+      renderToStaticMarkup(
+        <StatusScreen
+          view={VIEW}
+          screen={{
+            kind: 'complete',
+            terminal: true,
+            pollMs: 5000,
+            bridgeStatus: null,
+            action: null,
+            notice: null,
+            payment: null,
+            refundNeedingAddress: null,
+          }}
+          tokenOf={() => null}
+          client={{} as never}
+          now={Date.parse('2026-10-26T12:00:00Z')}
+          onRefresh={() => {}}
+          showBackLink={showBackLink}
+        />,
+      );
+    expect(draw(false)).not.toContain('Return to store');
+    expect(draw(true)).toContain('Return to store');
+  });
+
+  it('celebration skipped with reduced motion', () => {
+    stubMedia(['(prefers-reduced-motion: reduce)']);
+    const reduced = render(<Celebration kind="confetti" />);
+    expect(reduced.container.querySelector('.tdr-celebration')).toBeNull();
+    cleanup();
+    stubMedia([]);
+    const shown = render(<Celebration kind="confetti" />);
+    expect(shown.container.querySelector('.tdr-celebration')).not.toBeNull();
+    cleanup();
+    const none = render(<Celebration kind="none" />);
+    expect(none.container.querySelector('.tdr-celebration')).toBeNull();
   });
 });

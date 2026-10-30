@@ -16,6 +16,11 @@ interface Props {
   client: CheckoutClient;
   now: number;
   onRefresh: () => void;
+  /**
+   * The complete screen's own way back. Off when the theme's thank-you page has a back-to-store
+   * block, which draws it instead (one link, not two).
+   */
+  showBackLink?: boolean;
 }
 
 /** A link back to the store; inside a frame it navigates the store's page, not the frame. */
@@ -31,14 +36,23 @@ export function StoreLink({ href, children }: { href: string | null; children: s
 
 /**
  * Back to where the shopper came from: the payment link page ("Back to <title>") for a session
- * made from a link, else the store's success or cancel page ("Return to store").
+ * made from a link, else the store's success or cancel page ("Return to store"). `label` is the
+ * theme's back-to-store wording, when it sets one.
  */
-function BackLink({ view, to }: { view: SessionView; to: 'success' | 'cancel' }) {
+export function BackLink({
+  view,
+  to,
+  label,
+}: {
+  view: SessionView;
+  to: 'success' | 'cancel';
+  label?: string;
+}) {
   const link = view.payment_link;
-  if (link) return <StoreLink href={link.url}>{`Back to ${link.title}`}</StoreLink>;
+  if (link) return <StoreLink href={link.url}>{label || `Back to ${link.title}`}</StoreLink>;
   return (
     <StoreLink href={to === 'success' ? view.success_url : view.cancel_url}>
-      Return to store
+      {label || 'Return to store'}
     </StoreLink>
   );
 }
@@ -120,7 +134,15 @@ export function ProgressScreen({ kind }: { kind: 'detected' | 'converting' }) {
   );
 }
 
-export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: Props) {
+export function StatusScreen({
+  view,
+  screen,
+  tokenOf,
+  client,
+  now,
+  onRefresh,
+  showBackLink = true,
+}: Props) {
   const payment = screen.payment;
   const token = view.quote ? tokenOf(view.quote.origin_asset) : null;
   const returns = returnsOf(view, payment);
@@ -163,7 +185,7 @@ export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: 
           ) : notice === 'sent' ? (
             <p className="muted small">You sent a little extra. It was sent back to you.</p>
           ) : null}
-          <BackLink view={view} to="success" />
+          {showBackLink ? <BackLink view={view} to="success" /> : null}
         </section>
       );
     }

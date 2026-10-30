@@ -1,6 +1,6 @@
 import { TENDR_DEFAULT_THEME, type ShopperTheme } from '@tendr/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { parseShopperTheme } from './parse';
+import { parseShopperTheme, parseShopperThemeCached } from './parse';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -36,5 +36,22 @@ describe('parseShopperTheme', () => {
       expect(theme.trading_as).toBeNull();
     }
     expect(warn).toHaveBeenCalledTimes(5);
+  });
+
+  it('cached: a broken theme warns once across polls; a new version is parsed again', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const broken = (version: number) => ({
+      ...valid(),
+      id: 'thm_cache',
+      version,
+      document: { ...valid().document, blocks: 'nope' },
+    });
+    for (let i = 0; i < 5; i++) {
+      expect(parseShopperThemeCached(broken(7), 'Lagos Leather Co.').id).toBeNull();
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    const fixed = { ...valid(), id: 'thm_cache', version: 8 };
+    expect(parseShopperThemeCached(fixed, 'Lagos Leather Co.')).toEqual(fixed);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

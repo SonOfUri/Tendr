@@ -1,8 +1,26 @@
 @import '@tendr/ui/tokens.css';
 
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@500;600;700&family=Sora:wght@400;500;600;700&display=swap');
+/*
+ * Tendr's fonts, self-hosted: the @fontsource files copied to /fonts by scripts/copy-fonts.mjs
+ * (no font host in the CSP). Sora is the body face, Instrument Sans the display face, and
+ * JetBrains Mono the monospace for addresses.
+ */
+@font-face {
+  font-family: 'Sora';
+  src: url('/fonts/sora.woff2') format('woff2');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
 
-/* Tendr's monospace for addresses (copied from @fontsource by scripts/copy-fonts.mjs). */
+@font-face {
+  font-family: 'Instrument Sans';
+  src: url('/fonts/instrument-sans.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @font-face {
   font-family: 'JetBrains Mono';
   src: url('/fonts/jetbrains-mono.woff2') format('woff2');
@@ -1422,6 +1440,205 @@ code {
 
 .tdr-payment .pay-button {
   border-radius: var(--theme-radius, var(--tendr-radius));
+}
+
+/* The sealed block lays its parts out as the checkout card used to. */
+.tdr-payment {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.pay-payee {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A themed page: the card centred in the checkout column. */
+.tdr-page {
+  width: 100%;
+  display: grid;
+  justify-items: center;
+}
+
+.tdr-checkout {
+  min-width: 0;
+}
+
+/* The order summary block's cart lines (inside a merchant block). */
+.tdr-lines-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tdr-line {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.tdr-line-image {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: var(--theme-radius, var(--tendr-radius));
+  background: var(--theme-surface, var(--tendr-surface));
+}
+
+.tdr-line-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tdr-line-qty {
+  opacity: 0.75;
+}
+
+.tdr-line-amount {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.tdr-line-adjust {
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--tendr-border);
+  opacity: 0.85;
+}
+
+.tdr-thank-you {
+  font-size: 1.1rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/*
+ * The phone pay bar: fixed to the bottom while the payment block is mostly off screen. Only
+ * Tendr's CSS uses `position: fixed` (merchant CSS can't), and it sits above every block.
+ */
+.tdr-pay-bar {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 2147483000;
+  padding: 0.6rem 1rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
+  background: var(--tendr-navy);
+  border-top: 1px solid var(--tendr-border);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.tdr-pay-bar-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem 1rem;
+  border: 0;
+  border-radius: var(--theme-radius, var(--tendr-radius));
+  background: var(--tendr-indigo);
+  color: var(--theme-on-accent, #ffffff);
+  font-family: var(--tendr-font-sans);
+  font-size: 1rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tdr-pay-bar-text {
+  display: grid;
+  min-width: 0;
+}
+
+.tdr-pay-bar-payee {
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tdr-pay-bar-action {
+  flex: none;
+  font-weight: 600;
+}
+
+/* The thank-you celebration: decorative, above everything, never catching a tap. */
+.tdr-celebration {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483001;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.tdr-confetti-piece {
+  position: absolute;
+  top: -1rem;
+  width: 0.5rem;
+  height: 0.9rem;
+  border-radius: 2px;
+  background: var(--theme-accent, var(--tendr-indigo));
+  animation: tdr-confetti-fall 2.4s ease-in forwards;
+}
+
+.tdr-confetti-piece:nth-child(3n) {
+  background: var(--tendr-cyan);
+}
+
+.tdr-confetti-piece:nth-child(3n + 1) {
+  background: var(--tendr-lavender);
+}
+
+.tdr-celebration[data-kind='pulse'] {
+  box-shadow: inset 0 0 0 0 var(--theme-accent, var(--tendr-indigo));
+  animation: tdr-pulse 1.4s ease-out 1 forwards;
+}
+
+@keyframes tdr-confetti-fall {
+  to {
+    transform: translateY(110vh) rotate(var(--tdr-confetti-turn, 360deg));
+    opacity: 0.6;
+  }
+}
+
+@keyframes tdr-pulse {
+  0% {
+    box-shadow: inset 0 0 0 0 color-mix(in srgb, var(--theme-accent, #4035f5) 60%, transparent);
+  }
+  100% {
+    box-shadow: inset 0 0 0 40vmax transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tdr-celebration {
+    display: none;
+  }
+}
+
+/* The theme preview: payments are off, and the page says so. */
+.tdr-preview-ribbon {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 2147483002;
+  padding: 0.45rem 1rem;
+  background: #f5b942;
+  color: #080d1b;
+  font-family: var(--tendr-font-sans);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.tdr-preview {
+  width: 100%;
+  padding-top: 2.5rem;
+}
+
+.tdr-preview[data-viewport='phone'] .pay-card {
+  width: min(390px, 100%);
 }
 
 /* ─── Connect popup ─────────────────────────────────────────────────────── */

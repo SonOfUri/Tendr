@@ -1,5 +1,6 @@
 // Strict CSP (with a per-request script nonce) on every dashboard page and the sign-in pages,
-// where passkeys are created and used, and the checkout policy on the shopper pages (`/pay/*`).
+// where passkeys are created and used, and the checkout policy on the shopper pages (`/pay/*`)
+// and the theme preview page (`/preview/theme/*`, never framed by a store).
 // The Connect popup (`/connect`) gets its own policy (no frames at all; lib/csp.ts), and it and the
 // notification-email verify page are never cached.
 // See lib/csp.ts. X-Frame-Options for the dashboard is in next.config.ts (never set for /pay).
@@ -39,6 +40,7 @@ async function checkoutPolicy(request: NextRequest, nonce: string, dev: boolean)
     frameAncestors: frameable ? await frameOrigins(sessionId) : [],
     walletHosts: WALLET_CONNECT_HOSTS,
     walletFrameHosts: WALLET_FRAME_HOSTS,
+    assetOrigin: process.env.TENDR_ASSET_ORIGIN ?? null,
   });
 }
 
@@ -59,7 +61,7 @@ export async function middleware(request: NextRequest) {
   const nonce = btoa(String.fromCharCode(...bytes));
   const dev = process.env.NODE_ENV === 'development';
   const { pathname } = request.nextUrl;
-  const checkout = pathname.startsWith('/pay/');
+  const checkout = pathname.startsWith('/pay/') || pathname.startsWith('/preview/theme/');
   const csp = checkout
     ? await checkoutPolicy(request, nonce, dev)
     : pathname === '/connect'
@@ -91,6 +93,7 @@ export const config = {
     '/recover',
     '/recover/:path*',
     '/pay/:path*',
+    '/preview/theme/:path*',
     '/connect',
     '/settings/notification-email/verify',
   ],

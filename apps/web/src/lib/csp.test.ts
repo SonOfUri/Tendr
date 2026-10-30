@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  THEME_VIDEO_HOSTS,
+  TOKEN_LOGO_HOSTS,
   checkoutContentSecurityPolicy,
   connectContentSecurityPolicy,
   contentSecurityPolicy,
@@ -117,7 +119,11 @@ describe('checkoutContentSecurityPolicy (/pay/*)', () => {
         ],
       }),
     );
-    expect(d['frame-src']).toEqual(["'self'", 'https://verify.wallet.example']);
+    expect(d['frame-src']).toEqual([
+      "'self'",
+      'https://verify.wallet.example',
+      ...THEME_VIDEO_HOSTS,
+    ]);
     expect(d['script-src']).toEqual(["'self'", "'nonce-n1'"]);
   });
 
@@ -136,7 +142,7 @@ describe('checkoutContentSecurityPolicy (/pay/*)', () => {
       'https://api.usetendr.tech',
       ...WALLET_CONNECT_HOSTS,
     ]);
-    expect(d['frame-src']).toEqual(["'self'", ...WALLET_FRAME_HOSTS]);
+    expect(d['frame-src']).toEqual(["'self'", ...WALLET_FRAME_HOSTS, ...THEME_VIDEO_HOSTS]);
     // The wallet providers this checkout talks to.
     expect(WALLET_CONNECT_HOSTS).toEqual(
       expect.arrayContaining([
@@ -155,10 +161,61 @@ describe('checkoutContentSecurityPolicy (/pay/*)', () => {
     expect(csp).not.toMatch(/unsafe-eval|unsafe-inline'[^;]*script/);
   });
 
-  it('allows https images (the store logo) and no eval outside development', () => {
-    const d = directives(checkoutContentSecurityPolicy({ ...base, frameAncestors: [] }));
-    expect(d['img-src']).toEqual(["'self'", 'data:', 'blob:', 'https:']);
+  it('img-src has no https wildcard and includes asset origin', () => {
+    const d = directives(
+      checkoutContentSecurityPolicy({
+        ...base,
+        frameAncestors: [],
+        assetOrigin: 'https://assets.usetendr.tech/tendr-assets',
+      }),
+    );
+    expect(d['img-src']).toEqual([
+      "'self'",
+      'data:',
+      'blob:',
+      'https://assets.usetendr.tech',
+      ...TOKEN_LOGO_HOSTS,
+    ]);
+    expect(d['img-src']).not.toContain('https:');
+    expect(TOKEN_LOGO_HOSTS).toEqual([
+      'https://assets.coingecko.com',
+      'https://coin-images.coingecko.com',
+    ]);
+    // Fonts: Tendr's own (self-hosted) and uploaded brand fonts; no Google Fonts anywhere.
+    expect(d['font-src']).toEqual(["'self'", 'https://assets.usetendr.tech']);
+    expect(d['style-src']).toEqual(["'self'", "'unsafe-inline'"]);
     expect(d['script-src']).not.toContain("'unsafe-eval'");
+    // No asset origin configured (or a malformed one): no asset host at all.
+    for (const assetOrigin of [null, 'not a url', 'https://x.example; script-src *']) {
+      const none = directives(
+        checkoutContentSecurityPolicy({ ...base, frameAncestors: [], assetOrigin }),
+      );
+      expect(none['img-src']).toEqual(["'self'", 'data:', 'blob:', ...TOKEN_LOGO_HOSTS]);
+      expect(none['font-src']).toEqual(["'self'"]);
+    }
+  });
+
+  it('frame-src allows only the two video hosts', () => {
+    const d = directives(
+      checkoutContentSecurityPolicy({ ...base, frameAncestors: [], walletFrameHosts: [] }),
+    );
+    expect(d['frame-src']).toEqual([
+      "'self'",
+      'https://www.youtube-nocookie.com',
+      'https://player.vimeo.com',
+    ]);
+    expect(THEME_VIDEO_HOSTS).toEqual([
+      'https://www.youtube-nocookie.com',
+      'https://player.vimeo.com',
+    ]);
+  });
+
+  it('the dashboard policy loads no Google Fonts either', () => {
+    const d = directives(
+      contentSecurityPolicy({ nonce: 'n', apiBaseUrl: 'https://api.usetendr.tech', dev: false }),
+    );
+    expect(d['style-src']).toEqual(["'self'", "'unsafe-inline'"]);
+    expect(d['font-src']).toEqual(["'self'"]);
   });
 });
 

@@ -77,6 +77,27 @@ describe('link page', () => {
     expect(html).not.toContain('href="https://evil.example');
   });
 
+  it('draws the link on its theme: title in the order summary, payment sealed', () => {
+    const theme = {
+      ...tendrShopperTheme('Kola Kicks'),
+      id: 'thm_link',
+      version: 2,
+      payee: 'Acme Studio',
+      trading_as: 'Kola Kicks',
+    };
+    const html = render({ ...FIXED, theme });
+    expect(html).toMatch(/class="tdr-theme tdr-page"/);
+    // The title is the theme's order summary block (a merchant block); the default theme puts
+    // the payment block last.
+    expect(html).toMatch(/data-type="order_summary"[\s\S]*Logo design/);
+    const inSealed = html.split('<section class="tdr-payment"')[1]!.replace(/&#x27;/g, "'");
+    expect(inSealed).toContain("You're paying <strong>Acme Studio</strong>");
+    expect(inSealed).toContain('· trading as Kola Kicks');
+    expect(inSealed).toContain('Pay with crypto');
+    expect(inSealed).toContain('Note to Acme Studio (optional)');
+    expect(inSealed).not.toContain('Logo design');
+  });
+
   it('renders without usd equivalent', () => {
     expect(render({ ...FIXED, usd_rate: null })).not.toContain('≈');
     expect(render({ ...FIXED, currency: 'USD', amount: '25.00', usd_rate: null })).not.toContain(

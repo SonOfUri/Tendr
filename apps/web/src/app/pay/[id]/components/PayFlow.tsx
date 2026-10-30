@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CheckoutClient, Quote, SessionView, Token } from '@/lib/checkout/api';
-import { themeDisplayName } from '@/lib/checkout/brand';
 import { formatUnits, formatUsd, networkName } from '@/lib/checkout/format';
 import { Countdown } from './Countdown';
 import { quoteFailure, type QuoteFailure } from './quote-errors';
@@ -380,7 +379,7 @@ export function PayFlow({
               checkBeforeSend={checkBeforeSend}
               onSendingChange={setWalletSending}
               onWalletAddress={(address, gasless) => requote(token, address, 'wallet', gasless)}
-              gasless={{ api: client, merchantName: themeDisplayName(view.theme), nativeToken }}
+              gasless={{ api: client, merchantName: view.merchant.name, nativeToken }}
               onDepositSent={onDepositSent}
             />
           )}

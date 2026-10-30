@@ -1,7 +1,13 @@
 // What a payment link's preview card says (spec §4.1), shared by the page metadata and the image.
-import type { PublicPaymentLinkView } from '@tendr/contracts';
+import type { PublicPaymentLinkView, ShopperTheme } from '@tendr/contracts';
 import { themeDisplayName } from './checkout/brand';
 import { formatLinkAmount, linkFractionDigits } from './payment-links-client';
+import { parseShopperTheme } from './theme/parse';
+
+/** The link's theme, or the Tendr default when it doesn't parse (a card never fails on it). */
+export function linkTheme(view: PublicPaymentLinkView): ShopperTheme {
+  return parseShopperTheme(view.theme, view.merchant?.name ?? '');
+}
 
 /** The price line, or null when the link no longer takes payments (no price on its card). */
 export function linkPriceText(view: PublicPaymentLinkView): string | null {
@@ -13,7 +19,7 @@ export function linkPriceText(view: PublicPaymentLinkView): string | null {
 /** `og:description`: "<merchant> · <price>", prefixed "Test · " on a test link. */
 export function linkDescription(view: PublicPaymentLinkView, test: boolean): string {
   const price = linkPriceText(view);
-  const name = themeDisplayName(view.theme);
+  const name = themeDisplayName(linkTheme(view));
   const text = price ? `${name} · ${price}` : name;
   return test ? `Test · ${text}` : text;
 }

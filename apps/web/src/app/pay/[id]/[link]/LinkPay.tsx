@@ -2,9 +2,12 @@
 
 import type { PaymentLinkAvailability, PublicPaymentLinkView } from '@tendr/contracts';
 import { PAYER_NOTE_MAX } from '@tendr/contracts';
-import { useEffect, useState } from 'react';
-import { themeDisplayName, themeLogoUrl } from '@/lib/checkout/brand';
+import { useEffect, useMemo, useState } from 'react';
+import { BlockCanvas } from '@/components/theme/BlockCanvas';
+import { ThemedPage } from '@/components/theme/ThemedPage';
 import { safeHttpUrl } from '@/lib/checkout/format';
+import { parseShopperTheme } from '@/lib/theme/parse';
+import { PayeeLine } from '../components/CheckoutHeader';
 import {
   decimalLess,
   formatLinkAmount,
@@ -176,7 +179,11 @@ interface BodyProps {
   onSubmit: () => void;
 }
 
-/** The page itself, from its state (LinkPay owns the state and the request). */
+/**
+ * The page itself, from its state (LinkPay owns the state and the request), on the theme's canvas:
+ * the link's title and description fill the order summary block, and the sealed payment block
+ * holds the payee, the amount (or amount box), the note and the Pay button.
+ */
 export function LinkPayBody({
   view,
   state,
@@ -185,9 +192,9 @@ export function LinkPayBody({
   onNote,
   onSubmit,
 }: BodyProps) {
-  const logoUrl = themeLogoUrl(view.theme);
-  const logo = logoUrl?.startsWith('https://') ? safeHttpUrl(logoUrl) : null;
-  const storeName = themeDisplayName(view.theme);
+  // A theme that doesn't parse is the Tendr default look; the link still takes payments.
+  const theme = useMemo(() => parseShopperTheme(view.theme, view.merchant.name), [view]);
+  const payee = view.merchant.name;
   const open = view.amount_type === 'open';
   const typed = open ? parseLinkAmount(state.amount, view.minor_units) : null;
   const usd = open
@@ -199,16 +206,19 @@ export function LinkPayBody({
       : null;
   const available = state.availability === 'available';
 
-  return (
-    <div className="pay-card">
+  const summary = (
+    <div className="pay-section">
+      <h1 id="link-title" className="pay-title">
+        {view.title}
+      </h1>
+      {view.description ? <p className="pay-link-description">{view.description}</p> : null}
+    </div>
+  );
+
+  const sealed = (
+    <>
       <header className="pay-header">
-        <div className="pay-store">
-          {logo ? (
-            // eslint-disable-next-line @next/next/no-img-element -- the store's own logo, any host
-            <img src={logo} alt="" width={28} height={28} className="pay-logo" />
-          ) : null}
-          <span className="pay-store-name">{storeName}</span>
-        </div>
+        <PayeeLine payee={payee} tradingAs={theme.trading_as} />
         {!view.livemode ? (
           <p className="pay-test-banner small" role="note">
             Test mode — no real money moves
@@ -216,12 +226,7 @@ export function LinkPayBody({
         ) : null}
       </header>
 
-      <section className="pay-section" aria-labelledby="link-title">
-        <h1 id="link-title" className="pay-title">
-          {view.title}
-        </h1>
-        {view.description ? <p className="pay-link-description">{view.description}</p> : null}
-
+      <section className="pay-section" aria-label="Payment">
         {continueUrl ? (
           <div className="pay-link-continue" role="status">
             <p className="small">You already started paying this link.</p>
@@ -289,7 +294,7 @@ export function LinkPayBody({
 
             {view.note === 'optional' ? (
               <label className="field">
-                <span>Note to {storeName} (optional)</span>
+                <span>Note to {payee} (optional)</span>
                 <input
                   name="note"
                   maxLength={PAYER_NOTE_MAX}
@@ -326,7 +331,19 @@ export function LinkPayBody({
           </form>
         )}
       </section>
-    </div>
+    </>
+  );
+
+  return (
+    <ThemedPage theme={theme}>
+      <div className="pay-card">
+        <BlockCanvas
+          blocks={theme.document.blocks}
+          theme={theme}
+          slots={{ payment: sealed, orderSummary: summary }}
+        />
+      </div>
+    </ThemedPage>
   );
 }
 
