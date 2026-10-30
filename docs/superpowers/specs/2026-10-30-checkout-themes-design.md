@@ -1,6 +1,6 @@
 # Checkout Themes — Design (Project 5c)
 
-Status: draft for the user's review, 2026-10-30. Builds on foundation (1), merchant accounts (2), checkout core (3), WooCommerce plugin (4), gasless payments (5a) and payment links (5b), all merged on local main.
+Status: draft for the user's review, 2026-10-30. Revised after the user's review (fonts, block wrappers and pay bar, state colours, "trading as", button-word rule, proxied product images, language of custom words). Builds on foundation (1), merchant accounts (2), checkout core (3), WooCommerce plugin (4), gasless payments (5a) and payment links (5b), all merged on local main.
 
 As in every project 5 design, **we do not build dashboard screens**. We build the API, the shopper-facing pages and the infrastructure, document how they work, and only *suggest* screens to the dashboard owner *(user: "We would suggest and not map out. The only thing we map out is how the api's, and infra we have built works")*.
 
@@ -84,9 +84,10 @@ Most merchants will spend two minutes on this, so the defaults must get them abo
 | Display name and logo | Shown in the header block. |
 | Colours | Accent (buttons, highlights), background, surface (cards), text. The builder adds `surface` if needed. |
 | Mode | `light`, `dark`, or `auto` (follows the shopper's phone). With `auto`, the theme holds a light and a dark palette *(my call)*. |
-| Font | From a curated list of about 15 web fonts served by Tendr, or an uploaded `.woff2` *(my call)*. |
+| Font | From a curated list of about 15 web fonts served by Tendr, or an uploaded `.woff2` *(my call)*. Applies to merchant blocks, and inside the sealed block **only** to headings and the Pay button label (§3.1). |
 | Corner shape | Square to fully round, applied consistently. |
-| Button words | E.g. "Complete purchase", "Give ₦50,000", "Get my gems". The amount may be included through a placeholder that Tendr fills. Free text can never state an amount. |
+| Button words | E.g. "Complete purchase", "Give {amount}", "Get my gems". The amount can appear only through the `{amount}` placeholder, which Tendr fills. **Rule:** button words containing any digit (Unicode `\p{Nd}`) or currency symbol (`\p{Sc}`, plus ISO codes such as `USD` or `NGN` as whole words) are rejected on save, with a plain reason. |
+| Language of custom words | Optional BCP-47 tag (e.g. `fr`, `yo`) for the merchant's own words: button words, thank-you message and block text. Stored now so the languages project can match the rest of the checkout to it. Until then, Tendr's own words stay in English *(my call)*. |
 | Thank-you message, support and terms links | As today's columns. Links are https only. |
 | Celebration effect | None, confetti or a subtle pulse on success. It is off when the shopper has "reduce motion" on. |
 
@@ -142,7 +143,13 @@ It contains, unchangeable by the merchant:
 
 This changes current behaviour: today the payee shown is `theme.displayName ?? merchant.name` (`apps/api/src/checkout/quotes.ts`). The display name moves to the header block only.
 
-The theme styles the block only through its settings (colours, mode, font, corner shape, button words). Merchant CSS and HTML cannot reach it (§4).
+**The payee line is visually strong** ("You're paying Lagos Leather Co."). If the theme's display name doesn't match the account name, the sealed block also shows the display name as "Lagos Leather Co. · trading as Kola Kicks". The match ignores case, spacing, punctuation and common company suffixes (Ltd, LLC, Inc, Co.). This rule stands in until lookalike detection arrives with the AI layer *(review fix)*.
+
+**What the theme may change inside the sealed block** (review fixes):
+- **Colours:** accent, background, surface and text, through theme settings. Merchant CSS and HTML cannot reach the block (§4).
+- **Fixed state colours:** warning, error, success and timer colours are Tendr's own and never take theme colours. They only shift between Tendr's light and dark variants, so a network warning, an expiry timer or an error always looks like one.
+- **Fonts:** amounts, addresses, the QR caption, the payee line, warnings, errors and timers always render in Tendr's own fonts, with addresses in a Tendr monospace font. Uploaded fonts never apply inside the sealed block. A curated font may style the block's headings and the Pay button label only. A custom font can draw any character as any other, so this keeps what the shopper reads equal to the real text.
+- **Shape:** corner shape and mode apply.
 
 ### 3.2 Block library
 
@@ -171,10 +178,11 @@ This section is the safety core. The rules below are *(my call)* and serve the a
 
 ### 4.1 Custom CSS
 
-- **Scope:** merchant CSS styles merchant blocks and the page background only. It cannot select, style, overlay or affect the sealed payment block or its ancestors.
-  - **Suggested approach:** render the payment block in its own shadow root (so selectors can't reach in).
-  - Prefix every merchant selector with the merchant-blocks scope, and reject selectors that escape it (`:root`, `html`, `body`, `*` at top level, `:host`, and similar).
-  - Give each merchant block CSS containment (`contain: paint`, its own stacking context), so nothing drawn inside a block can escape its box to cover the payment block.
+- **Scope:** merchant CSS reaches only elements **inside** each merchant block, plus the page background colour or image. It cannot select, style, overlay or affect the sealed payment block, its ancestors, or the **block wrappers** *(review fix)*.
+  - Tendr owns every block's wrapper: its margins, padding, size, transforms, order and position in the stack. Merchants can't set them, so a block's box can't slide over the payment block (e.g. with a negative margin).
+  - **Suggested approach:** render the payment block in its own shadow root, so selectors can't reach in.
+  - Prefix every merchant selector with the per-block content scope, and reject selectors that escape it (`:root`, `html`, `body`, `*` at top level, `:host`, the wrapper itself, and similar).
+  - The wrapper applies CSS containment (`contain: paint`, its own stacking context, `overflow: clip`), so nothing drawn inside a block escapes its box.
 - **Rejected:**
   - `@import`;
   - `url()` pointing anywhere except Tendr's asset origin;
@@ -183,6 +191,11 @@ This section is the safety core. The rules below are *(my call)* and serve the a
   - `position: fixed` and `position: sticky`;
   - anything that can affect elements outside the block's box.
 - **The payment block always stays visible and readable** on every screen size. Tendr enforces a minimum size and visibility for it regardless of merchant CSS.
+- **Tendr's pay bar** *(review fix)*: a merchant can stack tall blocks above the payment block. So on phones, whenever the sealed payment block is out of view, Tendr shows a pay bar fixed to the bottom of the screen.
+  - It shows the amount, "You're paying <account name>", and a button that scrolls to the payment block.
+  - Choosing a token still happens inside the block.
+  - Only Tendr uses fixed positioning, so no merchant block can cover the bar.
+  - It hides while the payment block is on screen, and on the success, expired and cancelled screens.
 - **Limits:** 50 KB of CSS.
 - **Checked on save:** the CSS is parsed (never regex-filtered) and validated. A rejection gives a plain reason with the line, e.g. "`position: fixed` isn't allowed — it could cover the payment details". `cssValidation` stores the result and `cssHash` the hash. Only validated CSS is ever served.
 
@@ -242,10 +255,11 @@ This section is the safety core. The rules below are *(my call)* and serve the a
   - an optional `image_url` (https), and an optional `description`.
 
   The items are display only. The session `amount` stays the amount charged. A mismatch between the items and `amount` is allowed (discounts, shipping and tax may be applied); the summary can show a "Shipping / tax / discount" difference line *(my call)*.
-- **Product images** are the one place an image may come from outside Tendr, because they come from the merchant's own store.
-  - They render as plain images with `referrerpolicy="no-referrer"`, inside the order-summary block, under the CSP's image allowance for https.
-  - If an image fails to load, it is hidden.
-  - This is *(my call)*. The alternative, proxying every product image through Tendr, is left to the builder if CSP needs it.
+- **Product images are served through Tendr** *(review fix)*.
+  - Tendr fetches each `image_url` server-side, with the same fetch-safety rules as the brand pull (§7). It accepts only the image types in §5, re-encodes or validates the image, caches it in object storage, and serves it from the asset origin.
+  - The checkout's image policy therefore stays limited to Tendr's asset origin, and shoppers' browsers never contact outside hosts on the payment page.
+  - If the fetch fails or isn't ready, the item shows without an image.
+  - The builder decides when to fetch (at session creation, in the background, or on first view) and how long to cache.
 - **The WooCommerce plugin** sends the cart's items (name, quantity, line price, featured image URL) when it creates a session.
 - **Payment links** show the link's title and description (5b) in the order-summary block.
 
@@ -318,6 +332,7 @@ Webhooks: none new *(my call)*.
 
 - **Mintlify:**
   - a "Branding your checkout" guide (presets, brand pull, blocks, CSS and HTML rules with every rejection reason);
+  - a note that Tendr's own checkout words stay in English until the languages project, while merchants can write their own words in any language;
   - an API reference for every endpoint above;
   - the session `line_items` and `theme_id` fields.
 - **Handover note** `docs/handover/2026-10-30-checkout-themes.md`. It **maps out the API, the infrastructure and the safety rules** and only **suggests** editor screens:
@@ -345,4 +360,4 @@ Webhooks: none new *(my call)*.
   - each block's exact JSON shape.
 - **Detection:** the exact address-pattern and countdown-label rules (§3.2, §4.3).
 - **Limits:** all numeric limits marked *(my call)* may be tuned with a note in the handover.
-- **Safety isolation:** how the payment block is isolated (shadow root or equivalent). The **anti-goals are the test**: the builder must include tests that try to cover, hide, shrink, restyle, push off-screen and impersonate the payment block, and to collect input, through each of settings, blocks, CSS and HTML.
+- **Safety isolation:** how the payment block is isolated (shadow root or equivalent). The **anti-goals are the test**: the builder must include tests that try to cover, hide, shrink, restyle, push off-screen and impersonate the payment block, and to collect input, through each of settings, blocks, CSS and HTML. The tests must also cover: an uploaded font reaching amount, address or warning text; a block wrapper moved by merchant CSS; the pay bar appearing whenever the payment block is out of view on a phone; theme colours reaching warning, error or timer states; and button words carrying digits or currency.
