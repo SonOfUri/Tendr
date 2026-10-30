@@ -968,6 +968,8 @@ describe('return to sender', () => {
       payment_id: r.paymentId,
       session_id: p.sessionId,
       external_ref: s.externalRef,
+      payment_link_id: null,
+      payer_note: null,
       amount: row.amount.toFixed(0),
       asset: row.assetId,
       reason: 'overpaid',

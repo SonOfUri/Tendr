@@ -43,6 +43,7 @@ import { depositInFlight } from './in-flight.js';
 import { resolvePayers } from './pricing.js';
 import { merchantRefundStatus, publicReviewReason } from './refunds.js';
 import { assetLabel, tokenInfo, type AssetLabel } from './tokens.js';
+import { sessionRefs, type SessionRefsInput } from './session-refs.js';
 import { connectionMayAct } from './webhooks.js';
 
 /**
@@ -441,12 +442,20 @@ export async function createSession(
             status: 'PENDING_DEPOSIT',
             expiresAt: { lte: now },
           },
-          select: { id: true, merchantId: true, livemode: true, expiresAt: true },
+          select: {
+            id: true,
+            merchantId: true,
+            livemode: true,
+            expiresAt: true,
+            externalRef: true,
+            paymentLinkId: true,
+            payerNote: true,
+          },
         });
         for (const s of stale) {
           await lockSession(tx, s.id);
           if (await depositInFlight(tx, s, now)) throw depositInProgress(s.id, 'CONFLICT');
-          await expireInTx(tx, t, s.id, externalRef, 'timeout');
+          await expireInTx(tx, t, s.id, s, 'timeout');
         }
       }
       await tx.session.create({
@@ -489,7 +498,14 @@ export async function createSession(
         aggregateType: 'session',
         aggregateId: id,
         type: 'session.created',
-        payload: { session_id: id, external_ref: externalRef },
+        payload: {
+          session_id: id,
+          ...sessionRefs({
+            externalRef,
+            paymentLinkId: link?.id ?? null,
+            payerNote: fromLink?.payerNote ?? null,
+          }),
+        },
       });
     });
   } catch (err) {
@@ -681,6 +697,8 @@ export async function expireSession(ctx: CheckoutCtx, id: string): Promise<Sessi
         livemode: true,
         expiresAt: true,
         externalRef: true,
+        paymentLinkId: true,
+        payerNote: true,
         connectionId: true,
       },
     });
@@ -698,7 +716,7 @@ export async function expireSession(ctx: CheckoutCtx, id: string): Promise<Sessi
     if (cur.status === 'PENDING_DEPOSIT' && (await depositInFlight(tx, s, new Date()))) {
       throw depositInProgress(id, 'DEPOSIT_IN_PROGRESS');
     }
-    await expireInTx(tx, t, id, s.externalRef, 'canceled');
+    await expireInTx(tx, t, id, s, 'canceled');
   });
   return sessionView(ctx, id);
 }
@@ -720,7 +738,15 @@ export async function expireConnectionSessions(
   if (connectionIds.length === 0) return out;
   const open = await tx.session.findMany({
     where: { merchantId, connectionId: { in: connectionIds }, status: 'PENDING_DEPOSIT' },
-    select: { id: true, merchantId: true, livemode: true, expiresAt: true, externalRef: true },
+    select: {
+      id: true,
+      merchantId: true,
+      livemode: true,
+      expiresAt: true,
+      externalRef: true,
+      paymentLinkId: true,
+      payerNote: true,
+    },
     orderBy: { id: 'asc' },
   });
   for (const s of open) {
@@ -734,7 +760,7 @@ export async function expireConnectionSessions(
       out.inFlight += 1;
       continue;
     }
-    await expireInTx(tx, { merchantId, livemode: s.livemode }, s.id, s.externalRef, 'canceled');
+    await expireInTx(tx, { merchantId, livemode: s.livemode }, s.id, s, 'canceled');
     out.expired += 1;
   }
   return out;
@@ -749,7 +775,7 @@ export async function expireInTx(
   tx: Prisma.TransactionClient,
   ctx: ScopeContext,
   id: string,
-  externalRef: string | null,
+  refs: SessionRefsInput,
   reason: 'timeout' | 'canceled',
 ): Promise<void> {
   await transitionSession(tx, ctx, id, 'EXPIRED', { reason });
@@ -761,6 +787,6 @@ export async function expireInTx(
     aggregateType: 'session',
     aggregateId: id,
     type: 'checkout.session.expired',
-    payload: { session_id: id, external_ref: externalRef, reason },
+    payload: { session_id: id, ...sessionRefs(refs), reason },
   });
 }

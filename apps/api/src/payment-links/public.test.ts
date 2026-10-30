@@ -264,6 +264,22 @@ describe('public payment links', () => {
       expect(long.payerNote).toHaveLength(280);
     });
 
+    it('records session.created with the link id and note, null external_ref', async () => {
+      const l = await createLink(ctx(), fixedUsd);
+      const s = await sessionOf(
+        (await createLinkSession('acme', 'tshirt', false, { note: 'for Sam' }, IP)).url,
+      );
+      const ev = await prisma.event.findFirstOrThrow({
+        where: { type: 'session.created', aggregateId: s.id },
+      });
+      expect(ev.payload).toEqual({
+        session_id: s.id,
+        external_ref: null,
+        payment_link_id: l.id,
+        payer_note: 'for Sam',
+      });
+    });
+
     it('drops the note when the link has note off', async () => {
       await createLink(ctx(), { ...fixedUsd, note: 'off' });
       const s = await sessionOf(

@@ -48,6 +48,7 @@ import {
   settledUsdOf,
 } from './refunds.js';
 import { grossUpForReturnFee, usdPerUnit } from './return-fee.js';
+import { sessionRefs } from './session-refs.js';
 import { assetLabel } from './tokens.js';
 
 export { merchantRefundStatus };
@@ -448,7 +449,7 @@ async function insertMerchantRefund(
       aggregateId: row.id,
       type: 'refund.needs_address',
       payload: {
-        ...refundPayload(row, p.sessionId, s.externalRef),
+        ...refundPayload(row, p.sessionId, s),
         sender_address: sender,
         sender_chain: senderChain,
         customer_email_on_file: s.customerEmail !== null,
@@ -493,7 +494,13 @@ export async function cancelMerchantRefund(
   if (!r0) throw notFound('Refund not found');
   const s = await prisma.session.findFirstOrThrow({
     where: { id: r0.payment.sessionId, ...tenantOf(ctx) },
-    select: { id: true, connectionId: true, externalRef: true },
+    select: {
+      id: true,
+      connectionId: true,
+      externalRef: true,
+      paymentLinkId: true,
+      payerNote: true,
+    },
   });
   if (!(await mayRefund(ctx, s.connectionId))) throw notFound('Refund not found');
 
@@ -526,7 +533,7 @@ export async function cancelMerchantRefund(
         refund_id: r.id,
         payment_id: r.paymentId,
         session_id: s.id,
-        external_ref: s.externalRef,
+        ...sessionRefs(s),
         ...refundRef(r),
         asset: r.assetId,
         amount: r.amount,

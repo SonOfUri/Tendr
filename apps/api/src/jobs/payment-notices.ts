@@ -159,6 +159,9 @@ export async function onPaymentReceivedNotice(
       fxRate: true,
       fxSource: true,
       fxAsOf: true,
+      payerNote: true,
+      // One join, with the session: the link's title for the subject and first line.
+      paymentLink: { select: { title: true } },
     },
   });
   if (!p.settlement.amount_out) {
@@ -214,11 +217,18 @@ export async function onPaymentReceivedNotice(
   const tx = p.transactions.settlement ?? p.transactions.origin;
   const txUrl = tx ? explorerTxUrl(tx.chain, tx.hash, e.livemode) : '';
   const dashboardUrl = dashboardPaymentUrl(p.id, e.merchantId, e.livemode);
-  const order = orderLabel(p.external_ref);
+  // A payment through a payment link is named for the link; the payer's note is quoted as plain
+  // text (every line behind "> "), never as markup or a link.
+  const linkTitle = s.paymentLink ? oneLine(s.paymentLink.title) : null;
+  const payerNote = s.payerNote ?? '';
+  const order = linkTitle ? `via ${linkTitle}` : `for ${orderLabel(p.external_ref)}`;
 
-  const subject = subjectFor(e.livemode, `You got paid ${received} for ${order}`);
+  const subject = subjectFor(e.livemode, `You got paid ${received} ${order}`);
   const text = [
-    `${target.name} received ${received} for ${order}.`,
+    `${target.name} received ${received} ${order}.`,
+    ...(payerNote
+      ? ['Note from the payer:', ...payerNote.split(/\r?\n/).map((l) => `> ${l}`)]
+      : []),
     ...(e.livemode ? [] : ['This is a test payment: no real money moved.']),
     '',
     `Order total: ${orderTotal}`,
@@ -243,6 +253,8 @@ export async function onPaymentReceivedNotice(
       livemode: String(e.livemode),
       payment_id: p.id,
       external_ref: p.external_ref ?? '',
+      payment_link_title: linkTitle ?? '',
+      payer_note: payerNote,
       amount_received: amountReceived,
       settlement_symbol: settlement?.symbol ?? p.settlement.asset,
       order_total: orderTotal,
