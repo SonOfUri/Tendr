@@ -180,7 +180,15 @@ export function sanitizeThemeHtml(html: string, assetOrigin: string): SanitizedH
   });
 
   const text = [visibleText(clean), ...altTexts];
-  if (text.some((t) => containsAddressLike(t) || containsSendInstruction(t))) add(TEXT_PROBLEM);
+  // The whole block with every tag and all whitespace removed, so an address split across lines
+  // (`<br>`), elements or spaces is still seen as one run.
+  const compact = decodeBasicEntities(clean.replace(/<[^>]*>/g, '')).replace(/\s+/g, '');
+  if (
+    text.some((t) => containsAddressLike(t) || containsSendInstruction(t)) ||
+    containsAddressLike(compact)
+  ) {
+    add(TEXT_PROBLEM);
+  }
 
   return problems.length > 0 ? { ok: false, problems } : { ok: true, html: clean };
 }

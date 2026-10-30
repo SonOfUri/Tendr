@@ -47,6 +47,16 @@ describe('theme text rules', () => {
     expect(maskAddressLike('plain text')).toBe('plain text');
   });
 
+  it('ignores invisible format characters that split an address', () => {
+    const zw = (x: string, ch: string) => x.slice(0, 10) + ch + x.slice(10);
+    for (const ch of ['\u200b', '\u00ad', '\u2060', '\ufeff', '\u200e', '\u200d']) {
+      expect(containsAddressLike(zw(EVM, ch)), JSON.stringify(ch)).toBe(true);
+      expect(maskAddressLike(`send ${zw(EVM, ch)} now`)).toBe('send ••• now');
+    }
+    expect(containsAddressLike('kola\u200b.near')).toBe(true);
+    expect(containsSendInstruction('se\u00adnd USDC to this wal\u200blet')).toBe(true);
+  });
+
   it('detects send instructions', () => {
     expect(containsSendInstruction('send USDC to this wallet address')).toBe(true);
     expect(containsSendInstruction('Transfer funds to account 12')).toBe(true);

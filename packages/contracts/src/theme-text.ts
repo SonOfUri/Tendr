@@ -84,7 +84,16 @@ function isBase58Address(m: string): boolean {
   return /\d/.test(m) && /[A-Za-z]/.test(m);
 }
 
-export function containsAddressLike(s: string): boolean {
+/**
+ * Removes invisible format characters (Unicode `Cf`: zero-width space/joiners, soft hyphen, word
+ * joiner, BOM, bidi marks, …) that could split an address so the patterns below miss it.
+ */
+export function stripFormatChars(s: string): string {
+  return s.replace(/\p{Cf}/gu, '');
+}
+
+export function containsAddressLike(input: string): boolean {
+  const s = stripFormatChars(input);
   return addressPatterns().some((re, i) => {
     for (const m of s.matchAll(re)) {
       if (i !== BASE58_INDEX || isBase58Address(m[0])) return true;
@@ -93,9 +102,9 @@ export function containsAddressLike(s: string): boolean {
   });
 }
 
-/** Replaces each address-like match with `•••`. */
+/** Replaces each address-like match with `•••` (invisible format characters are removed first). */
 export function maskAddressLike(s: string): string {
-  let out = s;
+  let out = stripFormatChars(s);
   addressPatterns().forEach((re, i) => {
     out = out.replace(re, (m) => (i !== BASE58_INDEX || isBase58Address(m) ? '•••' : m));
   });
@@ -107,7 +116,7 @@ const SEND_INSTRUCTION =
 
 /** "Send USDC to this wallet" style phrasing a merchant could use to redirect a payment. */
 export function containsSendInstruction(s: string): boolean {
-  return SEND_INSTRUCTION.test(s);
+  return SEND_INSTRUCTION.test(stripFormatChars(s));
 }
 
 const COUNTDOWN_BANNED =

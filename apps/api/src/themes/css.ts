@@ -95,7 +95,26 @@ const FORBIDDEN_FUNCTIONS: ReadonlyMap<string, string> = new Map([
   ['paint', "`paint()` isn't allowed — it can run code"],
   ['anchor', "`anchor()` isn't allowed — it could move content over the payment details"],
   ['anchor-size', "`anchor-size()` isn't allowed — it could move content over the payment details"],
+  ['attr', "`attr()` isn't allowed — CSS can't put text on the page"],
 ]);
+
+/** Properties whose string values are drawn on screen; their strings are kept icon-sized. */
+const DISPLAYED_STRING_PROPERTIES = new Set([
+  'content',
+  'quotes',
+  'list-style',
+  'list-style-type',
+  'text-overflow',
+  'text-emphasis',
+  'text-emphasis-style',
+  'hyphenate-character',
+]);
+/** Longest string (in code points) a displayed-string property may carry: an icon or a quote mark. */
+export const THEME_CSS_CONTENT_MAX_CHARS = 4;
+
+const BREAKS_STYLE_ELEMENT = /<\/style|<!--|<\/?script/i;
+const ANGLE_BRACKET = "CSS text and links can't contain `<`";
+const TEXT_IN_CSS = `CSS text can be at most ${THEME_CSS_CONTENT_MAX_CHARS} characters (an icon or quote mark) — put words in your blocks instead`;
 
 const TEXT_PROBLEM = "Text can't contain wallet addresses or payment instructions";
 const UNREADABLE = "This part of the CSS couldn't be read — check for a missing `{`, `}` or `;`";
@@ -208,6 +227,7 @@ class Checker {
             : node.value?.type === 'Identifier'
               ? node.value.name
               : '';
+        if (value.includes('<')) this.add(line, ANGLE_BRACKET);
         // Substring matchers (`^=`, `*=`, …) could reach Tendr's names, so any mention is refused.
         if ((name === 'class' || name === 'id') && /tdr|pay/i.test(value)) {
           this.add(line, "Selectors can't match Tendr's own class names (`tdr-…`, `pay-…`)");
@@ -274,6 +294,13 @@ class Checker {
       return;
     }
     if (name === 'position') this.position(decl, line);
+    if (DISPLAYED_STRING_PROPERTIES.has(name)) {
+      csstree.walk(decl.value, (n) => {
+        if (n.type === 'String' && [...n.value].length > THEME_CSS_CONTENT_MAX_CHARS) {
+          this.add(lineOf(n, line), TEXT_IN_CSS);
+        }
+      });
+    }
     this.value(decl.value, line);
     if ((name === 'animation' || name === 'animation-name') && decl.value.type === 'Value') {
       decl.value.children.forEach((n) => {
@@ -320,8 +347,10 @@ class Checker {
           break;
         }
         case 'Url': {
-          const normalized = this.assetUrl(n.value);
-          if (normalized === null) {
+          const normalized = n.value.includes('<') ? null : this.assetUrl(n.value);
+          if (n.value.includes('<')) {
+            this.add(at, ANGLE_BRACKET);
+          } else if (normalized === null) {
             this.add(at, '`url()` can only point to images and fonts uploaded to Tendr');
           } else {
             n.value = normalized;
@@ -329,6 +358,7 @@ class Checker {
           break;
         }
         case 'String':
+          if (n.value.includes('<')) this.add(at, ANGLE_BRACKET);
           if (containsAddressLike(n.value) || containsSendInstruction(n.value)) {
             this.add(at, TEXT_PROBLEM);
           }
@@ -472,6 +502,10 @@ export function scopeThemeCss(css: string, assetOrigin: string): ScopedCss {
     return { ok: false, problems: [...checker.problems].sort((a, b) => a.line - b.line) };
   }
   const out = csstree.generate(ast);
+  // Safety net: the CSS is served inside a <style> element, which these sequences could end.
+  if (BREAKS_STYLE_ELEMENT.test(out)) {
+    return { ok: false, problems: [{ line: 1, message: ANGLE_BRACKET }] };
+  }
   return { ok: true, css: out, hash: createHash('sha256').update(out).digest('hex') };
 }
 
@@ -496,5 +530,7 @@ export function checkInlineStyle(
   if (checker.problems.length > 0) {
     return { ok: false, problems: [...new Set(checker.problems.map((p) => p.message))] };
   }
-  return { ok: true, style: csstree.generate(ast) };
+  const out = csstree.generate(ast);
+  if (BREAKS_STYLE_ELEMENT.test(out)) return { ok: false, problems: [ANGLE_BRACKET] };
+  return { ok: true, style: out };
 }

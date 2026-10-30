@@ -117,6 +117,29 @@ describe('sanitizeThemeHtml', () => {
     }
   });
 
+  it('rejects addresses split by invisible characters', () => {
+    for (const html of [
+      '<p>0x5290840009&#8203;8527886E0F7030069857D2E4169EE7</p>',
+      '<p>0x5290840009&shy;8527886E0F7030069857D2E4169EE7</p>',
+      '<p>0x5290840009&#x2060;8527886E0F7030069857D2E4169EE7</p>',
+      '<p>Se&#8203;nd USDC to this wal&shy;let</p>',
+    ]) {
+      expect(problemsOf(html).join(' '), html).toMatch(/wallet addresses or payment instructions/);
+    }
+  });
+
+  it('rejects addresses split across lines, elements or spaces', () => {
+    for (const html of [
+      '<p>0x52908400098527<br>886E0F7030069857D2E4169EE7</p>',
+      '<p>0x52908400098527</p><p>886E0F7030069857D2E4169EE7</p>',
+      '<div>0x529084</div><div>00098527886E0F</div><div>7030069857D2E4169EE7</div>',
+      '<ul><li>0x52908400098527</li><li>886E0F7030069857D2E4169EE7</li></ul>',
+      '<p>0x5290 8400 0985 2788 6E0F 7030 0698 57D2 E416 9EE7</p>',
+    ]) {
+      expect(problemsOf(html).join(' '), html).toMatch(/wallet addresses or payment instructions/);
+    }
+  });
+
   it('runs inline styles through the css rules', () => {
     expect(problemsOf('<div style="position: fixed; inset: 0">x</div>').join(' ')).toMatch(
       /position: fixed/,
