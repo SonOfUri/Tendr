@@ -368,6 +368,21 @@ describe('public payment links', () => {
       expect(await createLinkSession('acme', 'tshirt', false, {}, IP)).toHaveProperty('url');
     });
 
+    it.each(['PROCESSING', 'SCREENING_PENDING'] as const)(
+      'a %s session holds its use past its expiry',
+      async (status) => {
+        await createLink(ctx(), { ...fixedUsd, max_uses: 1 });
+        await createLinkSession('acme', 'tshirt', false, {}, IP);
+        // The deposit arrived just before the expiry; the payment is still being processed.
+        await prisma.session.updateMany({
+          data: { status, expiresAt: new Date(Date.now() - 60_000) },
+        });
+        const err = await rejection(createLinkSession('acme', 'tshirt', false, {}, IP));
+        expect(err.code).toBe('LINK_RESERVED');
+        expect(await prisma.session.count()).toBe(1);
+      },
+    );
+
     it('all uses settled → LINK_UNAVAILABLE used_up', async () => {
       const l = await createLink(ctx(), { ...fixedUsd, max_uses: 2 });
       await prisma.paymentLink.update({ where: { id: l.id }, data: { useCount: 2 } });

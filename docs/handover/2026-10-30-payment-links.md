@@ -59,7 +59,8 @@ No credential, never cached (`cache-control: no-store`, errors too).
 - Session creation takes a **row lock** on the link (`FOR UPDATE`), then refuses unless the link is
   available. With `max_uses`, `use_count + open sessions >= max_uses` refuses: `LINK_RESERVED` while
   some uses are only held by open sessions, `LINK_UNAVAILABLE`/`used_up` when all are settled. "Open"
-  means status `PENDING_DEPOSIT`, `PROCESSING` or `SCREENING_PENDING` and `expiresAt > now`.
+  means status `PENDING_DEPOSIT` with `expiresAt > now`, or status `PROCESSING` or `SCREENING_PENDING`
+  whatever the expiry (a payment in progress holds its use until it settles or fails).
 - Public sessions start with a **5 minute expiry** (`LINK_UNQUOTED_TTL_MS`). The first quote extends it
   to the normal lifetime in the quote's transaction. Sessions your server creates with
   `payment_link_id` keep the caller's expiry and `external_ref`.

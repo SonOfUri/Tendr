@@ -133,8 +133,23 @@ export const LINK_UNQUOTED_TTL_MS = 5 * 60_000;
 /** A link refuses new public sessions (LINK_BUSY) at this many open sessions with a quote. */
 export const LINK_MAX_QUOTED_SESSIONS = 200;
 
-/** Session statuses that still hold a use of a link (with `expiresAt` in the future). */
-export const LINK_OPEN_STATUSES = ['PENDING_DEPOSIT', 'PROCESSING', 'SCREENING_PENDING'] as const;
+/**
+ * The open sessions of a link: each one holds a use of it. A session waiting for its deposit
+ * (PENDING_DEPOSIT) holds it until `expiresAt`; one whose deposit arrived (PROCESSING,
+ * SCREENING_PENDING) holds it with no expiry condition, because that payment can still settle
+ * after the session's expiry passes.
+ */
+export function linkOpenSessions(t: ScopeContext, linkId: string, now: Date) {
+  return {
+    merchantId: t.merchantId,
+    livemode: t.livemode,
+    paymentLinkId: linkId,
+    OR: [
+      { status: 'PENDING_DEPOSIT' as const, expiresAt: { gt: now } },
+      { status: { in: ['PROCESSING' as const, 'SCREENING_PENDING' as const] } },
+    ],
+  };
+}
 
 export interface CreatedSession {
   id: string;
@@ -214,13 +229,7 @@ async function lockLinkForSession(
   const availability = linkAvailability(link, { now, merchantReady: true });
   if (availability !== 'available') throw linkUnavailable(availability, publicPath);
 
-  const open = {
-    merchantId: t.merchantId,
-    livemode: t.livemode,
-    paymentLinkId: linkId,
-    status: { in: [...LINK_OPEN_STATUSES] },
-    expiresAt: { gt: now },
-  };
+  const open = linkOpenSessions(t, linkId, now);
   if (link.maxUses !== null) {
     const holding = await tx.session.count({ where: open });
     if (link.useCount + holding >= link.maxUses) {

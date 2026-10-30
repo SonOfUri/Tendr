@@ -85,11 +85,14 @@ A link is never deleted: its payments and totals stay. The `slug` is part of the
 
 ### How `max_uses` works
 
-`max_uses` is safe for single-use invoices. Every **open session reserves one use** until it settles or
-expires, so two payers cannot both start paying a link that has one use left.
+`max_uses` is safe for single-use invoices. Every **open session reserves one use**, so two payers
+cannot both start paying a link that has one use left. A session waiting for its deposit holds the use
+until it expires. Once the deposit has arrived, the session holds the use until the payment settles or
+fails, even if that runs past the session's expiry.
 
 - While a payer is mid-payment on the last use, a second payer gets `409 LINK_RESERVED`: "Someone is
-  paying this link right now, try again shortly." If that session expires, the use is free again.
+  paying this link right now, try again shortly." If that session expires without a deposit, the use
+  is free again.
 - When every use has settled, new payers get `409 LINK_UNAVAILABLE` with `availability: "used_up"`.
 - A session started from the page lives 5 minutes until the payer gets a quote, then the normal session
   lifetime. A payer who walks away frees the use after those 5 minutes.
