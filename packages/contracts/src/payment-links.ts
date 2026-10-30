@@ -12,13 +12,16 @@ export const LINK_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/;
 
 /** Slugs a link may not take: they collide with routes under `/pay/<merchant>/…`. */
 export const RESERVED_LINK_SLUGS: readonly string[] = [
+  'refund-address',
   'qr',
   'opengraph-image',
   'twitter-image',
   'sessions',
   'session',
   'public',
+  'test',
   'new',
+  'edit',
   'api',
   'pay',
   'success',

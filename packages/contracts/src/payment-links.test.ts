@@ -11,7 +11,9 @@ const base = { title: 'Tithe', currency: 'USD' };
 
 describe('PaymentLinkCreateSchema', () => {
   it('rejects fixed links without amount and open links with amount', () => {
-    expect(PaymentLinkCreateSchema.safeParse({ ...base, amount_type: 'fixed' }).success).toBe(false);
+    expect(PaymentLinkCreateSchema.safeParse({ ...base, amount_type: 'fixed' }).success).toBe(
+      false,
+    );
     expect(
       PaymentLinkCreateSchema.safeParse({ ...base, amount_type: 'fixed', amount: '10.00' }).success,
     ).toBe(true);
@@ -43,9 +45,22 @@ describe('PaymentLinkCreateSchema', () => {
     const ok = (slug: string) =>
       PaymentLinkCreateSchema.safeParse({ ...base, amount_type: 'open', slug }).success;
     for (const bad of ['ab', '-ab', 'ab-', 'Ab1', 'a'.repeat(61)]) expect(ok(bad), bad).toBe(false);
-    for (const good of ['tithe', 'sunday-offering-2', 'a'.repeat(60)]) expect(ok(good), good).toBe(true);
+    for (const good of ['tithe', 'sunday-offering-2', 'a'.repeat(60)])
+      expect(ok(good), good).toBe(true);
     expect(LINK_SLUG_RE.test('tithe')).toBe(true);
     for (const r of RESERVED_LINK_SLUGS) expect(ok(r), r).toBe(false);
+    for (const r of [
+      'refund-address',
+      'qr',
+      'opengraph-image',
+      'twitter-image',
+      'test',
+      'new',
+      'edit',
+    ]) {
+      expect(RESERVED_LINK_SLUGS, r).toContain(r);
+      expect(ok(r), r).toBe(false);
+    }
   });
 });
 
