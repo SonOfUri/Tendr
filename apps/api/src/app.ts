@@ -5,6 +5,7 @@ import { env } from './env.js';
 import { auth } from './gateway/auth.js';
 import { idempotency } from './gateway/idempotency.js';
 import { createRateLimiters, type RateLimitKind } from './gateway/rate-limit.js';
+import { createObjectStore, type ObjectStore } from './storage/object-store.js';
 import { closeClient, closeRedis, createRedis, getRedis, whenReady } from './lib/redis.js';
 import { AppError, prismaErrorFor } from './lib/errors.js';
 import { log } from './lib/logger.js';
@@ -36,6 +37,7 @@ import { refundRoutes } from './routes/refunds.js';
 import { relayerRoutes } from './routes/relayers.js';
 import { reviewRoutes } from './routes/review.js';
 import { teamRoutes } from './routes/team.js';
+import { themeAssetRoutes } from './routes/theme-assets.js';
 import { themeRoutes } from './routes/themes.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { randomUUID } from 'node:crypto';
@@ -49,6 +51,8 @@ export type BuildAppOptions = {
   redisUrl?: string;
   /** Redis key prefix for rate-limit counters (tests isolate runs with a unique one). */
   rateLimitNamespace?: string;
+  /** Where theme assets are stored; default is the store `ASSET_STORE_DRIVER` names. */
+  objectStore?: ObjectStore;
 };
 
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -259,6 +263,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(relayerRoutes);
   await app.register(hookRoutes);
   await app.register(themeRoutes);
+  await app.register(themeAssetRoutes, { store: opts.objectStore ?? createObjectStore(env()) });
   opts.extraRoutes?.(app);
 
   return app;

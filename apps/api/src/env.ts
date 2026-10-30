@@ -400,6 +400,26 @@ const EnvSchema = z
         .refine((u) => /^https?:\/\//i.test(u), 'must be an http(s) URL')
         .default('http://localhost:9100/tendr-assets'),
     ),
+    /**
+     * Where uploaded theme assets are stored: `s3` (any S3-compatible bucket — MinIO locally, R2
+     * or S3 in production) or `memory` (tests). Defaults to memory outside production; production
+     * must use s3. The bucket must be publicly readable at TENDR_ASSET_ORIGIN.
+     */
+    ASSET_STORE_DRIVER: z.preprocess(blankAsUnset, z.enum(['s3', 'memory']).optional()),
+    /** S3 endpoint (MinIO: http://localhost:9100). Unset = AWS S3 for the region. */
+    ASSET_S3_ENDPOINT: z.preprocess(blankAsUnset, z.string().url().optional()),
+    ASSET_S3_REGION: z.preprocess(blankAsUnset, z.string().default('auto')),
+    ASSET_S3_BUCKET: z.preprocess(blankAsUnset, optionalString),
+    ASSET_S3_ACCESS_KEY_ID: z.preprocess(blankAsUnset, optionalString),
+    ASSET_S3_SECRET_ACCESS_KEY: z.preprocess(blankAsUnset, optionalString),
+    /** `true` for MinIO (bucket in the path, not the host name). */
+    ASSET_S3_FORCE_PATH_STYLE: z.preprocess(
+      blankAsUnset,
+      z
+        .enum(['true', 'false'])
+        .default('false')
+        .transform((v) => v === 'true'),
+    ),
   })
   .superRefine((e, ctx) => {
     if (e.MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO > e.FUNDING_PER_ACCOUNT_YOCTO) {
@@ -502,6 +522,38 @@ const EnvSchema = z
         });
       }
     }
+    const assetDriver = e.ASSET_STORE_DRIVER ?? (e.NODE_ENV === 'production' ? 's3' : 'memory');
+    if (e.NODE_ENV === 'production') {
+      if (assetDriver !== 's3') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ASSET_STORE_DRIVER'],
+          message: 'memory is not allowed in production (set ASSET_STORE_DRIVER=s3)',
+        });
+      }
+      if (!e.TENDR_ASSET_ORIGIN.startsWith('https://')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['TENDR_ASSET_ORIGIN'],
+          message: 'must be https in production',
+        });
+      }
+    }
+    if (assetDriver === 's3') {
+      for (const key of [
+        'ASSET_S3_BUCKET',
+        'ASSET_S3_ACCESS_KEY_ID',
+        'ASSET_S3_SECRET_ACCESS_KEY',
+      ] as const) {
+        if (!e[key]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: 'required when ASSET_STORE_DRIVER=s3',
+          });
+        }
+      }
+    }
     for (const origin of splitList(e.WEBAUTHN_ORIGINS)) {
       if (!z.string().url().safeParse(origin).success) {
         ctx.addIssue({
@@ -545,6 +597,8 @@ const EnvSchema = z
       ? splitList(e.WEBAUTHN_ORIGINS)
       : ['http://localhost:3000'],
     FX_PROVIDER: e.FX_PROVIDER ?? (e.NODE_ENV === 'production' ? 'openexchangerates' : 'fixed'),
+    ASSET_STORE_DRIVER:
+      e.ASSET_STORE_DRIVER ?? (e.NODE_ENV === 'production' ? ('s3' as const) : ('memory' as const)),
     MAIL_DRIVER:
       e.MAIL_DRIVER ??
       ({ development: 'log', test: 'memory', production: 'unconfigured' } as const)[e.NODE_ENV],

@@ -41,7 +41,11 @@ const UpdateBodySchema = z.strictObject({
 });
 const ValidateBodySchema = z.strictObject({ document: z.unknown() });
 
-function ctxOf(req: FastifyRequest, permission: 'account:read' | 'settings:manage'): ThemeCtx {
+/** The theme context for a request, after the dashboard permission check (theme assets too). */
+export function ctxOf(
+  req: FastifyRequest,
+  permission: 'account:read' | 'settings:manage',
+): ThemeCtx {
   const p = requirePrincipal(req);
   if (!req.db) throw unauthorized();
   if (p.kind === 'dashboard_user') {

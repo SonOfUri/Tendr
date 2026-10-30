@@ -14,10 +14,9 @@
 // Ruling C24: in live mode endpoint URLs must be https and must not resolve to private, loopback or
 // link-local addresses — checked at create and again at send time (on the connection's own DNS
 // lookup, so a rebinding answer cannot slip through); redirects are never followed.
-import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import { request as httpRequest, type RequestOptions } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { BlockList, isIP, type LookupFunction } from 'node:net';
+import { isIP } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import type { Event, Prisma, WebhookDelivery, WebhookEndpoint } from '@prisma/client';
 import {
@@ -34,6 +33,13 @@ import { newId } from '../lib/ids.js';
 import { LOCAL_DEV_HOSTS } from '../lib/local-hosts.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
+import {
+  assertPublicHost,
+  guardedLookup,
+  isPrivateAddress,
+  setSafeFetchResolver,
+  type HostErrors,
+} from '../lib/safe-fetch.js';
 import { registerEventHandler, handlerNamesFor } from '../jobs/handlers.js';
 import { getSecret, putSecret } from '../secrets/secrets.js';
 
@@ -204,80 +210,12 @@ export function retryDelayMs(attempt: number): number {
 }
 
 // ─── URL policy and SSRF guard ──────────────────────────────────────────────
+// The address checks live in lib/safe-fetch.ts, shared with every other outbound fetch.
 
-const blocked = new BlockList();
-for (const [net, prefix] of [
-  ['0.0.0.0', 8],
-  ['10.0.0.0', 8],
-  ['100.64.0.0', 10],
-  ['127.0.0.0', 8],
-  ['169.254.0.0', 16],
-  ['172.16.0.0', 12],
-  ['192.0.0.0', 24],
-  ['192.0.2.0', 24],
-  ['192.88.99.0', 24],
-  ['192.168.0.0', 16],
-  ['198.18.0.0', 15],
-  ['198.51.100.0', 24],
-  ['203.0.113.0', 24],
-  ['224.0.0.0', 4],
-  ['240.0.0.0', 4],
-] as const) {
-  blocked.addSubnet(net, prefix, 'ipv4');
-}
-for (const [net, prefix] of [
-  ['::', 96], // unspecified, loopback and IPv4-compatible (deprecated; embeds any IPv4) — T9
-  ['64:ff9b::', 96], // NAT64: may front any IPv4, including private ones
-  ['64:ff9b:1::', 48],
-  ['100::', 64],
-  ['2001::', 32], // Teredo: tunnels to an arbitrary IPv4 — T9
-  ['2001:db8::', 32],
-  ['2002::', 16], // 6to4: embeds an arbitrary IPv4
-  ['fc00::', 7],
-  ['fe80::', 10],
-  ['fec0::', 10],
-  ['ff00::', 8],
-] as const) {
-  blocked.addSubnet(net, prefix, 'ipv6');
-}
+export { isPrivateAddress };
 
-/** Whether an IP literal is private, loopback, link-local or otherwise not publicly routable. */
-export function isPrivateAddress(address: string): boolean {
-  const ip = address.replace(/^\[|\]$/g, '').split('%')[0]!;
-  const family = isIP(ip);
-  if (family === 4) return blocked.check(ip, 'ipv4');
-  if (family !== 6) return true; // not an IP: never treated as safe
-  const lower = ip.toLowerCase();
-  // IPv4-mapped IPv6 (::ffff:a.b.c.d, ::ffff:7f00:1): judge the embedded IPv4. IPv4-compatible
-  // (::a.b.c.d) is in ::/96 and blocked outright.
-  const mapped = /^(?:0{0,4}:){0,5}(?:0{0,4}:)?ffff:(.+)$/.exec(lower);
-  if (mapped) {
-    const tail = mapped[1]!;
-    if (isIP(tail) === 4) return blocked.check(tail, 'ipv4');
-    const parts = tail.split(':');
-    if (parts.length === 2) {
-      const n = (parseInt(parts[0]!, 16) << 16) | parseInt(parts[1]!, 16);
-      const v4 = [24, 16, 8, 0].map((s) => (n >>> s) & 255).join('.');
-      return blocked.check(v4, 'ipv4');
-    }
-    return true;
-  }
-  return blocked.check(ip, 'ipv6');
-}
-
-type Resolver = (host: string) => Promise<LookupAddress[]>;
-const systemResolver: Resolver = (host) =>
-  new Promise((resolve, reject) =>
-    dnsLookup(host, { all: true, verbatim: true }, (err, addrs) =>
-      err ? reject(err) : resolve(addrs),
-    ),
-  );
-let resolver: Resolver = systemResolver;
-
-/** Test hook: replaces the DNS resolver (null restores the system one). Tests never use the network. */
-export function setWebhookResolver(fn: Resolver | null): void {
-  resolver = fn ?? systemResolver;
-}
+/** Test hook: replaces the DNS resolver for the SSRF guard (null restores the system one). */
+export const setWebhookResolver = setSafeFetchResolver;
 
 /**
  * Whether endpoints of this mode get the full SSRF policy (https only, public addresses only).
@@ -315,52 +253,20 @@ export async function validateEndpointUrl(raw: string, livemode: boolean): Promi
   } else if (url.protocol !== 'https:') {
     throw invalidUrl('The URL must use https://');
   }
-  if (strict) await assertPublicHost(url.hostname);
+  if (strict) await assertPublicHost(url.hostname, hostErrors);
   return url.toString();
 }
 
 const ssrfError = () =>
   invalidUrl('Webhook endpoints must resolve to public addresses (not private or loopback)');
 
-/** Throws unless `hostname` is a public IP literal or resolves only to public addresses. */
-export async function assertPublicHost(hostname: string): Promise<void> {
-  const host = hostname.replace(/^\[|\]$/g, '');
-  if (isIP(host)) {
-    if (isPrivateAddress(host)) throw ssrfError();
-    return;
-  }
-  let addrs: LookupAddress[];
-  try {
-    addrs = await resolver(host);
-  } catch {
-    throw invalidUrl('The URL host could not be resolved');
-  }
-  if (addrs.length === 0 || addrs.some((a) => isPrivateAddress(a.address))) throw ssrfError();
-}
-
-/**
- * A `lookup` for the outbound socket that refuses private answers, so the address actually
- * connected to is the one checked (no DNS-rebinding gap between check and connect).
- */
-const guardedLookup: LookupFunction = (hostname, options, callback) => {
-  resolver(hostname).then(
-    (addrs) => {
-      const family = typeof options === 'object' ? options.family : undefined;
-      const usable = addrs.filter((a) => !family || a.family === family);
-      if (usable.length === 0 || addrs.some((a) => isPrivateAddress(a.address))) {
-        const err = Object.assign(new Error('webhook host resolves to a private address'), {
-          code: 'EBLOCKED',
-        });
-        return callback(err, '', 4);
-      }
-      if (typeof options === 'object' && options.all) {
-        return (callback as unknown as (e: null, a: LookupAddress[]) => void)(null, usable);
-      }
-      callback(null, usable[0]!.address, usable[0]!.family);
-    },
-    (err: NodeJS.ErrnoException) => callback(err, '', 4),
-  );
+/** `assertPublicHost` errors for endpoint URLs: plain 400s the merchant can act on. */
+const hostErrors: HostErrors = {
+  blocked: ssrfError,
+  unresolved: () => invalidUrl('The URL host could not be resolved'),
 };
+
+const guardedWebhookLookup = guardedLookup('webhook host resolves to a private address');
 
 // ─── transport ──────────────────────────────────────────────────────────────
 
@@ -387,7 +293,7 @@ const httpTransport: WebhookTransport = async (req) => {
   const opts: RequestOptions = {
     method: 'POST',
     headers: { ...req.headers, 'content-length': String(Buffer.byteLength(req.body)) },
-    ...(req.strict ? { lookup: guardedLookup } : {}),
+    ...(req.strict ? { lookup: guardedWebhookLookup } : {}),
   };
   return new Promise((resolve, reject) => {
     const r = send(url, opts, (res) => {
@@ -1003,7 +909,7 @@ async function send(d: WebhookDelivery, now: Date): Promise<SendOutcome> {
     if (strict) {
       const url = new URL(endpoint.url);
       if (url.protocol !== 'https:') return fail('webhook endpoints must use https://', true);
-      await assertPublicHost(url.hostname);
+      await assertPublicHost(url.hostname, hostErrors);
     }
     secrets = await signingSecrets(endpoint, now);
   } catch (err) {

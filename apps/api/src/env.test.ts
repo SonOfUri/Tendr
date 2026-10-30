@@ -8,13 +8,25 @@ const gcp = {
   GCP_KMS_KEYRING: 'tendr',
   GCP_CREDENTIALS_JSON: '{"type":"service_account","client_email":"a@b","private_key":"k"}',
 };
-/** Production has no WebAuthn defaults, and needs a 1Click API key and an FX API key. */
+/** Production's theme-asset store: an s3 bucket served from an https origin. */
+const assets = {
+  TENDR_ASSET_ORIGIN: 'https://assets.usetendr.tech',
+  ASSET_S3_ENDPOINT: 'https://acct.r2.cloudflarestorage.com',
+  ASSET_S3_BUCKET: 'tendr-assets',
+  ASSET_S3_ACCESS_KEY_ID: 'ak',
+  ASSET_S3_SECRET_ACCESS_KEY: 'sk',
+};
+/**
+ * Production has no WebAuthn defaults, and needs a 1Click API key, an FX API key and an asset
+ * store.
+ */
 const webauthn = {
   WEBAUTHN_RP_ID: 'usetendr.tech',
   WEBAUTHN_ORIGINS: 'https://dashboard.usetendr.tech',
   ONECLICK_API_KEY: 'jwt',
   FX_API_KEY: 'oxr',
   WEB_INTERNAL_TOKEN: 'i'.repeat(32),
+  ...assets,
 };
 
 describe('loadEnv keyvault rules', () => {
@@ -190,6 +202,7 @@ describe('loadEnv dashboard auth and mail', () => {
     ONECLICK_API_KEY: 'jwt',
     FX_API_KEY: 'oxr',
     WEB_INTERNAL_TOKEN: 'i'.repeat(32),
+    ...assets,
   };
 
   it('defaults WebAuthn to localhost and parses the origin list', () => {
@@ -507,5 +520,40 @@ describe('loadEnv FX', () => {
     for (const bad of ['not json', '[]', '{"NGN":1602.04}', '{"NGN":"0"}', '{"ngn":"1"}']) {
       expect(() => loadEnv({ ...base, FX_FIXED_RATES: bad }), bad).toThrow(/FX_FIXED_RATES/);
     }
+  });
+});
+
+describe('loadEnv theme asset store', () => {
+  const prod = { ...base, ...gcp, ...webauthn, NODE_ENV: 'production', KEYVAULT_DRIVER: 'gcp' };
+
+  it('defaults to memory outside production and s3 in production', () => {
+    const dev = loadEnv({ ...base, NODE_ENV: 'development' });
+    expect(dev.ASSET_STORE_DRIVER).toBe('memory');
+    expect(dev.ASSET_S3_REGION).toBe('auto');
+    expect(dev.ASSET_S3_FORCE_PATH_STYLE).toBe(false);
+    expect(dev.TENDR_ASSET_ORIGIN).toBe('http://localhost:9100/tendr-assets');
+    expect(loadEnv(prod).ASSET_STORE_DRIVER).toBe('s3');
+    const minio = loadEnv({
+      ...base,
+      ASSET_STORE_DRIVER: 's3',
+      ASSET_S3_ENDPOINT: 'http://localhost:9100',
+      ASSET_S3_BUCKET: 'tendr-assets',
+      ASSET_S3_ACCESS_KEY_ID: 'minio',
+      ASSET_S3_SECRET_ACCESS_KEY: 'minio-secret',
+      ASSET_S3_FORCE_PATH_STYLE: 'true',
+    });
+    expect(minio.ASSET_S3_FORCE_PATH_STYLE).toBe(true);
+  });
+
+  it('s3 needs a bucket and keys; production needs s3 and an https origin', () => {
+    expect(() => loadEnv({ ...base, ASSET_STORE_DRIVER: 's3' })).toThrow(/ASSET_S3_BUCKET/);
+    expect(() => loadEnv({ ...prod, ASSET_STORE_DRIVER: 'memory' })).toThrow(/ASSET_STORE_DRIVER/);
+    const { ASSET_S3_SECRET_ACCESS_KEY: _sk, ...noSecret } = prod;
+    expect(() => loadEnv(noSecret)).toThrow(/ASSET_S3_SECRET_ACCESS_KEY/);
+    expect(() => loadEnv({ ...prod, TENDR_ASSET_ORIGIN: 'http://assets.usetendr.tech' })).toThrow(
+      /TENDR_ASSET_ORIGIN/,
+    );
+    const { TENDR_ASSET_ORIGIN: _o, ...noOrigin } = prod;
+    expect(() => loadEnv(noOrigin)).toThrow(/TENDR_ASSET_ORIGIN/);
   });
 });
