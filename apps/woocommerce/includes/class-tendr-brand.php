@@ -85,7 +85,7 @@ final class Tendr_Brand {
 	 * @param mixed $url Candidate.
 	 */
 	public static function is_https_url( $url ): bool {
-		return is_string( $url ) && strlen( $url ) <= 2048 && str_starts_with( $url, 'https://' ) && is_string( wp_parse_url( $url, PHP_URL_HOST ) );
+		return is_string( $url ) && strlen( $url ) <= 2048 && str_starts_with( $url, 'https://' ) && false !== filter_var( $url, FILTER_VALIDATE_URL ) && is_string( wp_parse_url( $url, PHP_URL_HOST ) );
 	}
 
 	/**

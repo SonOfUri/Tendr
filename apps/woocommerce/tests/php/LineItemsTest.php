@@ -41,30 +41,112 @@ class LineItemsTest extends Tendr_Test_Case {
 		$this->assertCount( 50, $body['line_items'] );
 	}
 
-	public function test_line_item_unit_amounts_use_store_decimals(): void {
+	/**
+	 * An order with one line.
+	 *
+	 * @param string $name     Name.
+	 * @param float  $quantity Quantity.
+	 * @param string $total    Line total.
+	 */
+	private static function order_with_line( string $name, float $quantity, string $total ): WC_Order {
 		$order = wc_create_order();
-		$order->set_currency( 'NGN' );
-		$third = new WC_Order_Item_Product();
-		$third->set_name( 'Three for ten' );
-		$third->set_quantity( 3 );
-		$third->set_total( '10.00' );
-		$order->add_item( $third );
-		$pair = new WC_Order_Item_Product();
-		$pair->set_name( 'Plain' );
-		$pair->set_quantity( 2 );
-		$pair->set_total( '25.00' );
-		$order->add_item( $pair );
+		$item  = new WC_Order_Item_Product();
+		$item->set_name( $name );
+		$item->set_quantity( $quantity );
+		$item->set_total( $total );
+		$order->add_item( $item );
 		$order->save();
+		return $order;
+	}
 
-		$items = Tendr_Gateway::line_items( $order );
-		$this->assertSame( '3.33', $items[0]['unit_amount'], 'rounded to the 2 store decimals' );
-		$this->assertSame( 3, $items[0]['quantity'] );
-		$this->assertSame( '12.5', $items[1]['unit_amount'], 'no trailing zero, like the order amount' );
+	public function test_line_item_unit_amounts_use_store_decimals(): void {
+		// Exact division in minor units: 25.00 / 2 = 12.50, trailing zero trimmed like the order amount.
+		$line = Tendr_Gateway::line_items( self::order_with_line( 'Pair', 2, '25.00' ) )[0];
+		$this->assertSame( 2, $line['quantity'] );
+		$this->assertSame( '12.5', $line['unit_amount'] );
+
+		// A JPY store with 2 price decimals, 3 for 1000: not divisible, so one unit at the line total
+		// (never "333.33", which the API refuses for JPY).
+		$line = Tendr_Gateway::line_items( self::order_with_line( 'Tee', 3, '1000.00' ) )[0];
+		$this->assertSame( 1, $line['quantity'] );
+		$this->assertSame( 'Tee × 3', $line['name'] );
+		$this->assertSame( '1000', $line['unit_amount'] );
+
+		// 3 for 999.00 divides exactly: 333.
+		$line = Tendr_Gateway::line_items( self::order_with_line( 'Tee', 3, '999.00' ) )[0];
+		$this->assertSame( array( 3, '333' ), array( $line['quantity'], $line['unit_amount'] ) );
+
+		// A 3-decimal store (USD only allows 2): 3 for 1.500 divides to 0.5 (fine); 3 for 1.000 does not.
+		update_option( 'woocommerce_price_num_decimals', '3' );
+		$line = Tendr_Gateway::line_items( self::order_with_line( 'Gum', 3, '1.500' ) )[0];
+		$this->assertSame( array( 3, '0.5' ), array( $line['quantity'], $line['unit_amount'] ) );
+		$line = Tendr_Gateway::line_items( self::order_with_line( 'Gum', 3, '1.000' ) )[0];
+		$this->assertSame( array( 1, 'Gum × 3', '1' ), array( $line['quantity'], $line['name'], $line['unit_amount'] ) );
 
 		update_option( 'woocommerce_price_num_decimals', '0' );
-		$items = Tendr_Gateway::line_items( $order );
-		$this->assertSame( '3', $items[0]['unit_amount'] );
-		$this->assertSame( '13', $items[1]['unit_amount'] );
+		$line = Tendr_Gateway::line_items( self::order_with_line( 'Tee', 3, '10' ) )[0];
+		$this->assertSame( array( 1, '10' ), array( $line['quantity'], $line['unit_amount'] ) );
+	}
+
+	public function test_fractional_and_out_of_range_quantities_keep_the_line_total(): void {
+		// Stores that sell by length or weight can have decimal quantities (WooCommerce itself rounds
+		// them down on an item, so the helper is called with the raw quantity).
+		$line = Tendr_Gateway::priced_line( 'Cloth', 2.5, 25.0, 2 );
+		$this->assertSame( array( 1, 'Cloth × 2.5', '25' ), array( $line['quantity'], $line['name'], $line['unit_amount'] ) );
+
+		$line = Tendr_Gateway::line_items( self::order_with_line( 'Bolts', 20000, '200.00' ) )[0];
+		$this->assertSame( array( 1, 'Bolts × 20000', '200' ), array( $line['quantity'], $line['name'], $line['unit_amount'] ) );
+		$this->assertLessThanOrEqual( 200, mb_strlen( Tendr_Gateway::priced_line( str_repeat( 'a', 300 ), 2.5, 5.0, 2 )['name'] ) );
+	}
+
+	public function test_names_are_decoded_after_stripping_tags(): void {
+		$line = Tendr_Gateway::line_items( self::order_with_line( '<b>Tom &amp; Jerry&#039;s</b>', 1, '5' ) )[0];
+		$this->assertSame( "Tom & Jerry's", $line['name'] );
+	}
+
+	public function test_a_session_refused_for_its_line_items_is_retried_without_them_on_a_new_key(): void {
+		self::connect_locally();
+		$order = self::order_with_items( 2 );
+		$order->set_total( '20.00' );
+		$order->save();
+		$calls = 0;
+		$this->mock_http(
+			static function ( $url, $args ) use ( &$calls ) {
+				++$calls;
+				$body = json_decode( (string) $args['body'], true );
+				if ( isset( $body['line_items'] ) ) {
+					return self::response(
+						400,
+						array(
+							'error' => array(
+								'code'    => 'VALIDATION_ERROR',
+								'message' => 'line_items[0]: unit_amount in USD allows at most 2 decimal places',
+								'details' => array( 'field' => 'line_items.0.unit_amount' ),
+							),
+						)
+					);
+				}
+				return self::response(
+					201,
+					array(
+						'id'            => 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0',
+						'client_secret' => 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0_secret_0123456789abcdef0123456789abcdef',
+						'url'           => 'https://usetendr.tech/pay/ses_01JABCDEFGHJKMNPQRSTVWXYZ0#cs=ses_01JABCDEFGHJKMNPQRSTVWXYZ0_secret_0123456789abcdef0123456789abcdef',
+						'expires_at'    => gmdate( 'c', time() + 600 ),
+						'status'        => 'PENDING_DEPOSIT',
+					)
+				);
+			}
+		);
+
+		$result = ( new Tendr_Gateway() )->process_payment( $order->get_id() );
+
+		$this->assertSame( 'success', $result['result'] );
+		$this->assertSame( 2, $calls );
+		$ref = Tendr_Gateway::external_ref( $order->get_id() );
+		$this->assertSame( $ref . '-1', $this->requests[0]['args']['headers']['Idempotency-Key'] );
+		$this->assertSame( $ref . '-2', $this->requests[1]['args']['headers']['Idempotency-Key'], 'the refused call used its key up' );
+		$this->assertArrayNotHasKey( 'line_items', json_decode( (string) $this->requests[1]['args']['body'], true ) );
 	}
 
 	public function test_skips_non_https_images(): void {

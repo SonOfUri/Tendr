@@ -340,16 +340,11 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 			if ( ! $item instanceof WC_Order_Item_Product ) {
 				continue;
 			}
-			$quantity = (int) $item->get_quantity();
-			$name     = mb_substr( trim( wp_strip_all_tags( (string) $item->get_name() ) ), 0, 200 );
-			if ( $quantity < 1 || $quantity > 10000 || '' === $name ) {
+			$name = trim( html_entity_decode( wp_strip_all_tags( (string) $item->get_name() ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ) );
+			if ( '' === $name ) {
 				continue;
 			}
-			$line  = array(
-				'name'        => $name,
-				'quantity'    => $quantity,
-				'unit_amount' => self::unit_amount( (float) $item->get_total(), $quantity, $decimals ),
-			);
+			$line  = self::priced_line( $name, (float) $item->get_quantity(), (float) $item->get_total(), $decimals );
 			$image = self::item_image( $item );
 			if ( null !== $image ) {
 				$line['image_url'] = $image;
@@ -360,19 +355,48 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	}
 
 	/**
-	 * A line's total divided by its quantity, to the store's price decimals, without trailing
-	 * fraction zeros (as amount(): the API checks against the currency's own decimals).
+	 * A line's name, quantity and unit price. The unit price is the line total divided by the
+	 * quantity in whole minor units of the store's price decimals; when that does not divide
+	 * exactly (or the quantity is fractional or out of range) the line is sent as one unit at the
+	 * line total, with the quantity in the name ("Name × 3"), so the shown prices stay true.
 	 *
-	 * @param float $total    Line total.
-	 * @param int   $quantity Quantity.
-	 * @param int   $decimals Store price decimals.
+	 * @param string $name     Product name.
+	 * @param float  $quantity Quantity.
+	 * @param float  $total    Line total.
+	 * @param int    $decimals Store price decimals.
+	 * @return array{name: string, quantity: int, unit_amount: string}
 	 */
-	private static function unit_amount( float $total, int $quantity, int $decimals ): string {
-		$unit = number_format( max( 0.0, $total ) / $quantity, $decimals, '.', '' );
-		if ( str_contains( $unit, '.' ) ) {
-			$unit = rtrim( rtrim( $unit, '0' ), '.' );
+	public static function priced_line( string $name, float $quantity, float $total, int $decimals ): array {
+		$minor = (int) round( max( 0.0, $total ) * ( 10 ** $decimals ) );
+		if ( floor( $quantity ) === $quantity && $quantity >= 1 && $quantity <= 10000 && 0 === $minor % (int) $quantity ) {
+			return array(
+				'name'        => mb_substr( $name, 0, 200 ),
+				'quantity'    => (int) $quantity,
+				'unit_amount' => self::minor_to_decimal( intdiv( $minor, (int) $quantity ), $decimals ),
+			);
 		}
-		return '' === $unit ? '0' : $unit;
+		$suffix = ' × ' . rtrim( rtrim( number_format( $quantity, 4, '.', '' ), '0' ), '.' );
+		return array(
+			'name'        => mb_substr( $name, 0, 200 - mb_strlen( $suffix ) ) . $suffix,
+			'quantity'    => 1,
+			'unit_amount' => self::minor_to_decimal( $minor, $decimals ),
+		);
+	}
+
+	/**
+	 * Minor units as a decimal string at `$decimals` places, without trailing fraction zeros (as
+	 * amount(): the API checks against the currency's own decimals).
+	 *
+	 * @param int $minor    Amount in 10^-decimals units.
+	 * @param int $decimals Decimals.
+	 */
+	private static function minor_to_decimal( int $minor, int $decimals ): string {
+		$digits = str_pad( (string) $minor, $decimals + 1, '0', STR_PAD_LEFT );
+		$value  = $decimals > 0 ? substr( $digits, 0, -$decimals ) . '.' . substr( $digits, -$decimals ) : $digits;
+		if ( str_contains( $value, '.' ) ) {
+			$value = rtrim( rtrim( $value, '0' ), '.' );
+		}
+		return $value;
 	}
 
 	/**
@@ -450,6 +474,19 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		return 'VALIDATION_ERROR' === $error->get_error_code()
 			&& is_array( $data ) && 'amount' === ( $data['field'] ?? null )
 			&& str_contains( $error->get_error_message(), 'decimal places' );
+	}
+
+	/**
+	 * Whether the API refused the session for its `line_items` (`VALIDATION_ERROR`, 400; the
+	 * client keeps only the message, which names `line_items[i]`).
+	 *
+	 * @param WP_Error $error Error.
+	 */
+	private static function is_line_items_error( WP_Error $error ): bool {
+		$data = $error->get_error_data();
+		return 'VALIDATION_ERROR' === $error->get_error_code()
+			&& 400 === (int) ( is_array( $data ) ? ( $data['status'] ?? 0 ) : 0 )
+			&& str_contains( $error->get_error_message(), 'line_items' );
 	}
 
 	/**
@@ -584,6 +621,12 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		$body   = $this->session_body( $order );
 		$result = self::create_once( $order, $body, $mode );
 		if ( is_wp_error( $result ) && 'IDEMPOTENCY_CONFLICT' === $result->get_error_code() ) {
+			$result = self::create_once( $order, $body, $mode );
+		}
+		// Line items are display only: if the API refuses them, pay without them. The refused call
+		// used its key up (a 4xx), so the retry takes the next key and a different body.
+		if ( is_wp_error( $result ) && isset( $body['line_items'] ) && self::is_line_items_error( $result ) ) {
+			unset( $body['line_items'] );
 			$result = self::create_once( $order, $body, $mode );
 		}
 		return $result;
