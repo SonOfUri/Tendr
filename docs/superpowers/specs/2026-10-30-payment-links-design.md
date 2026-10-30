@@ -105,6 +105,7 @@ A merchant can change everything except `slug` and the mode. Changes apply to pa
 - A merchant may set a higher `min_amount` in the link's currency.
 - The payer page shows the minimum under the amount box ("Minimum ₦1,600") and refuses lower amounts before creating a session. The API enforces it again.
 - No maximum *(my call — not asked for; screening applies as with all payments)*.
+- **Fixed-price links meet the same floor (review fix).** A fixed amount must be worth at least $1.00 when the link is created or its amount is edited. If the FX rate can't be fetched then, creation is refused with `FX_RATE_UNAVAILABLE`. The check runs again when the payer presses Pay, because rates move. Below the floor, Pay returns `AMOUNT_TOO_LOW` and the page says the amount is too small to pay in crypto right now, instead of failing at the quote.
 
 ### 2.5 When a link stops taking payments
 
@@ -114,14 +115,17 @@ Merchants may create links before they finish setting up *(my call — they'll o
 
 **These checks apply to every session that names a link,** including sessions created through the store API (`POST /v1/checkout/sessions` with `payment_link_id`). That path keeps working for merchants who build their own page around a link, but it can't take payments a switched-off, expired or used-up link wouldn't *(my call)*. The amount is the caller's on that path, since it's the merchant's own key.
 
-`use_count` goes up when a payment from the link **succeeds**, inside the same transaction that records the success. A later refund does not lower it *(my call — the merchant can raise `max_uses` if they restock)*. A link at `max_uses - 1` can have several sessions open at once; if more than one succeeds, the extra payments still settle normally (money that arrived is never refused), and the count may exceed `max_uses` *(my call — refusing a settled payment is worse than overshooting a limit)*. Merchants who need a hard stock limit should know this; the docs say so.
+`use_count` goes up when a payment from the link **succeeds**, inside the same transaction that records the success. A later refund does not lower it *(my call — the merchant can raise `max_uses` if they restock)*.
+
+**Reserving a use (review fix).** When `max_uses` is set, each new session reserves one use. Session creation locks the link row (`SELECT … FOR UPDATE`) and counts settled uses plus the link's open sessions (pending, processing or screening, not yet expired). If that total has already reached `max_uses`, it refuses the new session. This is what makes single-use invoices safe: two payers pressing Pay at the same instant can't both get a session. If every use is settled, the link is `used_up`. If some are only reserved, the payer sees "Someone is paying this link right now, try again shortly." (`LINK_RESERVED`, 409). A reservation is freed when its session expires. One rare case is left: a payer who deposits after their session expired. That money still settles (money that arrived is never refused), so `use_count` can exceed `max_uses` in that case only. The docs say so.
 
 ## 3. Addresses, test mode and the QR code
 
 - **Live links:** `usetendr.tech/pay/<merchant-slug>/<link-slug>`.
 - **Test links:** `usetendr.tech/pay/<merchant-slug>/<link-slug>?mode=test` *(my call)*. Slugs are unique per mode, so a test link and a live link can share a slug; the `mode=test` marker picks the test one. Without it, only live links resolve. The test page shows a clear "Test mode — no real money moves" banner, as the checkout already does.
-- **Routing:** the web app already has `/pay/[sessionId]`. Next.js does not allow two different dynamic names at the same level, so the builder restructures the `pay` routes (for example a shared first segment that is either a session id or a merchant slug, told apart by the `ses_` prefix). Session URLs must keep working exactly as today.
-- **Merchant slug changes** would break every link the merchant has shared. The builder checks whether merchants can change their slug today; if they can, either block it once the merchant has a link, or keep the old slug redirecting. *(Raised as an open item — see §10.)*
+- **Routing:** the web app already has `/pay/[sessionId]`. Next.js does not allow two different dynamic names at the same level, so the builder restructures the `pay` routes (for example a shared first segment that is either a session id or a merchant slug, told apart by the `ses_` prefix). Session URLs must keep working exactly as today. Session ids are matched first. Merchant slugs can't take the session-id shape: signup slugs are `[a-z0-9-]` only, and `isReservedLabel` also refuses any label starting with `ses_`. A test pins both (review fix).
+- **Merchant slugs never change.** They are set at signup and are the merchant's NEAR account labels, so shared links can't break that way.
+- **Domain:** `usetendr.tech`, as decided in project 2 (the passkey RP ID) and confirmed in project 4. `usetendr.xyz` appears only in the early diagrams and is not used.
 - **QR code:** `usetendr.tech/pay/<merchant>/<link>/qr` returns a PNG (default) or SVG (`?format=svg`) of the link's address, large enough to print, with a quiet zone *(my call)*. Public, cacheable, and only for links that exist. Test links' QR codes encode the `?mode=test` address. The API also returns the address and QR URL on every link.
 
 ## 4. The payer's page
@@ -144,6 +148,8 @@ The page is server-rendered so chat apps can read its preview (§4.1), works wit
 
 The page publishes Open Graph and Twitter card tags, plus a generated preview image showing the merchant's logo and name, the link title, and the price or "Pay any amount". Test links' cards say "Test". Inactive or expired links still render a card (the merchant name and title) but no price *(my call)*.
 
+**The image renderer never fetches an arbitrary URL (review fix).** Theme `logo_url` is free text today. The preview image draws the logo only when the URL is https and its origin is Tendr's own asset origin (the web env var `TENDR_ASSET_ORIGIN`, which 5c's `theme_assets` uploads will use). It fetches with a 3-second timeout, no redirects, a 1 MB limit and an image content type. In every other case it draws the merchant's initial instead. On the page itself the browser loads the logo, so there is no server-side fetch, and the CSP `img-src` already governs it.
+
 ## 5. Creating a session from a link
 
 **Where things run** *(my call)*: the web app (`apps/web`) serves the payer's page, the QR route and the preview image, and reads link data by calling the API server-side. The API (`apps/api`) owns the public endpoints below, including their rate limits; the payer's browser calls the API directly to create the session, as the checkout already does for its own calls.
@@ -160,7 +166,12 @@ It:
 5. Calls the same `createSession` logic as the store API, with: the link's currency and FX conversion; the link's fee and gas overrides; `payment_link_id` set; **no `external_ref`** *(my call — there is no order; payments are told apart by session id)*; success and cancel destinations pointing back to the link page.
 6. Returns the hosted checkout URL with the client secret in the fragment, exactly as session creation does today. The page redirects to it.
 
-**Abuse limits** *(my call; numbers are the builder's to tune)*: per-IP limits on this endpoint (e.g. 10 sessions a minute), a per-link ceiling on open sessions (e.g. 200 pending at once), and the existing global public limits. Sessions from links use the normal session expiry, so abandoned ones expire on their own. Bot protection beyond rate limits (a CAPTCHA) is not added now; the docs list it as the next step if abuse appears.
+**Abuse limits (revised after review).** Nobody who only knows a link may be able to take it offline.
+- **Payer IP is the key everywhere.** The web server renders the page and reads the link server-side, so its requests all come from one address. It therefore calls the API with an internal credential (`WEB_INTERNAL_TOKEN`, a shared env secret, compared in constant time) and passes the payer's IP in `x-tendr-client-ip`. The API trusts that header only alongside a valid credential. Public reads are limited per payer IP, under a global ceiling, and the web server's own address is exempt from per-IP limits when it presents the credential. Session creation is called from the payer's browser, so it already sees the real IP.
+- **Unquoted link sessions die fast.** A link session starts with a 5-minute expiry. The first quote on it extends the expiry to the normal session lifetime (counted from creation), in the same transaction as the quote. A session nobody quotes stops holding anything after 5 minutes.
+- **The busy ceiling counts only quoted sessions.** A link refuses new sessions (`LINK_BUSY`) when it has 200 open sessions that have a quote. Unquoted sessions don't count, so filling the ceiling means requesting real quotes, which are rate-limited separately.
+- **Per-IP cap per link:** at most 3 new sessions per payer IP per link in any 5 minutes, alongside the 10-a-minute per-IP limit across all links.
+- The existing global public limits still apply. A CAPTCHA is not added now; the docs list it as the next step if abuse appears.
 
 Public read of a link (`GET .../public/<merchant-slug>/<link-slug>`) returns only what the page shows: merchant display name and logo, title, description, amount type, amount and currency, minimum, note setting, availability and mode. Never the merchant's id, settlement details, limits or counts.
 
@@ -183,7 +194,11 @@ Authenticated like the rest of the merchant API (secret keys with `payment_links
 
 - `POST /v1/payment_links` — create.
 - `GET /v1/payment_links` — list, newest first, paginated like other lists, filterable by status; archived hidden unless asked.
-- `GET /v1/payment_links/:id` — one link, including its public URL, QR URL, `availability`, `use_count`, and how much it has collected in USD: `total_paid_usd` (successful payments, at the USD amount fixed when each session was created) and `total_refunded_usd`, so the dashboard can show what was kept *(my call — the first thing a church or NGO wants to know)*.
+- `GET /v1/payment_links/:id` — one link, including its public URL, QR URL, `availability`, `use_count`, and how much it has collected:
+  - `total_paid` and `total_refunded` are in the **link's own currency**. Each session's original local amount (`originalAmount`, or `amount` for USD links) is summed, so an NGN link reports naira.
+  - `total_paid_usd` and `total_refunded_usd` use the USD value fixed when each session was created (`session.amount`, which checkout already stores in USD for non-USD orders).
+
+  The dashboard can then show what was kept *(my call — the first thing a church or NGO wants to know; local-currency totals added after review)*.
 - `PATCH /v1/payment_links/:id` — edit (§2.3); switch on/off via `status`.
 - `DELETE /v1/payment_links/:id` — archive.
 
@@ -191,7 +206,7 @@ Responses follow the existing API's shape and error conventions; creation honour
 
 ## 9. Documentation and handover
 
-- **Mintlify (`apps/docs`):** a "Payment links" guide (kinds of link, currencies and minimums, the note, test mode, QR codes, preview cards, the `max_uses` overshoot caveat, what the payer sees) and API reference pages for §8 and the new webhook fields.
+- **Mintlify (`apps/docs`):** a "Payment links" guide (kinds of link, currencies and minimums, the note, test mode, QR codes, preview cards, how `max_uses` reserves a use per open session and the late-deposit caveat, what the payer sees) and API reference pages for §8 and the new webhook fields.
 - **Handover note** (`docs/handover/`): how the link API, public endpoints, QR and preview routes work, plus *suggested* screens only: a link list with totals, a create/edit form with a live preview, a link detail page with QR download and "copy link", and payments filtered by link.
 
 ## 10. Open items for the builder
@@ -199,7 +214,6 @@ Responses follow the existing API's shape and error conventions; creation honour
 - **Stale-session sweep:** `createSession` expires overdue pending sessions by filtering on `external_ref` (`sessions.ts:313`). With no `external_ref`, as link sessions have, that filter disappears and it would expire every overdue pending session for the merchant. The sweep must be skipped, or keyed differently, for sessions without a ref.
 
 - **Next.js route restructure** under `/pay` without breaking session URLs (§3).
-- **Merchant slug changes:** find out whether they're possible today and pick block-or-redirect (§3).
 - **The $1.00 floor** against real 1Click minimums (§2.4).
 - **Webhook allowlist change** must not break the WooCommerce plugin (§7).
 - **Preview image generation** method (Next.js image route or similar) and its caching, including invalidation when a link is edited.
