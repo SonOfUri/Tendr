@@ -13,6 +13,7 @@ import { registerRefundHooks } from '../checkout/refunds.js';
 import { registerWatcherHooks } from '../checkout/watcher.js';
 import { registerWebhookHandlers } from '../checkout/webhooks.js';
 import { registerHookHandlers } from '../hooks/hooks.js';
+import { registerProductImageHandler } from '../themes/product-images.js';
 import { registerAccountHandlers } from './account-notices.js';
 import { registerNotificationEmailNotices } from './notification-email-notices.js';
 import { registerPaymentNotices } from './payment-notices.js';
@@ -62,3 +63,7 @@ registerNotificationEmailNotices();
 // Integrator hooks (gasless spec §4): a HOOK session's settled payment gets its contract call
 // (`onTendrDeposit` / `on_tendr_deposit`), and `hook.failed` mails the store once.
 registerHookHandlers();
+
+// Product images (checkout themes spec §6): a new session's line-item images are fetched safely,
+// re-encoded and cached on the asset origin; shoppers see only the cached copies.
+registerProductImageHandler();

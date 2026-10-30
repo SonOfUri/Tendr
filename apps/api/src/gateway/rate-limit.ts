@@ -1,4 +1,4 @@
-// Redis-backed rate limits, one-minute windows.
+// Redis-backed rate limits, one-minute windows unless noted.
 //
 //   ip_global      3000 / IP          every /v1 route, BEFORE auth — bounds credential guessing
 //   secret_key     1000 / key
@@ -18,6 +18,8 @@
 //   payment_link_read_global 20000 / all  ceiling across every payer on that route
 //   payment_link_session  10 / IP     the public "Pay" route (session from a link)
 //   payment_link_session_link 3 / (IP, link) per 5 minutes, on that route too
+//   brand_pull       10 / merchant  per 60 minutes, the brand-pull routes (`brandPull`), on top of
+//                                   the principal's own limit: each pull fetches outside pages
 //
 // On the payment-link routes "IP" is the payer's: `internalClient(req).clientIp`, which is
 // `req.ip` unless the web server presents its internal token with the payer's address on a
@@ -64,7 +66,9 @@ export type RateLimitKind =
   /** Sessions from payment links, per payer IP. */
   | 'payment_link_session'
   /** Sessions from payment links, per (payer IP, link), over `PAYMENT_LINK_SESSION_LINK_WINDOW_MS`. */
-  | 'payment_link_session_link';
+  | 'payment_link_session_link'
+  /** Brand pulls (theme from a website or store), per merchant, over `BRAND_PULL_WINDOW_MS`. */
+  | 'brand_pull';
 
 export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   ip_global: 3000,
@@ -83,13 +87,18 @@ export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   payment_link_read_global: 20_000,
   payment_link_session: 10,
   payment_link_session_link: 3,
+  brand_pull: 10,
 };
 
 /** The window of `payment_link_session_link` (every other kind uses one minute). */
 export const PAYMENT_LINK_SESSION_LINK_WINDOW_MS = 5 * 60_000;
 
+/** The window of `brand_pull`. */
+export const BRAND_PULL_WINDOW_MS = 60 * 60_000;
+
 const WINDOW_MS: Partial<Record<RateLimitKind, number>> = {
   payment_link_session_link: PAYMENT_LINK_SESSION_LINK_WINDOW_MS,
+  brand_pull: BRAND_PULL_WINDOW_MS,
 };
 
 declare module 'fastify' {
@@ -139,6 +148,7 @@ export async function createRateLimiters(
   notificationEmailVerify: Hook;
   paymentLinkRead: Hook;
   paymentLinkSession: Hook;
+  brandPull: Hook;
 }> {
   await app.register(rateLimit, {
     global: false,
@@ -173,6 +183,7 @@ export async function createRateLimiters(
     payment_link_read_global: make('payment_link_read_global'),
     payment_link_session: make('payment_link_session'),
     payment_link_session_link: make('payment_link_session_link'),
+    brand_pull: make('brand_pull'),
   };
 
   async function enforce(
@@ -241,6 +252,16 @@ export async function createRateLimiters(
       const ip = internalClient(req).clientIp;
       await enforce(req, reply, 'payment_link_session', `pls:${ip}`);
       await enforce(req, reply, 'payment_link_session_link', `plsl:${ip}:${linkKey(req)}`);
+    },
+    /**
+     * Route-level hook for the brand-pull routes (after auth): `brand_pull` per merchant, whatever
+     * key or person makes the call. Requests without a merchant principal pass (the route refuses
+     * them).
+     */
+    brandPull: async (req, reply) => {
+      const p = req.principal;
+      if (!p || p.kind === 'user_session') return;
+      await enforce(req, reply, 'brand_pull', `bp:${p.merchantId}`);
     },
     ip: async (req, reply) => {
       if (!isV1(req.routeOptions.url)) return;

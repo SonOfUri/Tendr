@@ -38,6 +38,7 @@ import { relayerRoutes } from './routes/relayers.js';
 import { reviewRoutes } from './routes/review.js';
 import { teamRoutes } from './routes/team.js';
 import { themeAssetRoutes } from './routes/theme-assets.js';
+import { themeBrandRoutes } from './routes/theme-brand.js';
 import { themeRoutes } from './routes/themes.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { randomUUID } from 'node:crypto';
@@ -262,8 +263,13 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(gasRoutes);
   await app.register(relayerRoutes);
   await app.register(hookRoutes);
+  const objectStore = opts.objectStore ?? createObjectStore(env());
   await app.register(themeRoutes);
-  await app.register(themeAssetRoutes, { store: opts.objectStore ?? createObjectStore(env()) });
+  await app.register(themeAssetRoutes, { store: objectStore });
+  await app.register(themeBrandRoutes, {
+    store: objectStore,
+    brandPullRateLimit: limiters.brandPull,
+  });
   opts.extraRoutes?.(app);
 
   return app;
