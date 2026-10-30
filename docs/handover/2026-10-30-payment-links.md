@@ -79,8 +79,10 @@ No credential, never cached (`cache-control: no-store`, errors too).
 
 The public routes sit behind the web app, so the API sees the web server's address, not the payer's.
 The web server sends `x-tendr-internal: <WEB_INTERNAL_TOKEN>` and `x-tendr-client-ip: <payer IP>`. The
-API trusts the IP header only when the token matches (constant-time compare), and then does not apply
-per-IP limits to the web server's own address.
+API trusts the IP header only when the token matches (constant-time compare), and only on `GET`
+requests under `/v1/payment_links/public/` (the read the web server makes). There it skips `ip_global`
+for the web server's own address and keys the read limit on the payer's IP. Every other route,
+including "Pay" (the payer's browser calls it directly), ignores both headers and keys on `req.ip`.
 
 | Limit | Value |
 | --- | --- |

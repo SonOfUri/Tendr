@@ -7,7 +7,7 @@
 // and are never cached.
 import { PublicLinkSessionInputSchema } from '@tendr/contracts';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
-import { internalClient } from '../gateway/internal-client.js';
+import { internalClient, PAYMENT_LINK_PUBLIC_PREFIX } from '../gateway/internal-client.js';
 import { createLinkSession, getPublicLink } from '../payment-links/public.js';
 
 type Hook = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -21,7 +21,7 @@ type Req = FastifyRequest<{
 
 const livemodeOf = (req: Req) => req.query?.mode !== 'test';
 
-export const PAYMENT_LINK_PUBLIC_PREFIX = '/v1/payment_links/public/';
+export { PAYMENT_LINK_PUBLIC_PREFIX };
 
 export const paymentLinkPublicRoutes: FastifyPluginAsync<PaymentLinkPublicRouteOptions> = async (
   app,

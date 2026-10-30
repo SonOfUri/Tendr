@@ -36,23 +36,40 @@ describe('gateway rate limits', () => {
     return app;
   };
 
-  it('trusted internal requests skip ip_global but key `public` on the payer ip', async () => {
+  it('a trusted request to a route other than the public link read is an ordinary caller', async () => {
     loadEnv({ ...process.env, WEB_INTERNAL_TOKEN: 'k'.repeat(40) });
     try {
-      await start({ rateLimitOverrides: { ip_global: 2, public: 3 } });
-      const get = (ip: string, token = 'k'.repeat(40)) =>
+      await start({ rateLimitOverrides: { ip_global: 2, public: 100 } });
+      // The internal token is honoured only on GET /v1/payment_links/public/...: here the forwarded
+      // address is ignored, every request is keyed on req.ip and counts against ip_global.
+      const get = (ip: string) =>
         app.inject({
           url: '/v1/test/public',
-          headers: { 'x-tendr-internal': token, 'x-tendr-client-ip': ip },
+          headers: { 'x-tendr-internal': 'k'.repeat(40), 'x-tendr-client-ip': ip },
         });
-      // Three from one payer: past ip_global (2), within public (3).
-      for (let i = 0; i < 3; i++) expect((await get('203.0.113.7')).statusCode).toBe(200);
-      expect((await get('203.0.113.7')).statusCode).toBe(429);
+      expect((await get('203.0.113.7')).statusCode).toBe(200);
       expect((await get('203.0.113.8')).statusCode).toBe(200);
-      // A wrong token is an ordinary caller: keyed on req.ip, and ip_global applies.
-      expect((await get('203.0.113.9', 'x'.repeat(40))).statusCode).toBe(200);
-      expect((await get('203.0.113.10', 'x'.repeat(40))).statusCode).toBe(200);
-      expect((await get('203.0.113.11', 'x'.repeat(40))).statusCode).toBe(429);
+      const third = await get('203.0.113.9');
+      expect(third.statusCode).toBe(429);
+      expect(third.json().error.code).toBe('RATE_LIMITED');
+    } finally {
+      loadEnv();
+    }
+  });
+
+  it('a trusted request elsewhere keys `public` on req.ip, not the forwarded address', async () => {
+    loadEnv({ ...process.env, WEB_INTERNAL_TOKEN: 'k'.repeat(40) });
+    try {
+      await start({ rateLimitOverrides: { public: 2 } });
+      const get = (ip: string) =>
+        app.inject({
+          url: '/v1/test/public',
+          headers: { 'x-tendr-internal': 'k'.repeat(40), 'x-tendr-client-ip': ip },
+        });
+      // Different forwarded addresses share req.ip's `public` bucket.
+      expect((await get('203.0.113.7')).statusCode).toBe(200);
+      expect((await get('203.0.113.8')).statusCode).toBe(200);
+      expect((await get('203.0.113.9')).statusCode).toBe(429);
     } finally {
       loadEnv();
     }

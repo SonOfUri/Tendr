@@ -5,8 +5,14 @@ import { internalClient } from './internal-client.js';
 
 const TOKEN = 'w'.repeat(40);
 
-const req = (headers: Record<string, string>, ip = '10.0.0.5') =>
-  ({ headers, ip }) as unknown as FastifyRequest;
+const LINK_READ = '/v1/payment_links/public/:merchant/:link';
+
+/** By default the one route the internal token is honoured on: the public link read. */
+const req = (
+  headers: Record<string, string>,
+  ip = '10.0.0.5',
+  { method = 'GET', url = LINK_READ }: { method?: string; url?: string } = {},
+) => ({ headers, ip, method, routeOptions: { url } }) as unknown as FastifyRequest;
 
 describe('internalClient', () => {
   afterEach(() => {
@@ -44,6 +50,27 @@ describe('internalClient', () => {
     expect(
       internalClient(req({ 'x-tendr-internal': TOKEN, 'x-tendr-client-ip': '2001:db8::1' })),
     ).toEqual({ trusted: true, clientIp: '2001:db8::1' });
+  });
+
+  it('is honoured only on GET of the public link read', () => {
+    loadEnv({ ...process.env, WEB_INTERNAL_TOKEN: TOKEN });
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const h = { 'x-tendr-internal': TOKEN, 'x-tendr-client-ip': '203.0.113.7' };
+    const untrusted = { trusted: false, clientIp: '10.0.0.5' };
+    const pay = { method: 'POST', url: `${LINK_READ}/sessions` };
+    expect(internalClient(req(h, undefined, pay))).toEqual(untrusted);
+    expect(internalClient(req(h, undefined, { method: 'HEAD' }))).toEqual(untrusted);
+    expect(internalClient(req(h, undefined, { url: '/v1/connect/token' }))).toEqual(untrusted);
+    expect(
+      internalClient(req(h, undefined, { url: '/v1/settings/notification-email/verify' })),
+    ).toEqual(untrusted);
+    // An unmatched route (404) has no route url.
+    expect(
+      internalClient({ headers: h, ip: '10.0.0.5', method: 'GET', routeOptions: {} } as never),
+    ).toEqual(untrusted);
+    // Elsewhere the token is not looked at, so a missing address is never warned about.
+    internalClient(req({ 'x-tendr-internal': TOKEN }, undefined, { url: '/v1/connect/token' }));
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('client ip header ignored without a valid token', () => {

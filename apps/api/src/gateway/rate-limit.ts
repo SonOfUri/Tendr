@@ -19,10 +19,12 @@
 //   payment_link_session  10 / IP     the public "Pay" route (session from a link)
 //   payment_link_session_link 3 / (IP, link) per 5 minutes, on that route too
 //
-// "IP" is the payer's: `internalClient(req).clientIp`, which is `req.ip` unless the web server
-// presents its internal token with the payer's address (internal-client.ts). Such trusted
-// requests skip `ip_global` (the server's own address would trip it for everyone); `public` and
-// the route-level limits key on the payer's IP, so a leaked token never lifts per-payer limits.
+// On the payment-link routes "IP" is the payer's: `internalClient(req).clientIp`, which is
+// `req.ip` unless the web server presents its internal token with the payer's address on a
+// `GET /v1/payment_links/public/...` read (internal-client.ts). Such trusted reads skip
+// `ip_global` (the server's own address would trip it for everyone); `payment_link_read` keys on
+// the payer's IP, so a leaked token never lifts per-payer limits. Every other route ignores the
+// internal headers and keys on `req.ip`.
 //
 // Counters are keyed by ids (principalRef) and IPs, never by raw credentials. Fails open:
 // if Redis is unreachable the request is let through and a warning is logged.
@@ -217,12 +219,11 @@ export async function createRateLimiters(
     },
     /** Route-level hook for `POST /v1/connect/token`: `connect_token` per IP. */
     connectToken: async (req, reply) => {
-      await enforce(req, reply, 'connect_token', `ct:${internalClient(req).clientIp}`);
+      await enforce(req, reply, 'connect_token', `ct:${req.ip}`);
     },
     /** Route-level hook for the notification-email verify link: per IP. */
     notificationEmailVerify: async (req, reply) => {
-      const ip = internalClient(req).clientIp;
-      await enforce(req, reply, 'notification_email_verify', `nev:${ip}`);
+      await enforce(req, reply, 'notification_email_verify', `nev:${req.ip}`);
     },
     /**
      * Route-level hook for `GET /v1/payment_links/public/:merchant/:link`: a global ceiling, then
@@ -249,17 +250,16 @@ export async function createRateLimiters(
     principal: async (req, reply) => {
       if (!isV1(req.routeOptions.url)) return;
       const p = req.principal;
-      const client = internalClient(req);
       if (!p) {
         if (
           req.routeOptions.config.auth === 'public' &&
           req.routeOptions.config.publicLimit !== 'route'
         ) {
-          await enforce(req, reply, 'public', `pub:${client.clientIp}`);
+          await enforce(req, reply, 'public', `pub:${req.ip}`);
         }
         return;
       }
-      await enforce(req, reply, principalKind(p), principalKey(p, client.clientIp));
+      await enforce(req, reply, principalKind(p), principalKey(p, req.ip));
     },
   };
 }
