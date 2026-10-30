@@ -2,6 +2,7 @@ import { connect, createServer, type AddressInfo, type Server, type Socket } fro
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp, type BuildAppOptions } from '../app.js';
+import { loadEnv } from '../env.js';
 import { DEFAULT_LIMITS } from './rate-limit.js';
 import { createApiKey, createMerchant, resetDb } from '../test/helpers.js';
 
@@ -9,11 +10,9 @@ const bearer = (raw: string) => ({ authorization: `Bearer ${raw}` });
 
 function routes(app: FastifyInstance) {
   app.get('/v1/test/public', { config: { auth: 'public' } }, async () => ({ ok: true }));
-  app.post(
-    '/v1/test/echo',
-    { config: { auth: { principals: ['secret_key'] } } },
-    async (req) => ({ body: req.body }),
-  );
+  app.post('/v1/test/echo', { config: { auth: { principals: ['secret_key'] } } }, async (req) => ({
+    body: req.body,
+  }));
 }
 
 describe('gateway rate limits', () => {
@@ -36,6 +35,45 @@ describe('gateway rate limits', () => {
     await app.ready();
     return app;
   };
+
+  it('a trusted request to a route other than the public link read is an ordinary caller', async () => {
+    loadEnv({ ...process.env, WEB_INTERNAL_TOKEN: 'k'.repeat(40) });
+    try {
+      await start({ rateLimitOverrides: { ip_global: 2, public: 100 } });
+      // The internal token is honoured only on GET /v1/payment_links/public/...: here the forwarded
+      // address is ignored, every request is keyed on req.ip and counts against ip_global.
+      const get = (ip: string) =>
+        app.inject({
+          url: '/v1/test/public',
+          headers: { 'x-tendr-internal': 'k'.repeat(40), 'x-tendr-client-ip': ip },
+        });
+      expect((await get('203.0.113.7')).statusCode).toBe(200);
+      expect((await get('203.0.113.8')).statusCode).toBe(200);
+      const third = await get('203.0.113.9');
+      expect(third.statusCode).toBe(429);
+      expect(third.json().error.code).toBe('RATE_LIMITED');
+    } finally {
+      loadEnv();
+    }
+  });
+
+  it('a trusted request elsewhere keys `public` on req.ip, not the forwarded address', async () => {
+    loadEnv({ ...process.env, WEB_INTERNAL_TOKEN: 'k'.repeat(40) });
+    try {
+      await start({ rateLimitOverrides: { public: 2 } });
+      const get = (ip: string) =>
+        app.inject({
+          url: '/v1/test/public',
+          headers: { 'x-tendr-internal': 'k'.repeat(40), 'x-tendr-client-ip': ip },
+        });
+      // Different forwarded addresses share req.ip's `public` bucket.
+      expect((await get('203.0.113.7')).statusCode).toBe(200);
+      expect((await get('203.0.113.8')).statusCode).toBe(200);
+      expect((await get('203.0.113.9')).statusCode).toBe(429);
+    } finally {
+      loadEnv();
+    }
+  });
 
   it('429 after the per-key limit, separate counters per key', async () => {
     await start({ rateLimitOverrides: { secret_key: 3 } });
@@ -131,7 +169,9 @@ describe('gateway rate limits', () => {
     const res = await app.inject({ url: '/v1/ping', headers: bearer(k.raw) });
     expect(res.statusCode).toBe(200);
     const lines = logSpy.mock.calls.map((c) => String(c[0]));
-    expect(lines.some((l) => l.includes('"level":"warn"') && l.includes('failing open'))).toBe(true);
+    expect(lines.some((l) => l.includes('"level":"warn"') && l.includes('failing open'))).toBe(
+      true,
+    );
   });
 
   it('fails open within ~1s when Redis stops replying mid-connection', async () => {

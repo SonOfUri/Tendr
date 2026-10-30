@@ -14,6 +14,17 @@
 //   connect_token    10 / IP          `POST /v1/connect/token` (public), instead of `public`
 //   notification_email_verify 10 / IP `POST /v1/settings/notification-email/verify` (public),
 //                                     instead of `public`
+//   payment_link_read    120 / IP     the public payment-link read, instead of `public`
+//   payment_link_read_global 20000 / all  ceiling across every payer on that route
+//   payment_link_session  10 / IP     the public "Pay" route (session from a link)
+//   payment_link_session_link 3 / (IP, link) per 5 minutes, on that route too
+//
+// On the payment-link routes "IP" is the payer's: `internalClient(req).clientIp`, which is
+// `req.ip` unless the web server presents its internal token with the payer's address on a
+// `GET /v1/payment_links/public/...` read (internal-client.ts). Such trusted reads skip
+// `ip_global` (the server's own address would trip it for everyone); `payment_link_read` keys on
+// the payer's IP, so a leaked token never lifts per-payer limits. Every other route ignores the
+// internal headers and keys on `req.ip`.
 //
 // Counters are keyed by ids (principalRef) and IPs, never by raw credentials. Fails open:
 // if Redis is unreachable the request is let through and a warning is logged.
@@ -23,6 +34,7 @@ import type { Redis } from 'ioredis';
 import { AppError } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
 import { isV1 } from './auth.js';
+import { internalClient } from './internal-client.js';
 import { principalRef, type Principal } from './principal.js';
 
 export const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -44,7 +56,15 @@ export type RateLimitKind =
   /** The Connect code exchange, per IP. */
   | 'connect_token'
   /** The notification-email verify link, per IP. */
-  | 'notification_email_verify';
+  | 'notification_email_verify'
+  /** The public payment-link read, per payer IP. */
+  | 'payment_link_read'
+  /** The public payment-link read, across all payers. */
+  | 'payment_link_read_global'
+  /** Sessions from payment links, per payer IP. */
+  | 'payment_link_session'
+  /** Sessions from payment links, per (payer IP, link), over `PAYMENT_LINK_SESSION_LINK_WINDOW_MS`. */
+  | 'payment_link_session_link';
 
 export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   ip_global: 3000,
@@ -59,6 +79,17 @@ export const DEFAULT_LIMITS: Record<RateLimitKind, number> = {
   frame_origins_global: 20_000,
   connect_token: 10,
   notification_email_verify: 10,
+  payment_link_read: 120,
+  payment_link_read_global: 20_000,
+  payment_link_session: 10,
+  payment_link_session_link: 3,
+};
+
+/** The window of `payment_link_session_link` (every other kind uses one minute). */
+export const PAYMENT_LINK_SESSION_LINK_WINDOW_MS = 5 * 60_000;
+
+const WINDOW_MS: Partial<Record<RateLimitKind, number>> = {
+  payment_link_session_link: PAYMENT_LINK_SESSION_LINK_WINDOW_MS,
 };
 
 declare module 'fastify' {
@@ -106,6 +137,8 @@ export async function createRateLimiters(
   frameOrigins: Hook;
   connectToken: Hook;
   notificationEmailVerify: Hook;
+  paymentLinkRead: Hook;
+  paymentLinkSession: Hook;
 }> {
   await app.register(rateLimit, {
     global: false,
@@ -120,7 +153,7 @@ export async function createRateLimiters(
   const make = (kind: RateLimitKind): Limiter =>
     app.createRateLimit({
       max: max(kind),
-      timeWindow: RATE_LIMIT_WINDOW_MS,
+      timeWindow: WINDOW_MS[kind] ?? RATE_LIMIT_WINDOW_MS,
       keyGenerator: (req: FastifyRequest) => keys.get(req) ?? '',
     });
   const limiters: Record<RateLimitKind, Limiter> = {
@@ -136,6 +169,10 @@ export async function createRateLimiters(
     frame_origins_global: make('frame_origins_global'),
     connect_token: make('connect_token'),
     notification_email_verify: make('notification_email_verify'),
+    payment_link_read: make('payment_link_read'),
+    payment_link_read_global: make('payment_link_read_global'),
+    payment_link_session: make('payment_link_session'),
+    payment_link_session_link: make('payment_link_session_link'),
   };
 
   async function enforce(
@@ -188,8 +225,26 @@ export async function createRateLimiters(
     notificationEmailVerify: async (req, reply) => {
       await enforce(req, reply, 'notification_email_verify', `nev:${req.ip}`);
     },
+    /**
+     * Route-level hook for `GET /v1/payment_links/public/:merchant/:link`: a global ceiling, then
+     * `payment_link_read` per payer IP.
+     */
+    paymentLinkRead: async (req, reply) => {
+      await enforce(req, reply, 'payment_link_read_global', 'plr:all');
+      await enforce(req, reply, 'payment_link_read', `plr:${internalClient(req).clientIp}`);
+    },
+    /**
+     * Route-level hook for `POST /v1/payment_links/public/:merchant/:link/sessions`:
+     * `payment_link_session` per payer IP, then `payment_link_session_link` per (IP, link).
+     */
+    paymentLinkSession: async (req, reply) => {
+      const ip = internalClient(req).clientIp;
+      await enforce(req, reply, 'payment_link_session', `pls:${ip}`);
+      await enforce(req, reply, 'payment_link_session_link', `plsl:${ip}:${linkKey(req)}`);
+    },
     ip: async (req, reply) => {
       if (!isV1(req.routeOptions.url)) return;
+      if (internalClient(req).trusted) return;
       await enforce(req, reply, 'ip_global', `ip:${req.ip}`);
     },
     principal: async (req, reply) => {
@@ -207,6 +262,17 @@ export async function createRateLimiters(
       await enforce(req, reply, principalKind(p), principalKey(p, req.ip));
     },
   };
+}
+
+/** Slug-shaped params only; anything else (never a real link) shares one bucket per IP. */
+const SLUG = /^[a-z0-9-]{1,64}$/;
+
+/** The link a payer is paying: merchant slug, link slug and mode. */
+function linkKey(req: FastifyRequest): string {
+  const { merchant = '', link = '' } = (req.params ?? {}) as { merchant?: string; link?: string };
+  if (!SLUG.test(merchant) || !SLUG.test(link)) return 'invalid';
+  const test = (req.query as { mode?: unknown } | undefined)?.mode === 'test';
+  return `${merchant}/${link}${test ? ':test' : ''}`;
 }
 
 function principalKind(p: Principal): Exclude<RateLimitKind, 'ip_global' | 'public'> {

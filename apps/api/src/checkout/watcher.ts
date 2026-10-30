@@ -45,6 +45,7 @@ import { onPaymentCollected, onQuotePaymentDetected } from '../relayer/submissio
 import { recordRevenue } from './revenue.js';
 import { liveSenderResolvers } from './senders/index.js';
 import { onScreeningAllowed, screenAddress, type ScreeningOutcome } from './screening.js';
+import { sessionRefs } from './session-refs.js';
 import { expireInTx } from './sessions.js';
 import { tokenInfo } from './tokens.js';
 
@@ -520,7 +521,7 @@ async function detect(q: QuoteRow, status: StatusResponse): Promise<Payment | nu
       const base = {
         payment_id: p.id,
         session_id: s.id,
-        external_ref: s.externalRef,
+        ...sessionRefs(s),
         quote_id: q.id,
         deposit_address: q.depositAddress,
         origin_asset: q.originAssetId,
@@ -863,7 +864,7 @@ async function markLateInTx(
   });
   const s = await tx.session.findFirstOrThrow({
     where: { id: p.sessionId },
-    select: { status: true, externalRef: true },
+    select: { status: true, externalRef: true, paymentLinkId: true, payerNote: true },
   });
   await recordEvent(tx, ctx, {
     aggregateType: 'payment',
@@ -872,7 +873,7 @@ async function markLateInTx(
     payload: {
       payment_id: p.id,
       session_id: p.sessionId,
-      external_ref: s.externalRef,
+      ...sessionRefs(s),
       quote_id: l.quote.id,
       session_status: s.status,
     },
@@ -924,7 +925,7 @@ async function refund(
     });
     const s = await tx.session.findFirstOrThrow({
       where: { id: p.sessionId },
-      select: { externalRef: true },
+      select: { externalRef: true, paymentLinkId: true, payerNote: true },
     });
     await recordEvent(tx, ctx, {
       aggregateType: 'payment',
@@ -933,7 +934,7 @@ async function refund(
       payload: {
         payment_id: p.id,
         session_id: p.sessionId,
-        external_ref: s.externalRef,
+        ...sessionRefs(s),
         reason,
         refunded_amount: refunded.toString(),
         asset: q.originAssetId,
@@ -1380,6 +1381,14 @@ async function settle(
         await transitionSession(tx, ctx, s.id, 'PROCESSING', { payment_id: p.id });
       }
       await transitionSession(tx, ctx, s.id, 'SETTLED', { payment_id: p.id });
+      // A payment link counts successful payments, in the transaction that records the success
+      // (a session settles once; a later refund does not give the use back).
+      if (s.paymentLinkId) {
+        await tx.paymentLink.updateMany({
+          where: { id: s.paymentLinkId, merchantId: ctx.merchantId, livemode: ctx.livemode },
+          data: { useCount: { increment: 1 } },
+        });
+      }
       await recordRevenue(tx, ctx, p.id);
       // The proceeds are collected here: a held gas sponsorship is charged at its estimate.
       await onPaymentCollected(tx, ctx, q, p.id);
@@ -1390,7 +1399,7 @@ async function settle(
         payload: {
           payment_id: p.id,
           session_id: s.id,
-          external_ref: s.externalRef,
+          ...sessionRefs(s),
           quote_id: q.id,
           origin_asset: q.originAssetId,
           amount_in: q.amountIn,
@@ -1506,7 +1515,7 @@ export async function expireSessions(now: Date = deps.now()): Promise<number> {
           select: { status: true },
         });
         if (cur.status !== 'PENDING_DEPOSIT') return false;
-        await expireInTx(tx, ctx, s.id, s.externalRef, 'timeout');
+        await expireInTx(tx, ctx, s.id, s, 'timeout');
         return true;
       });
       if (did) expired++;

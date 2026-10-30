@@ -58,6 +58,19 @@ Verify the raw body before parsing it, and reject a `t` more than 5 minutes old.
 `chain`, `contract`, `attempts` and `tx_hash`. `hook.failed` also carries `error`, the last error. See
 [integrator hooks](/integrations/hooks).
 
+## Payment link fields
+
+Every checkout, payment and refund event carries `data.payment_link_id` and `data.payer_note` next to
+`external_ref`. They are always present:
+
+| Key | Value |
+| --- | --- |
+| `payment_link_id` | The id of the [payment link](/payment-links/overview) the session was created from, or `null`. |
+| `payer_note` | The note the payer left on the link page (plain text, up to 280 characters), or `null`. |
+
+Sessions made from a link's public page have no `external_ref` (it is `null`): match them by
+`payment_link_id` instead. Treat `payer_note` as untrusted text and escape it wherever you show it.
+
 ## `network_fee` on `payment.succeeded`
 
 `payment.succeeded` includes `data.network_fee` for payments quoted with gasless payments. It is null

@@ -167,6 +167,46 @@ describe('dashboard payments', () => {
     expect(liveRes.json().payments.map((x: { id: string }) => x.id)).toEqual([live.id]);
   });
 
+  it('payments list filters by payment_link_id', async () => {
+    const link = await createRow('PaymentLink', merchant.id, false, {});
+    const linked = await createRow('Payment', merchant.id, false, {});
+    await prisma.session.update({
+      where: { id: linked.sessionId as string },
+      data: { paymentLinkId: link.id },
+    });
+    const plain = await createRow('Payment', merchant.id, false, {});
+    const ids = async (url: string) =>
+      (await get(url)).json().payments.map((x: { id: string }) => x.id);
+    expect(await ids(`/v1/payments?payment_link_id=${link.id}`)).toEqual([linked.id]);
+    expect((await ids('/v1/payments')).sort()).toEqual([linked.id, plain.id].sort());
+    expect(await ids('/v1/payments?payment_link_id=plink_unknown')).toEqual([]);
+  });
+
+  it('list and detail carry payment_link_id and payer_note (null for non-link payments)', async () => {
+    const link = await createRow('PaymentLink', merchant.id, false, {});
+    const linked = await createRow('Payment', merchant.id, false, {});
+    await prisma.session.update({
+      where: { id: linked.sessionId as string },
+      data: { paymentLinkId: link.id, payerNote: 'for <b>Sam</b>' },
+    });
+    const plain = await createRow('Payment', merchant.id, false, {});
+    const list = (await get('/v1/payments')).json().payments as {
+      id: string;
+      payment_link_id: string | null;
+      payer_note: string | null;
+    }[];
+    const pick = (id: string) => list.find((x) => x.id === id)!;
+    expect(pick(linked.id)).toMatchObject({
+      payment_link_id: link.id,
+      payer_note: 'for <b>Sam</b>',
+    });
+    expect(pick(plain.id)).toMatchObject({ payment_link_id: null, payer_note: null });
+    const d1 = (await get(`/v1/payments/${linked.id}`)).json();
+    expect(d1).toMatchObject({ payment_link_id: link.id, payer_note: 'for <b>Sam</b>' });
+    const d2 = (await get(`/v1/payments/${plain.id}`)).json();
+    expect(d2).toMatchObject({ payment_link_id: null, payer_note: null });
+  });
+
   it('the detail breaks the fees out (network fee estimated) with integer-string amounts', async () => {
     const { p, q } = await settled('overpay');
     const res = await get(`/v1/payments/${p.id}`);

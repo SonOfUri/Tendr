@@ -27,7 +27,10 @@ export function CheckoutHeader({
   const logo = view.merchant.logo_url?.startsWith('https://')
     ? safeHttpUrl(view.merchant.logo_url)
     : null;
-  const back = safeHttpUrl(view.cancel_url);
+  // A session from a payment link goes back to the link's page, named by its title.
+  const link = view.payment_link ?? null;
+  const back = safeHttpUrl(link ? link.url : view.cancel_url);
+  const backLabel = link ? `Back to ${link.title}` : 'Back to store';
   return (
     <header className="pay-header">
       <div className="pay-row">
@@ -44,7 +47,7 @@ export function CheckoutHeader({
           </button>
         ) : showTimer && back ? (
           <a className="link-button small" href={back} target="_top" rel="noopener">
-            Back to store
+            {backLabel}
           </a>
         ) : null}
       </div>

@@ -26,9 +26,16 @@
             ]
           },
           {
+            "group": "Payment links",
+            "pages": [
+              "payment-links/overview"
+            ]
+          },
+          {
             "group": "API reference",
             "pages": [
               "api-reference/overview",
+              "api-reference/payment-links",
               "api-reference/webhooks"
             ]
           },

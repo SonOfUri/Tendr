@@ -17,8 +17,8 @@ import {
   WalletConnect,
   type WalletQuoteResult,
   type WalletSendResult,
-} from '@/app/pay/[sessionId]/components/WalletConnect';
-import { TestModePanel } from '@/app/pay/[sessionId]/components/TestModePanel';
+} from '@/app/pay/[id]/components/WalletConnect';
+import { TestModePanel } from '@/app/pay/[id]/components/TestModePanel';
 import type { DemoCheckoutBootstrap, DemoSlug } from '@/lib/demo';
 import { buildDemoUiQuote } from '@/lib/demo-ui-checkout';
 import { DemoAssetModal } from './DemoAssetModal';

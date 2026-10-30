@@ -254,6 +254,67 @@ describe('merchant payment and refund emails', () => {
     }
   });
 
+  it('link payment email names the link and quotes the note', async () => {
+    const link = await createRow('PaymentLink', merchant.id, false, { title: 'Sam T-shirt' });
+    const p = await settledPayment({
+      session: {
+        externalRef: null,
+        paymentLinkId: link.id,
+        payerNote: 'for Sam\nsize M',
+      },
+    });
+    await onPaymentReceivedNotice(await succeeded(p.id), deps);
+    const m = received()[0]!;
+    expect(m.subject).toBe('[Test] You got paid 48.75 USDC via Sam T-shirt');
+    const lines = m.text!.split('\n');
+    expect(lines[0]).toBe(`${merchant.name} received 48.75 USDC via Sam T-shirt.`);
+    expect(m.text).toContain('Note from the payer:\n> for Sam\n> size M');
+    expect(m.data).toMatchObject({
+      payment_link_title: 'Sam T-shirt',
+      payer_note: 'for Sam\nsize M',
+    });
+    expect(copy(m)).not.toMatch(BANNED);
+  });
+
+  it('link payment without a note has no note block; non-link mail is unchanged', async () => {
+    const link = await createRow('PaymentLink', merchant.id, false, { title: 'Tip jar' });
+    const p = await settledPayment({ session: { externalRef: null, paymentLinkId: link.id } });
+    await onPaymentReceivedNotice(await succeeded(p.id), deps);
+    expect(received()[0]!.text).not.toContain('Note from the payer');
+    expect(received()[0]!.data).toMatchObject({ payment_link_title: 'Tip jar', payer_note: '' });
+    const plain = await settledPayment();
+    await onPaymentReceivedNotice(await succeeded(plain.id), deps);
+    const m = received()[1]!;
+    expect(m.subject).toBe('[Test] You got paid 48.75 USDC for order order-1001');
+    expect(m.data).toMatchObject({ payment_link_title: '', payer_note: '' });
+  });
+
+  it('a store-path session naming a link keeps the order wording', async () => {
+    const link = await createRow('PaymentLink', merchant.id, false, { title: 'Sam T-shirt' });
+    const p = await settledPayment({
+      session: { externalRef: 'order-77', paymentLinkId: link.id, payerNote: 'gift wrap' },
+    });
+    await onPaymentReceivedNotice(await succeeded(p.id), deps);
+    const m = received()[0]!;
+    expect(m.subject).toBe('[Test] You got paid 48.75 USDC for order order-77');
+    expect(m.text!.split('\n')[0]).toBe(`${merchant.name} received 48.75 USDC for order order-77.`);
+    expect(m.text).toContain('Note from the payer:\n> gift wrap');
+  });
+
+  it('escapes the note in the email', async () => {
+    const link = await createRow('PaymentLink', merchant.id, false, { title: 'Shop <i>link</i>' });
+    const note = '<script>x</script> http://evil.example';
+    const p = await settledPayment({
+      session: { externalRef: null, paymentLinkId: link.id, payerNote: note },
+    });
+    await onPaymentReceivedNotice(await succeeded(p.id), deps);
+    const m = received()[0]!;
+    // The mail is plain text: the note appears verbatim as text, quoted, and is never turned into
+    // markup or a link; `data` carries the raw string.
+    expect(m.text).toContain(`> ${note}`);
+    expect(m.data.payer_note).toBe(note);
+  });
+
   it('refund_sent goes to the same address, once per event, from the refund row', async () => {
     await prisma.merchant.update({
       where: { id: merchant.id },

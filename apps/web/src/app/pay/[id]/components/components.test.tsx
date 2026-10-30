@@ -50,6 +50,31 @@ describe('checkout components', () => {
     expect(header(false)).not.toContain('Close checkout');
   });
 
+  it('the header back link reads "Back to <title>" for a session from a payment link', () => {
+    const render = (view: SessionView) =>
+      renderToStaticMarkup(
+        <CheckoutHeader
+          view={view}
+          settlementSymbol={null}
+          now={Date.parse('2026-10-26T12:00:00Z')}
+          showTimer
+          canClose={false}
+          onClose={() => {}}
+        />,
+      );
+    const linked = render({
+      ...VIEW,
+      cancel_url: 'https://usetendr.tech/pay/acme/tip-jar',
+      payment_link: { title: 'Tip <jar>', url: 'https://usetendr.tech/pay/acme/tip-jar' },
+    } as SessionView);
+    expect(linked).toContain('Back to Tip &lt;jar&gt;');
+    expect(linked).toContain('href="https://usetendr.tech/pay/acme/tip-jar"');
+    expect(linked).not.toContain('Back to store');
+    const plain = render({ ...VIEW, payment_link: null } as SessionView);
+    expect(plain).toContain('Back to store');
+    expect(plain).toContain('href="https://shop.example/cart"');
+  });
+
   it('CopyButton announces "Copied" from a live region outside the button', () => {
     const html = renderToStaticMarkup(<CopyButton value="0xabc" label="Copy the address" />);
     const button = html.slice(html.indexOf('<button'), html.indexOf('</button>'));
@@ -317,6 +342,59 @@ describe('StatusScreen: the extra paid (C42)', () => {
 
   it('a return in progress is being sent back', () => {
     expect(settled('processing')).toContain('being sent back to you');
+  });
+});
+
+describe('StatusScreen: sessions from a payment link', () => {
+  const screen = (kind: 'complete' | 'expired', view: SessionView) =>
+    renderToStaticMarkup(
+      <StatusScreen
+        view={view}
+        screen={{
+          kind,
+          terminal: true,
+          pollMs: 5000,
+          bridgeStatus: null,
+          action: null,
+          notice: null,
+          payment: null,
+          refundNeedingAddress: null,
+        }}
+        tokenOf={() => null}
+        client={{} as never}
+        now={Date.parse('2026-10-26T12:00:00Z')}
+        onRefresh={() => {}}
+      />,
+    );
+  const linked = {
+    ...VIEW,
+    success_url: 'https://usetendr.tech/pay/acme/tip-jar',
+    cancel_url: 'https://usetendr.tech/pay/acme/tip-jar',
+    payment_link: { title: 'Tip <jar>', url: 'https://usetendr.tech/pay/acme/tip-jar' },
+  } as SessionView;
+
+  it('reads "Back to <title>" and goes to the link instead of "Return to store"', () => {
+    for (const kind of ['complete', 'expired'] as const) {
+      const html = screen(kind, linked);
+      expect(html).toContain('Back to Tip &lt;jar&gt;');
+      expect(html).toContain('href="https://usetendr.tech/pay/acme/tip-jar"');
+      expect(html).not.toContain('Return to store');
+    }
+  });
+
+  it('keeps "Return to store" for ordinary sessions', () => {
+    const html = screen('complete', { ...VIEW, payment_link: null } as SessionView);
+    expect(html).toContain('Return to store');
+    expect(html).toContain('href="https://shop.example/thanks"');
+  });
+
+  it('the expired screen sends the payer back to the link page to start again', () => {
+    const html = screen('expired', linked);
+    expect(html).toContain('Go back to Tip &lt;jar&gt; to start again.');
+    expect(html).not.toContain('Return to the store');
+    const plain = screen('expired', { ...VIEW, payment_link: null } as SessionView);
+    expect(plain).toContain('Return to the store to start again.');
+    expect(plain).toContain('href="https://shop.example/cart"');
   });
 });
 

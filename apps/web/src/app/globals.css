@@ -1009,6 +1009,45 @@ code {
   border-top: 1px solid var(--tendr-border);
 }
 
+/* The payment link page (/pay/<merchant>/<link>). The description is plain text: breaks kept. */
+.pay-link-description {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  color: var(--tendr-lavender);
+}
+
+.pay-link-price {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.pay-link-amount,
+.pay-link-amount > div {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.pay-link-form .pay-button {
+  width: 100%;
+}
+
+.pay-link-continue {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.pay-link-continue p {
+  margin: 0;
+}
+
+.pay-link-continue .pay-button {
+  width: 100%;
+  text-align: center;
+}
+
 .pay-test {
   display: grid;
   gap: 0.5rem;

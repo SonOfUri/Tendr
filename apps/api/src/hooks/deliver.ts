@@ -68,6 +68,7 @@ import {
   type ExpectedHookCall,
   type HookArgs,
 } from './guard.js';
+import { sessionRefs } from '../checkout/session-refs.js';
 
 export const DELIVER_HOOK_JOB = 'deliver-hook';
 export const SWEEP_HOOKS_JOB = 'sweep-hooks';
@@ -573,7 +574,7 @@ async function recordOutcome(
     if (event) {
       const session = await tx.session.findFirstOrThrow({
         where: { id: row.sessionId, ...ctx },
-        select: { externalRef: true },
+        select: { externalRef: true, paymentLinkId: true, payerNote: true },
       });
       await recordEvent(tx, ctx, {
         aggregateType: 'payment',
@@ -582,7 +583,7 @@ async function recordOutcome(
         payload: {
           payment_id: row.paymentId,
           session_id: row.sessionId,
-          external_ref: session.externalRef,
+          ...sessionRefs(session),
           hook_call_id: row.id,
           chain: row.chain,
           contract: row.targetContract,

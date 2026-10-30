@@ -12,6 +12,27 @@ const client = new TendrClient({
 });
 ```
 
-The client currently handles authentication, `Idempotency-Key` headers, timeouts and typed errors (`TendrApiError`). Its endpoint methods (sessions, quotes, payments) are coming in the checkout project.
+The client currently handles authentication, `Idempotency-Key` headers, timeouts and typed errors (`TendrApiError`). Endpoint methods so far: `client.paymentLinks` (below). Sessions, quotes and payments are coming in the checkout project.
+
+## Payment links
+
+```ts
+const link = await client.paymentLinks.create(
+  { title: 'Logo deposit', amount_type: 'fixed', amount: '250.00', currency: 'USD', max_uses: 1 },
+  { idempotencyKey: 'invoice-114' },
+);
+console.log(link.url, link.qr_url);
+
+const page = await client.paymentLinks.list({ status: 'active', limit: 20 });
+await client.paymentLinks.update(link.id, { status: 'inactive', max_uses: null }); // null clears
+await client.paymentLinks.archive(link.id);
+```
+
+`create`, `list`, `retrieve`, `update` and `archive` map to the
+[payment links API](/api-reference/payment-links) and throw `TendrApiError` with its error codes
+(`LINK_NOT_SUPPORTED`, `AMOUNT_TOO_LOW`, and so on). The key needs `payment_links:read` or
+`payment_links:write`.
+
+## Webhooks
 
 Webhook verification is Node-only — do not import `@tendr/sdk/webhook` into browser bundles.

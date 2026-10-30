@@ -78,6 +78,9 @@ export function isDeliverableEventType(type: string): type is WebhookEventType {
 const DATA_KEYS = [
   'session_id',
   'external_ref',
+  /** The payment link the session was opened from, and the payer's note from its page. */
+  'payment_link_id',
+  'payer_note',
   'payment_id',
   'refund_id',
   /** A merchant refund's own reference (the WooCommerce refund id), W7. */
@@ -135,14 +138,17 @@ const TYPE_DATA_KEYS: Readonly<Partial<Record<string, readonly string[]>>> = {
 
 /**
  * The webhook `data` for an event payload: only the allowlisted keys (DATA_KEYS, plus the event
- * type's own TYPE_DATA_KEYS), `external_ref` always set.
+ * type's own TYPE_DATA_KEYS), `external_ref`, `payment_link_id` and `payer_note` always set.
  */
 export function webhookData(payload: unknown, type?: string): Record<string, unknown> {
   const src = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   const keys = [...DATA_KEYS, ...((type && TYPE_DATA_KEYS[type]) || [])];
   for (const k of keys) if (k in src) out[k] = src[k];
-  if ('session_id' in out && !('external_ref' in out)) out.external_ref = null;
+  if ('session_id' in out) {
+    for (const k of ['external_ref', 'payment_link_id', 'payer_note'])
+      if (!(k in out)) out[k] = null;
+  }
   return out;
 }
 

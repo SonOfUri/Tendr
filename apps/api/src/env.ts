@@ -382,6 +382,12 @@ const EnvSchema = z
         .refine((u) => /^https?:\/\//i.test(u), 'must be an http(s) URL')
         .default('http://localhost:3000'),
     ),
+    /**
+     * Shared secret the web server sends as `x-tendr-internal` when it reads public payment links
+     * for a payer: with it, the API trusts `x-tendr-client-ip` as the payer's IP and keys per-IP
+     * limits on it. Unset = never trusted. Required (≥ 32 chars) in production. Never logged.
+     */
+    WEB_INTERNAL_TOKEN: z.preprocess(blankAsUnset, z.string().min(32).optional()),
   })
   .superRefine((e, ctx) => {
     if (e.MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO > e.FUNDING_PER_ACCOUNT_YOCTO) {
@@ -460,6 +466,13 @@ const EnvSchema = z
           code: z.ZodIssueCode.custom,
           path: ['WEBAUTHN_ORIGINS'],
           message: 'required in production; every origin must be https',
+        });
+      }
+      if (!e.WEB_INTERNAL_TOKEN) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['WEB_INTERNAL_TOKEN'],
+          message: 'required in production (the web server reads payment links with it)',
         });
       }
       if (!e.ONECLICK_API_KEY) {

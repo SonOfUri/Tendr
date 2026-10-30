@@ -10,10 +10,10 @@ export default async function RefundAddressPage({
   params,
   searchParams,
 }: {
-  params: Promise<{ sessionId: string }>;
+  params: Promise<{ id: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { sessionId } = await params;
+  const { id: sessionId } = await params;
   if (!SESSION_ID.test(sessionId)) notFound();
   const t = (await searchParams).t;
   const token = typeof t === 'string' && t.length > 0 && t.length <= 256 ? t : null;

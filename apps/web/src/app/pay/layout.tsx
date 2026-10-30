@@ -10,7 +10,7 @@ export const metadata: Metadata = {
   referrer: 'no-referrer',
 };
 
-// No I/O-bound awaits here or in pay/[sessionId]/page.tsx, and never the boot script that strips
+// No I/O-bound awaits here or in pay/[id]/page.tsx, and never the boot script that strips
 // `#cs=`: this layout is inside the root loading.tsx Suspense boundary, which can stream after
 // the RSC payload, so the boot script lives in the root layout's <head> (CheckoutBootScript).
 export default function PayLayout({ children }: { children: React.ReactNode }) {

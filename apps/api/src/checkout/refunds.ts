@@ -74,6 +74,7 @@ import { HOLD_NOTICE } from './hold.js';
 import { screenAddress, type ScreeningOutcome } from './screening.js';
 import type { ShopperCtx } from './quotes.js';
 import { providerFor, type StatusResponse } from './oneclick/index.js';
+import { sessionRefs, type SessionRefsInput } from './session-refs.js';
 import { tokenInfo } from './tokens.js';
 import { onReturnNeeded, type ReturnReason } from './watcher.js';
 
@@ -295,7 +296,7 @@ export async function queueReturn(
   const exchange = isExchangeAddress(senderChain, sender);
   const session = await prisma.session.findFirstOrThrow({
     where: { id: p.sessionId, ...tenantOf(ctx) },
-    select: { externalRef: true, customerEmail: true },
+    select: { externalRef: true, paymentLinkId: true, payerNote: true, customerEmail: true },
   });
   const { refund, created } = await insertRefund(
     ctx,
@@ -315,7 +316,7 @@ export async function queueReturn(
         aggregateId: row.id,
         type: 'refund.needs_address',
         payload: {
-          ...refundPayload(row, p.sessionId, session.externalRef),
+          ...refundPayload(row, p.sessionId, session),
           sender_address: sender,
           sender_chain: senderChain,
           customer_email_on_file: session.customerEmail !== null,
@@ -588,12 +589,12 @@ async function merchantRefundSent(
   return false;
 }
 
-export function refundPayload(r: Refund, sessionId: string, externalRef: string | null) {
+export function refundPayload(r: Refund, sessionId: string, session: SessionRefsInput) {
   return {
     refund_id: r.id,
     payment_id: r.paymentId,
     session_id: sessionId,
-    external_ref: externalRef,
+    ...sessionRefs(session),
     ...refundRef(r),
     reason: r.reason,
     asset: r.assetId,
@@ -730,13 +731,13 @@ export async function draftReturn(
       const updated = await tx.refund.findFirstOrThrow({ where: { id: r.id, ...tenantOf(ctx) } });
       const s = await tx.session.findFirstOrThrow({
         where: { id: r.payment.sessionId, ...tenantOf(ctx) },
-        select: { externalRef: true },
+        select: { externalRef: true, paymentLinkId: true, payerNote: true },
       });
       await recordEvent(tx, ctx, {
         aggregateType: 'refund',
         aggregateId: r.id,
         type: 'refund.pending',
-        payload: refundPayload(updated, r.payment.sessionId, s.externalRef),
+        payload: refundPayload(updated, r.payment.sessionId, s),
       });
       return updated;
     });
@@ -845,7 +846,7 @@ async function blockReturn(ctx: ScopeContext, refundId: string): Promise<Refund>
     if (!held) {
       const s = await tx.session.findFirstOrThrow({
         where: { id: p.sessionId, ...tenantOf(ctx) },
-        select: { externalRef: true },
+        select: { externalRef: true, paymentLinkId: true, payerNote: true },
       });
       await recordEvent(tx, ctx, {
         aggregateType: 'payment',
@@ -854,7 +855,7 @@ async function blockReturn(ctx: ScopeContext, refundId: string): Promise<Refund>
         payload: {
           payment_id: p.id,
           session_id: p.sessionId,
-          external_ref: s.externalRef,
+          ...sessionRefs(s),
           held_reason: 'sanctions',
           refund_id: r.id,
           blocked_destination: r.destination,
@@ -1343,14 +1344,14 @@ export async function onRefundProposalExecuted(e: Event): Promise<void> {
       }
       const s = await tx.session.findFirstOrThrow({
         where: { id: p.sessionId, ...tenantOf(ctx) },
-        select: { externalRef: true, destAsset: true },
+        select: { externalRef: true, paymentLinkId: true, payerNote: true, destAsset: true },
       });
       const done = await tx.refund.findFirstOrThrow({ where: { id: r.id, ...tenantOf(ctx) } });
       await recordEvent(tx, ctx, {
         aggregateType: 'refund',
         aggregateId: r.id,
         type: 'refund.sent',
-        payload: { ...refundPayload(done, p.sessionId, s.externalRef), tx_hash: done.refundTxHash },
+        payload: { ...refundPayload(done, p.sessionId, s), tx_hash: done.refundTxHash },
       });
       if (fullyRefunded) {
         // Once, when the last of the order amount went back (never for a partial refund).
@@ -1369,7 +1370,7 @@ export async function onRefundProposalExecuted(e: Event): Promise<void> {
           payload: {
             payment_id: p.id,
             session_id: p.sessionId,
-            external_ref: s.externalRef,
+            ...sessionRefs(s),
             reason: 'merchant',
             refunded_amount: net.toString(),
             asset: s.destAsset,
@@ -1477,7 +1478,7 @@ async function recordRefundOutcome(
   if (seen) return;
   const s = await tx.session.findFirstOrThrow({
     where: { id: sessionId, ...tenantOf(ctx) },
-    select: { externalRef: true },
+    select: { externalRef: true, paymentLinkId: true, payerNote: true },
   });
   await recordEvent(tx, ctx, {
     aggregateType: 'refund',
@@ -1488,7 +1489,7 @@ async function recordRefundOutcome(
       payment_id: r.paymentId,
       session_id: sessionId,
       // The order's reference, as on every other session event (`refund.sent` included).
-      external_ref: s.externalRef,
+      ...sessionRefs(s),
       ...refundRef(r),
       asset: r.assetId,
       amount: r.amount,

@@ -9,6 +9,7 @@ import { verifyRequestSignature } from '../gateway/signing.js';
 import { clearEventHandlers, handledEventTypes, handlerNamesFor } from '../jobs/handlers.js';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
+import { sessionRefs } from './session-refs.js';
 import { createMerchant, createRow, resetDb } from '../test/helpers.js';
 import {
   attemptDelivery,
@@ -305,6 +306,8 @@ describe('webhook delivery', () => {
         payment_id: 'pay_1',
         session_id: rows[0]!.sessionId,
         external_ref: 'order-77',
+        payment_link_id: null,
+        payer_note: null,
         amount_out: '25.10',
       },
     });
@@ -313,6 +316,41 @@ describe('webhook delivery', () => {
     const t = Number(/t=(\d+)/.exec(header)![1]);
     expect(verifyRequestSignature(header, Buffer.from(req.body), all.secret, t)).toBe('ok');
     expect(rows[0]!.sessionId).toMatch(/^ses_/);
+  });
+
+  it('payment.succeeded webhook carries payment_link_id and payer_note', async () => {
+    await createEndpoint(testCtx(), { url: 'https://a.example/hooks' });
+    const s = await session();
+    const ev = await event('payment.succeeded', {
+      payment_id: 'pay_1',
+      session_id: s.id,
+      ...sessionRefs({ externalRef: null, paymentLinkId: 'plink_1', payerNote: 'for <b>Sam</b>' }),
+    });
+    await fanOutEvent(ev);
+    const d = await prisma.webhookDelivery.findFirstOrThrow();
+    await attemptDelivery(d.id);
+    expect(parse(sent[0]!).data).toMatchObject({
+      external_ref: null,
+      payment_link_id: 'plink_1',
+      payer_note: 'for <b>Sam</b>',
+    });
+  });
+
+  it('non-link session events carry both as null', async () => {
+    const data = webhookData({ session_id: 'ses_1', external_ref: 'order-1' }, 'payment.late');
+    expect(data).toEqual({
+      session_id: 'ses_1',
+      external_ref: 'order-1',
+      payment_link_id: null,
+      payer_note: null,
+    });
+    // Events with no session keep the keys out entirely.
+    expect(webhookData({ endpoint_id: 'we_1' }, 'ping')).toEqual({ endpoint_id: 'we_1' });
+    expect(sessionRefs({ externalRef: 'o', paymentLinkId: null, payerNote: null })).toEqual({
+      external_ref: 'o',
+      payment_link_id: null,
+      payer_note: null,
+    });
   });
 
   it('never delivers internal ops events (C23 allowlist)', async () => {
@@ -360,6 +398,8 @@ describe('webhook delivery', () => {
       payment_id: 'pay_9',
       session_id: s.id,
       external_ref: 'order-77',
+      payment_link_id: null,
+      payer_note: null,
       held_reason: 'sanctions',
       notice: 'Tendr cannot freeze them',
     });

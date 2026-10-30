@@ -20,7 +20,8 @@ export function verifyWebhookSignature(opts: {
   const age = Math.abs(Math.floor(Date.now() / 1000) - parsed.t);
   if (age > tolerance) return false;
 
-  const payload = typeof opts.payload === 'string' ? Buffer.from(opts.payload, 'utf8') : opts.payload;
+  const payload =
+    typeof opts.payload === 'string' ? Buffer.from(opts.payload, 'utf8') : opts.payload;
   const expected = Buffer.from(hmac(opts.secret, parsed.t, payload), 'hex');
   return parsed.v1.some((sig) => {
     const provided = Buffer.from(sig, 'hex');
@@ -35,7 +36,8 @@ export function signWebhookPayload(opts: {
   timestamp?: number;
 }): { header: string; timestamp: number } {
   const timestamp = opts.timestamp ?? Math.floor(Date.now() / 1000);
-  const payload = typeof opts.payload === 'string' ? Buffer.from(opts.payload, 'utf8') : opts.payload;
+  const payload =
+    typeof opts.payload === 'string' ? Buffer.from(opts.payload, 'utf8') : opts.payload;
   return { header: `t=${timestamp},v1=${hmac(opts.secret, timestamp, payload)}`, timestamp };
 }
 

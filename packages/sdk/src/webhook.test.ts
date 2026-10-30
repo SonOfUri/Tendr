@@ -13,9 +13,9 @@ describe('webhook signatures', () => {
     const t = now();
     const header = `t=${t},v1=${v1(secret, t, payload)}`;
     expect(verifyWebhookSignature({ payload, secret, signatureHeader: header })).toBe(true);
-    expect(verifyWebhookSignature({ payload: Buffer.from(payload), secret, signatureHeader: header })).toBe(
-      true,
-    );
+    expect(
+      verifyWebhookSignature({ payload: Buffer.from(payload), secret, signatureHeader: header }),
+    ).toBe(true);
   });
 
   it('round-trips with signWebhookPayload', () => {
@@ -26,14 +26,22 @@ describe('webhook signatures', () => {
   it('accepts a match on any v1 during a secret rotation', () => {
     const t = now();
     const header = `t=${t},v1=${v1('whsec_new', t, payload)},v1=${v1('whsec_old', t, payload)}`;
-    expect(verifyWebhookSignature({ payload, secret: 'whsec_old', signatureHeader: header })).toBe(true);
-    expect(verifyWebhookSignature({ payload, secret: 'whsec_new', signatureHeader: header })).toBe(true);
-    expect(verifyWebhookSignature({ payload, secret: 'whsec_other', signatureHeader: header })).toBe(false);
+    expect(verifyWebhookSignature({ payload, secret: 'whsec_old', signatureHeader: header })).toBe(
+      true,
+    );
+    expect(verifyWebhookSignature({ payload, secret: 'whsec_new', signatureHeader: header })).toBe(
+      true,
+    );
+    expect(
+      verifyWebhookSignature({ payload, secret: 'whsec_other', signatureHeader: header }),
+    ).toBe(false);
   });
 
   it('rejects a tampered payload', () => {
     const { header } = signWebhookPayload({ payload, secret });
-    expect(verifyWebhookSignature({ payload: payload + 'x', secret, signatureHeader: header })).toBe(false);
+    expect(
+      verifyWebhookSignature({ payload: payload + 'x', secret, signatureHeader: header }),
+    ).toBe(false);
   });
 
   it('rejects a timestamp outside the tolerance', () => {
@@ -44,7 +52,15 @@ describe('webhook signatures', () => {
   it('rejects malformed headers', () => {
     const t = now();
     const sig = v1(secret, t, payload);
-    for (const header of ['', sig, `sha256=${sig}`, `v1=${sig}`, `t=${t}`, `t=abc,v1=${sig}`, `t=${t},v1=zz`]) {
+    for (const header of [
+      '',
+      sig,
+      `sha256=${sig}`,
+      `v1=${sig}`,
+      `t=${t}`,
+      `t=abc,v1=${sig}`,
+      `t=${t},v1=zz`,
+    ]) {
       expect(verifyWebhookSignature({ payload, secret, signatureHeader: header })).toBe(false);
     }
   });

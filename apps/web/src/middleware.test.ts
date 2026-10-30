@@ -96,3 +96,27 @@ describe('middleware /connect', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
   });
 });
+
+describe('middleware payment link pages', () => {
+  it('qr route not forced no-store; link page is', async () => {
+    const fetchFn = fetchStub();
+    const page = await middleware(new NextRequest('http://localhost:3000/pay/acme/tip-jar'));
+    expect(page.headers.get('cache-control')).toBe('no-store');
+    const test = await middleware(
+      new NextRequest('http://localhost:3000/pay/acme/tip-jar?mode=test'),
+    );
+    expect(test.headers.get('cache-control')).toBe('no-store');
+    for (const sub of ['qr', 'opengraph-image', 'twitter-image', 'opengraph-image-1x2y3z']) {
+      const res = await middleware(
+        new NextRequest(`http://localhost:3000/pay/acme/tip-jar/${sub}`),
+      );
+      expect(res.headers.get('cache-control'), sub).toBeNull();
+    }
+    // A session's sub-page keeps no-store, and link pages never ask for frame origins.
+    const refund = await middleware(
+      new NextRequest(`http://localhost:3000/pay/${SESSION}/refund-address?t=x`),
+    );
+    expect(refund.headers.get('cache-control')).toBe('no-store');
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+});

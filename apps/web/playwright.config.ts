@@ -51,6 +51,9 @@ function channel(): string | undefined {
  */
 const API_HOST = process.env.E2E_API_HOST ?? '127.0.0.1';
 
+/** The web server's payment-link credential (x-tendr-internal), the same in both servers. */
+const WEB_INTERNAL_TOKEN = 'e2e-web-internal-token-0123456789abcdef';
+
 export default defineConfig({
   testDir: './e2e',
   // The WooCommerce spec needs WordPress in Docker (wp-env): its own config and CI job.
@@ -99,6 +102,7 @@ export default defineConfig({
         MAIL_DRIVER: 'log',
         KEYVAULT_DRIVER: 'local',
         LOG_LEVEL: 'warn',
+        WEB_INTERNAL_TOKEN,
       },
     },
     {
@@ -119,6 +123,7 @@ export default defineConfig({
         NEXT_PUBLIC_REOWN_PROJECT_ID: '',
         // EVM wallets come from the test wallet the gasless spec injects as window.ethereum.
         NEXT_PUBLIC_E2E_INJECTED_WALLET: '1',
+        WEB_INTERNAL_TOKEN,
       },
     },
     {

@@ -29,6 +29,20 @@ export function StoreLink({ href, children }: { href: string | null; children: s
   );
 }
 
+/**
+ * Back to where the shopper came from: the payment link page ("Back to <title>") for a session
+ * made from a link, else the store's success or cancel page ("Return to store").
+ */
+function BackLink({ view, to }: { view: SessionView; to: 'success' | 'cancel' }) {
+  const link = view.payment_link;
+  if (link) return <StoreLink href={link.url}>{`Back to ${link.title}`}</StoreLink>;
+  return (
+    <StoreLink href={to === 'success' ? view.success_url : view.cancel_url}>
+      Return to store
+    </StoreLink>
+  );
+}
+
 function paidAmount(view: SessionView, payment: SessionPayment | null, token: Token | null) {
   if (!token) return null;
   const received = payment?.amount_received
@@ -149,7 +163,7 @@ export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: 
           ) : notice === 'sent' ? (
             <p className="muted small">You sent a little extra. It was sent back to you.</p>
           ) : null}
-          <StoreLink href={view.success_url}>Return to store</StoreLink>
+          <BackLink view={view} to="success" />
         </section>
       );
     }
@@ -197,7 +211,7 @@ export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: 
           <p className="muted small">
             The cost of sending it back is taken from the amount returned.
           </p>
-          <StoreLink href={view.cancel_url}>Return to store</StoreLink>
+          <BackLink view={view} to="cancel" />
         </section>
       );
 
@@ -212,7 +226,7 @@ export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: 
           <p className="muted small">
             The cost of sending it back is taken from the amount returned.
           </p>
-          <StoreLink href={view.cancel_url}>Return to store</StoreLink>
+          <BackLink view={view} to="cancel" />
         </section>
       );
 
@@ -233,7 +247,7 @@ export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: 
           <p className="muted small">
             The cost of sending it back is taken from the amount returned.
           </p>
-          <StoreLink href={view.cancel_url}>Return to store</StoreLink>
+          <BackLink view={view} to="cancel" />
         </section>
       );
     }
@@ -243,7 +257,7 @@ export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: 
         <section className="pay-section" aria-labelledby="pay-held-title">
           <h2 id="pay-held-title">We couldn&apos;t complete this payment</h2>
           <p>Please contact the store for help with this order.</p>
-          <StoreLink href={view.cancel_url}>Return to store</StoreLink>
+          <BackLink view={view} to="cancel" />
         </section>
       );
 
@@ -252,9 +266,12 @@ export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: 
         <section className="pay-section" aria-labelledby="pay-expired-title">
           <h2 id="pay-expired-title">This checkout has expired</h2>
           <p>
-            Return to the store to start again. Don&apos;t send money to an address from this page.
+            {view.payment_link
+              ? `Go back to ${view.payment_link.title} to start again.`
+              : 'Return to the store to start again.'}{' '}
+            Don&apos;t send money to an address from this page.
           </p>
-          <StoreLink href={view.cancel_url}>Return to store</StoreLink>
+          <BackLink view={view} to="cancel" />
         </section>
       );
 

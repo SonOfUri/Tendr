@@ -149,6 +149,23 @@ describe('foundation schema', () => {
     );
   });
 
+  it('payment_links has no dest_asset column', async () => {
+    const cols = await prisma.$queryRaw<
+      { column_name: string }[]
+    >`SELECT column_name FROM information_schema.columns WHERE table_name='payment_links'`;
+    const names = cols.map((c) => c.column_name);
+    expect(names).not.toContain('dest_asset');
+    expect(names).not.toContain('dest_chain');
+    expect(names).toEqual(expect.arrayContaining(['description', 'min_amount', 'note_mode', 'fee_payer', 'archived_at']));
+  });
+
+  it('sessions.payer_note is varchar(280)', async () => {
+    const rows = await prisma.$queryRaw<
+      { data_type: string; character_maximum_length: number }[]
+    >`SELECT data_type, character_maximum_length FROM information_schema.columns WHERE table_name='sessions' AND column_name='payer_note'`;
+    expect(rows).toEqual([{ data_type: 'character varying', character_maximum_length: 280 }]);
+  });
+
   it('no column stores private keys', async () => {
     const cols = await prisma.$queryRaw<
       { column_name: string }[]

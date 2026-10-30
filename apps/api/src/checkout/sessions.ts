@@ -6,7 +6,7 @@
 // default) and stored. The client secret (`ses_<ULID>_secret_<32 hex>`, the format the gateway's
 // `session_client` principal parses) is returned once and stored only as its sha256.
 import { randomBytes } from 'node:crypto';
-import { Prisma } from '@prisma/client';
+import { Prisma, type PaymentLink } from '@prisma/client';
 import {
   FeePayerSchema,
   GasPayerSchema,
@@ -17,6 +17,7 @@ import {
   gasPayerFromDb,
   gasPayerToDb,
   type GasPayer,
+  type PaymentLinkAvailability,
 } from '@tendr/contracts';
 import { z } from 'zod';
 import { scopedDb, type ScopeContext, type ScopedDb } from '../db/scoped.js';
@@ -29,6 +30,7 @@ import { hookDeliveryFor } from '../hooks/destination.js';
 import { sha256 } from '../lib/crypto.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
+import { linkAvailability } from '../payment-links/links.js';
 import { toJsonDecimal } from '../lib/serialize.js';
 import {
   convertToUsd,
@@ -41,6 +43,7 @@ import { depositInFlight } from './in-flight.js';
 import { resolvePayers } from './pricing.js';
 import { merchantRefundStatus, publicReviewReason } from './refunds.js';
 import { assetLabel, tokenInfo, type AssetLabel } from './tokens.js';
+import { sessionRefs, type SessionRefsInput } from './session-refs.js';
 import { connectionMayAct } from './webhooks.js';
 
 /**
@@ -54,7 +57,7 @@ export const DEFAULT_FEE_BPS = 50;
 /** `sessions.amount` is `Decimal(38, 18)`: at most 20 integer digits and 18 fraction digits. */
 const AMOUNT_MAX_INT_DIGITS = 20;
 const AMOUNT_MAX_SCALE = 18;
-const USD_DECIMALS = 2;
+export const USD_DECIMALS = 2;
 
 const AMOUNT_RE = /^(\d+)(?:\.(\d+))?$/;
 
@@ -104,6 +107,50 @@ export const CreateSessionSchema = z
   .strict();
 export type CreateSessionInput = z.infer<typeof CreateSessionSchema>;
 
+/**
+ * What `createSession` takes: the store route's input, or a payment link's (the public "Pay"
+ * route), which has no `external_ref` — there is no order; payments are told apart by session id.
+ */
+export type InternalSessionInput = Omit<
+  CreateSessionInput,
+  'external_ref' | 'success_url' | 'cancel_url'
+> & { external_ref?: string; success_url: string; cancel_url: string };
+
+/** A session from a payment link's public page: where the payer returns, and their note. */
+export interface FromLink {
+  linkId: string;
+  payerNote: string | null;
+  returnUrl: string;
+}
+
+/**
+ * A session from a link's public page expires this soon unless it is quoted; the first quote
+ * extends it to `createdAt + SESSION_TTL_MS` (quotes.ts), so unquoted sessions stop holding a use
+ * of the link within minutes.
+ */
+export const LINK_UNQUOTED_TTL_MS = 5 * 60_000;
+
+/** A link refuses new public sessions (LINK_BUSY) at this many open sessions with a quote. */
+export const LINK_MAX_QUOTED_SESSIONS = 200;
+
+/**
+ * The open sessions of a link: each one holds a use of it. A session waiting for its deposit
+ * (PENDING_DEPOSIT) holds it until `expiresAt`; one whose deposit arrived (PROCESSING,
+ * SCREENING_PENDING) holds it with no expiry condition, because that payment can still settle
+ * after the session's expiry passes.
+ */
+export function linkOpenSessions(t: ScopeContext, linkId: string, now: Date) {
+  return {
+    merchantId: t.merchantId,
+    livemode: t.livemode,
+    paymentLinkId: linkId,
+    OR: [
+      { status: 'PENDING_DEPOSIT' as const, expiresAt: { gt: now } },
+      { status: { in: ['PROCESSING' as const, 'SCREENING_PENDING' as const] } },
+    ],
+  };
+}
+
 export interface CreatedSession {
   id: string;
   client_secret: string;
@@ -116,7 +163,7 @@ const amountInvalid = (message: string) =>
   new AppError('VALIDATION_ERROR', message, 400, { field: 'amount' });
 
 /** Positive, ≤ `maxDecimals` fraction digits, and representable in `Decimal(38, 18)`. */
-function assertAmount(amount: string, maxDecimals: number, currency: string): void {
+export function assertAmount(amount: string, maxDecimals: number, currency: string): void {
   const m = AMOUNT_RE.exec(amount);
   if (!m) throw amountInvalid('amount must be a decimal string like "25.10"');
   const [, int, frac = ''] = m;
@@ -131,6 +178,69 @@ function assertAmount(amount: string, maxDecimals: number, currency: string): vo
 
 function accountNotReady(message: string): AppError {
   return new AppError('ACCOUNT_NOT_READY', message, 409);
+}
+
+/**
+ * LINK_UNAVAILABLE (409). The public page never tells an archived link from a switched-off one
+ * (spec §2.3), so `publicView` reports `archived` as `inactive`.
+ */
+export function linkUnavailable(
+  availability: PaymentLinkAvailability,
+  publicView = false,
+): AppError {
+  const reported = publicView && availability === 'archived' ? 'inactive' : availability;
+  return new AppError('LINK_UNAVAILABLE', 'This link is not taking payments right now', 409, {
+    availability: reported,
+  });
+}
+
+const linkReserved = () =>
+  new AppError('LINK_RESERVED', 'Someone is paying this link right now, try again shortly.', 409);
+
+const linkBusy = () =>
+  new AppError('LINK_BUSY', 'This link is busy right now, try again in a few minutes.', 429);
+
+type LockedLink = Pick<PaymentLink, 'id' | 'feePayer' | 'gasSponsor' | 'gasMaxUsd'>;
+
+/**
+ * Inside the session-insert transaction: row-locks the link (`FOR UPDATE`, so concurrent
+ * sessions for one link serialise here), then refuses unless it can take a payment right now.
+ * With `max_uses`, settled uses plus open sessions (each reserves a use until it expires) must
+ * stay below it: LINK_RESERVED while some are only reserved, LINK_UNAVAILABLE `used_up` when all
+ * are settled. A public session is also refused (LINK_BUSY) at `LINK_MAX_QUOTED_SESSIONS` open
+ * sessions that have a quote (unquoted ones expire within minutes and do not count).
+ */
+async function lockLinkForSession(
+  tx: Prisma.TransactionClient,
+  t: ScopeContext,
+  linkId: string,
+  now: Date,
+  publicPath: boolean,
+): Promise<LockedLink> {
+  const locked = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM payment_links
+    WHERE id = ${linkId} AND merchant_id = ${t.merchantId} AND livemode = ${t.livemode}
+    FOR UPDATE`;
+  if (locked.length === 0) throw notFound('Payment link not found');
+  const link = await tx.paymentLink.findFirstOrThrow({
+    where: { id: linkId, merchantId: t.merchantId, livemode: t.livemode },
+  });
+  // The caller already refused a store that is not ready (ACCOUNT_NOT_READY).
+  const availability = linkAvailability(link, { now, merchantReady: true });
+  if (availability !== 'available') throw linkUnavailable(availability, publicPath);
+
+  const open = linkOpenSessions(t, linkId, now);
+  if (link.maxUses !== null) {
+    const holding = await tx.session.count({ where: open });
+    if (link.useCount + holding >= link.maxUses) {
+      throw holding > 0 ? linkReserved() : linkUnavailable('used_up', publicPath);
+    }
+  }
+  if (publicPath) {
+    const quoted = await tx.session.count({ where: { ...open, quotes: { some: {} } } });
+    if (quoted >= LINK_MAX_QUOTED_SESSIONS) throw linkBusy();
+  }
+  return link;
 }
 
 /** Why a store cannot take payments in a mode yet (the cause of ACCOUNT_NOT_READY). */
@@ -231,11 +341,19 @@ async function isExternalRefConflict(
  * nor the settlement asset, FX_RATE_UNAVAILABLE (503) when no current rate is available,
  * ACCOUNT_NOT_READY (409) without an active merchant account or a settlement config in this mode,
  * CONFLICT (409) when `external_ref` belongs to an open or paid session.
+ *
+ * A session naming a payment link (`payment_link_id`, or `opts.fromLink` from the link's public
+ * page) takes the link's fee and gas settings and must pass `lockLinkForSession` (LINK_UNAVAILABLE,
+ * LINK_RESERVED, LINK_BUSY). `fromLink` sessions have no `external_ref`, store the payer's note,
+ * return to the link page, and start with `LINK_UNQUOTED_TTL_MS` instead of the caller's expiry.
  */
 export async function createSession(
   ctx: CheckoutCtx,
-  input: CreateSessionInput,
+  input: InternalSessionInput,
+  opts: { fromLink?: FromLink } = {},
 ): Promise<CreatedSession> {
+  const { fromLink } = opts;
+  const linkId = fromLink?.linkId ?? input.payment_link_id;
   const { db } = ctx;
   const [readiness, merchant] = await Promise.all([
     readinessFor(ctx),
@@ -278,13 +396,13 @@ export async function createSession(
     currency = 'USD';
   }
 
-  const link = input.payment_link_id
-    ? await db.paymentLink.findFirst({
-        where: { id: input.payment_link_id },
-        select: { id: true, gasSponsor: true, gasMaxUsd: true },
-      })
-    : null;
-  if (input.payment_link_id && !link) throw notFound('Payment link not found');
+  // A link of another merchant or mode is not found (looked at again, under lock, below).
+  if (
+    linkId &&
+    !(await db.paymentLink.findFirst({ where: { id: linkId }, select: { id: true } }))
+  ) {
+    throw notFound('Payment link not found');
+  }
 
   const now = new Date();
   const plan = await db.feePlan.findFirst({
@@ -293,43 +411,61 @@ export async function createSession(
     select: { feeBps: true },
   });
 
-  const linkGas: GasPayer | null =
-    link && link.gasSponsor !== 'default' ? gasPayerFromDb(link.gasSponsor) : null;
-  const payers = resolvePayers({
-    sessionOverride: { feePayer: input.fee_payer, gasPayer: input.gas_payer },
-    // Payment links carry no fee-payer setting yet (project 5).
-    link: link ? { gasPayer: linkGas } : null,
-    merchant: {
-      defaultFeePayer: feePayerFromDb(merchant.defaultFeePayer),
-      defaultGasPayer: gasPayerFromDb(merchant.defaultGasPayer),
-    },
-  });
-
   const id = newId('ses');
   const clientSecret = `${id}_secret_${randomBytes(16).toString('hex')}`;
-  const expiresAt = new Date(
-    now.getTime() + (input.expires_in !== undefined ? input.expires_in * 1000 : SESSION_TTL_MS),
-  );
+  const ttl = fromLink
+    ? LINK_UNQUOTED_TTL_MS
+    : input.expires_in !== undefined
+      ? input.expires_in * 1000
+      : SESSION_TTL_MS;
+  const expiresAt = new Date(now.getTime() + ttl);
+  const externalRef = input.external_ref ?? null;
 
   try {
     await tenantTransaction(ctx, async (tx, t) => {
+      // Every session naming a link: lock it and check it can take this payment (spec §2.5).
+      const link = linkId ? await lockLinkForSession(tx, t, linkId, now, !!fromLink) : null;
+      const linkGas: GasPayer | null =
+        link && link.gasSponsor !== 'default' ? gasPayerFromDb(link.gasSponsor) : null;
+      const payers = resolvePayers({
+        sessionOverride: { feePayer: input.fee_payer, gasPayer: input.gas_payer },
+        link: link
+          ? { feePayer: link.feePayer ? feePayerFromDb(link.feePayer) : null, gasPayer: linkGas }
+          : null,
+        merchant: {
+          defaultFeePayer: feePayerFromDb(merchant.defaultFeePayer),
+          defaultGasPayer: gasPayerFromDb(merchant.defaultGasPayer),
+        },
+      });
+
       // A PENDING_DEPOSIT session past its expiry that the sweeper has not reached yet still holds
       // the ref; expire it (timeout) first so the store's retry is not refused — unless a deposit
-      // is in flight (the sweeper's own test, in-flight.ts): then the ref stays held, 409.
-      const stale = await tx.session.findMany({
-        where: {
-          merchantId: t.merchantId,
-          livemode: t.livemode,
-          externalRef: input.external_ref,
-          status: 'PENDING_DEPOSIT',
-          expiresAt: { lte: now },
-        },
-        select: { id: true, merchantId: true, livemode: true, expiresAt: true },
-      });
-      for (const s of stale) {
-        await lockSession(tx, s.id);
-        if (await depositInFlight(tx, s, now)) throw depositInProgress(s.id, 'CONFLICT');
-        await expireInTx(tx, t, s.id, input.external_ref, 'timeout');
+      // is in flight (the sweeper's own test, in-flight.ts): then the ref stays held, 409. Only
+      // with a ref (spec §10): without one this filter would match every overdue session.
+      if (externalRef !== null) {
+        const stale = await tx.session.findMany({
+          where: {
+            merchantId: t.merchantId,
+            livemode: t.livemode,
+            externalRef,
+            status: 'PENDING_DEPOSIT',
+            expiresAt: { lte: now },
+          },
+          select: {
+            id: true,
+            merchantId: true,
+            livemode: true,
+            expiresAt: true,
+            externalRef: true,
+            paymentLinkId: true,
+            payerNote: true,
+          },
+        });
+        for (const s of stale) {
+          await lockSession(tx, s.id);
+          if (await depositInFlight(tx, s, now)) throw depositInProgress(s.id, 'CONFLICT');
+          await expireInTx(tx, t, s.id, s, 'timeout');
+        }
       }
       await tx.session.create({
         data: {
@@ -338,7 +474,7 @@ export async function createSession(
           livemode: t.livemode,
           paymentLinkId: link?.id ?? null,
           connectionId: ctx.connectionId ?? null,
-          externalRef: input.external_ref,
+          externalRef,
           amountMode: 'EXACT_OUT',
           amount,
           amountCurrency: currency,
@@ -355,14 +491,15 @@ export async function createSession(
           delivery: hook.delivery,
           hookData: hook.hookData ?? Prisma.DbNull,
           metadata: input.metadata ?? {},
+          payerNote: fromLink?.payerNote ?? null,
           feeBps: plan?.feeBps ?? DEFAULT_FEE_BPS,
           feePayer: feePayerToDb(payers.feePayer),
           gasSponsor: gasPayerToDb(payers.gasPayer),
           gasMaxUsd: link?.gasMaxUsd ?? null,
           expiresAt,
           clientSecretHash: sha256(clientSecret),
-          successUrl: input.success_url,
-          cancelUrl: input.cancel_url,
+          successUrl: fromLink?.returnUrl ?? input.success_url,
+          cancelUrl: fromLink?.returnUrl ?? input.cancel_url,
           customerEmail: input.customer_email?.toLowerCase() ?? null,
         },
       });
@@ -370,13 +507,24 @@ export async function createSession(
         aggregateType: 'session',
         aggregateId: id,
         type: 'session.created',
-        payload: { session_id: id, external_ref: input.external_ref },
+        payload: {
+          session_id: id,
+          ...sessionRefs({
+            externalRef,
+            paymentLinkId: link?.id ?? null,
+            payerNote: fromLink?.payerNote ?? null,
+          }),
+        },
       });
     });
   } catch (err) {
-    if (isP2002(err) && (await isExternalRefConflict(ctx, err, input.external_ref))) {
+    if (
+      externalRef !== null &&
+      isP2002(err) &&
+      (await isExternalRefConflict(ctx, err, externalRef))
+    ) {
       throw conflict('A session with this external_ref is already open or paid', {
-        external_ref: input.external_ref,
+        external_ref: externalRef,
       });
     }
     throw err;
@@ -460,6 +608,8 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
     external_ref: s.externalRef,
     customer_email: s.customerEmail,
     metadata: s.metadata,
+    /** The payer's note from a payment link's page (plain text; escape it wherever shown). */
+    payer_note: s.payerNote,
     success_url: s.successUrl,
     cancel_url: s.cancelUrl,
     fee_payer: feePayerFromDb(s.feePayer),
@@ -556,6 +706,8 @@ export async function expireSession(ctx: CheckoutCtx, id: string): Promise<Sessi
         livemode: true,
         expiresAt: true,
         externalRef: true,
+        paymentLinkId: true,
+        payerNote: true,
         connectionId: true,
       },
     });
@@ -573,7 +725,7 @@ export async function expireSession(ctx: CheckoutCtx, id: string): Promise<Sessi
     if (cur.status === 'PENDING_DEPOSIT' && (await depositInFlight(tx, s, new Date()))) {
       throw depositInProgress(id, 'DEPOSIT_IN_PROGRESS');
     }
-    await expireInTx(tx, t, id, s.externalRef, 'canceled');
+    await expireInTx(tx, t, id, s, 'canceled');
   });
   return sessionView(ctx, id);
 }
@@ -595,7 +747,15 @@ export async function expireConnectionSessions(
   if (connectionIds.length === 0) return out;
   const open = await tx.session.findMany({
     where: { merchantId, connectionId: { in: connectionIds }, status: 'PENDING_DEPOSIT' },
-    select: { id: true, merchantId: true, livemode: true, expiresAt: true, externalRef: true },
+    select: {
+      id: true,
+      merchantId: true,
+      livemode: true,
+      expiresAt: true,
+      externalRef: true,
+      paymentLinkId: true,
+      payerNote: true,
+    },
     orderBy: { id: 'asc' },
   });
   for (const s of open) {
@@ -609,7 +769,7 @@ export async function expireConnectionSessions(
       out.inFlight += 1;
       continue;
     }
-    await expireInTx(tx, { merchantId, livemode: s.livemode }, s.id, s.externalRef, 'canceled');
+    await expireInTx(tx, { merchantId, livemode: s.livemode }, s.id, s, 'canceled');
     out.expired += 1;
   }
   return out;
@@ -624,7 +784,7 @@ export async function expireInTx(
   tx: Prisma.TransactionClient,
   ctx: ScopeContext,
   id: string,
-  externalRef: string | null,
+  refs: SessionRefsInput,
   reason: 'timeout' | 'canceled',
 ): Promise<void> {
   await transitionSession(tx, ctx, id, 'EXPIRED', { reason });
@@ -636,6 +796,6 @@ export async function expireInTx(
     aggregateType: 'session',
     aggregateId: id,
     type: 'checkout.session.expired',
-    payload: { session_id: id, external_ref: externalRef, reason },
+    payload: { session_id: id, ...sessionRefs(refs), reason },
   });
 }

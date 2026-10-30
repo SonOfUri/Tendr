@@ -250,8 +250,6 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         title: 'Test link',
         amount: '49.00',
         amountCurrency: 'USD',
-        destAsset: 'nep141:usdc.test',
-        destChain: 'near',
         ...o,
       },
     }),

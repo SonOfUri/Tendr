@@ -23,6 +23,11 @@ import { hookRoutes } from './routes/hooks.js';
 import { healthRoutes } from './routes/health.js';
 import { merchantSettingsRoutes } from './routes/merchant-settings.js';
 import { merchantRoutes } from './routes/merchants.js';
+import {
+  PAYMENT_LINK_PUBLIC_PREFIX,
+  paymentLinkPublicRoutes,
+} from './routes/payment-links-public.js';
+import { paymentLinkRoutes } from './routes/payment-links.js';
 import { paymentRoutes } from './routes/payments.js';
 import { pingRoutes } from './routes/ping.js';
 import { proposalRoutes } from './routes/proposals.js';
@@ -107,7 +112,9 @@ export async function buildApp(opts: BuildAppOptions = {}) {
         });
       } else if (
         url.startsWith(CHECKOUT_CLIENT_PREFIX) ||
-        url.split('?')[0] === CHECKOUT_REFUND_ADDRESS_PATH
+        url.split('?')[0] === CHECKOUT_REFUND_ADDRESS_PATH ||
+        // The payer's link page creates its session from the browser ("Pay").
+        url.startsWith(PAYMENT_LINK_PUBLIC_PREFIX)
       ) {
         cb(null, { origin: [checkoutOrigin], credentials: false });
       } else {
@@ -236,6 +243,11 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   });
   await app.register(webhookRoutes);
   await app.register(paymentRoutes);
+  await app.register(paymentLinkRoutes);
+  await app.register(paymentLinkPublicRoutes, {
+    readRateLimit: limiters.paymentLinkRead,
+    sessionRateLimit: limiters.paymentLinkSession,
+  });
   await app.register(reviewRoutes);
   await app.register(refundRoutes);
   await app.register(merchantSettingsRoutes, {

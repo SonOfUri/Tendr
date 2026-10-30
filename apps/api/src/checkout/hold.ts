@@ -9,6 +9,7 @@ import { recordEvent } from '../events/record.js';
 import { transitionPayment, transitionSession } from '../events/transitions.js';
 import { notFound } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
+import { sessionRefs } from './session-refs.js';
 
 /** The non-custodial notice to all signers, verbatim (spec "Changes" #3; in @tendr/contracts). */
 export { HOLD_NOTICE };
@@ -51,7 +52,7 @@ export async function holdPaymentInTx(
   });
   const s = await tx.session.findFirst({
     where: { id: p.sessionId, ...tenant },
-    select: { status: true, externalRef: true },
+    select: { status: true, externalRef: true, paymentLinkId: true, payerNote: true },
   });
   // A PROCESSING session waits on this payment unless the payment is a late extra one.
   if (s && SESSION_HOLDABLE.has(s.status) && !(s.status === 'PROCESSING' && p.isLate)) {
@@ -64,7 +65,7 @@ export async function holdPaymentInTx(
     payload: {
       payment_id: p.id,
       session_id: p.sessionId,
-      external_ref: s?.externalRef ?? null,
+      ...sessionRefs(s ?? { externalRef: null, paymentLinkId: null, payerNote: null }),
       held_reason: 'sanctions',
       sender_address: p.senderAddress,
       notify: 'all_signers',

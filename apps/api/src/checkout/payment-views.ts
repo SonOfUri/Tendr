@@ -1,5 +1,6 @@
 // Dashboard reads of checkout payments (checkout Task 10): the list (filters: status, created-at
-// range; newest first, cursor `starting_after`) and the detail with the fee lines broken out.
+// range, payment link; newest first, cursor `starting_after`) and the detail with the fee lines
+// broken out.
 //
 // Every amount crosses the API as an integer string in the asset's base units (or a decimal USD
 // string); nothing is ever a float. Fee lines are the payment's `revenue_entries` once settled,
@@ -14,6 +15,7 @@ import { notFound } from '../lib/errors.js';
 import { networkFeeView } from '../gas/quote-fee.js';
 import { refundView } from './review.js';
 import { revenueLines } from './revenue.js';
+import { sessionRefs } from './session-refs.js';
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 const dec = (d: Prisma.Decimal | null) => (d ? d.toFixed() : null);
@@ -28,6 +30,8 @@ export const PaymentListQuerySchema = z
     created_to: z.string().datetime({ offset: true }).optional(),
     limit: z.coerce.number().int().min(1).max(100).default(50),
     starting_after: z.string().min(1).max(64).optional(),
+    /** Only payments of sessions created from this payment link. */
+    payment_link_id: z.string().min(1).max(64).optional(),
   })
   .strict();
 
@@ -53,6 +57,8 @@ const include = {
   session: {
     select: {
       externalRef: true,
+      paymentLinkId: true,
+      payerNote: true,
       amount: true,
       amountCurrency: true,
       destAsset: true,
@@ -74,7 +80,7 @@ function summary(p: Row) {
     livemode: p.livemode,
     status: p.status,
     session_id: p.sessionId,
-    external_ref: p.session.externalRef,
+    ...sessionRefs(p.session),
     order: { amount: p.session.amount.toFixed(), currency: p.session.amountCurrency },
     source: { asset: p.quote.originAssetId, chain: p.senderChain },
     received: { asset: p.quote.originAssetId, amount: p.amountReceived.toFixed(0) },
@@ -98,6 +104,7 @@ export async function listPayments(db: ScopedDb, query: z.infer<typeof PaymentLi
     where: {
       ...(query.status ? { status: query.status } : {}),
       ...(query.created_from || query.created_to ? { createdAt } : {}),
+      ...(query.payment_link_id ? { session: { paymentLinkId: query.payment_link_id } } : {}),
     },
     include,
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
