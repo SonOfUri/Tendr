@@ -87,9 +87,29 @@ const SVG_ATTRIBUTES = [
 /** A `url(...)` that points anywhere but a fragment of this document. */
 const EXTERNAL_URL = /url\s*\((?!\s*['"]?\s*#)/i;
 
+/** The only namespaces an SVG may declare: `xmlns` and `xmlns:xlink` are pinned to these. */
+const PINNED_NAMESPACES: Readonly<Record<string, string>> = {
+  xmlns: 'http://www.w3.org/2000/svg',
+  'xmlns:xlink': 'http://www.w3.org/1999/xlink',
+};
+
+/** Decodes CSS escapes (`\75` → `u`, `\(` → `(`), so `\75rl(` is seen as `url(`. */
+function decodeCssEscapes(value: string): string {
+  return value.replace(/\\([0-9a-f]{1,6})\s?|\\([^\n0-9a-f])/gi, (_, hex: string, ch: string) =>
+    hex ? String.fromCodePoint(Math.min(parseInt(hex, 16), 0x10ffff) || 0xfffd) : ch,
+  );
+}
+
+/** Whether an attribute value may stay: no backslashes, no `url()` outside the document. */
+function safeAttributeValue(value: string): boolean {
+  if (value.includes('\\')) return false;
+  return !EXTERNAL_URL.test(decodeCssEscapes(value));
+}
+
 /**
  * Rebuilds an SVG from the allowlist: no script or style (dropped with their contents), no event
- * handlers, links only to fragments of the document itself, no `url()` to anything outside it.
+ * handlers, links only to fragments of the document itself, no `url()` to anything outside it
+ * (CSS escapes decoded first; any value with a backslash is dropped), the two namespaces pinned.
  * `foreignObject` (HTML inside SVG) is refused outright rather than stripped.
  */
 function sanitizeSvg(buf: Buffer): Buffer {
@@ -112,7 +132,12 @@ function sanitizeSvg(buf: Buffer): Buffer {
         for (const [name, value] of Object.entries(attribs)) {
           const isLink = name === 'href' || name === 'xlink:href';
           if (isLink && !value.trim().startsWith('#')) continue;
-          if (EXTERNAL_URL.test(value)) continue;
+          const pinned = PINNED_NAMESPACES[name];
+          if (pinned !== undefined) {
+            kept[name] = pinned;
+            continue;
+          }
+          if (!safeAttributeValue(value)) continue;
           kept[name] = value;
         }
         return { tagName, attribs: kept };
@@ -124,6 +149,7 @@ function sanitizeSvg(buf: Buffer): Buffer {
   if (sniffAsset(clean)?.mime !== 'image/svg+xml') {
     throw invalid('The SVG has no drawing left after removing unsafe content');
   }
+  if (clean.length > SVG_MAX_BYTES) throw invalid(`SVG files can be at most ${kb(SVG_MAX_BYTES)}`);
   return clean;
 }
 

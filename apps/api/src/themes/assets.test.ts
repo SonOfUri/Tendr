@@ -180,6 +180,31 @@ describe('theme assets', () => {
       (await rejection(uploadThemeAsset(ctxOf(), { kind: 'logo', filename: 'b.svg', buf: big })))
         .message,
     ).toMatch(/512 KB/);
+    // Under the cap going in, over it coming out (each `>` is re-escaped as `&gt;`).
+    const grows = Buffer.from(`<svg><text>${'>'.repeat(200 * 1024)}</text></svg>`);
+    expect(
+      (await rejection(uploadThemeAsset(ctxOf(), { kind: 'logo', filename: 'g.svg', buf: grows })))
+        .message,
+    ).toMatch(/512 KB/);
+  });
+
+  it('svg drops css-escaped urls and pins namespaces', async () => {
+    const svg = [
+      '<svg xmlns="http://evil.example/ns" xmlns:xlink="http://evil.example/xlink">',
+      '<rect fill="\\75rl(https://evil.example/x)" stroke="u\\72l(https://evil.example/y)"/>',
+      '<circle fill="url(#ok)" stroke="#000" r="1"/>',
+      '</svg>',
+    ].join('');
+    const a = await uploadThemeAsset(ctxOf(), {
+      kind: 'logo',
+      filename: 'e.svg',
+      buf: Buffer.from(svg),
+    });
+    const out = store.objects.get(`assets/${merchant.id}/${a.id}.svg`)!.body.toString('utf8');
+    expect(out).toBe(
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">' +
+        '<rect></rect><circle fill="url(#ok)" stroke="#000" r="1"></circle></svg>',
+    );
   });
 
   it('201st asset is rejected', async () => {

@@ -4,6 +4,7 @@ import sharp from 'sharp';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { env } from '../env.js';
+import { computeSignature } from '../gateway/signing.js';
 import { prisma } from '../lib/prisma.js';
 import { memoryObjectStore } from '../storage/object-store.js';
 import { dashHeaders, loginAs } from '../test/dashboard.js';
@@ -149,5 +150,62 @@ describe('theme asset routes', () => {
     const list = await app.inject({ method: 'GET', url: '/v1/theme-assets', headers: viewer });
     expect(list.statusCode, list.body).toBe(200);
     expect(list.json().data).toHaveLength(1);
+  });
+
+  it('signing covers the multipart bytes', async () => {
+    const secret = 'whsec_theme_assets_signing_secret';
+    const key = (
+      await createApiKey(merchant.id, {
+        livemode: false,
+        signingRequired: true,
+        signingSecret: secret,
+      })
+    ).raw;
+    const f = form('logo', 'logo.png', png, 'image/png');
+    const t = Math.floor(Date.now() / 1000);
+    const upload = (signedBody: Buffer) =>
+      app.inject({
+        method: 'POST',
+        url: '/v1/theme-assets',
+        headers: {
+          ...bearer(key),
+          ...f.headers,
+          'tendr-signature': `t=${t},v1=${computeSignature(secret, t, signedBody)}`,
+        },
+        payload: f.payload,
+      });
+    const empty = await upload(Buffer.alloc(0));
+    expect(empty.statusCode, empty.body).toBe(401);
+    expect(store.objects.size).toBe(0);
+    const real = await upload(f.payload);
+    expect(real.statusCode, real.body).toBe(201);
+    expect(store.objects.size).toBe(1);
+  });
+
+  it('Idempotency-Key binds the uploaded file', async () => {
+    const other = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: '#abcdef' },
+    })
+      .png()
+      .toBuffer();
+    const upload = (file: Buffer) => {
+      const f = form('image', 'a.png', file);
+      return app.inject({
+        method: 'POST',
+        url: '/v1/theme-assets',
+        headers: { ...bearer(testKey), ...f.headers, 'idempotency-key': 'upload-1' },
+        payload: f.payload,
+      });
+    };
+    const first = await upload(png);
+    expect(first.statusCode, first.body).toBe(201);
+    const replay = await upload(png);
+    expect(replay.statusCode, replay.body).toBe(201);
+    expect(replay.headers['idempotent-replayed']).toBe('true');
+    expect(replay.json().id).toBe(first.json().id);
+    const conflict = await upload(other);
+    expect(conflict.statusCode, conflict.body).toBe(409);
+    expect(conflict.json().error.code).toBe('IDEMPOTENCY_CONFLICT');
+    expect(store.objects.size).toBe(1);
   });
 });
