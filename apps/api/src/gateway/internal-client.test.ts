@@ -1,5 +1,5 @@
 import type { FastifyRequest } from 'fastify';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadEnv } from '../env.js';
 import { internalClient } from './internal-client.js';
 
@@ -10,7 +10,30 @@ const req = (headers: Record<string, string>, ip = '10.0.0.5') =>
 
 describe('internalClient', () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     loadEnv();
+  });
+
+  it('warns once per request when a trusted request has no valid client ip, never logging secrets', () => {
+    loadEnv({ ...process.env, WEB_INTERNAL_TOKEN: TOKEN });
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const missing = req({ 'x-tendr-internal': TOKEN });
+    internalClient(missing);
+    internalClient(missing);
+    internalClient(req({ 'x-tendr-internal': TOKEN, 'x-tendr-client-ip': 'evil-value' }));
+    const lines = spy.mock.calls.map((c) => String(c[0]));
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ level: 'warn', clientIpHeader: 'missing' });
+    expect(JSON.parse(lines[1]!)).toMatchObject({ level: 'warn', clientIpHeader: 'invalid' });
+    for (const l of lines) {
+      expect(l).not.toContain(TOKEN);
+      expect(l).not.toContain('evil-value');
+    }
+    // Untrusted requests and trusted ones with a valid address log nothing.
+    spy.mockClear();
+    internalClient(req({ 'x-tendr-client-ip': 'junk' }));
+    internalClient(req({ 'x-tendr-internal': TOKEN, 'x-tendr-client-ip': '203.0.113.7' }));
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('is trusted with the right token and takes a valid client ip header', () => {

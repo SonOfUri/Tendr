@@ -664,12 +664,19 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
 }
 
 /**
- * The expiry a quote's deadline is bounded by. A link session's first quote extends the session
- * to `createdAt + SESSION_TTL_MS` (storeQuote), so that quote is priced against the extended
- * expiry rather than the short unquoted one.
+ * A session from a link's public page: it names a link and has no `external_ref` (a store-path
+ * session always carries its order's ref, and keeps the expiry the store asked for).
+ */
+const publicLinkSession = (s: { paymentLinkId: string | null; externalRef: string | null }) =>
+  s.paymentLinkId !== null && s.externalRef === null;
+
+/**
+ * The expiry a quote's deadline is bounded by. A public link session's first quote extends the
+ * session to `createdAt + SESSION_TTL_MS` (storeQuote), so that quote is priced against the
+ * extended expiry rather than the short unquoted one.
  */
 async function pricingExpiry(ctx: ShopperCtx, s: SessionRow): Promise<Date> {
-  if (!s.paymentLinkId) return s.expiresAt;
+  if (!publicLinkSession(s)) return s.expiresAt;
   const quoted = await ctx.db.quote.count({ where: { sessionId: s.id } });
   if (quoted > 0) return s.expiresAt;
   const extended = new Date(s.createdAt.getTime() + SESSION_TTL_MS);
@@ -800,10 +807,17 @@ async function storeQuote(
       walletAddress: extra.walletAddress,
     };
 
-    // A payment link session starts with a short expiry (LINK_UNQUOTED_TTL_MS); its first quote
-    // extends it to the normal lifetime, counted from creation. Later quotes leave it alone.
+    // A session from a link's public page starts with a short expiry (LINK_UNQUOTED_TTL_MS); its
+    // first quote extends it to the normal lifetime, counted from creation. Later quotes, and
+    // store-path sessions (which carry an external_ref and the store's own expiry), are untouched.
     await tx.session.updateMany({
-      where: { ...tenant, id: sessionId, paymentLinkId: { not: null }, quotes: { none: {} } },
+      where: {
+        ...tenant,
+        id: sessionId,
+        paymentLinkId: { not: null },
+        externalRef: null,
+        quotes: { none: {} },
+      },
       data: { expiresAt: new Date(row.created_at.getTime() + SESSION_TTL_MS) },
     });
     await tx.quote.updateMany({

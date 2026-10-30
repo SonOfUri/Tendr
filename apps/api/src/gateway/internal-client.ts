@@ -9,6 +9,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import type { FastifyRequest } from 'fastify';
 import { env } from '../env.js';
+import { log } from '../lib/logger.js';
 
 export const INTERNAL_TOKEN_HEADER = 'x-tendr-internal';
 export const CLIENT_IP_HEADER = 'x-tendr-client-ip';
@@ -31,9 +32,30 @@ function tokenMatches(given: string | undefined): boolean {
  * key on — the payer's IP from `x-tendr-client-ip` for a trusted request with a valid IPv4/IPv6
  * literal there, otherwise `req.ip`.
  */
-export function internalClient(req: FastifyRequest): { trusted: boolean; clientIp: string } {
+export function internalClient(req: FastifyRequest): InternalClient {
+  // Several hooks ask per request; decide (and warn) once.
+  const known = decided.get(req);
+  if (known) return known;
+  const out = decide(req);
+  decided.set(req, out);
+  return out;
+}
+
+export type InternalClient = { trusted: boolean; clientIp: string };
+
+const decided = new WeakMap<FastifyRequest, InternalClient>();
+
+function decide(req: FastifyRequest): InternalClient {
   const trusted = tokenMatches(header(req, INTERNAL_TOKEN_HEADER));
   const forwarded = header(req, CLIENT_IP_HEADER)?.trim();
-  const clientIp = trusted && forwarded && isIP(forwarded) !== 0 ? forwarded : req.ip;
-  return { trusted, clientIp };
+  const valid = forwarded !== undefined && isIP(forwarded) !== 0;
+  if (trusted && !valid) {
+    // The web server should always forward the payer's address; without it every payer shares
+    // the server's bucket. Neither the token nor the header value is logged.
+    log('warn', 'internal request without a valid client ip', {
+      requestId: req.id,
+      clientIpHeader: forwarded === undefined || forwarded === '' ? 'missing' : 'invalid',
+    });
+  }
+  return { trusted, clientIp: trusted && valid && forwarded ? forwarded : req.ip };
 }

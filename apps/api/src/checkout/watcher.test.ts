@@ -316,6 +316,48 @@ describe('payment watcher', () => {
     });
   });
 
+  it('a deposit to an overdue, unswept link session settles and can push use_count past max_uses', async () => {
+    // The spec §2.5 caveat: the reservation ends at expiry, but money that arrives still settles.
+    const link = await createRow('PaymentLink', merchant.id, false, { maxUses: 1 });
+    const a = (await linkSession(link.id)).json() as { id: string; client_secret: string };
+    const qa = await quote(a.client_secret);
+    // A's lifetime passes before the sweeper reaches it: its use is no longer reserved.
+    await prisma.session.update({
+      where: { id: a.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    const bRes = await linkSession(link.id);
+    expect(bRes.statusCode, bRes.body).toBe(201);
+    const b = bRes.json() as { id: string; client_secret: string };
+    const qb = await quote(b.client_secret);
+
+    await sim.simulate(qa.deposit_address, 'exact');
+    await poll(qa.deposit_address);
+    expect((await sessionOf(a.id)).status).toBe('SETTLED');
+    await sim.simulate(qb.deposit_address, 'exact');
+    await poll(qb.deposit_address);
+    expect((await sessionOf(b.id)).status).toBe('SETTLED');
+    expect((await prisma.paymentLink.findUniqueOrThrow({ where: { id: link.id } })).useCount).toBe(
+      2,
+    );
+  });
+
+  it('a late deposit on an expired link session is returned and is not a use', async () => {
+    const link = await createRow('PaymentLink', merchant.id, false, { maxUses: 1 });
+    const s = (await linkSession(link.id)).json() as { id: string; client_secret: string };
+    const q = await quote(s.client_secret);
+    offset = 31 * 60_000;
+    expect(await expireSessions(clock())).toBe(1);
+    await sim.simulate(q.deposit_address, 'late');
+    await poll(q.deposit_address);
+    expect((await paymentOf(q.id)).isLate).toBe(true);
+    expect((await sessionOf(s.id)).status).toBe('REFUNDED');
+    expect(await eventTypes()).not.toContain('payment.succeeded');
+    expect((await prisma.paymentLink.findUniqueOrThrow({ where: { id: link.id } })).useCount).toBe(
+      0,
+    );
+  });
+
   describe('I-2: test mode settles with the rpc driver (NODE_ENV=production)', () => {
     /** The deployed driver: testnet answers UNKNOWN_TRANSACTION (null) for a simulator hash. */
     function rpcLike(livemode: boolean): NearClient {

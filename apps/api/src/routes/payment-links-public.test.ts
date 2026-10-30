@@ -10,7 +10,7 @@ import { scopedDb } from '../db/scoped.js';
 import { env, loadEnv } from '../env.js';
 import { prisma } from '../lib/prisma.js';
 import { createLink } from '../payment-links/links.js';
-import { createMerchant, createRow, resetDb } from '../test/helpers.js';
+import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
 import { isolatedSimStore } from '../test/sim-1click.js';
 
 const sim1click = isolatedSimStore();
@@ -191,6 +191,35 @@ describe('public payment link routes', () => {
       expect(q2.statusCode, q2.body).toBe(201);
       const final = await prisma.session.findUniqueOrThrow({ where: { id: s.id } });
       expect(final.expiresAt.getTime()).toBe(moved.getTime());
+    });
+
+    it('a store-path link session with expires_in 60 keeps its expiry after a quote', async () => {
+      const key = (await createApiKey(merchant.id, { livemode: false })).raw;
+      const link = await prisma.paymentLink.findFirstOrThrow({ where: { slug: 'tshirt' } });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/checkout/sessions',
+        headers: { authorization: `Bearer ${key}` },
+        payload: {
+          amount: '25.00',
+          amount_currency: 'USD',
+          external_ref: 'order-60',
+          success_url: 'https://shop.example/thanks',
+          cancel_url: 'https://shop.example/cart',
+          payment_link_id: link.id,
+          expires_in: 60,
+        },
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const { id, client_secret } = res.json() as { id: string; client_secret: string };
+      const before = await prisma.session.findUniqueOrThrow({ where: { id } });
+      const q = await quote(client_secret);
+      expect(q.statusCode, q.body).toBe(201);
+      const after = await prisma.session.findUniqueOrThrow({ where: { id } });
+      expect(after.expiresAt.getTime()).toBe(before.expiresAt.getTime());
+      // Its quote is bounded by the store's 60-second expiry, not an extended one.
+      const qRow = await prisma.quote.findUniqueOrThrow({ where: { id: q.json().id } });
+      expect(qRow.deadline.getTime()).toBeLessThanOrEqual(before.expiresAt.getTime());
     });
 
     it('the shopper view names the link and its page', async () => {

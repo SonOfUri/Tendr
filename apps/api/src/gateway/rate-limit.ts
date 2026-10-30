@@ -21,8 +21,8 @@
 //
 // "IP" is the payer's: `internalClient(req).clientIp`, which is `req.ip` unless the web server
 // presents its internal token with the payer's address (internal-client.ts). Such trusted
-// requests skip `ip_global` and `public` (the server's own address would trip them for everyone);
-// the route-level per-IP limits and global ceilings still count them.
+// requests skip `ip_global` (the server's own address would trip it for everyone); `public` and
+// the route-level limits key on the payer's IP, so a leaked token never lifts per-payer limits.
 //
 // Counters are keyed by ids (principalRef) and IPs, never by raw credentials. Fails open:
 // if Redis is unreachable the request is let through and a warning is logged.
@@ -253,8 +253,7 @@ export async function createRateLimiters(
       if (!p) {
         if (
           req.routeOptions.config.auth === 'public' &&
-          req.routeOptions.config.publicLimit !== 'route' &&
-          !client.trusted
+          req.routeOptions.config.publicLimit !== 'route'
         ) {
           await enforce(req, reply, 'public', `pub:${client.clientIp}`);
         }
