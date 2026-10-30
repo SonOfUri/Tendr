@@ -27,15 +27,38 @@ function theme(patch: Partial<ShopperTheme> = {}): ShopperTheme {
   };
 }
 
+// The sealed block's real markup: heading and label text sit in child spans (PayFlow,
+// WalletPanel, WalletConnect, LinkPay).
 const PAYMENT = (
-  <div>
-    <h2>Pay with crypto</h2>
+  <div className="pay-card">
+    <h2 className="pay-title">
+      <span data-testid="heading-text">Pay with crypto</span>
+    </h2>
     <span className="pay-amount">25.10 USDC</span>
-    <button type="button" className="pay-button">
-      <span className="pay-button-label">Pay</span>
+    <span className="address" data-testid="address">
+      0x0000000000000000000000000000000000000000
+    </span>
+    <button type="button" className="pay-button" data-testid="primary">
+      <span className="pay-button-label">
+        <span data-testid="label-text">Pay 25.10 USDC</span>
+      </span>
+    </button>
+    <button type="button" className="pay-button pay-button-secondary" data-testid="secondary">
+      <span className="pay-button-label">Change token</span>
     </button>
   </div>
 );
+
+const CSS_DIR = resolve(__dirname, '../../app');
+/** Tendr's stylesheets as the checkout loads them (tokens, then globals), comments and imports stripped. */
+function tendrCss(): string {
+  const tokens = readFileSync(
+    resolve(__dirname, '../../../../../packages/ui/src/tokens.css'),
+    'utf8',
+  );
+  const globals = readFileSync(resolve(CSS_DIR, 'globals.css'), 'utf8');
+  return `${tokens}\n${globals}`.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@import[^;]+;/g, '');
+}
 
 function blocksOf(container: HTMLElement): string[] {
   return [...container.querySelectorAll(':scope > .tdr-canvas > *')].map(
@@ -108,7 +131,7 @@ describe('BlockCanvas', () => {
     expect(amount?.closest('.tdr-payment')).not.toBeNull();
 
     // The stylesheet contract: inside `.tdr-payment` only `--theme-font-curated` is ever used.
-    const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf8').replace(
+    const css = readFileSync(resolve(CSS_DIR, 'globals.css'), 'utf8').replace(
       /\/\*[\s\S]*?\*\//g,
       '',
     );
@@ -280,5 +303,53 @@ describe('ThemeStyles', () => {
     const text = container.querySelector('style')?.textContent ?? '';
     expect(text).toContain('font-family: "tdr-brand-font"');
     expect(text).toContain('url("https://assets.example/f.woff2")');
+  });
+});
+
+// jsdom applies the cascade (specificity, `inherit`) and reports the declared value, so these
+// check which Tendr rule wins on each sealed element.
+describe('sealed block stylesheet', () => {
+  function renderStyled(t: ShopperTheme = theme()) {
+    const style = document.createElement('style');
+    style.textContent = tendrCss();
+    document.head.appendChild(style);
+    const view = render(
+      <div className="tdr-theme" data-scheme="light">
+        <BlockCanvas
+          blocks={[{ id: 'payment', type: 'payment' }]}
+          theme={t}
+          slots={{ payment: PAYMENT }}
+        />
+      </div>,
+    );
+    return { ...view, style };
+  }
+  const font = (el: Element) => getComputedStyle(el).fontFamily;
+
+  afterEach(() => document.head.querySelectorAll('style').forEach((s) => s.remove()));
+
+  it('curated font reaches heading and Pay label text in child spans, nothing else', () => {
+    const { getByTestId, container } = renderStyled();
+    const curated = 'var(--theme-font-curated, var(--tendr-font-sans))';
+    expect(font(getByTestId('heading-text'))).toBe(curated);
+    expect(font(getByTestId('label-text'))).toBe(curated);
+    expect(font(container.querySelector('.pay-amount')!)).toBe('var(--tendr-font-sans)');
+    expect(font(getByTestId('address'))).toBe('var(--tendr-font-mono)');
+  });
+
+  it('secondary buttons keep the scheme text colour; primary uses the on-accent colour', () => {
+    const { getByTestId } = renderStyled();
+    expect(getComputedStyle(getByTestId('primary')).color).toBe('var(--theme-on-accent, #ffffff)');
+    expect(getComputedStyle(getByTestId('secondary')).color).toBe('var(--tendr-white)');
+  });
+
+  it('light data-scheme is never overridden to a dark color-scheme', () => {
+    const { container } = renderStyled();
+    const root = container.querySelector('.tdr-theme')!;
+    const rules = [...tendrCss().matchAll(/([^{}@]+)\{([^{}]*)\}/g)];
+    const schemes = rules
+      .filter(([, sel, body]) => /color-scheme\s*:/.test(body ?? '') && root.matches(sel!.trim()))
+      .map(([, , body]) => /color-scheme\s*:\s*(\w+)/.exec(body!)?.[1]);
+    expect(schemes).toEqual(['light']);
   });
 });

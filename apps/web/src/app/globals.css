@@ -946,11 +946,16 @@ code {
   border-radius: var(--tendr-radius);
   border: 1px solid transparent;
   background: var(--tendr-indigo);
-  /* Readable on the theme's accent (white unless the accent is light); white without a theme. */
-  color: var(--theme-on-accent, #ffffff) !important;
+  color: var(--tendr-white) !important;
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+}
+
+/* On the accent: readable on the theme's accent (white unless the accent is light). Secondary
+   buttons are transparent, so they keep the scheme's text colour. */
+.pay-button:not(.pay-button-secondary) {
+  color: var(--theme-on-accent, #ffffff) !important;
 }
 
 .pay-button-label {
@@ -1096,7 +1101,7 @@ code {
  * names may not start with `tdr-` or `pay-`, and merchant keyframes are renamed `tdrm-…`, so
  * Tendr never uses that prefix.
  */
-.tdr-theme {
+.tdr-theme:not([data-scheme='light']) {
   color-scheme: dark;
 }
 
@@ -1404,6 +1409,11 @@ code {
 
 .tdr-payment :is(h2, h3, .pay-button-label) {
   font-family: var(--theme-font-curated, var(--tendr-font-sans));
+}
+
+/* Heading and label text often sits in a child span: let it take the heading's font. */
+.tdr-payment :is(h2, h3, .pay-button-label) * {
+  font-family: inherit;
 }
 
 .tdr-payment :is(.pay-address, .pay-mono, .address, code) {

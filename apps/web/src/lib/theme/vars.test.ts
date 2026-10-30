@@ -7,7 +7,7 @@ import {
   type ThemeDocument,
 } from '@tendr/contracts';
 import { describe, expect, it } from 'vitest';
-import { themeVars } from './vars';
+import { themeDataScheme, themeVars } from './vars';
 
 function shopperTheme(
   patch: Partial<ThemeDocument['settings']> = {},
@@ -122,5 +122,50 @@ describe('themeVars', () => {
     for (const id of Object.keys(CURATED_FONTS)) {
       expect(script, id).toMatch(new RegExp(`(^|\\s)'?${id}'?: \\[`, 'm'));
     }
+  });
+
+  it('data-scheme follows the shown palette background, not the mode', () => {
+    expect(themeDataScheme(shopperTheme(), 'dark')).toBe('dark');
+    // A `dark`-mode theme whose palette is white still gets Tendr's light state colours.
+    const whiteDark = shopperTheme({
+      mode: 'dark',
+      palettes: {
+        dark: { accent: '#4035f5', background: '#ffffff', surface: '#f3f4fb', text: '#080d1b' },
+      },
+    });
+    expect(themeDataScheme(whiteDark, 'dark')).toBe('light');
+    expect(themeDataScheme(whiteDark, 'light')).toBe('light');
+    // A `light`-mode theme on near-black is dark.
+    const blackLight = shopperTheme({
+      mode: 'light',
+      palettes: {
+        light: { accent: '#9b5cff', background: '#111111', surface: '#1b1b1b', text: '#ffffff' },
+      },
+    });
+    expect(themeDataScheme(blackLight, 'light')).toBe('dark');
+    // `auto` picks the palette by preference, then reads that palette's background.
+    const auto = shopperTheme({ mode: 'auto' });
+    expect(themeDataScheme(auto, 'light')).toBe('light');
+    expect(themeDataScheme(auto, 'dark')).toBe('dark');
+    // Mid-grey sits on the 0.4 luminance boundary: #aaaaaa (≈0.40) is light, #a0a0a0 (≈0.35) dark.
+    const grey = (background: string) =>
+      themeDataScheme(
+        shopperTheme({
+          mode: 'dark',
+          palettes: {
+            dark: { accent: '#000000', background, surface: background, text: '#000000' },
+          },
+        }),
+        'dark',
+      );
+    expect(grey('#aaaaaa')).toBe('light');
+    expect(grey('#a0a0a0')).toBe('dark');
+  });
+
+  it('keeps the colour-scheme hook out of the server-importable module', () => {
+    const vars = readFileSync(resolve(__dirname, 'vars.ts'), 'utf8');
+    expect(vars).not.toMatch(/from 'react'/);
+    const hook = readFileSync(resolve(__dirname, 'use-scheme.ts'), 'utf8');
+    expect(hook.startsWith("'use client';")).toBe(true);
   });
 });

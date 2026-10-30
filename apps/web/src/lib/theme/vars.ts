@@ -2,7 +2,6 @@
 // palette tokens (so every existing `.pay-*` rule follows the theme); Tendr's state colours and
 // its own fonts are never set here, so warnings, errors, timers, amounts and addresses keep
 // Tendr's look whatever the theme says.
-import { useSyncExternalStore } from 'react';
 import {
   CURATED_FONTS,
   type ShopperTheme,
@@ -40,9 +39,19 @@ export function themePalette(theme: ShopperTheme, scheme: Scheme): ThemePalette 
   return (palettes[scheme] ?? palettes[other]) as ThemePalette;
 }
 
-/** The scheme a theme is drawn in when the shopper's preference is `preferred`. */
+/** Which of the theme's palettes is shown when the shopper's preference is `preferred`. */
 export function themeScheme(mode: ThemeSettings['mode'], preferred: Scheme): Scheme {
   return mode === 'auto' ? preferred : mode;
+}
+
+/**
+ * The `data-scheme` for the palette shown for `scheme`: whether that palette is light or dark by
+ * its background (relative luminance < 0.4 is dark), not by the mode it was filed under. It picks
+ * Tendr's fixed state-colour variants (tokens.css), so a `dark`-mode theme with a white background
+ * still gets the warning, error and success colours that read on white.
+ */
+export function themeDataScheme(theme: ShopperTheme, scheme: Scheme): Scheme {
+  return luminance(themePalette(theme, scheme).background) < 0.4 ? 'dark' : 'light';
 }
 
 /** The `font-family` value for the theme's brand font, or null when it can't load. */
@@ -97,27 +106,4 @@ export function themeVars(theme: ShopperTheme, scheme: Scheme): Record<string, s
     vars['--theme-font-curated'] = brandFont;
   }
   return vars;
-}
-
-const DARK_QUERY = '(prefers-color-scheme: dark)';
-
-function subscribe(onChange: () => void): () => void {
-  if (typeof window === 'undefined' || !window.matchMedia) return () => {};
-  const mq = window.matchMedia(DARK_QUERY);
-  mq.addEventListener('change', onChange);
-  return () => mq.removeEventListener('change', onChange);
-}
-
-function preferredScheme(): Scheme {
-  if (typeof window === 'undefined' || !window.matchMedia) return 'dark';
-  return window.matchMedia(DARK_QUERY).matches ? 'dark' : 'light';
-}
-
-/**
- * The scheme to draw a theme in: its fixed mode, or with `auto` the shopper's
- * `prefers-color-scheme` (dark during server rendering, matching Tendr's default look).
- */
-export function useScheme(mode: ThemeSettings['mode']): Scheme {
-  const preferred = useSyncExternalStore(subscribe, preferredScheme, () => 'dark' as const);
-  return themeScheme(mode, preferred);
 }
