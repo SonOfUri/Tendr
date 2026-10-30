@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEMOS, type DemoCheckoutBootstrap, type DemoSlug } from '@/lib/demo';
+import type { Token } from '@/lib/checkout/api';
+import { tokensFromOneClick } from '@/lib/demo-assets';
 import { buildDemoUiBootstrap, DEMO_UI_ONLY } from '@/lib/demo-ui-checkout';
+import { fetchOneClickTokens } from '@/lib/oneclick-tokens';
 import { CodePanel } from './CodePanel';
 import { DemoCheckoutPanel } from './DemoCheckoutPanel';
 import { DemoFlowStepper, type DemoFlowStage } from './DemoFlowStepper';
@@ -44,6 +47,7 @@ export function DemoPlayground() {
   const [settledHint, setSettledHint] = useState<string | null>(null);
   const [brands, setBrands] = useState(initialBrands);
   const [cartPricing, setCartPricing] = useState<CartPricing | null>(null);
+  const [liveTokens, setLiveTokens] = useState<Token[] | null>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
 
   const demo = DEMOS.find((d) => d.slug === slug) ?? DEMOS[0]!;
@@ -99,8 +103,27 @@ export function DemoPlayground() {
     }
   }, []);
 
+  // Prefetch live 1Click catalog so the asset modal isn't guessing chains.
+  useEffect(() => {
+    if (!DEMO_UI_ONLY) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await fetchOneClickTokens();
+        if (cancelled) return;
+        setLiveTokens(tokensFromOneClick(rows));
+      } catch {
+        // Keep mock catalog if 1Click is unreachable on stage.
+        if (!cancelled) setLiveTokens(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const startCheckout = useCallback(
-    (amount?: string) => {
+    async (amount?: string) => {
       const payAmount =
         amount ?? (slug === 'ecommerce' && cartPricing ? cartPricing.total : demo.amount);
       setBusy(true);
@@ -109,14 +132,24 @@ export function DemoPlayground() {
       setSettledHint(null);
       setView('component');
 
-      // UI-only demo: never hit the network. Feel the flow; no "fetch failed" on stage.
+      // UI-only settlement still — but asset list comes from live 1Click when available.
       if (DEMO_UI_ONLY) {
+        let tokens = liveTokens;
+        if (!tokens) {
+          try {
+            tokens = tokensFromOneClick(await fetchOneClickTokens());
+            setLiveTokens(tokens);
+          } catch {
+            tokens = null;
+          }
+        }
         const boot = buildDemoUiBootstrap({
           amount: payAmount,
           currency: demo.currency,
           productName: demo.productName,
           merchantName: brand.name,
           merchantLogoUrl: brand.logoUrl,
+          tokens: tokens ?? undefined,
         });
         setCheckout({
           sessionId: boot.sessionId,
@@ -142,6 +175,7 @@ export function DemoPlayground() {
       demo.amount,
       demo.currency,
       demo.productName,
+      liveTokens,
       slug,
     ],
   );
