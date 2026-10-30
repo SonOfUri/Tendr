@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import type { Quote, Token } from '@/lib/checkout/api';
 import { publicEnv } from '@/lib/env';
 import { showBlockNotice, type PaymentBlock } from '@/lib/wallets/block';
@@ -52,6 +52,8 @@ export interface WalletConnectProps {
   checkBeforeSend?: () => Promise<'ok' | 'blocked' | 'error'>;
   /** A wallet send is in flight (or just settled). */
   onSendingChange?: (sending: boolean) => void;
+  /** Skip the intermediate button and open the wallet connect step on mount. */
+  autoOpen?: boolean;
 }
 
 type Panel = ComponentType<WalletConnectProps & { route: WalletRoute }>;
@@ -107,7 +109,8 @@ export function PaymentSentNotice({
 }
 
 export function WalletConnect(props: WalletConnectProps) {
-  const { quote, token, blocked = null, onDidntGoThrough, onSendingChange } = props;
+  const { quote, token, blocked = null, onDidntGoThrough, onSendingChange, autoOpen = false } =
+    props;
   const route = useMemo(
     () => adapterFor(quote.origin_asset, token.blockchain),
     [quote.origin_asset, token.blockchain],
@@ -118,18 +121,43 @@ export function WalletConnect(props: WalletConnectProps) {
   // A wallet send in flight: a block arriving from a poll waits until it settles (C33), so the
   // panel (and its wallet connection) is never torn down mid-send.
   const [sending, setSending] = useState(false);
+  const autoOpened = useRef(false);
   const noticeShown = showBlockNotice(blocked, sending);
+  const walletAvailable =
+    !!route && !(needsReown(route.chainFamily) && publicEnv.reownProjectId === null);
+
+  async function open() {
+    if (!route) return;
+    setLoading(true);
+    setFailed(false);
+    try {
+      const { WalletPanel } = await import('./WalletPanel');
+      setPanel({ assetId: route.target.assetId, Panel: WalletPanel });
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   // A block closes the wallet step; after "didn't go through" it starts again from the button.
   useEffect(() => {
     if (noticeShown) setPanel(null);
   }, [noticeShown]);
 
+  // Demo / direct entry: open the wallet modal without an extra click.
+  useEffect(() => {
+    if (!autoOpen || autoOpened.current || noticeShown || !walletAvailable) return;
+    autoOpened.current = true;
+    void open();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpen, walletAvailable, noticeShown, quote.origin_asset]);
+
   if (noticeShown && blocked) {
     return <PaymentSentNotice blocked={blocked} onDidntGoThrough={onDidntGoThrough} />;
   }
 
-  if (!route || (needsReown(route.chainFamily) && publicEnv.reownProjectId === null)) {
+  if (!walletAvailable) {
     return (
       <div className="pay-wallet">
         <p className="muted small">
@@ -141,7 +169,7 @@ export function WalletConnect(props: WalletConnectProps) {
   }
 
   // Opened for this token: the wallet step. Another token starts over from the button.
-  if (panel && panel.assetId === route.target.assetId) {
+  if (panel && route && panel.assetId === route.target.assetId) {
     return (
       <panel.Panel
         {...props}
@@ -154,29 +182,19 @@ export function WalletConnect(props: WalletConnectProps) {
     );
   }
 
-  async function open() {
-    setLoading(true);
-    setFailed(false);
-    try {
-      const { WalletPanel } = await import('./WalletPanel');
-      setPanel({ assetId: route!.target.assetId, Panel: WalletPanel });
-    } catch {
-      setFailed(true);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   return (
     <div className="pay-wallet">
       <button
         type="button"
         className="pay-button"
         onClick={() => void open()}
-        disabled={loading}
-        aria-busy={loading}
+        disabled={loading || autoOpen}
+        aria-busy={loading || autoOpen}
       >
-        {loading ? 'Connecting…' : 'Connect wallet'}
+        <span className="pay-button-label">
+          {loading || autoOpen ? <span className="pay-button-spinner" aria-hidden /> : null}
+          <span>{loading || autoOpen ? 'Connecting' : 'Connect wallet'}</span>
+        </span>
       </button>
       {failed ? (
         <p className="pay-error" role="alert">

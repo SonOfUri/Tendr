@@ -33,6 +33,12 @@ onchain/target/
 # Local agent workspace
 .superpowers/
 
+# Local demo / seed scratch (never commit secrets or session dumps)
+.seed-output.txt
+session.json
+demo-body.json
+
+
 # Mainnet verify script state (throwaway passkey)
 .verify-merchant-account-state.json
 
