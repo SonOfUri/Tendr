@@ -76,6 +76,15 @@ describe('cleanPayerNote', () => {
   it('strips control characters, collapses whitespace and trims', () => {
     expect(cleanPayerNote('  hi\u0000\u0007 there  ')).toBe('hi there');
   });
+  it('removes bidi and direction controls, keeping the emoji joiner', () => {
+    const controls = ['‎', '‏', '‪', '‫', '‬', '‭', '‮', '⁦', '⁧', '⁨', '⁩', '؜'];
+    for (const c of controls) expect(cleanPayerNote(`pay${c}ment`)).toBe('payment');
+    // A right-to-left override cannot flip how the note reads in the dashboard or the email.
+    expect(cleanPayerNote('invoice ‮fdp.exe‬ ok')).toBe('invoice fdp.exe ok');
+    const family = '👨‍👩‍👧';
+    expect(cleanPayerNote(`for the ${family}`)).toBe(`for the ${family}`);
+    expect(cleanPayerNote('‮⁦')).toBeNull();
+  });
   it('returns null when empty', () => {
     expect(cleanPayerNote('\n\t')).toBeNull();
     expect(cleanPayerNote(undefined)).toBeNull();
@@ -95,7 +104,15 @@ describe('cleanPayerNote', () => {
 });
 
 describe('null clears optional fields (update only)', () => {
-  const clearable = ['expires_at', 'max_uses', 'description', 'min_amount', 'fee_payer', 'gas_payer', 'gas_max_usd'];
+  const clearable = [
+    'expires_at',
+    'max_uses',
+    'description',
+    'min_amount',
+    'fee_payer',
+    'gas_payer',
+    'gas_max_usd',
+  ];
   it('update accepts null on each clearable field', () => {
     for (const f of clearable) {
       expect(PaymentLinkUpdateSchema.safeParse({ [f]: null }).success, f).toBe(true);

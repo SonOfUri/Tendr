@@ -139,12 +139,21 @@ export type PublicPaymentLinkView = {
 };
 
 /**
- * Payer note as stored: control characters removed, whitespace collapsed, trimmed, cut to
- * `PAYER_NOTE_MAX` code points (never inside a surrogate pair). HTML is escaped at render.
+ * Direction marks and bidi embeddings/overrides/isolates (LRM, RLM, LRE…RLO, LRI…PDI, ALM): they
+ * could make a note read differently in the dashboard or an email than what was typed. The zero
+ * width joiner (U+200D) stays, because emoji sequences need it.
+ */
+const BIDI_CONTROLS = /[‎‏‪-‮⁦-⁩؜]/gu;
+
+/**
+ * Payer note as stored: control characters and bidi controls removed, whitespace collapsed,
+ * trimmed, cut to `PAYER_NOTE_MAX` code points (never inside a surrogate pair). HTML is escaped at
+ * render.
  */
 export function cleanPayerNote(raw: string | undefined): string | null {
   if (raw === undefined) return null;
   const s = raw
+    .replace(BIDI_CONTROLS, '')
     .replace(/\p{Cc}/gu, (c) => (/[\t\n\r]/.test(c) ? ' ' : ''))
     .replace(/\s+/gu, ' ')
     .trim();
