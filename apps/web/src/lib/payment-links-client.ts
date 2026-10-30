@@ -40,18 +40,32 @@ export function decimalLess(a: string, b: string): boolean {
 }
 
 /**
- * "25000.00" NGN → "₦25,000.00": always exactly `minorUnits` decimals (the link's `minor_units`),
- * so Intl's own idea of the currency never rounds the amount.
+ * How many decimals a link amount shows, from its own digits and the currency's minor units (the
+ * API's, never Intl's, so nothing is rounded): none when the decimals are all zeros ("25000.00" →
+ * 25,000); otherwise exactly the minor units for a currency with up to 2 ("15.2" USD → 15.20), and
+ * the significant decimals with trailing zeros trimmed for one with more ("0.00100000" BTC → 0.001).
+ */
+export function linkFractionDigits(amount: string, minorUnits: number): number {
+  const frac = (amount.trim().split('.')[1] ?? '').replace(/0+$/, '');
+  if (frac === '') return 0;
+  if (minorUnits <= 2) return minorUnits;
+  return Math.min(frac.length, minorUnits);
+}
+
+/**
+ * "25000.00" NGN → "₦25,000", "15.2" USD → "$15.20", "0.00100000" BTC → "BTC 0.001": decimals per
+ * `linkFractionDigits`, so Intl's own idea of the currency never rounds or pads the amount.
  */
 export function formatLinkAmount(amount: string, currency: string, minorUnits: number): string {
   if (!DECIMAL.test(amount.trim())) return `${amount} ${currency}`;
+  const digits = linkFractionDigits(amount, minorUnits);
   try {
     return new Intl.NumberFormat('en', {
       style: 'currency',
       currency,
       currencyDisplay: 'narrowSymbol',
-      minimumFractionDigits: minorUnits,
-      maximumFractionDigits: minorUnits,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
       // A decimal string is formatted exactly (Intl.NumberFormat v3).
     }).format(amount.trim() as unknown as number);
   } catch {

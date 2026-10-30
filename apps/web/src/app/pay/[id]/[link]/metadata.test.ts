@@ -82,7 +82,7 @@ describe('generateMetadata', () => {
     const fixed = await meta(base);
     expect(fixed.title).toBe('T-shirt');
     expect(fixed.openGraph?.title).toBe('T-shirt');
-    expect(fixed.openGraph?.description).toBe('Acme · ₦25,000.00');
+    expect(fixed.openGraph?.description).toBe('Acme · ₦25,000');
     expect(fixed.openGraph?.images).toEqual([
       { url: 'https://usetendr.tech/pay/acme/tee/opengraph-image', width: 1200, height: 630 },
     ]);
@@ -91,7 +91,7 @@ describe('generateMetadata', () => {
     expect(open.openGraph?.description).toBe('Acme · Pay any amount');
 
     const test = await meta({ ...base, livemode: false }, 'test');
-    expect(test.openGraph?.description).toBe('Test · Acme · ₦25,000.00');
+    expect(test.openGraph?.description).toBe('Test · Acme · ₦25,000');
     expect(test.openGraph?.images).toEqual([
       {
         url: 'https://usetendr.tech/pay/acme/tee/opengraph-image?mode=test',

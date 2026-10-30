@@ -63,7 +63,8 @@ describe('link page', () => {
     const html = render(FIXED);
     expect(html).toContain('Acme Studio');
     expect(html).toContain('Logo design');
-    expect(html).toContain('₦25,000.00');
+    expect(html).toContain('₦25,000');
+    expect(html).not.toContain('₦25,000.00');
     expect(html).toContain('≈ $15.63');
     expect(html).toContain('Note to Acme Studio (optional)');
     expect(html).toMatch(/maxLength="280"|maxlength="280"/);
@@ -81,11 +82,12 @@ describe('link page', () => {
     );
   });
 
-  it('formats with the API minor units, never rounding (RSD is 2, Intl says 0)', () => {
+  it('formats with the API minor units, never rounding or padding (RSD is 2, Intl says 0)', () => {
     const rsd = { ...FIXED, currency: 'RSD', amount: '100.50', usd_rate: null };
     expect(render(rsd)).toContain('RSD\u00a0100.50');
     const btc = { ...FIXED, currency: 'BTC', amount: '0.00100000', minor_units: 8, usd_rate: null };
-    expect(render(btc)).toContain('BTC\u00a00.00100000');
+    expect(render(btc)).toContain('BTC\u00a00.001');
+    expect(render(btc)).not.toContain('0.00100000');
   });
 
   it('accepts an open RSD amount with decimals and rejects IRT decimals', () => {
@@ -104,7 +106,7 @@ describe('link page', () => {
   it('renders an amount box and the minimum for an open link', () => {
     const html = render(OPEN);
     expect(html).toContain('name="amount"');
-    expect(html).toContain('Minimum ₦1,600.00');
+    expect(html).toContain('Minimum ₦1,600');
   });
 
   it('shows plus-fees line only for shopper-paid links', () => {
@@ -169,7 +171,7 @@ describe('link page', () => {
     expect(small).toContain('This amount is too small to pay in crypto right now.');
     expect(small).not.toContain('Pay with crypto');
     const low = msg(OPEN, 'AMOUNT_TOO_LOW', { min_amount: '1700.00' });
-    expect(low).toContain('The minimum is ₦1,700.00.');
+    expect(low).toContain('The minimum is ₦1,700.');
     expect(low).toContain('aria-invalid="true"');
     expect(low).toContain('Pay with crypto');
   });

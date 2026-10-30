@@ -39,12 +39,19 @@ describe('parseLinkAmount', () => {
 });
 
 describe('formatting', () => {
-  it('formats the link amount with exactly the currency minor units, never rounding', () => {
-    expect(formatLinkAmount('25000.00', 'NGN', 2)).toBe('₦25,000.00');
-    expect(formatLinkAmount('15.20', 'USD', 2)).toBe('$15.20');
+  it('formats like money, never rounding: whole amounts without decimals', () => {
+    // All-zero decimals: none shown.
+    expect(formatLinkAmount('25000.00', 'NGN', 2)).toBe('₦25,000');
     expect(formatLinkAmount('1500', 'JPY', 0)).toBe('¥1,500');
+    expect(formatLinkAmount('2.00000000', 'BTC', 8)).toBe('BTC\u00a02');
+    // Up to 2 minor units: exactly that many (RSD is 2 here, Intl says 0).
     expect(formatLinkAmount('100.50', 'RSD', 2)).toBe('RSD\u00a0100.50');
-    expect(formatLinkAmount('0.001', 'BTC', 8)).toBe('BTC\u00a00.00100000');
+    expect(formatLinkAmount('15.2', 'USD', 2)).toBe('$15.20');
+    expect(formatLinkAmount('15.20', 'USD', 2)).toBe('$15.20');
+    // More minor units (BTC, IQD...): the significant decimals, trailing zeros trimmed.
+    expect(formatLinkAmount('0.00100000', 'BTC', 8)).toBe('BTC\u00a00.001');
+    expect(formatLinkAmount('0.12345678', 'BTC', 8)).toBe('BTC\u00a00.12345678');
+    expect(formatLinkAmount('1.250', 'BHD', 3)).toBe('BHD\u00a01.25');
   });
 
   it('gives the USD equivalent from the rate, or null without one', () => {

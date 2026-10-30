@@ -1,6 +1,6 @@
 // What a payment link's preview card says (spec §4.1), shared by the page metadata and the image.
 import type { PublicPaymentLinkView } from '@tendr/contracts';
-import { formatLinkAmount } from './payment-links-client';
+import { formatLinkAmount, linkFractionDigits } from './payment-links-client';
 
 /** The price line, or null when the link no longer takes payments (no price on its card). */
 export function linkPriceText(view: PublicPaymentLinkView): string | null {
@@ -24,13 +24,14 @@ export function linkCardPrice(view: PublicPaymentLinkView): string | null {
   const price = linkPriceText(view);
   if (price === null || view.amount === null || view.amount_type === 'open') return price;
   if (!/[^\u0000-ÿ€]/.test(price)) return price;
+  const digits = linkFractionDigits(view.amount, view.minor_units);
   try {
     return new Intl.NumberFormat('en', {
       style: 'currency',
       currency: view.currency,
       currencyDisplay: 'code',
-      minimumFractionDigits: view.minor_units,
-      maximumFractionDigits: view.minor_units,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
     })
       .format(view.amount as unknown as number)
       .replace(/\u00A0/g, ' ');
