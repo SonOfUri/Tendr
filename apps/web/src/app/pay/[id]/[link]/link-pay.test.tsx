@@ -98,6 +98,33 @@ describe('link page', () => {
     expect(inSealed).not.toContain('Logo design');
   });
 
+  it('the theme button words label the Pay button, with Tendr formatting the amount (R22)', () => {
+    const withLabel = (label: string | undefined) => {
+      const t = tendrShopperTheme('Acme Studio');
+      return {
+        ...t,
+        id: 'thm_words',
+        document: { ...t.document, settings: { ...t.document.settings, button_label: label } },
+      };
+    };
+    const fixed = render({ ...FIXED, theme: withLabel('Grab it for {amount}') });
+    const [outside, inSealed] = fixed.split('<section class="tdr-payment"');
+    expect(inSealed).toContain('<span class="pay-button-label">Grab it for ₦25,000</span>');
+    expect(inSealed).not.toContain('Pay with crypto');
+    // Never outside the sealed block.
+    expect(outside).not.toContain('Grab it');
+    // Unset: today's wording.
+    expect(render({ ...FIXED, theme: withLabel(undefined) })).toContain(
+      '<span class="pay-button-label">Pay with crypto</span>',
+    );
+    // An open link: the typed amount once valid; Tendr's words until then.
+    const open = { ...OPEN, theme: withLabel('Send {amount}') };
+    expect(render(open)).toContain('<span class="pay-button-label">Pay with crypto</span>');
+    expect(render(open, { ...initialPayState(open), amount: '2500' })).toContain(
+      '<span class="pay-button-label">Send ₦2,500</span>',
+    );
+  });
+
   it('renders without usd equivalent', () => {
     expect(render({ ...FIXED, usd_rate: null })).not.toContain('≈');
     expect(render({ ...FIXED, currency: 'USD', amount: '25.00', usd_rate: null })).not.toContain(
@@ -175,7 +202,9 @@ describe('link page', () => {
     });
     const html = render(FIXED, state);
     expect(html).toContain('Someone is paying this link right now, try again shortly.');
-    expect(html).toMatch(/<button[^>]*type="submit"(?![^>]*disabled)[^>]*>Pay with crypto/);
+    expect(html).toMatch(
+      /<button[^>]*type="submit"(?![^>]*disabled)[^>]*><span class="pay-button-label">Pay with crypto/,
+    );
   });
 
   it('maps the other refusals to their messages', () => {

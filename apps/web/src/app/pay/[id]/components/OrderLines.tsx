@@ -56,18 +56,19 @@ export function OrderLines({
   amount,
   currency,
   symbol,
+  format,
 }: {
   items: readonly SessionLineItem[];
   amount: string;
   currency: string;
   /** The settlement token's symbol when the amount isn't in USD (as the order total shows it). */
   symbol: string | null;
+  /** Writes a non-negative amount; default as the order total (`formatOrderAmount`). */
+  format?: (amount: string) => string;
 }) {
   const { lines, difference } = orderLinesMath(items, amount);
-  const money = (v: string) =>
-    v.startsWith('-')
-      ? `−${formatOrderAmount(v.slice(1), currency, symbol)}`
-      : formatOrderAmount(v, currency, symbol);
+  const write = format ?? ((v: string) => formatOrderAmount(v, currency, symbol));
+  const money = (v: string) => (v.startsWith('-') ? `−${write(v.slice(1))}` : write(v));
   return (
     <div className="tdr-lines">
       <ul className="tdr-lines-list">

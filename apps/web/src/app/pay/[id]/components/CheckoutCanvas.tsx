@@ -9,10 +9,10 @@
 // - every other status screen (expired, held, refunded…): Tendr's wording in the sealed block
 //   under the theme's header only — styled by the theme, nothing else of it.
 import type { ShopperTheme, ThemeBlock } from '@tendr/contracts';
-import { useCallback, useRef, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { BlockCanvas } from '@/components/theme/BlockCanvas';
 import { Celebration } from '@/components/theme/Celebration';
-import { PayBar, revealPayment } from '@/components/theme/PayBar';
+import { WithPayBar } from '@/components/theme/PayBar';
 import type { SessionView } from '@/lib/checkout/api';
 import type { ScreenKind } from '@/lib/checkout/status';
 import { OrderLines } from './OrderLines';
@@ -39,6 +39,7 @@ export function CheckoutCanvas({
   sealed,
   amountText,
   settlementSymbol = null,
+  formatAmount,
 }: {
   view: SessionView;
   theme: ShopperTheme;
@@ -48,12 +49,9 @@ export function CheckoutCanvas({
   /** The order total as the sealed block shows it (the pay bar repeats it). */
   amountText: string;
   settlementSymbol?: string | null;
+  /** How cart amounts are written (the preview's sample currency); default as the order total. */
+  formatAmount?: (amount: string) => string;
 }) {
-  const root = useRef<HTMLDivElement>(null);
-  const sealedSection = useCallback(
-    () => root.current?.querySelector('.tdr-payment[data-sealed]') ?? null,
-    [],
-  );
   const settings = theme.document.settings;
 
   let canvas: ReactNode;
@@ -71,6 +69,7 @@ export function CheckoutCanvas({
               amount={view.amount}
               currency={view.amount_currency}
               symbol={settlementSymbol}
+              format={formatAmount}
             />
           ) : undefined,
         }}
@@ -102,17 +101,9 @@ export function CheckoutCanvas({
   }
 
   return (
-    <div ref={root} className="tdr-checkout">
+    <WithPayBar amount={amountText} payee={view.merchant.name} enabled={screen === 'pay'}>
       {canvas}
-      {screen === 'pay' ? (
-        <PayBar
-          amount={amountText}
-          payee={view.merchant.name}
-          target={sealedSection}
-          onActivate={() => revealPayment(sealedSection())}
-        />
-      ) : null}
       {screen === 'complete' ? <Celebration kind={settings.celebration} /> : null}
-    </div>
+    </WithPayBar>
   );
 }

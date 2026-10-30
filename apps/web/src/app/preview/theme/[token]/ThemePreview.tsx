@@ -6,6 +6,8 @@
 import type { ThemePreview as PreviewOpts } from '@tendr/contracts';
 import { useEffect, useMemo, useState } from 'react';
 import { BlockCanvas } from '@/components/theme/BlockCanvas';
+import { payButtonLabel } from '@/components/theme/pay-label';
+import { WithPayBar } from '@/components/theme/PayBar';
 import { ThemedPage } from '@/components/theme/ThemedPage';
 import type { SessionLineItem, SessionView } from '@/lib/checkout/api';
 import { formatUsd } from '@/lib/checkout/format';
@@ -65,10 +67,13 @@ function SealedPreview({
   payee,
   tradingAs,
   amount,
+  buttonLabel,
 }: {
   payee: string;
   tradingAs: string | null;
   amount: string;
+  /** The theme's button words (`settings.button_label`), if set. */
+  buttonLabel: string | null;
 }) {
   return (
     <>
@@ -89,7 +94,9 @@ function SealedPreview({
         <h2 id="preview-pay-title">Pay with crypto</h2>
         <p className="muted small">Shoppers choose a token and network here.</p>
         <button type="button" className="pay-button" disabled aria-disabled="true">
-          <span className="pay-button-label">Pay {amount}</span>
+          <span className="pay-button-label">
+            {payButtonLabel(buttonLabel, amount, `Pay ${amount}`)}
+          </span>
         </button>
         <p className="pay-alert small" role="note">
           {PREVIEW_RIBBON}. Nothing on this page can take a payment.
@@ -107,24 +114,33 @@ export function PreviewBody({ read }: { read: PreviewRead }) {
   const { sample, opts } = read;
   const payee = theme.payee;
   const amount = sampleAmount(sample.amount, sample.amount_currency);
-  const sealed = <SealedPreview payee={payee} tradingAs={theme.trading_as} amount={amount} />;
+  const sealed = (
+    <SealedPreview
+      payee={payee}
+      tradingAs={theme.trading_as}
+      amount={amount}
+      buttonLabel={theme.document.settings.button_label ?? null}
+    />
+  );
 
   let canvas;
   if (sample.kind === 'link') {
     canvas = (
-      <BlockCanvas
-        blocks={theme.document.blocks}
-        theme={theme}
-        slots={{
-          payment: sealed,
-          orderSummary: sample.link ? (
-            <div className="pay-section">
-              <h1 className="pay-title">{sample.link.title}</h1>
-              <p className="pay-link-description">{sample.link.description}</p>
-            </div>
-          ) : undefined,
-        }}
-      />
+      <WithPayBar amount={amount} payee={payee} enabled>
+        <BlockCanvas
+          blocks={theme.document.blocks}
+          theme={theme}
+          slots={{
+            payment: sealed,
+            orderSummary: sample.link ? (
+              <div className="pay-section">
+                <h1 className="pay-title">{sample.link.title}</h1>
+                <p className="pay-link-description">{sample.link.description}</p>
+              </div>
+            ) : undefined,
+          }}
+        />
+      </WithPayBar>
     );
   } else {
     // The checkout's own canvas, fed the sample cart as if it were a session.
@@ -148,7 +164,7 @@ export function PreviewBody({ read }: { read: PreviewRead }) {
         screen="pay"
         sealed={sealed}
         amountText={amount}
-        settlementSymbol={sample.amount_currency === 'USD' ? null : sample.amount_currency}
+        formatAmount={(v) => sampleAmount(v, sample.amount_currency)}
       />
     );
   }

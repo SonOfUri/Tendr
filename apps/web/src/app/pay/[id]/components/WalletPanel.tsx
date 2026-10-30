@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Quote } from '@/lib/checkout/api';
 import { formatUnits, shortAddress } from '@/lib/checkout/format';
+import { payButtonLabel, usePayLabel } from '@/components/theme/pay-label';
 import { publicEnv } from '@/lib/env';
 import { toWalletError, walletErrorCopy } from '@/lib/wallets/errors';
 import type { ChainFamily, WalletAdapter, WalletRoute } from '@/lib/wallets/index';
@@ -66,6 +67,22 @@ const MISMATCH_COPY =
   "This payment request doesn't match your price, so we didn't ask your wallet to sign it. Try again or pay by sending manually.";
 
 /** Whether the pay button is live. */
+/**
+ * The main wallet "Pay …" button's words: Tendr's "Pay <amount> <token>", or the theme's button
+ * words (R22) with `{amount}` filled with that same Tendr-formatted amount.
+ */
+export function walletPayLabel(
+  themeLabel: string | null,
+  amount: string | null,
+  symbol: string,
+): string {
+  return payButtonLabel(
+    themeLabel,
+    amount ? `${amount} ${symbol}` : null,
+    `Pay ${amount ?? ''} ${symbol}`,
+  );
+}
+
 export function canPay(opts: {
   family: ChainFamily;
   address: string | null;
@@ -122,6 +139,8 @@ export function WalletPanel({
   const gaslessOff = useRef(false);
   const [progress, setProgress] = useState<GaslessProgress | null>(null);
   const [canRetry, setCanRetry] = useState(false);
+  // The theme's button words for the main "Pay …" action (R22); unset keeps Tendr's.
+  const themeLabel = usePayLabel();
 
   // Mounted by the "Connect wallet" click: start connecting right away. Unmounting (another
   // token, or a payment went out) drops the wallet connection.
@@ -572,7 +591,7 @@ export function WalletPanel({
                         : 'Confirm in your wallet'
                       : phase === 'quoting'
                         ? 'Updating your price'
-                        : `Pay ${amount ?? ''} ${token.symbol}`}
+                        : walletPayLabel(themeLabel, amount, token.symbol)}
                   </span>
                 </span>
               </button>

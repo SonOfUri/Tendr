@@ -75,6 +75,40 @@ describe('theme preview page', () => {
     expect(html).toContain(PREVIEW_RIBBON);
   });
 
+  it('non-USD sample lines are written like the total, and the button words label Pay', () => {
+    const base = read();
+    const theme = base.theme as { document: { settings: Record<string, unknown> } };
+    const html = renderToStaticMarkup(
+      <PreviewBody
+        read={{
+          ...base,
+          theme: {
+            ...theme,
+            document: {
+              ...theme.document,
+              settings: { ...theme.document.settings, button_label: 'Own it for {amount}' },
+            },
+          },
+          sample: {
+            ...base.sample,
+            amount: '25000',
+            amount_currency: 'NGN',
+            line_items: base.sample.line_items.map((l, i) => ({
+              ...l,
+              unit_amount: i === 0 ? '15000' : '10000',
+            })),
+          },
+        }}
+      />,
+    );
+    expect(html).toContain('<span class="tdr-line-amount">₦15,000</span>');
+    expect(html).toContain('<span class="tdr-line-amount">₦10,000</span>');
+    expect(html).not.toContain('NGN');
+    const [outside, inSealed] = html.split('<section class="tdr-payment"');
+    expect(inSealed).toContain('<span class="pay-button-label">Own it for ₦25,000</span>');
+    expect(outside).not.toContain('Own it');
+  });
+
   it('an unknown or expired token reads as null, never throws', async () => {
     const notFound = vi.fn(async () => new Response('{}', { status: 404 }));
     expect(await fetchPreview('x'.repeat(43), notFound as unknown as typeof fetch)).toBeNull();

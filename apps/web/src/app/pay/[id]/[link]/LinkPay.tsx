@@ -4,6 +4,8 @@ import type { PaymentLinkAvailability, PublicPaymentLinkView } from '@tendr/cont
 import { PAYER_NOTE_MAX } from '@tendr/contracts';
 import { useEffect, useMemo, useState } from 'react';
 import { BlockCanvas } from '@/components/theme/BlockCanvas';
+import { payButtonLabel } from '@/components/theme/pay-label';
+import { WithPayBar } from '@/components/theme/PayBar';
 import { ThemedPage } from '@/components/theme/ThemedPage';
 import { safeHttpUrl } from '@/lib/checkout/format';
 import { parseShopperTheme } from '@/lib/theme/parse';
@@ -205,6 +207,20 @@ export function LinkPayBody({
       ? usdEquivalent(view.amount, view.currency, view.usd_rate)
       : null;
   const available = state.availability === 'available';
+  // The amount as the page shows it: the fixed price, or a valid typed amount (else none yet).
+  const amountText = open
+    ? typed?.ok
+      ? money(typed.amount, view)
+      : null
+    : view.amount
+      ? money(view.amount, view)
+      : null;
+  // The theme's button words (R22), `{amount}` filled with Tendr's formatted amount.
+  const payLabel = payButtonLabel(
+    theme.document.settings.button_label,
+    amountText,
+    'Pay with crypto',
+  );
 
   const summary = (
     <div className="pay-section">
@@ -317,14 +333,10 @@ export function LinkPayBody({
                   </p>
                 ) : null}
                 <button type="submit" className="pay-button" disabled={state.busy}>
-                  {state.busy ? (
-                    <span className="pay-button-label">
-                      <span className="pay-button-spinner" aria-hidden />
-                      Pay with crypto
-                    </span>
-                  ) : (
-                    'Pay with crypto'
-                  )}
+                  <span className="pay-button-label">
+                    {state.busy ? <span className="pay-button-spinner" aria-hidden /> : null}
+                    {payLabel}
+                  </span>
                 </button>
               </>
             )}
@@ -337,11 +349,17 @@ export function LinkPayBody({
   return (
     <ThemedPage theme={theme}>
       <div className="pay-card">
-        <BlockCanvas
-          blocks={theme.document.blocks}
-          theme={theme}
-          slots={{ payment: sealed, orderSummary: summary }}
-        />
+        <WithPayBar
+          amount={amountText ?? 'Choose an amount'}
+          payee={payee}
+          enabled={available && !state.tooSmall}
+        >
+          <BlockCanvas
+            blocks={theme.document.blocks}
+            theme={theme}
+            slots={{ payment: sealed, orderSummary: summary }}
+          />
+        </WithPayBar>
       </div>
     </ThemedPage>
   );

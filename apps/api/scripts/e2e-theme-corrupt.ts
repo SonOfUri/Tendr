@@ -6,7 +6,8 @@
 //   tsx scripts/e2e-theme-corrupt.ts '{"themeId":"thm_…"}'
 //
 // TEST DATABASE ONLY: DATABASE_URL is replaced by TEST_DATABASE_URL (environment, then the root
-// .env), and it refuses to run without one, or in production.
+// .env), and it refuses to run without one, in production, or when that database's name doesn't
+// end in `_test`.
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDotenvFile } from '../src/lib/load-dotenv.js';
@@ -16,6 +17,16 @@ async function main() {
   if (process.env.NODE_ENV === 'production') throw new Error('e2e script refuses production');
   const testDb = process.env.TEST_DATABASE_URL;
   if (!testDb) throw new Error('TEST_DATABASE_URL is not set');
+  // It writes broken rows: only ever into a database whose name says it is a test one.
+  let dbName = '';
+  try {
+    dbName = decodeURIComponent(new URL(testDb).pathname.replace(/^\//, ''));
+  } catch {
+    dbName = '';
+  }
+  if (!dbName.endsWith('_test')) {
+    throw new Error(`refusing to write: database "${dbName}" is not a *_test database`);
+  }
   process.env.DATABASE_URL = testDb;
 
   const { themeId } = JSON.parse(process.argv[2] ?? '{}') as { themeId?: string };

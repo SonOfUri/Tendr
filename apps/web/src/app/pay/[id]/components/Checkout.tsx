@@ -23,6 +23,7 @@ import {
 } from '@/lib/wallets/popup';
 import { walletModalOpen } from '@/lib/wallets/modal-state';
 import { createDepositReporter, type PendingTx } from '@/lib/wallets/tx-store';
+import { PayLabelContext } from '@/components/theme/pay-label';
 import { ThemedPage } from '@/components/theme/ThemedPage';
 import { formatOrderAmount } from '@/lib/checkout/format';
 import { parseShopperThemeCached } from '@/lib/theme/parse';
@@ -318,8 +319,9 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   const theme = parseShopperThemeCached(view.theme, view.merchant.name);
 
   // The sealed payment block: everything about the money stays Tendr's, whatever the theme says.
+  // The theme's button words reach only its primary pay button (WalletPanel, R22).
   const sealed = (
-    <>
+    <PayLabelContext.Provider value={theme.document.settings.button_label ?? null}>
       <CheckoutHeader
         view={view}
         tradingAs={theme.trading_as}
@@ -387,7 +389,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
       {screen.action === 'needs_address' && screen.refundNeedingAddress ? (
         <NeedsAddressPanel client={client} refund={screen.refundNeedingAddress} onDone={refresh} />
       ) : null}
-    </>
+    </PayLabelContext.Provider>
   );
 
   return (

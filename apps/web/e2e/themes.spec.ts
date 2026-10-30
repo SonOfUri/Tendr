@@ -196,8 +196,23 @@ test.describe('checkout themes', () => {
 
     const box = await sealed(page).evaluate((el) => {
       const r = el.getBoundingClientRect();
-      return { top: r.top + scrollY, bottom: r.bottom + scrollY, left: r.left, right: r.right };
+      const canvas = el.closest('.tdr-canvas')!.getBoundingClientRect();
+      return {
+        top: r.top + scrollY,
+        bottom: r.bottom + scrollY,
+        left: r.left,
+        right: r.right,
+        width: r.width,
+        height: r.height,
+        canvasLeft: canvas.left,
+        canvasWidth: canvas.width,
+      };
     });
+    // Not squeezed or shifted: the payment block keeps the card's full width and a real height.
+    expect(Math.abs(box.width - box.canvasWidth)).toBeLessThan(1);
+    expect(Math.abs(box.left - box.canvasLeft)).toBeLessThan(1);
+    expect(box.width).toBeGreaterThan(280);
+    expect(box.height).toBeGreaterThan(200);
     const wraps = await page.locator('.tdr-wrap').evaluateAll((els) =>
       els.map((el) => {
         const r = el.getBoundingClientRect();
@@ -317,7 +332,8 @@ test.describe('checkout themes', () => {
     await expect(page.locator('.tdr-header-name')).toHaveText('Draft Atelier');
     await expect(page.locator('.tdr-theme.tdr-page')).toHaveAttribute('data-scheme', 'light');
     await expect(page.getByText('Linen shirt')).toBeVisible();
-    const pay = sealed(page).getByRole('button', { name: /^Pay / });
+    // The fashion preset's button words ("Complete purchase") label the inert Pay button (R22).
+    const pay = sealed(page).getByRole('button', { name: 'Complete purchase' });
     await expect(pay).toBeDisabled();
     await pay.click({ force: true });
     // Nothing on the page can pay: no token list, and the browser only ever read the preview
@@ -331,7 +347,14 @@ test.describe('checkout themes', () => {
     const store = seedStore();
     const theme = await createTheme(store, 'fashion', (d) => ({
       ...d,
-      settings: { ...d.settings, display_name: 'Link Look' },
+      settings: { ...d.settings, display_name: 'Link Look', button_label: 'Buy it for {amount}' },
+      custom_css: '.tall { height: 2500px; background: #e8dfd4; }',
+      blocks: [
+        { id: 'header', type: 'header', show_logo: true, show_name: true },
+        { id: 'banner', type: 'custom_html', html: '<div class="tall"></div>' },
+        { id: 'summary', type: 'order_summary' },
+        { id: 'payment', type: 'payment' },
+      ],
     }));
     const title = `Gift card ${Date.now().toString(36)}`;
     const created = await api<{ url: string }>('/v1/payment_links', {
@@ -358,7 +381,22 @@ test.describe('checkout themes', () => {
     await expect(sealed(page).locator('.pay-payee')).toContainText(
       /You're paying E2E Shop \S+ · trading as Link Look/,
     );
-    await expect(sealed(page).getByRole('button', { name: 'Pay with crypto' })).toBeVisible();
+    // The theme's button words, with Tendr's formatted amount (R22).
+    const pay = sealed(page).getByRole('button', { name: 'Buy it for $15' });
+    await expect(pay).toBeAttached();
+    await expect(page.getByText('Buy it for')).toHaveCount(1);
+
+    // The tall banner pushes the payment block off a phone screen: the pay bar stands in for it.
+    const bar = page.locator('[data-pay-bar]');
+    await expect(bar).toBeVisible();
+    await expect(bar).toContainText('$15');
+    await expect(bar).toContainText(/You're paying E2E Shop/);
+    await bar.getByRole('button').click();
+    await expect(bar).toHaveCount(0);
+    await expect(pay).toBeInViewport();
     await expect(sealed(page).locator('.pay-total')).toHaveText('$15');
+    // It stays hidden while the block is on screen (no flash after the smooth scroll ends).
+    await page.waitForTimeout(1800);
+    await expect(bar).toHaveCount(0);
   });
 });

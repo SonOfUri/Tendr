@@ -10,11 +10,13 @@ import { PayFlow, QuotePending, leftoversNotice, refundToCarry } from './PayFlow
 import { CONFIRM_NOT_SENT_COPY } from './WalletConnect';
 import { WalletConnect } from './WalletConnect';
 import { StatusScreen } from './StatusScreens';
-import { canPay } from './WalletPanel';
+import { canPay, walletPayLabel } from './WalletPanel';
 import { NetworkFee, showFeeChoice } from './NetworkFee';
 import { SendDetails } from './SendDetails';
 import { tendrShopperTheme } from '@/lib/checkout/brand';
 import { Celebration } from '@/components/theme/Celebration';
+import { payButtonLabel } from '@/components/theme/pay-label';
+import { WithPayBar } from '@/components/theme/PayBar';
 import { CheckoutCanvas } from './CheckoutCanvas';
 
 const VIEW = {
@@ -739,5 +741,126 @@ describe('themed checkout', () => {
     cleanup();
     const none = render(<Celebration kind="none" />);
     expect(none.container.querySelector('.tdr-celebration')).toBeNull();
+  });
+});
+
+// ─── Fix round 1: button words (R22) and the pay bar's reveal ────────────────
+
+/** An IntersectionObserver the test drives: `report(share)` tells every observer `share` (0–1). */
+function controlledObserver() {
+  const observers: { cb: IntersectionObserverCallback; els: Element[] }[] = [];
+  vi.stubGlobal(
+    'IntersectionObserver',
+    class {
+      private entry: { cb: IntersectionObserverCallback; els: Element[] };
+      constructor(cb: IntersectionObserverCallback) {
+        this.entry = { cb, els: [] };
+        observers.push(this.entry);
+      }
+      observe(el: Element) {
+        this.entry.els.push(el);
+      }
+      disconnect() {
+        this.entry.els = [];
+      }
+      unobserve() {}
+    },
+  );
+  const report = (share: number) =>
+    act(() => {
+      for (const o of observers) {
+        for (const el of o.els) {
+          o.cb(
+            [
+              {
+                target: el,
+                isIntersecting: share > 0,
+                intersectionRatio: share,
+                boundingClientRect: { height: 1000 } as DOMRectReadOnly,
+                intersectionRect: { height: 1000 * share } as DOMRectReadOnly,
+                rootBounds: { height: 812 } as DOMRectReadOnly,
+              } as unknown as IntersectionObserverEntry,
+            ],
+            {} as IntersectionObserver,
+          );
+        }
+      }
+    });
+  const observed = () => observers.flatMap((o) => o.els);
+  return { report, observed };
+}
+
+describe('button words (R22)', () => {
+  it('label with {amount} renders the formatted amount; unset keeps the default', () => {
+    expect(walletPayLabel('Grab it for {amount}', '25.1', 'USDC')).toBe('Grab it for 25.1 USDC');
+    expect(walletPayLabel('Complete purchase', '25.1', 'USDC')).toBe('Complete purchase');
+    expect(walletPayLabel(null, '25.1', 'USDC')).toBe('Pay 25.1 USDC');
+    // No amount known yet: Tendr's wording, never a half-filled label.
+    expect(payButtonLabel('Grab it for {amount}', null, 'Pay with crypto')).toBe('Pay with crypto');
+  });
+});
+
+describe('pay bar reveal', () => {
+  const draw = () =>
+    render(
+      <CheckoutCanvas
+        view={VIEW}
+        theme={shopperTheme()}
+        screen="pay"
+        sealed={<button type="button">Choose</button>}
+        amountText="$84.00"
+      />,
+    );
+
+  it('does not flash back while the smooth scroll passes low readings', () => {
+    stubMedia(['(max-width: 640px)']);
+    const io = controlledObserver();
+    const r = draw();
+    (r.container.querySelector('.tdr-payment') as HTMLElement).scrollIntoView = () => {};
+    io.report(0.05);
+    const bar = () => r.container.querySelector('[data-pay-bar]');
+    expect(bar()).not.toBeNull();
+    act(() => (r.container.querySelector('[data-pay-bar] button') as HTMLButtonElement).click());
+    expect(bar()).toBeNull();
+    io.report(0.1); // on the way down
+    io.report(0.2);
+    expect(bar()).toBeNull();
+    io.report(0.6); // arrived
+    expect(bar()).toBeNull();
+    io.report(0.1); // the shopper scrolls away again
+    expect(bar()).not.toBeNull();
+  });
+
+  it('comes back after ~1.5 s when the block never reaches 30%', () => {
+    vi.useFakeTimers();
+    stubMedia(['(max-width: 640px)']);
+    const io = controlledObserver();
+    const r = draw();
+    (r.container.querySelector('.tdr-payment') as HTMLElement).scrollIntoView = () => {};
+    io.report(0);
+    act(() => (r.container.querySelector('[data-pay-bar] button') as HTMLButtonElement).click());
+    io.report(0.1);
+    expect(r.container.querySelector('[data-pay-bar]')).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1600);
+    });
+    expect(r.container.querySelector('[data-pay-bar]')).not.toBeNull();
+    vi.useRealTimers();
+  });
+
+  it('re-observes the payment block when it is replaced', () => {
+    stubMedia(['(max-width: 640px)']);
+    const io = controlledObserver();
+    const tree = (which: 'a' | 'b') => (
+      <WithPayBar amount="$84.00" payee="Bean Shop" enabled>
+        <section key={which} className="tdr-payment" data-sealed="" data-which={which} />
+      </WithPayBar>
+    );
+    const r = render(tree('a'));
+    const first = r.container.querySelector('[data-which="a"]');
+    expect(io.observed()).toEqual([first]);
+    r.rerender(tree('b'));
+    const second = r.container.querySelector('[data-which="b"]');
+    expect(io.observed()).toEqual([second]);
   });
 });
