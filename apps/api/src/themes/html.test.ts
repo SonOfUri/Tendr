@@ -161,6 +161,10 @@ describe('sanitizeThemeHtml', () => {
       '<p>Hello</p><p>1BoatSLRHt</p><p>KNngkdXEeo</p><p>bR76b53LETtpyT</p>',
       '<p>Hello</p><p>1BoatSLRHt</p><p>KNngkdXEeo</p><p>bR76b53LETtpyT</p><p>thanks</p>',
       '<p>Hi</p><p>1Boat</p><p>SLRHt</p><p>KNngk</p><p>dXEeo</p><p>bR76b</p><p>53LETtpyT</p><p>ok</p>',
+      // Long sentences glued to the first or last piece don't hide the split.
+      '<p>Handmade leather bags from our small workshop in Yaba ok 1BoatSLRHt</p><p>KNngkdXEeo</p><p>bR76b53LETtpyT</p><p>hello</p>',
+      '<p>hello</p><p>1BoatSLRHt</p><p>KNngkdXEeo</p><p>bR76b53LETtpyT all orders leave the workshop within two working days</p>',
+      '<p>Handmade leather bags from our small workshop in Yaba ok 1BoatSLRHt</p><p>KNngkdXEeo</p><p>bR76b53LETtpyT all orders leave the workshop within two working days</p>',
     ]) {
       expect(problemsOf(html).join(' '), html).toMatch(/wallet addresses or payment instructions/);
     }

@@ -242,13 +242,65 @@ describe('scopeThemeCss', () => {
       expect(p.message).toBe("CSS can't add text — put words in a text block instead");
   });
 
+  it('counters can show digits and bullets but not letters', () => {
+    const STYLE = 'Counters and list markers can only use';
+    const VALUE = 'Counter values must be whole numbers from -999 to 999';
+    const ONE = '`content` can show at most one `counter()`';
+    // The reviewer's probes: letters from counter styles, or long numbers from big counter values.
+    const probe1 = problemsOf(
+      'p::before{content:counter(a) counter(b, lower-alpha) counter(c)} p{counter-reset:a 0 b 24 c 5290840}',
+    ).map((p) => p.message);
+    expect(probe1.some((m) => m.startsWith(STYLE))).toBe(true);
+    expect(probe1).toContain(VALUE);
+    const probe2 = problemsOf(
+      'p::before{content:counter(a, lower-alpha) " " counter(b, lower-alpha)} p{counter-set:a 343334 b 1}',
+    ).map((p) => p.message);
+    expect(probe2).toContain(VALUE);
+    expect(probe2.length).toBeGreaterThanOrEqual(2);
+    const probe3 = problemsOf(
+      'li{list-style-type:lower-alpha} li{counter-set:list-item 343334}',
+    ).map((p) => p.message);
+    expect(probe3.some((m) => m.startsWith(STYLE))).toBe(true);
+    expect(probe3).toContain(VALUE);
+    expectRejected('li::marker{content:counter(list-item, upper-alpha)}', STYLE);
+
+    for (const css of [
+      'li{list-style-type:upper-alpha}',
+      'li{list-style-type:lower-latin}',
+      'li{list-style-type:upper-roman}',
+      'li{list-style-type:lower-greek}',
+      'li{list-style-type:hiragana}',
+      'li{list-style-type:disclosure-open}',
+      'li{list-style:lower-roman inside}',
+      'li{list-style:url(https://assets.tendr.test/a/dot.png) armenian}',
+      'p::before{content:counter(a, lower-roman)}',
+      '@keyframes k{from{content:counter(a, lower-alpha)}} p::before{animation:k 1s}',
+    ]) {
+      expectRejected(css, STYLE);
+    }
+    expectRejected('p::before{content:counter(a) counter(b)}', ONE);
+    expectRejected('@keyframes k{to{content:counter(a) counter(b)}}', ONE);
+    for (const css of [
+      'p{counter-reset:a 1000}',
+      'p{counter-set:a -1000}',
+      'p{counter-increment:a 1.5}',
+      'p{counter-reset:a 1e6}',
+      'p{counter-set:a var(--n)}',
+      'p{counter-set:a calc(5290840)}',
+    ]) {
+      expectRejected(css, VALUE);
+    }
+  });
+
   it('text-free content values pass', () => {
     const r = scopeThemeCss(
       [
         'p::before{content:""}',
         '.logo::before{content:url(https://assets.tendr.test/a/star.png)}',
         'li::before{content:counter(item)}',
-        'li::marker{content:counter(item, upper-roman)}',
+        'li::marker{content:counter(item, decimal)}',
+        'li::before{content:counter(item, decimal-leading-zero) ""}',
+        'ol{counter-reset:item 0 step -999} li{counter-increment:item 999; counter-set:x}',
         'q::before{content:open-quote} q::after{content:close-quote}',
         'p::after{content:none} p::before{content:normal}',
         'q{quotes:auto} blockquote{quotes:none}',

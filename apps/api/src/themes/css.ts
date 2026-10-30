@@ -123,7 +123,27 @@ const CONTENT_KEYWORDS = new Set([
 ]);
 /** Functions that could put text (or a value standing in for text) into a drawing property. */
 const TEXT_FUNCTIONS = new Set(['var', 'env', 'attr', 'counter', 'counters', 'symbols', 'string']);
+const QUOTES_KEYWORDS = new Set(['none', 'auto']);
+const TEXT_OVERFLOW_KEYWORDS = new Set(['clip', 'ellipsis']);
+const HYPHENATE_KEYWORDS = new Set(['auto']);
 const NO_TEXT = "CSS can't add text — put words in a text block instead";
+/** Counter and list-marker styles that draw only digits or bullets, never letters. */
+const COUNTER_STYLES = new Set([
+  'decimal',
+  'decimal-leading-zero',
+  'disc',
+  'circle',
+  'square',
+  'none',
+]);
+const LIST_STYLE_POSITIONS = new Set(['inside', 'outside']);
+const COUNTER_STYLE_PROBLEM =
+  'Counters and list markers can only use `decimal`, `decimal-leading-zero`, `disc`, `circle`, `square` or `none`';
+const ONE_COUNTER = '`content` can show at most one `counter()`';
+/** Properties whose numbers set a counter's value. */
+const COUNTER_VALUE_PROPERTIES = new Set(['counter-reset', 'counter-set', 'counter-increment']);
+const COUNTER_VALUE_MAX = 999;
+const COUNTER_VALUE_PROBLEM = `Counter values must be whole numbers from -${COUNTER_VALUE_MAX} to ${COUNTER_VALUE_MAX}`;
 
 const BREAKS_STYLE_ELEMENT = /<\/style|<!--|<\/?script/i;
 const ANGLE_BRACKET = "CSS text and links can't contain `<`";
@@ -306,8 +326,12 @@ class Checker {
       return;
     }
     if (name === 'position') this.position(decl, line);
-    if (TEXT_DRAWING_PROPERTIES.has(name) && !this.drawsNoText(name, decl.value)) {
-      this.add(line, NO_TEXT);
+    if (TEXT_DRAWING_PROPERTIES.has(name)) {
+      const problem = this.textDrawingProblem(name, decl.value);
+      if (problem) this.add(line, problem);
+    }
+    if (COUNTER_VALUE_PROPERTIES.has(name) && !counterValuesAreSmall(decl.value)) {
+      this.add(line, COUNTER_VALUE_PROBLEM);
     }
     // Strings anywhere else are checked together too, in case they are ever shown.
     const strings: string[] = [];
@@ -328,27 +352,41 @@ class Checker {
     }
   }
 
-  /** Whether a text-drawing property's value is one of the text-free forms it allows. */
-  private drawsNoText(name: string, value: csstree.Value | csstree.Raw): boolean {
-    if (value.type !== 'Value') return false;
+  /**
+   * Why a text-drawing property's value isn't one of the text-free forms it allows, or null if it
+   * is. Counters and list markers may show digits or bullets but never letters, which could spell
+   * out an address.
+   */
+  private textDrawingProblem(name: string, value: csstree.Value | csstree.Raw): string | null {
+    if (value.type !== 'Value') return NO_TEXT;
     const parts = value.children.toArray();
-    const ident = (n: csstree.CssNode, allowed: readonly string[]) =>
-      n.type === 'Identifier' && allowed.includes(n.name.toLowerCase());
+    const ident = (n: csstree.CssNode, allowed: ReadonlySet<string>) =>
+      n.type === 'Identifier' && allowed.has(n.name.toLowerCase());
     switch (name) {
-      case 'content':
-        return parts.every(
-          (n) =>
-            (n.type === 'Identifier' && CONTENT_KEYWORDS.has(n.name.toLowerCase())) ||
-            (n.type === 'String' && n.value === '') ||
-            n.type === 'Url' ||
-            (n.type === 'Function' && n.name.toLowerCase() === 'counter' && this.plainCounter(n)),
-        );
+      case 'content': {
+        let counters = 0;
+        for (const n of parts) {
+          if (n.type === 'Function' && n.name.toLowerCase() === 'counter' && plainCounter(n)) {
+            if (!counterStyleAllowed(n)) return COUNTER_STYLE_PROBLEM;
+            counters += 1;
+          } else if (
+            !ident(n, CONTENT_KEYWORDS) &&
+            !(n.type === 'String' && n.value === '') &&
+            n.type !== 'Url'
+          ) {
+            return NO_TEXT;
+          }
+        }
+        return counters > 1 ? ONE_COUNTER : null;
+      }
       case 'quotes':
-        return parts.length === 1 && ident(parts[0]!, ['none', 'auto']);
+        return parts.length === 1 && ident(parts[0]!, QUOTES_KEYWORDS) ? null : NO_TEXT;
       case 'text-overflow':
-        return parts.length >= 1 && parts.every((n) => ident(n, ['clip', 'ellipsis']));
+        return parts.length >= 1 && parts.every((n) => ident(n, TEXT_OVERFLOW_KEYWORDS))
+          ? null
+          : NO_TEXT;
       case 'hyphenate-character':
-        return parts.length === 1 && ident(parts[0]!, ['auto']);
+        return parts.length === 1 && ident(parts[0]!, HYPHENATE_KEYWORDS) ? null : NO_TEXT;
       default: {
         // list-style(-type), text-emphasis(-style): keywords (and colours / images), no text.
         let ok = true;
@@ -356,22 +394,22 @@ class Checker {
           if (n.type === 'String') ok = false;
           if (n.type === 'Function' && TEXT_FUNCTIONS.has(unprefixed(n.name))) ok = false;
         });
-        return ok;
+        if (!ok) return NO_TEXT;
+        if (name === 'list-style-type') {
+          return parts.length === 1 && ident(parts[0]!, COUNTER_STYLES)
+            ? null
+            : COUNTER_STYLE_PROBLEM;
+        }
+        if (name === 'list-style') {
+          const markersOk = parts.every(
+            (n) =>
+              n.type !== 'Identifier' || ident(n, COUNTER_STYLES) || ident(n, LIST_STYLE_POSITIONS),
+          );
+          return markersOk ? null : COUNTER_STYLE_PROBLEM;
+        }
+        return null;
       }
     }
-  }
-
-  /** `counter(<ident>)` or `counter(<ident>, <ident>)`: a number, never a string. */
-  private plainCounter(fn: csstree.FunctionNode): boolean {
-    const args = fn.children.toArray();
-    if (args.length === 1) return args[0]!.type === 'Identifier';
-    return (
-      args.length === 3 &&
-      args[0]!.type === 'Identifier' &&
-      args[1]!.type === 'Operator' &&
-      args[1]!.value === ',' &&
-      args[2]!.type === 'Identifier'
-    );
   }
 
   private position(decl: csstree.Declaration, line: number): void {
@@ -445,6 +483,42 @@ class Checker {
     if (url.origin !== origin || url.username !== '' || url.password !== '') return null;
     return url.href;
   }
+}
+
+/** `counter(<ident>)` or `counter(<ident>, <ident>)`: a number, never a string. */
+function plainCounter(fn: csstree.FunctionNode): boolean {
+  const args = fn.children.toArray();
+  if (args.length === 1) return args[0]!.type === 'Identifier';
+  return (
+    args.length === 3 &&
+    args[0]!.type === 'Identifier' &&
+    args[1]!.type === 'Operator' &&
+    args[1]!.value === ',' &&
+    args[2]!.type === 'Identifier'
+  );
+}
+
+/** Whether a plain `counter()` draws digits or bullets: no style, or an allowed one. */
+function counterStyleAllowed(fn: csstree.FunctionNode): boolean {
+  const style = fn.children.toArray()[2];
+  return (
+    style === undefined ||
+    (style.type === 'Identifier' && COUNTER_STYLES.has(style.name.toLowerCase()))
+  );
+}
+
+/**
+ * `counter-reset` / `counter-set` / `counter-increment`: counter names and whole numbers no larger
+ * than {@link COUNTER_VALUE_MAX}, so a counter can't hold a long run of digits. Functions (`var()`,
+ * `calc()`, …) are refused because they could carry a larger number past the check.
+ */
+function counterValuesAreSmall(value: csstree.Value | csstree.Raw): boolean {
+  if (value.type !== 'Value') return false;
+  return value.children.toArray().every((n) => {
+    if (n.type === 'Identifier') return true;
+    if (n.type !== 'Number') return false;
+    return /^[+-]?\d+$/.test(n.value) && Math.abs(Number(n.value)) <= COUNTER_VALUE_MAX;
+  });
 }
 
 function keyframesName(rule: csstree.Atrule): string | null {

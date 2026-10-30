@@ -99,6 +99,14 @@ function glue(a: string, b: string): string {
   return a !== '' && /[.!?,;:]\s*$/.test(a) ? `${a} ${b}` : a + b;
 }
 
+/** First and last whitespace-separated word of a trimmed, non-empty text node. */
+function firstWord(s: string): string {
+  return s.split(/\s+/)[0]!;
+}
+function lastWord(s: string): string {
+  return s.split(/\s+/).at(-1)!;
+}
+
 /** Visible text of sanitised HTML: inline tags join their text, block tags break it. */
 function visibleText(html: string): string {
   const stripped = html.replace(BLOCK_BOUNDARY, '\n').replace(/<[^>]*>/g, '');
@@ -200,18 +208,21 @@ export function sanitizeThemeHtml(html: string, assetOrigin: string): SanitizedH
     .reduce((acc, t) => glue(acc, t), '');
   // Every run of consecutive text nodes (up to RUN_MAX_CHARS combined) on its own, so an address
   // split across any number of elements is found even when other words sit in the blocks around
-  // it: the run that is exactly the address pieces is checked with the full anchored patterns.
+  // it. A run is built from edge words: the first node gives only its last word and the last node
+  // only its first word (interior nodes give their full text), so a long sentence before or after
+  // the pieces can't push the run past the cap. Each run gets the full anchored patterns.
   const nodes = clean
     .split(/<[^>]*>/)
     .map((t) => decodeBasicEntities(t).trim())
     .filter((t) => t !== '');
   const runs: string[] = [];
   for (let i = 0; i < nodes.length; i += 1) {
-    let run = nodes[i]!;
+    let prefix = lastWord(nodes[i]!);
     for (let j = i + 1; j < nodes.length; j += 1) {
-      run = glue(run, nodes[j]!);
-      if (run.length > RUN_MAX_CHARS) break;
-      runs.push(run);
+      if (prefix.length > RUN_MAX_CHARS) break;
+      const run = glue(prefix, firstWord(nodes[j]!));
+      if (run.length <= RUN_MAX_CHARS) runs.push(run);
+      prefix = glue(prefix, nodes[j]!);
     }
   }
   const text = [visibleText(clean), joined, ...runs, ...altTexts];
