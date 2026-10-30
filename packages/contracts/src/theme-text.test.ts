@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   containsAddressLike,
+  containsDistinctiveAddressLike,
   containsSendInstruction,
   contrastRatio,
   findButtonWordsProblem,
@@ -55,6 +56,15 @@ describe('theme text rules', () => {
     }
     expect(containsAddressLike('kola\u200b.near')).toBe(true);
     expect(containsSendInstruction('se\u00adnd USDC to this wal\u200blet')).toBe(true);
+  });
+
+  it('containsDistinctiveAddressLike skips base58', () => {
+    expect(containsDistinctiveAddressLike(EVM)).toBe(true);
+    expect(containsDistinctiveAddressLike('bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq')).toBe(true);
+    expect(containsDistinctiveAddressLike('kola.near')).toBe(true);
+    expect(containsDistinctiveAddressLike('a'.repeat(32) + 'b'.repeat(32))).toBe(true);
+    expect(containsDistinctiveAddressLike('1BoatSLRHtKNngkdXEeobR76b53LETtpyT')).toBe(false);
+    expect(containsDistinctiveAddressLike('Shipsin2daysfromLagosandAbujatoKano')).toBe(false);
   });
 
   it('detects send instructions', () => {

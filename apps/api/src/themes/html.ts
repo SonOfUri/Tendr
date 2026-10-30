@@ -1,5 +1,6 @@
 import {
   containsAddressLike,
+  containsDistinctiveAddressLike,
   containsSendInstruction,
   THEME_HTML_MAX_BYTES,
 } from '@tendr/contracts';
@@ -179,13 +180,16 @@ export function sanitizeThemeHtml(html: string, assetOrigin: string): SanitizedH
     },
   });
 
-  const text = [visibleText(clean), ...altTexts];
-  // The whole block with every tag and all whitespace removed, so an address split across lines
-  // (`<br>`), elements or spaces is still seen as one run.
-  const compact = decodeBasicEntities(clean.replace(/<[^>]*>/g, '')).replace(/\s+/g, '');
+  // The whole block with every tag removed and nothing in its place, so an address split across
+  // `<br>` or elements is seen as one run; it gets the full check (including base58).
+  const joined = decodeBasicEntities(clean.replace(/<[^>]*>/g, ''));
+  const text = [visibleText(clean), joined, ...altTexts];
+  // With whitespace removed too, only the distinctive shapes are checked: ordinary prose with
+  // its spaces removed can look like base58, but never like `0x…`, `bc1…` or `….near`.
+  const compact = joined.replace(/\s+/g, '');
   if (
     text.some((t) => containsAddressLike(t) || containsSendInstruction(t)) ||
-    containsAddressLike(compact)
+    containsDistinctiveAddressLike(compact)
   ) {
     add(TEXT_PROBLEM);
   }

@@ -128,6 +128,28 @@ describe('sanitizeThemeHtml', () => {
     }
   });
 
+  it('ordinary prose passes the whole-block checks', () => {
+    const prose = [
+      '<p>Ships in 2 days from Lagos and Abuja to Kano</p>',
+      '<p>We started in 2019 with 3 sewing machines and a market stall in Yaba.<br>' +
+        'Today our team of 14 makes every bag by hand from Nigerian leather<br>' +
+        'Orders placed before 4pm leave the workshop the same day<br>' +
+        'Most deliveries arrive within 2 to 5 working days<br>' +
+        'Returns are free for 30 days if the bag is unused<br>' +
+        'Questions? Message us any time and we reply within 24 hours</p>',
+    ];
+    for (const html of prose) {
+      const r = sanitizeThemeHtml(html, ORIGIN);
+      expect(r.ok, `${html} → ${r.ok ? '' : r.problems.join(' | ')}`).toBe(true);
+    }
+  });
+
+  it('rejects a <br>-split base58 address', () => {
+    expect(problemsOf('<p>1BoatSLRHtKNng<br>kdXEeobR76b53LETtpyT</p>').join(' ')).toMatch(
+      /wallet addresses or payment instructions/,
+    );
+  });
+
   it('rejects addresses split across lines, elements or spaces', () => {
     for (const html of [
       '<p>0x52908400098527<br>886E0F7030069857D2E4169EE7</p>',

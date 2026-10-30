@@ -102,6 +102,15 @@ export function containsAddressLike(input: string): boolean {
   });
 }
 
+/**
+ * Only the distinctive address shapes (EVM, bech32, NEAR implicit and named), never base58.
+ * Safe to run on text with whitespace removed, where ordinary prose can look like base58.
+ */
+export function containsDistinctiveAddressLike(input: string): boolean {
+  const s = stripFormatChars(input);
+  return addressPatterns().some((re, i) => i !== BASE58_INDEX && re.test(s));
+}
+
 /** Replaces each address-like match with `•••` (invisible format characters are removed first). */
 export function maskAddressLike(s: string): string {
   let out = stripFormatChars(s);
