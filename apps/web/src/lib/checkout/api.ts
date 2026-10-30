@@ -110,6 +110,8 @@ export interface SessionView {
   gas_payer: 'merchant' | 'shopper';
   success_url: string | null;
   cancel_url: string | null;
+  /** The payment link this session was made from (its page is the way back), else null. */
+  payment_link?: { title: string; url: string } | null;
   quote: Quote | null;
   payments: SessionPayment[];
   refunds: SessionRefund[];

@@ -42,6 +42,14 @@ async function checkoutPolicy(request: NextRequest, nonce: string, dev: boolean)
   });
 }
 
+/**
+ * A payment link's QR code and preview images (`/pay/<merchant>/<link>/qr`, `…/opengraph-image…`,
+ * `…/twitter-image…`): public and cacheable, so they set their own Cache-Control. The link page
+ * itself stays no-store (availability and rates are live).
+ */
+const LINK_ASSET =
+  /^\/pay\/[^/]+\/[^/]+\/(?:qr|opengraph-image|twitter-image)(?:-[A-Za-z0-9]+)?\/?$/;
+
 /** Pages whose responses carry one-time parameters (connect state, a verify token): never cached. */
 const NO_STORE_PATHS = ['/connect', '/settings/notification-email/verify'];
 
@@ -64,7 +72,7 @@ export async function middleware(request: NextRequest) {
   requestHeaders.set('Content-Security-Policy', csp);
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set('Content-Security-Policy', csp);
-  if (checkout || NO_STORE_PATHS.includes(pathname)) {
+  if ((checkout && !LINK_ASSET.test(pathname)) || NO_STORE_PATHS.includes(pathname)) {
     // The checkout policy depends on the session and on whether the request can be framed; the
     // others carry one-time parameters. Never cache them.
     response.headers.set('Cache-Control', 'no-store');

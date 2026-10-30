@@ -320,6 +320,50 @@ describe('StatusScreen: the extra paid (C42)', () => {
   });
 });
 
+describe('StatusScreen: sessions from a payment link', () => {
+  const screen = (kind: 'complete' | 'expired', view: SessionView) =>
+    renderToStaticMarkup(
+      <StatusScreen
+        view={view}
+        screen={{
+          kind,
+          terminal: true,
+          pollMs: 5000,
+          bridgeStatus: null,
+          action: null,
+          notice: null,
+          payment: null,
+          refundNeedingAddress: null,
+        }}
+        tokenOf={() => null}
+        client={{} as never}
+        now={Date.parse('2026-10-26T12:00:00Z')}
+        onRefresh={() => {}}
+      />,
+    );
+  const linked = {
+    ...VIEW,
+    success_url: 'https://usetendr.tech/pay/acme/tip-jar',
+    cancel_url: 'https://usetendr.tech/pay/acme/tip-jar',
+    payment_link: { title: 'Tip <jar>', url: 'https://usetendr.tech/pay/acme/tip-jar' },
+  } as SessionView;
+
+  it('reads "Back to <title>" and goes to the link instead of "Return to store"', () => {
+    for (const kind of ['complete', 'expired'] as const) {
+      const html = screen(kind, linked);
+      expect(html).toContain('Back to Tip &lt;jar&gt;');
+      expect(html).toContain('href="https://usetendr.tech/pay/acme/tip-jar"');
+      expect(html).not.toContain('Return to store');
+    }
+  });
+
+  it('keeps "Return to store" for ordinary sessions', () => {
+    const html = screen('complete', { ...VIEW, payment_link: null } as SessionView);
+    expect(html).toContain('Return to store');
+    expect(html).toContain('href="https://shop.example/thanks"');
+  });
+});
+
 describe('NetworkFee (Global Constraints copy)', () => {
   const USDC = { symbol: 'USDC', decimals: 6 };
   const fee = (over: Partial<NetworkFeeView>): NetworkFeeView => ({

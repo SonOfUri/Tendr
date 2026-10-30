@@ -52,5 +52,11 @@ export function serverEnv() {
     webUrl: process.env.WEB_URL ?? 'http://localhost:3000',
     /** Demo Merchant secret test key from seed — never expose to the browser. */
     tendrSecretKeyTest: process.env.TENDR_SECRET_KEY_TEST ?? '',
+    /**
+     * Shared secret sent as `x-tendr-internal` on the server's payment-link reads, so the API
+     * trusts the payer IP it forwards (lib/payment-links.ts). Same value as the API's. Unset: the
+     * API keys its limits on this server's address. Never expose to the browser.
+     */
+    webInternalToken: process.env.WEB_INTERNAL_TOKEN || null,
   };
 }

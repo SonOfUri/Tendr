@@ -1,0 +1,178 @@
+import type { PublicPaymentLinkView } from '@tendr/contracts';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Checkout } from '../components/Checkout';
+import PayPage from '../page';
+import { LinkPayBody, applyPayError, initialPayState, type PayState } from './LinkPay';
+
+vi.mock('next/headers', () => ({
+  headers: async () => new Headers({ 'x-forwarded-for': '203.0.113.7' }),
+}));
+
+const SESSION = 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0';
+
+const FIXED: PublicPaymentLinkView = {
+  merchant: { name: 'Acme Studio', logo_url: null },
+  title: 'Logo design',
+  description: 'Line one\nLine two https://evil.example',
+  amount_type: 'fixed',
+  amount: '25000.00',
+  currency: 'NGN',
+  min_amount: null,
+  usd_rate: '1600',
+  note: 'optional',
+  fee_payer: 'merchant',
+  availability: 'available',
+  livemode: true,
+};
+
+const OPEN: PublicPaymentLinkView = {
+  ...FIXED,
+  title: 'Tip jar',
+  description: null,
+  amount_type: 'open',
+  amount: null,
+  min_amount: '1600.00',
+};
+
+const render = (view: PublicPaymentLinkView, state: PayState = initialPayState(view)) =>
+  renderToStaticMarkup(
+    <LinkPayBody
+      view={view}
+      state={state}
+      onAmount={() => {}}
+      onNote={() => {}}
+      onSubmit={() => {}}
+    />,
+  );
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('link page', () => {
+  it('renders a fixed price with its USD equivalent, the note and the pay button', () => {
+    const html = render(FIXED);
+    expect(html).toContain('Acme Studio');
+    expect(html).toContain('Logo design');
+    expect(html).toContain('₦25,000');
+    expect(html).toContain('≈ $15.63');
+    expect(html).toContain('Note to Acme Studio (optional)');
+    expect(html).toMatch(/maxLength="280"|maxlength="280"/);
+    expect(html).toContain('Pay with crypto');
+    expect(html).not.toContain('Test mode');
+    // Plain text: kept as written, never turned into a link.
+    expect(html).toContain('Line one\nLine two https://evil.example');
+    expect(html).not.toContain('href="https://evil.example');
+  });
+
+  it('renders without usd equivalent', () => {
+    expect(render({ ...FIXED, usd_rate: null })).not.toContain('≈');
+    expect(render({ ...FIXED, currency: 'USD', amount: '25.00', usd_rate: null })).not.toContain(
+      '≈',
+    );
+  });
+
+  it('renders an amount box and the minimum for an open link', () => {
+    const html = render(OPEN);
+    expect(html).toContain('name="amount"');
+    expect(html).toContain('Minimum ₦1,600');
+  });
+
+  it('shows plus-fees line only for shopper-paid links', () => {
+    expect(render({ ...FIXED, fee_payer: 'shopper' })).toContain('plus fees, shown before you pay');
+    expect(render(FIXED)).not.toContain('plus fees');
+  });
+
+  it('hides the note when the link takes none, and shows the test banner in test mode', () => {
+    expect(render({ ...FIXED, note: 'off' })).not.toContain('Note to');
+    expect(render({ ...FIXED, livemode: false })).toContain('Test mode — no real money moves');
+  });
+
+  it('shows each unavailable state with no pay button', () => {
+    const cases = [
+      ['inactive', "This link isn't taking payments right now"],
+      ['archived', "This link isn't taking payments right now"],
+      ['used_up', "This link isn't taking payments right now"],
+      ['expired', 'This link has expired'],
+      ['merchant_not_ready', "This link isn't taking payments yet"],
+    ] as const;
+    for (const [availability, copy] of cases) {
+      const html = render({ ...FIXED, availability });
+      expect(html).toContain(copy.replace("'", '&#x27;'));
+      expect(html).not.toContain('Pay with crypto');
+    }
+  });
+
+  it('shows unavailable state after a refused pay', () => {
+    const state = applyPayError(initialPayState(FIXED), FIXED, {
+      code: 'LINK_UNAVAILABLE',
+      message: 'x',
+      details: { availability: 'expired' },
+    });
+    const html = render(FIXED, state);
+    expect(html).toContain('This link has expired');
+    expect(html).not.toContain('Pay with crypto');
+  });
+
+  it('shows the someone-is-paying message on LINK_RESERVED', () => {
+    const state = applyPayError(initialPayState(FIXED), FIXED, {
+      code: 'LINK_RESERVED',
+      message: 'x',
+    });
+    const html = render(FIXED, state);
+    expect(html).toContain('Someone is paying this link right now, try again shortly.');
+    expect(html).toMatch(/<button[^>]*type="submit"(?![^>]*disabled)[^>]*>Pay with crypto/);
+  });
+
+  it('maps the other refusals to their messages', () => {
+    const msg = (view: PublicPaymentLinkView, code: string, details?: unknown) =>
+      render(view, applyPayError(initialPayState(view), view, { code, message: 'x', details }));
+    expect(msg(FIXED, 'LINK_BUSY')).toContain(
+      'Too many people are paying right now. Try again in a minute.',
+    );
+    expect(msg(FIXED, 'RATE_LIMITED')).toContain(
+      'Too many people are paying right now. Try again in a minute.',
+    );
+    expect(msg(FIXED, 'FX_RATE_UNAVAILABLE')).toContain(
+      'Prices can&#x27;t be loaded right now. Try again in a minute.',
+    );
+    const small = msg(FIXED, 'AMOUNT_TOO_LOW', { min_amount: '1600.00' });
+    expect(small).toContain('This amount is too small to pay in crypto right now.');
+    expect(small).not.toContain('Pay with crypto');
+    const low = msg(OPEN, 'AMOUNT_TOO_LOW', { min_amount: '1700.00' });
+    expect(low).toContain('The minimum is ₦1,700.');
+    expect(low).toContain('aria-invalid="true"');
+    expect(low).toContain('Pay with crypto');
+  });
+});
+
+describe('pay routes', () => {
+  it('/pay/ses_<valid id> still routes to the session page', async () => {
+    const el = await PayPage({ params: Promise.resolve({ id: SESSION }) });
+    expect(el.type).toBe(Checkout);
+    expect(el.props.sessionId).toBe(SESSION);
+    await expect(PayPage({ params: Promise.resolve({ id: 'acme' }) })).rejects.toThrow();
+  });
+
+  it('a link page never resolves a session id, and 404s an unknown link', async () => {
+    const { default: LinkPage } = await import('./page');
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'nope' } }), {
+          status: 404,
+        }),
+    );
+    vi.stubGlobal('fetch', fetchFn);
+    const page = (id: string, link: string, mode?: string) =>
+      LinkPage({
+        params: Promise.resolve({ id, link }),
+        searchParams: Promise.resolve(mode ? { mode } : {}),
+      });
+    await expect(page(SESSION, 'tip-jar')).rejects.toThrow();
+    expect(fetchFn).not.toHaveBeenCalled();
+    await expect(page('acme', 'nope', 'test')).rejects.toThrow();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toMatch(/\/v1\/payment_links\/public\/acme\/nope\?mode=test$/);
+    expect(new Headers(init.headers).get('x-tendr-client-ip')).toBe('203.0.113.7');
+  });
+});
