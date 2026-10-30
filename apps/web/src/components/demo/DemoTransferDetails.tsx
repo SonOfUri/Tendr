@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { formatCountdown } from '@/lib/checkout/format';
 import { QrImage } from '@/components/QrImage';
-import { useNow } from '@/app/pay/[sessionId]/components/useNow';
+import { useNow } from '@/app/pay/[id]/components/useNow';
 
 /** Quote hold window used for the progress track (matches typical ~12 min price lock). */
 const QUOTE_WINDOW_MS = 12 * 60 * 1000;
