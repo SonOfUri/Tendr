@@ -65,6 +65,7 @@ const eslintConfig = [
       'src/app/**/page.tsx',
       'src/app/**/layout.tsx',
       'src/app/**/route.ts',
+      'src/app/**/route.tsx',
       'src/app/**/opengraph-image.tsx',
       'src/app/**/twitter-image.tsx',
       'src/lib/payment-links.test.ts',
