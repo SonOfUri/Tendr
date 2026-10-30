@@ -294,12 +294,23 @@ class Checker {
       return;
     }
     if (name === 'position') this.position(decl, line);
+    // All strings in one declaration are drawn together (`content: "0x52" "9084" …`), so the cap
+    // and the text checks apply to their concatenation, not to each string alone.
+    const strings: string[] = [];
+    let usesVariable = false;
+    csstree.walk(decl.value, (n) => {
+      if (n.type === 'String') strings.push(n.value);
+      if (n.type === 'Function' && ['var', 'env'].includes(unprefixed(n.name))) usesVariable = true;
+    });
+    const joined = strings.join('');
     if (DISPLAYED_STRING_PROPERTIES.has(name)) {
-      csstree.walk(decl.value, (n) => {
-        if (n.type === 'String' && [...n.value].length > THEME_CSS_CONTENT_MAX_CHARS) {
-          this.add(lineOf(n, line), TEXT_IN_CSS);
-        }
-      });
+      if ([...joined].length > THEME_CSS_CONTENT_MAX_CHARS) this.add(line, TEXT_IN_CSS);
+      // A variable could carry text past the cap (`--a: "Send USDC"; content: var(--a)`).
+      if (usesVariable)
+        this.add(line, `\`${raw}\` can't use \`var()\` or \`env()\` — write the value directly`);
+    }
+    if (strings.length > 1 && (containsAddressLike(joined) || containsSendInstruction(joined))) {
+      this.add(line, TEXT_PROBLEM);
     }
     this.value(decl.value, line);
     if ((name === 'animation' || name === 'animation-name') && decl.value.type === 'Value') {

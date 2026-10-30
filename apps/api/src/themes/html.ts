@@ -183,9 +183,17 @@ export function sanitizeThemeHtml(html: string, assetOrigin: string): SanitizedH
   // The whole block with every tag removed and nothing in its place, so an address split across
   // `<br>` or elements is seen as one run; it gets the full check (including base58).
   const joined = decodeBasicEntities(clean.replace(/<[^>]*>/g, ''));
-  const text = [visibleText(clean), joined, ...altTexts];
-  // With whitespace removed too, only the distinctive shapes are checked: ordinary prose with
-  // its spaces removed can look like base58, but never like `0x…`, `bc1…` or `….near`.
+  // Each pair of neighbouring text nodes on its own, so a base58 address split across two
+  // elements is found even when other words sit in the blocks around it.
+  const nodes = clean
+    .split(/<[^>]*>/)
+    .map((t) => decodeBasicEntities(t).trim())
+    .filter((t) => t !== '');
+  const pairs = nodes.slice(1).map((t, i) => nodes[i]! + t);
+  const text = [visibleText(clean), joined, ...pairs, ...altTexts];
+  // With whitespace removed too, only the distinctive shapes are checked (unanchored, as glued-on
+  // words remove word boundaries): prose with its spaces removed can look like base58, but never
+  // like `0x…`, `bc1…` or `….near`.
   const compact = joined.replace(/\s+/g, '');
   if (
     text.some((t) => containsAddressLike(t) || containsSendInstruction(t)) ||

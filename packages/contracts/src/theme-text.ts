@@ -103,21 +103,73 @@ export function containsAddressLike(input: string): boolean {
 }
 
 /**
- * Only the distinctive address shapes (EVM, bech32, NEAR implicit and named), never base58.
- * Safe to run on text with whitespace removed, where ordinary prose can look like base58.
+ * Unanchored versions of the distinctive address shapes (EVM, bech32, NEAR implicit and named),
+ * never base58. For text whose tags and whitespace were removed: neighbouring words get glued on,
+ * so a `\b` boundary can't be relied on. NEAR names are lower-case only here, so prose such as
+ * "in. Nearby" doesn't match once its spaces are gone.
+ */
+function distinctivePatterns(): RegExp[] {
+  return [
+    /0x[0-9a-fA-F]{40}/,
+    /(?:bc1|tb1)[02-9ac-hj-np-z]{11,87}/i,
+    /[0-9a-f]{64}/,
+    /[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.(?:near|testnet|tg)/,
+  ];
+}
+
+/**
+ * Only the distinctive address shapes, unanchored, never base58. Safe to run on text with tags
+ * and whitespace removed, where ordinary prose can look like base58.
  */
 export function containsDistinctiveAddressLike(input: string): boolean {
   const s = stripFormatChars(input);
-  return addressPatterns().some((re, i) => i !== BASE58_INDEX && re.test(s));
+  return distinctivePatterns().some((re) => re.test(s));
 }
 
-/** Replaces each address-like match with `•••` (invisible format characters are removed first). */
+/**
+ * Replaces each address-like run with `•••`. Invisible format characters are ignored when
+ * matching (so a split address is still masked whole) but kept everywhere outside a masked run,
+ * so emoji sequences and bidi marks in the rest of the text survive.
+ */
 export function maskAddressLike(s: string): string {
-  let out = stripFormatChars(s);
+  // Visible characters, and where each one sits in `s` (UTF-16 offsets).
+  let visible = '';
+  const at: number[] = [];
+  for (let i = 0; i < s.length;) {
+    const ch = String.fromCodePoint(s.codePointAt(i)!);
+    if (!/\p{Cf}/u.test(ch)) {
+      for (let k = 0; k < ch.length; k += 1) at.push(i + k);
+      visible += ch;
+    }
+    i += ch.length;
+  }
+
+  const spans: Array<[number, number]> = [];
   addressPatterns().forEach((re, i) => {
-    out = out.replace(re, (m) => (i !== BASE58_INDEX || isBase58Address(m) ? '•••' : m));
+    for (const m of visible.matchAll(re)) {
+      if (i === BASE58_INDEX && !isBase58Address(m[0])) continue;
+      spans.push([m.index, m.index + m[0].length]);
+    }
   });
-  return out;
+  if (spans.length === 0) return s;
+
+  spans.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const [a, b] of spans) {
+    const last = merged[merged.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+
+  let out = '';
+  let cursor = 0;
+  for (const [a, b] of merged) {
+    const from = at[a]!;
+    const to = at[b - 1]! + 1;
+    out += s.slice(cursor, from) + '•••';
+    cursor = to;
+  }
+  return out + s.slice(cursor);
 }
 
 const SEND_INSTRUCTION =

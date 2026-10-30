@@ -58,6 +58,25 @@ describe('theme text rules', () => {
     expect(containsSendInstruction('se\u00adnd USDC to this wal\u200blet')).toBe(true);
   });
 
+  it('maskAddressLike keeps format characters outside the masked address', () => {
+    const family = '\u{1F468}‍\u{1F469}‍\u{1F467}';
+    expect(maskAddressLike(`${family} ${EVM}`)).toBe(`${family} •••`);
+    const split = EVM.slice(0, 10) + '​' + EVM.slice(10);
+    expect(maskAddressLike(`‏${family} pay ${split}‎!`)).toBe(`‏${family} pay •••‎!`);
+    expect(maskAddressLike(`hi ${family}‎`)).toBe(`hi ${family}‎`);
+  });
+
+  it('containsDistinctiveAddressLike finds glued-on addresses without \\b', () => {
+    expect(containsDistinctiveAddressLike('Walletbc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq')).toBe(
+      true,
+    );
+    expect(
+      containsDistinctiveAddressLike('Hello' + 'a'.repeat(32) + 'b'.repeat(32) + 'World'),
+    ).toBe(true);
+    expect(containsDistinctiveAddressLike('Askkola.nearToday')).toBe(true);
+    expect(containsDistinctiveAddressLike('Comein.Nearbyshopsopenat9')).toBe(false);
+  });
+
   it('containsDistinctiveAddressLike skips base58', () => {
     expect(containsDistinctiveAddressLike(EVM)).toBe(true);
     expect(containsDistinctiveAddressLike('bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq')).toBe(true);

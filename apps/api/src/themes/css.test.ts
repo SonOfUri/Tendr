@@ -173,6 +173,28 @@ describe('scopeThemeCss', () => {
     }
   });
 
+  it('checks the strings of one declaration together', () => {
+    const evm = '0x52908400098527886E0F7030069857D2E4169EE7';
+    const chunks = evm
+      .match(/.{1,4}/g)!
+      .map((c) => `"${c}"`)
+      .join(' ');
+    expectRejected(`p::before{content:${chunks}}`, 'wallet addresses');
+    expectRejected(`p::before{content:${chunks}}`, 'at most 4 characters');
+    const send = 'p::before{content:"Send" " USD" "C to" " thi" "s wa" "llet"}';
+    expectRejected(send, 'wallet addresses or payment instructions');
+    expectRejected(send, 'at most 4 characters');
+    expectRejected('p::before{content:"“" "”" "«" "»" "★"}', 'at most 4 characters');
+    expect(scopeThemeCss('q::before{content:"“" "→"}', ORIGIN).ok).toBe(true);
+    // Strings outside drawn properties are still checked together.
+    expectRejected(`p{font-family:${chunks}}`, 'wallet addresses');
+  });
+
+  it('displayed-string properties cannot use variables', () => {
+    expectRejected('p::before{content:var(--a)}', "can't use `var()`");
+    expectRejected('li{list-style-type:env(x)}', "can't use `var()`");
+  });
+
   it('rejects attr() so CSS cannot copy text onto the page', () => {
     expectRejected('p::after{content:attr(class)}', "`attr()` isn't allowed");
     expectRejected('p{width:attr(data-w px)}', "`attr()` isn't allowed");

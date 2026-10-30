@@ -144,6 +144,18 @@ describe('sanitizeThemeHtml', () => {
     }
   });
 
+  it('rejects element-split addresses with other words in neighbouring blocks', () => {
+    for (const html of [
+      '<p>Hello</p><p>1BoatSLRHtKNng</p><p>kdXEeobR76b53LETtpyT</p>',
+      '<p>Wallet</p><p>bc1qar0s</p><p>rrr7xfkvy5l643lydnw9re59gtzzwf5mdq</p>',
+      `<p>Hello</p><p>${'a'.repeat(32)}</p><p>${'b'.repeat(32)}</p>`,
+      '<p>Hello</p><p>0x52908400098527886E0F</p><p>7030069857D2E4169EE7</p><p>World</p>',
+      '<p>Ask</p><p>kola</p><p>.near</p><p>Today</p>',
+    ]) {
+      expect(problemsOf(html).join(' '), html).toMatch(/wallet addresses or payment instructions/);
+    }
+  });
+
   it('rejects a <br>-split base58 address', () => {
     expect(problemsOf('<p>1BoatSLRHtKNng<br>kdXEeobR76b53LETtpyT</p>').join(' ')).toMatch(
       /wallet addresses or payment instructions/,
