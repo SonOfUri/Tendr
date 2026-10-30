@@ -1,6 +1,6 @@
 # Payment Links — Design (Project 5b)
 
-Status: draft for the user's review, 2026-10-30. Builds on foundation (1), merchant accounts (2), checkout core (3), WooCommerce plugin (4) and gasless payments (5a), all merged on local main.
+Status: approved by the user 2026-10-30. Builds on foundation (1), merchant accounts (2), checkout core (3), WooCommerce plugin (4) and gasless payments (5a), all merged on local main.
 
 Project 5 is three designs, in this order (user's decision): 5a gasless payments + relayer + hooks (done), **5b payment links** (this document), 5c checkout branding. As in every project 5 design, **we do not build dashboard screens**. We build the API, the payer-facing pages and the infrastructure, document how they work, and only *suggest* screens to the person who owns the dashboard (user's decision: "We would suggest and not map out. The only thing we map out is how the api's, and infra we have built works").
 
