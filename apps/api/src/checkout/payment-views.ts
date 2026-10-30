@@ -15,6 +15,7 @@ import { notFound } from '../lib/errors.js';
 import { networkFeeView } from '../gas/quote-fee.js';
 import { refundView } from './review.js';
 import { revenueLines } from './revenue.js';
+import { sessionRefs } from './session-refs.js';
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 const dec = (d: Prisma.Decimal | null) => (d ? d.toFixed() : null);
@@ -56,6 +57,8 @@ const include = {
   session: {
     select: {
       externalRef: true,
+      paymentLinkId: true,
+      payerNote: true,
       amount: true,
       amountCurrency: true,
       destAsset: true,
@@ -77,7 +80,7 @@ function summary(p: Row) {
     livemode: p.livemode,
     status: p.status,
     session_id: p.sessionId,
-    external_ref: p.session.externalRef,
+    ...sessionRefs(p.session),
     order: { amount: p.session.amount.toFixed(), currency: p.session.amountCurrency },
     source: { asset: p.quote.originAssetId, chain: p.senderChain },
     received: { asset: p.quote.originAssetId, amount: p.amountReceived.toFixed(0) },
