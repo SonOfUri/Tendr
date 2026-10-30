@@ -42,7 +42,7 @@ export type PaymentLinkAvailability = z.infer<typeof PaymentLinkAvailabilitySche
 
 const AMOUNT_STR = z.string().regex(/^\d+(?:\.\d+)?$/, 'must be a decimal string like "25.10"');
 
-const CreateFields = z.object({
+const CreateFields = z.strictObject({
   title: z.string().trim().min(1).max(LINK_TITLE_MAX),
   description: z.string().trim().max(LINK_DESCRIPTION_MAX).optional(),
   slug: z

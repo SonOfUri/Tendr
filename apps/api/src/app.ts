@@ -23,6 +23,7 @@ import { hookRoutes } from './routes/hooks.js';
 import { healthRoutes } from './routes/health.js';
 import { merchantSettingsRoutes } from './routes/merchant-settings.js';
 import { merchantRoutes } from './routes/merchants.js';
+import { paymentLinkRoutes } from './routes/payment-links.js';
 import { paymentRoutes } from './routes/payments.js';
 import { pingRoutes } from './routes/ping.js';
 import { proposalRoutes } from './routes/proposals.js';
@@ -236,6 +237,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   });
   await app.register(webhookRoutes);
   await app.register(paymentRoutes);
+  await app.register(paymentLinkRoutes);
   await app.register(reviewRoutes);
   await app.register(refundRoutes);
   await app.register(merchantSettingsRoutes, {

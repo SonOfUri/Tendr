@@ -278,10 +278,8 @@ describe('payment link service', () => {
   describe('update', () => {
     it('slug cannot be changed by update', async () => {
       const l = await createLink(ctxOf(), fixedNgn);
-      // The route schema drops the key; the service refuses it if it ever arrives.
-      expect(PaymentLinkUpdateSchema.parse({ slug: 'other', title: 'x' })).not.toHaveProperty(
-        'slug',
-      );
+      // The route schema refuses the key; the service refuses it too if it ever arrives.
+      expect(PaymentLinkUpdateSchema.safeParse({ slug: 'other', title: 'x' }).success).toBe(false);
       const err = await rejection(
         updateLink(ctxOf(), l.id, { slug: 'other' } as unknown as Parameters<typeof updateLink>[2]),
       );

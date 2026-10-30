@@ -425,7 +425,7 @@ export async function updateLink(
   id: string,
   input: PaymentLinkUpdate,
 ): Promise<PaymentLinkView> {
-  // The slug is part of the shared URL and never changes. The route schema drops the key; refuse
+  // The slug is part of the shared URL and never changes. The route schema refuses the key; refuse
   // it here too so no caller can slip it through.
   if ('slug' in input) throw invalid('slug', 'slug cannot be changed');
   const link = await load(ctx, id);

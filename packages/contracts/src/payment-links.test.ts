@@ -65,10 +65,10 @@ describe('PaymentLinkCreateSchema', () => {
 });
 
 describe('PaymentLinkUpdateSchema', () => {
-  it('has no slug, all fields optional, and accepts archived', () => {
+  it('refuses slug, all fields optional, and accepts archived', () => {
     expect(PaymentLinkUpdateSchema.safeParse({}).success).toBe(true);
     expect(PaymentLinkUpdateSchema.safeParse({ archived: true }).success).toBe(true);
-    expect(PaymentLinkUpdateSchema.parse({ slug: 'x-y-z', title: 'T' })).toEqual({ title: 'T' });
+    expect(PaymentLinkUpdateSchema.safeParse({ slug: 'x-y-z', title: 'T' }).success).toBe(false);
   });
 });
 
@@ -109,5 +109,15 @@ describe('null clears optional fields (update only)', () => {
   });
   it('omitted stays undefined', () => {
     expect(PaymentLinkUpdateSchema.parse({ title: 'x' }).expires_at).toBeUndefined();
+  });
+});
+
+describe('strict bodies', () => {
+  it('rejects unknown keys, including slug on update', () => {
+    expect(
+      PaymentLinkCreateSchema.safeParse({ ...base, amount_type: 'open', bogus: 1 }).success,
+    ).toBe(false);
+    expect(PaymentLinkUpdateSchema.safeParse({ slug: 'new-slug' }).success).toBe(false);
+    expect(PaymentLinkUpdateSchema.safeParse({ title: 'ok' }).success).toBe(true);
   });
 });
