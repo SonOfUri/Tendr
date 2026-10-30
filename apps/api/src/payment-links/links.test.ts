@@ -290,6 +290,7 @@ describe('payment link service', () => {
         amount_type: 'open',
         currency: 'NGN',
         min_amount: '5000',
+        note: 'optional',
       });
       expect((await updateLink(ctxOf(), l.id, { currency: 'USD' })).min_amount).toBeNull();
       const again = await updateLink(ctxOf(), l.id, { currency: 'NGN', min_amount: '2000' });
