@@ -11,6 +11,8 @@ import {
   FeePayerSchema,
   GasPayerSchema,
   HookDataSchema,
+  LINE_ITEMS_MAX,
+  LineItemSchema,
   SESSION_TTL_MS,
   feePayerFromDb,
   feePayerToDb,
@@ -96,6 +98,10 @@ export const CreateSessionSchema = z
      */
     hook_data: HookDataSchema.optional(),
     payment_link_id: z.string().min(1).max(64).optional(),
+    /** One of the merchant's themes; a live session renders it only once published. */
+    theme_id: z.string().min(1).max(64).optional(),
+    /** Cart lines for the order summary; `unit_amount` follows the session currency's precision. */
+    line_items: z.array(LineItemSchema).max(LINE_ITEMS_MAX).optional(),
     /** Seconds until the session expires (60–1800); default 30 minutes. */
     expires_in: z
       .number()
@@ -174,6 +180,28 @@ export function assertAmount(amount: string, maxDecimals: number, currency: stri
     throw amountInvalid('amount is too large');
   }
   if (/^0*$/.test(int! + frac)) throw amountInvalid('amount must be greater than 0');
+}
+
+/** Each line's `unit_amount` has at most `maxDecimals` fraction digits and fits the column. */
+function assertLineItemAmounts(
+  items: readonly { unit_amount: string }[],
+  maxDecimals: number,
+  currency: string,
+): void {
+  items.forEach((item, i) => {
+    const [int = '', frac = ''] = item.unit_amount.split('.');
+    const problem =
+      frac.length > maxDecimals
+        ? `unit_amount in ${currency} allows at most ${maxDecimals} decimal places`
+        : int.replace(/^0+/, '').length > AMOUNT_MAX_INT_DIGITS
+          ? 'unit_amount is too large'
+          : null;
+    if (problem) {
+      throw new AppError('VALIDATION_ERROR', `line_items[${i}]: ${problem}`, 400, {
+        field: `line_items.${i}.unit_amount`,
+      });
+    }
+  });
 }
 
 function accountNotReady(message: string): AppError {
@@ -378,22 +406,35 @@ export async function createSession(
   let currency = input.amount_currency;
   let amount = input.amount;
   let fx: UsdConversion | null = null;
+  const lineItems = input.line_items;
   if (currency === 'USD') {
     assertAmount(amount, USD_DECIMALS, 'USD');
+    if (lineItems) assertLineItemAmounts(lineItems, USD_DECIMALS, 'USD');
   } else if (currency === settlement.destAssetId) {
     const token = await tokenInfo(ctx.livemode, currency);
-    assertAmount(amount, Math.min(token.decimals, AMOUNT_MAX_SCALE), currency);
+    const scale = Math.min(token.decimals, AMOUNT_MAX_SCALE);
+    assertAmount(amount, scale, currency);
+    if (lineItems) assertLineItemAmounts(lineItems, scale, currency);
   } else {
     const minor = minorUnits(currency);
     if (minor === undefined) throw unsupportedCurrency(currency, settlement.destAssetId);
     // Precision first, so a malformed amount never costs a provider call.
     assertAmount(amount, minor, currency);
+    if (lineItems) assertLineItemAmounts(lineItems, minor, currency);
     const rate = await getUsdRate(currency, new Date(), { livemode: ctx.livemode });
     fx = convertToUsd(amount, currency, rate);
     // The USD amount must pass the same checks as an amount given in USD.
     assertAmount(fx.usd, USD_DECIMALS, 'USD');
     amount = fx.usd;
     currency = 'USD';
+  }
+
+  // A theme of another merchant is not found (the scoped client sees only this merchant's).
+  if (
+    input.theme_id &&
+    !(await db.checkoutTheme.findFirst({ where: { id: input.theme_id }, select: { id: true } }))
+  ) {
+    throw notFound('No theme with that id');
   }
 
   // A link of another merchant or mode is not found (looked at again, under lock, below).
@@ -474,6 +515,8 @@ export async function createSession(
           livemode: t.livemode,
           paymentLinkId: link?.id ?? null,
           connectionId: ctx.connectionId ?? null,
+          themeId: input.theme_id ?? null,
+          lineItems: lineItems ?? Prisma.DbNull,
           externalRef,
           amountMode: 'EXACT_OUT',
           amount,
@@ -622,6 +665,9 @@ export async function sessionView(ctx: CheckoutCtx, id: string) {
     /** The current quote's network fee (who pays it, how, why); null without a quote. */
     network_fee: s.quotes[0] ? networkFeeView(s.quotes[0]) : null,
     payment_link_id: s.paymentLinkId,
+    theme_id: s.themeId,
+    /** The cart lines as sent at creation; null when none were given. */
+    line_items: s.lineItems ?? null,
     url: hostedUrl(s.id),
     expires_at: s.expiresAt.toISOString(),
     created_at: s.createdAt.toISOString(),

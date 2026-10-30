@@ -194,6 +194,15 @@ describe('theme service', () => {
     expect((await rejection(getTheme(ctxOf(), b.id))).status).toBe(404);
   });
 
+  it('deleting a theme only a session names succeeds and clears the session theme_id', async () => {
+    const t = await blank();
+    const session = await createRow('Session', merchant.id, false, { themeId: t.id });
+    await expect(deleteTheme(ctxOf(), t.id)).resolves.toMatchObject({ id: t.id, deleted: true });
+    const after = await prisma.session.findUniqueOrThrow({ where: { id: session.id as string } });
+    expect(after.themeId).toBeNull();
+    expect(after.merchantId).toBe(merchant.id);
+  });
+
   it("another merchant's theme is not found", async () => {
     const other = await createMerchant();
     const t = await createTheme(ctxOf(false, other.id), { name: 'Theirs', from: 'blank' });

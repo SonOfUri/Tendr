@@ -14,6 +14,7 @@ function view(over: Partial<SessionView> = {}): SessionView {
     livemode: false,
     merchant: { name: 'Bean Shop' },
     theme: tendrShopperTheme('Bean Shop'),
+    line_items: [],
     checkout_domains: [],
     amount: '25',
     amount_currency: 'USD',

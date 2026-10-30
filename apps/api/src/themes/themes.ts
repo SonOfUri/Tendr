@@ -259,7 +259,8 @@ export async function deleteTheme(
   try {
     await ctx.db.checkoutTheme.delete({ where: { id } });
   } catch (err) {
-    // Another row still names the theme (a session, an asset, or a link added since the check).
+    // Another row still names the theme (an asset or a link added since the check); sessions do
+    // not, their FK clears theme_id.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
       throw inUse('Something still uses this theme', { reason: 'referenced' });
     }

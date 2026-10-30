@@ -546,6 +546,76 @@ describe('checkout session routes', () => {
     });
   });
 
+  describe('theme and line items', () => {
+    const item = (over: Record<string, unknown> = {}) => ({
+      name: 'Beans',
+      quantity: 2,
+      unit_amount: '10.00',
+      ...over,
+    });
+
+    it('session create accepts theme_id and line_items', async () => {
+      const theme = await createRow('CheckoutTheme', merchant.id, false, {});
+      const items = [item(), item({ name: 'Mug', description: 'Blue', unit_amount: '5.10' })];
+      const res = await create(body({ theme_id: theme.id, line_items: items }));
+      expect(res.statusCode, res.body).toBe(201);
+      const row = await prisma.session.findUniqueOrThrow({ where: { id: res.json().id } });
+      expect(row.themeId).toBe(theme.id);
+      const read = (await get(res.json().id)).json();
+      expect(read.theme_id).toBe(theme.id);
+      expect(read.line_items).toEqual(items);
+    });
+
+    it('without them the session reports null', async () => {
+      const res = await create(body());
+      const read = (await get(res.json().id)).json();
+      expect(read.theme_id).toBeNull();
+      expect(read.line_items).toBeNull();
+    });
+
+    it('line items over 50 rejected', async () => {
+      const ok = await create(body({ line_items: Array.from({ length: 50 }, () => item()) }));
+      expect(ok.statusCode, ok.body).toBe(201);
+      const res = await create(
+        body({ external_ref: 'o2', line_items: Array.from({ length: 51 }, () => item()) }),
+      );
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('line item unit_amount precision follows currency', async () => {
+      const usd = await create(body({ line_items: [item({ unit_amount: '1.005' })] }));
+      expect(usd.statusCode).toBe(400);
+      expect(usd.json().error.code).toBe('VALIDATION_ERROR');
+      expect(usd.json().error.message).toContain('line_items[0]');
+      // JPY has no minor units; the order is converted, the lines stay as sent.
+      const jpy = await create(
+        body({ amount_currency: 'JPY', amount: '1000', line_items: [item({ unit_amount: '500.5' })] }),
+      );
+      expect(jpy.statusCode).toBe(400);
+      expect(jpy.json().error.code).toBe('VALIDATION_ERROR');
+      const settle = await create(
+        body({
+          amount_currency: 'nep141:usdc.test',
+          amount: '1.123456',
+          line_items: [item({ unit_amount: '0.1234567' })],
+        }),
+      );
+      expect(settle.statusCode).toBe(400);
+    });
+
+    it('foreign theme_id is 404', async () => {
+      const other = await createMerchant();
+      const theirs = await createRow('CheckoutTheme', other.id, false, {});
+      for (const id of [theirs.id, 'thm_missing']) {
+        const res = await create(body({ theme_id: id }));
+        expect(res.statusCode).toBe(404);
+        expect(res.json().error.code).toBe('NOT_FOUND');
+        expect(res.json().error.message).toBe('No theme with that id');
+      }
+    });
+  });
+
   describe('external_ref', () => {
     it('replays with the same Idempotency-Key and conflicts with a different one', async () => {
       const first = await create(body(), testKey, 'idem-1');

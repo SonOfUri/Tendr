@@ -1014,6 +1014,7 @@ model Session {
 
   merchant          Merchant          @relation(fields: [merchantId], references: [id])
   connection        Connection?       @relation(fields: [connectionId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
+  /// The DB constraint is `ON DELETE SET NULL (theme_id)` (migration 20261030130000); Prisma cannot express the column list.
   theme             CheckoutTheme?    @relation(fields: [themeId, merchantId], references: [id, merchantId], onDelete: Restrict, onUpdate: Restrict)
   paymentLink       PaymentLink?      @relation(fields: [paymentLinkId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   quotes            Quote[]

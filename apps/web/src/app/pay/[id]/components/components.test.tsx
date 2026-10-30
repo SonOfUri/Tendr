@@ -17,6 +17,7 @@ const VIEW = {
   livemode: true,
   merchant: { name: 'Bean Shop' },
   theme: tendrShopperTheme('Bean Shop'),
+  line_items: [],
   checkout_domains: ['https://shop.example'],
   amount: '84',
   amount_currency: 'USD',

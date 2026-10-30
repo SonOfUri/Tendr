@@ -225,6 +225,7 @@ export function buildDemoUiBootstrap(opts: {
     livemode: false,
     merchant: { name: opts.merchantName },
     theme: tendrShopperTheme(opts.merchantName, opts.merchantLogoUrl),
+    line_items: [],
     checkout_domains: ['*'],
     amount: opts.amount,
     amount_currency: opts.currency,

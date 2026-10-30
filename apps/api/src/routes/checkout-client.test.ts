@@ -8,6 +8,7 @@ import { SIMULATED_FEE_USD } from '../gas/fees.js';
 import { putGasPolicy } from '../gas/policy.js';
 import { RESERVATION_GRACE_MS, releaseStaleReservations } from '../gas/quote-fee.js';
 import { env } from '../env.js';
+import { sha256 } from '../lib/crypto.js';
 import { prisma } from '../lib/prisma.js';
 import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
 import { isolatedSimStore } from '../test/sim-1click.js';
@@ -110,6 +111,56 @@ describe('shopper checkout routes', () => {
     expect(raw).not.toContain(accountId);
     expect(raw).not.toContain('client_secret');
     expect(raw).not.toContain('external_ref');
+  });
+
+  describe('line items', () => {
+    const IMG = 'https://shop.example/bean.jpg';
+    const ADDR = '0x1234567890abcdef1234567890abcdef12345678';
+
+    it('view masks address-like item names', async () => {
+      const s = await newSession({
+        line_items: [
+          { name: `Gift ${ADDR}`, quantity: 1, unit_amount: '25.00', description: `to ${ADDR}` },
+          { name: 'Beans', quantity: 2, unit_amount: '5.00' },
+        ],
+      });
+      const v = (await call('GET', 'session', s.client_secret)).json();
+      expect(v.line_items).toHaveLength(2);
+      expect(v.line_items[0].name).toBe('Gift •••');
+      expect(v.line_items[0].description).toBe('to •••');
+      expect(v.line_items[1]).toEqual({
+        name: 'Beans',
+        quantity: 2,
+        unit_amount: '5.00',
+        description: null,
+        image_url: null,
+      });
+      expect(JSON.stringify(v)).not.toContain(ADDR);
+    });
+
+    it('view image_url null until cached, asset url once ok', async () => {
+      const s = await newSession({
+        line_items: [{ name: 'Beans', quantity: 1, unit_amount: '25.00', image_url: IMG }],
+      });
+      const img = await createRow('ProductImage', merchant.id, false, {
+        urlHash: sha256(IMG),
+        sourceUrl: IMG,
+        status: 'pending',
+      });
+      const first = (await call('GET', 'session', s.client_secret)).json();
+      expect(first.line_items[0].image_url).toBeNull();
+      await prisma.productImage.update({
+        where: { id: img.id as string },
+        data: { status: 'failed' },
+      });
+      expect((await call('GET', 'session', s.client_secret)).json().line_items[0].image_url).toBeNull();
+      await prisma.productImage.update({
+        where: { id: img.id as string },
+        data: { status: 'ok', url: 'https://assets.test/product/abc.webp' },
+      });
+      const ok = (await call('GET', 'session', s.client_secret)).json();
+      expect(ok.line_items[0].image_url).toBe('https://assets.test/product/abc.webp');
+    });
   });
 
   describe('theme', () => {

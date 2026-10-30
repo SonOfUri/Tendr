@@ -17,6 +17,7 @@ import { Prisma } from '@prisma/client';
 import {
   FeeModeSchema,
   GaslessMethodSchema,
+  LineItemSchema,
   SESSION_TTL_MS,
   SMALL_OVERPAY_USD,
   feePayerFromDb,
@@ -26,6 +27,7 @@ import {
 } from '@tendr/contracts';
 import { z } from 'zod';
 import { tenantTransaction } from '../db/tenant-transaction.js';
+import { sha256 } from '../lib/crypto.js';
 import { reserveBudget } from '../gas/budget.js';
 import { releaseReplacedHold } from '../relayer/submissions.js';
 import {
@@ -403,6 +405,35 @@ async function depositSubmittedAt(ctx: ShopperCtx, sessionId: string): Promise<D
 }
 
 /**
+ * The session's cart lines as the shopper sees them. Names and descriptions are masked when they
+ * look like an address; an image shows only once Tendr has fetched and cached it (`ProductImage`
+ * `ok`), otherwise null. Stored lines that no longer parse yield none: a page never fails on them.
+ */
+async function shopperLineItems(ctx: ShopperCtx, s: SessionRow): Promise<ShopperLineItem[]> {
+  const parsed = LineItemSchema.array().safeParse(s.lineItems ?? []);
+  if (!parsed.success) return [];
+  const items = parsed.data;
+  const hashes = [
+    ...new Set(items.flatMap((i) => (i.image_url ? [sha256(i.image_url)] : []))),
+  ];
+  const cached = new Map<string, string>();
+  if (hashes.length > 0) {
+    const rows = await ctx.db.productImage.findMany({
+      where: { urlHash: { in: hashes }, status: 'ok' },
+      select: { urlHash: true, url: true },
+    });
+    for (const r of rows) if (r.url) cached.set(r.urlHash, r.url);
+  }
+  return items.map((i) => ({
+    name: maskAddressLike(i.name),
+    quantity: i.quantity,
+    unit_amount: i.unit_amount,
+    description: i.description ? maskAddressLike(i.description) : null,
+    image_url: (i.image_url && cached.get(sha256(i.image_url))) || null,
+  }));
+}
+
+/**
  * The shopper-safe view: the payee and the resolved theme, amount, status, expiry, the current quote
  * and payments with shopper-facing states. Never merchant ids, account ids, metadata, the external
  * reference or other sessions.
@@ -440,8 +471,8 @@ export async function shopperSessionView(ctx: ShopperCtx) {
     cancel_url: s.cancelUrl,
     /** The payment link this session came from (title and page); null otherwise. */
     payment_link: await linkInfo(ctx, s, store.slug),
-    /** Cart lines shown in the order summary (filled from the session by Task 6). */
-    line_items: [] as ShopperLineItem[],
+    /** Cart lines shown in the order summary. */
+    line_items: await shopperLineItems(ctx, s),
     quote: quote ? quoteView(quote, feePayer, s.amount) : null,
     /** The current quote's network fee (who pays, how, why); null without a quote. */
     network_fee: quote ? networkFeeView(quote, 'shopper') : null,

@@ -96,12 +96,23 @@ export interface TopupOffer {
   message: string;
 }
 
+export interface SessionLineItem {
+  name: string;
+  quantity: number;
+  unit_amount: string;
+  description: string | null;
+  /** A Tendr-hosted copy of the product image, once cached; else null. */
+  image_url: string | null;
+}
+
 export interface SessionView {
   id: string;
   livemode: boolean;
   merchant: MerchantDisplay;
   /** The resolved theme (named, else the store default, else Tendr's). */
   theme: ShopperTheme;
+  /** Cart lines for the order summary (names already masked server-side). */
+  line_items: SessionLineItem[];
   /** Origins allowed to frame the page. */
   checkout_domains: string[];
   amount: string;
