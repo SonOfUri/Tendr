@@ -266,7 +266,10 @@ export function StatusScreen({ view, screen, tokenOf, client, now, onRefresh }: 
         <section className="pay-section" aria-labelledby="pay-expired-title">
           <h2 id="pay-expired-title">This checkout has expired</h2>
           <p>
-            Return to the store to start again. Don&apos;t send money to an address from this page.
+            {view.payment_link
+              ? `Go back to ${view.payment_link.title} to start again.`
+              : 'Return to the store to start again.'}{' '}
+            Don&apos;t send money to an address from this page.
           </p>
           <BackLink view={view} to="cancel" />
         </section>

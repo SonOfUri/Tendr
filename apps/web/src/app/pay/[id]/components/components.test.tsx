@@ -387,6 +387,15 @@ describe('StatusScreen: sessions from a payment link', () => {
     expect(html).toContain('Return to store');
     expect(html).toContain('href="https://shop.example/thanks"');
   });
+
+  it('the expired screen sends the payer back to the link page to start again', () => {
+    const html = screen('expired', linked);
+    expect(html).toContain('Go back to Tip &lt;jar&gt; to start again.');
+    expect(html).not.toContain('Return to the store');
+    const plain = screen('expired', { ...VIEW, payment_link: null } as SessionView);
+    expect(plain).toContain('Return to the store to start again.');
+    expect(plain).toContain('href="https://shop.example/cart"');
+  });
 });
 
 describe('NetworkFee (Global Constraints copy)', () => {

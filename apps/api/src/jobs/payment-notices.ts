@@ -18,6 +18,7 @@ import { scopedDb } from '../db/scoped.js';
 import { minorUnits } from '../checkout/fx.js';
 import type { TokenInfo } from '../checkout/oneclick/index.js';
 import { getPayment } from '../checkout/payment-views.js';
+import { publicLinkSession } from '../checkout/session-refs.js';
 import { tokenInfo } from '../checkout/tokens.js';
 import { AppError } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
@@ -160,6 +161,8 @@ export async function onPaymentReceivedNotice(
       fxSource: true,
       fxAsOf: true,
       payerNote: true,
+      externalRef: true,
+      paymentLinkId: true,
       // One join, with the session: the link's title for the subject and first line.
       paymentLink: { select: { title: true } },
     },
@@ -217,11 +220,13 @@ export async function onPaymentReceivedNotice(
   const tx = p.transactions.settlement ?? p.transactions.origin;
   const txUrl = tx ? explorerTxUrl(tx.chain, tx.hash, e.livemode) : '';
   const dashboardUrl = dashboardPaymentUrl(p.id, e.merchantId, e.livemode);
-  // A payment through a payment link is named for the link; the payer's note is quoted as plain
-  // text (every line behind "> "), never as markup or a link.
+  // A payment from a link's public page is named for the link; a store-path session naming a link
+  // keeps its order reference. The payer's note is quoted as plain text (every line behind "> "),
+  // never as markup or a link.
   const linkTitle = s.paymentLink ? oneLine(s.paymentLink.title) : null;
   const payerNote = s.payerNote ?? '';
-  const order = linkTitle ? `via ${linkTitle}` : `for ${orderLabel(p.external_ref)}`;
+  const order =
+    linkTitle && publicLinkSession(s) ? `via ${linkTitle}` : `for ${orderLabel(p.external_ref)}`;
 
   const subject = subjectFor(e.livemode, `You got paid ${received} ${order}`);
   const text = [

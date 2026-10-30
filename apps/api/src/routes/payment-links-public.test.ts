@@ -236,6 +236,35 @@ describe('public payment link routes', () => {
       });
       expect(res.json().success_url).toBe('http://localhost:3000/pay/acme/tshirt?mode=test');
     });
+
+    it('a store-path session naming a link keeps the store as its way back', async () => {
+      const key = (await createApiKey(merchant.id, { livemode: false })).raw;
+      const link = await prisma.paymentLink.findFirstOrThrow({ where: { slug: 'tshirt' } });
+      const created = await app.inject({
+        method: 'POST',
+        url: '/v1/checkout/sessions',
+        headers: { authorization: `Bearer ${key}` },
+        payload: {
+          amount: '25.00',
+          amount_currency: 'USD',
+          external_ref: 'order-61',
+          success_url: 'https://shop.example/thanks',
+          cancel_url: 'https://shop.example/cart',
+          payment_link_id: link.id,
+        },
+      });
+      expect(created.statusCode, created.body).toBe(201);
+      const res = await app.inject({
+        method: 'GET',
+        url: '/v1/checkout/client/session',
+        headers: { authorization: `Bearer ${created.json().client_secret}` },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      // The header and result screens fall back to the store's own URLs.
+      expect(res.json().payment_link).toBeNull();
+      expect(res.json().success_url).toBe('https://shop.example/thanks');
+      expect(res.json().cancel_url).toBe('https://shop.example/cart');
+    });
   });
 
   describe('limits', () => {

@@ -64,6 +64,7 @@ import {
 } from './pricing.js';
 import { emailWaitingReturns, shopperRefunds } from './refunds.js';
 import { screenAddress } from './screening.js';
+import { PUBLIC_LINK_SESSION_WHERE, publicLinkSession } from './session-refs.js';
 import type { CheckoutCtx } from './sessions.js';
 import { tokenInfo, tokenList } from './tokens.js';
 import { markSessionViewed, topupEnabled, watcherNow } from './watcher.js';
@@ -290,13 +291,16 @@ async function storeInfo(ctx: ShopperCtx, s: SessionRow) {
   };
 }
 
-/** The payment link a session came from: its title and page (the "Back to …" link). */
+/**
+ * The payment link a public-path session came from: its title and page (the "Back to …" link).
+ * Null for a store-path session naming a link, whose way back is the store's own URLs.
+ */
 async function linkInfo(
   ctx: ShopperCtx,
   s: SessionRow,
   merchantSlug: string,
 ): Promise<{ title: string; url: string } | null> {
-  if (!s.paymentLinkId) return null;
+  if (!publicLinkSession(s) || !s.paymentLinkId) return null;
   const link = await ctx.db.paymentLink.findFirst({
     where: { id: s.paymentLinkId },
     select: { title: true, slug: true },
@@ -664,13 +668,6 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
 }
 
 /**
- * A session from a link's public page: it names a link and has no `external_ref` (a store-path
- * session always carries its order's ref, and keeps the expiry the store asked for).
- */
-const publicLinkSession = (s: { paymentLinkId: string | null; externalRef: string | null }) =>
-  s.paymentLinkId !== null && s.externalRef === null;
-
-/**
  * The expiry a quote's deadline is bounded by. A public link session's first quote extends the
  * session to `createdAt + SESSION_TTL_MS` (storeQuote), so that quote is priced against the
  * extended expiry rather than the short unquoted one.
@@ -814,8 +811,7 @@ async function storeQuote(
       where: {
         ...tenant,
         id: sessionId,
-        paymentLinkId: { not: null },
-        externalRef: null,
+        ...PUBLIC_LINK_SESSION_WHERE,
         quotes: { none: {} },
       },
       data: { expiresAt: new Date(row.created_at.getTime() + SESSION_TTL_MS) },

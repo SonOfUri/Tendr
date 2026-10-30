@@ -21,3 +21,21 @@ export function sessionRefs(s: SessionRefsInput): SessionRefs {
     payer_note: s.payerNote,
   };
 }
+
+/**
+ * A session from a link's public page: it names a link and has no `external_ref`. A store-path
+ * session (`POST /v1/checkout/sessions` with `payment_link_id`) always carries its order's ref and
+ * keeps the store's own expiry, success/cancel URLs and email wording.
+ */
+export function publicLinkSession(s: {
+  paymentLinkId: string | null;
+  externalRef: string | null;
+}): boolean {
+  return s.paymentLinkId !== null && s.externalRef === null;
+}
+
+/** `publicLinkSession` as a Prisma session filter. */
+export const PUBLIC_LINK_SESSION_WHERE = {
+  paymentLinkId: { not: null },
+  externalRef: null,
+} as const;

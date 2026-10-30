@@ -289,6 +289,18 @@ describe('merchant payment and refund emails', () => {
     expect(m.data).toMatchObject({ payment_link_title: '', payer_note: '' });
   });
 
+  it('a store-path session naming a link keeps the order wording', async () => {
+    const link = await createRow('PaymentLink', merchant.id, false, { title: 'Sam T-shirt' });
+    const p = await settledPayment({
+      session: { externalRef: 'order-77', paymentLinkId: link.id, payerNote: 'gift wrap' },
+    });
+    await onPaymentReceivedNotice(await succeeded(p.id), deps);
+    const m = received()[0]!;
+    expect(m.subject).toBe('[Test] You got paid 48.75 USDC for order order-77');
+    expect(m.text!.split('\n')[0]).toBe(`${merchant.name} received 48.75 USDC for order order-77.`);
+    expect(m.text).toContain('Note from the payer:\n> gift wrap');
+  });
+
   it('escapes the note in the email', async () => {
     const link = await createRow('PaymentLink', merchant.id, false, { title: 'Shop <i>link</i>' });
     const note = '<script>x</script> http://evil.example';
