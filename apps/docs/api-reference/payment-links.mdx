@@ -125,6 +125,8 @@ the next page.
   `gas_max_usd`. An omitted key is unchanged.
 - `slug` cannot be changed: the request is a `400`.
 - Switching `amount_type` clears the fields that no longer apply.
+- Changing `currency` on a fixed link needs the new `amount` in the same request (else `400`, field
+  `amount`). On an open link it clears `min_amount` unless you send a new one.
 - A change that touches the fixed amount or currency is re-checked against the $1.00 minimum.
 
 Payments already in progress keep the price they started with.

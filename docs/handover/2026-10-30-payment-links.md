@@ -22,6 +22,9 @@ endpoints, and the dashboard team is free to shape the product differently.
 - **PATCH nulls.** `null` clears `expires_at`, `max_uses`, `description`, `min_amount`, `fee_payer`,
   `gas_payer`, `gas_max_usd`. An omitted key is unchanged. `archived: true|false` archives or restores.
   `DELETE` is the same as `archived: true` and returns the link.
+- **Currency change.** A fixed link's `currency` change needs `amount` in the same PATCH (400
+  `VALIDATION_ERROR`, field `amount`); an open link's `min_amount` is cleared unless supplied. The $1.00
+  floor runs on the new values.
 - **Slug.** Optional on create; generated from the title (`title`, `title-2`, ...) and retried on a race.
   3 to 60 chars, unique per store and mode, reserved words refused.
 - **Amounts.** `USD` or an ISO 4217 code in the FX table. Minimum $1.00 USD equivalent on the amount

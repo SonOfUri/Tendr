@@ -437,6 +437,8 @@ export async function updateLink(
   const currencyChanged = currency !== link.amountCurrency;
   const minor = minorOf(currency);
 
+  // The stored amount and min_amount are in the old currency: a currency change never carries them
+  // over. A fixed link must name its new amount; an open link's minimum is cleared unless given.
   let amount: string | null = null;
   let minAmount: string | null = null;
   if (open) {
@@ -444,12 +446,15 @@ export async function updateLink(
     minAmount =
       input.min_amount !== undefined
         ? input.min_amount
-        : typeChanged
+        : typeChanged || currencyChanged
           ? null
           : (link.minAmount?.toFixed() ?? null);
   } else {
     if (input.min_amount !== undefined && input.min_amount !== null) {
       throw invalid('min_amount', 'min_amount is only allowed for open links');
+    }
+    if (currencyChanged && !typeChanged && input.amount === undefined) {
+      throw invalid('amount', 'amount is required when the currency changes');
     }
     amount = input.amount ?? (typeChanged ? null : (link.amount?.toFixed() ?? null));
     if (amount === null) throw invalid('amount', 'amount is required for fixed links');

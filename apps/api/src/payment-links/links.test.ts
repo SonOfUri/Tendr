@@ -268,6 +268,34 @@ describe('payment link service', () => {
       expect(err.code).toBe('FX_RATE_UNAVAILABLE');
     });
 
+    it('a currency change on a fixed link needs the amount in the new currency', async () => {
+      rate1600();
+      const l = await createLink(ctxOf(), { ...fixedNgn, amount: '5000' });
+      const err = await rejection(updateLink(ctxOf(), l.id, { currency: 'USD' }));
+      expect(err).toMatchObject({ code: 'VALIDATION_ERROR', status: 400 });
+      expect(err.details).toEqual({ field: 'amount' });
+      expect(err.message).toMatch(/amount/);
+      expect((await getLink(ctxOf(), l.id)).currency).toBe('NGN');
+      // The floor check runs on the new values.
+      const low = await rejection(updateLink(ctxOf(), l.id, { currency: 'USD', amount: '0.50' }));
+      expect(low.code).toBe('AMOUNT_TOO_LOW');
+      const ok = await updateLink(ctxOf(), l.id, { currency: 'USD', amount: '3.00' });
+      expect(ok).toMatchObject({ currency: 'USD', amount: '3.00' });
+    });
+
+    it('a currency change on an open link clears its min_amount unless one is given', async () => {
+      rate1600();
+      const l = await createLink(ctxOf(), {
+        title: 'Tips',
+        amount_type: 'open',
+        currency: 'NGN',
+        min_amount: '5000',
+      });
+      expect((await updateLink(ctxOf(), l.id, { currency: 'USD' })).min_amount).toBeNull();
+      const again = await updateLink(ctxOf(), l.id, { currency: 'NGN', min_amount: '2000' });
+      expect(again).toMatchObject({ currency: 'NGN', min_amount: '2000.00' });
+    });
+
     it('re-checks precision when the currency changes', async () => {
       const l = await createLink(ctxOf(), { ...fixedUsd, amount: '5.25' });
       const err = await rejection(updateLink(ctxOf(), l.id, { currency: 'JPY' }));
