@@ -941,7 +941,10 @@ USD amount matches `amount / rate` rounded up.
 - **`@coinbase/cdp-sdk` is pinned to 1.52.0** (root `overrides`). Version 1.53 and later
   statically import optional `@x402` packages, which breaks the Next build through Reown AppKit's
   optional Coinbase dependency. Check that before lifting the pin.
-- Pricing currency is USD or the settlement asset only, because there is no FX source yet.
+- Pricing in a currency other than USD or the settlement asset needs an FX source (`FX_PROVIDER`).
+  Test mode uses built-in test rates; live mode needs Open Exchange Rates
+  (`FX_PROVIDER=openexchangerates` with `FX_API_KEY`), otherwise live non-USD sessions and links get
+  `503 FX_RATE_UNAVAILABLE`.
 - The 1Click wire format comes from its public docs until the mainnet checks run.
   `apps/api/src/checkout/oneclick/http.ts` is the only place that maps it.
 - Underpay top-ups are off in live mode until the mainnet check confirms that 1Click accumulates

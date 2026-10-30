@@ -100,7 +100,8 @@ fails, even if that runs past the session's expiry.
   count as a use.
 - **Refunds do not free a use.** A refunded payment stays used.
 - `use_count` can exceed `max_uses` in one narrow case: a session that is past its expiry but not yet
-  swept receives a deposit that settles.
+  swept receives a deposit that settles. A deposit that lands in the same millisecond the session
+  expires can do the same, because its use was already released to the next payer.
 
 A link accepts at most 200 open sessions that have a quote. Past that the page answers
 `429 LINK_BUSY`. Sessions that have no quote yet do not count: they expire within minutes.

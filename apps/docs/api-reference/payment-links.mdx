@@ -1,6 +1,6 @@
 ---
 title: Payment links API
-description: Create, list, read, update and archive payment links, and the two public endpoints behind the pay page.
+description: Create, list, read, update and archive payment links, and the two public endpoints the pay page uses.
 ---
 
 See [payment links](/payment-links/overview) for what a link is and how it behaves.
@@ -138,8 +138,11 @@ Payments already in progress keep the price they started with.
 
 ## Public endpoints
 
-The pay page uses two endpoints that need no key. They are documented because they are stable and you
-can build your own page on them. Add `?mode=test` to address a test link.
+The pay page at `/pay/<store>/<link>` uses two endpoints that need no key. They are documented so you
+know what the payer's page does; they are not an integration surface. Browsers can call them only from
+Tendr's checkout origin (CORS), so a page on your own site cannot use them. To take a link's payment
+from your own page, create a session with your secret key (`POST /v1/checkout/sessions` with
+`payment_link_id`). Add `?mode=test` to address a test link.
 
 ### Read a link
 
@@ -209,7 +212,7 @@ Past a rate limit the API answers `429 RATE_LIMITED`.
 | `VALIDATION_ERROR` | 400 | A field is invalid. `details.field` names it. Includes changing `slug`, and an expired `expires_at`. |
 | `AMOUNT_TOO_LOW` | 400 | Below the $1.00 floor or the link's `min_amount`. `details.min_amount` is the minimum in the link's currency. |
 | `FX_RATE_UNAVAILABLE` | 503 | No current rate for a non-USD link. Retry shortly. |
-| `LINK_UNAVAILABLE` | 409 | The link cannot take a payment. `details.availability` is `inactive`, `expired`, `used_up` or `merchant_not_ready`. |
+| `LINK_UNAVAILABLE` | 409 | The link cannot take a payment. `details.availability` is `inactive`, `expired`, `used_up` or `merchant_not_ready`; a session created with your key (`POST /v1/checkout/sessions` with `payment_link_id`) can also get `archived`. The public pay route reports an archived link as `inactive`. |
 | `LINK_RESERVED` | 409 | Every remaining use is held by an open session. Try again shortly. |
 | `LINK_NOT_SUPPORTED` | 409 | The store settles into its own contract and cannot have links. |
 | `LINK_BUSY` | 429 | The link has 200 open sessions with a quote. |

@@ -73,7 +73,8 @@ No credential, never cached (`cache-control: no-store`, errors too).
   quote**.
 - **Late deposits** (after a session is marked expired) are refunded and never count as a use.
   Refunds never free a use. `use_count` can exceed `max_uses` only when a session past its expiry but
-  not yet swept receives a deposit that settles.
+  not yet swept receives a deposit that settles (including a deposit in the very millisecond the
+  session expires, after its use was released).
 
 ### Rate limits and the web server's identity
 
