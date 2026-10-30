@@ -10,6 +10,7 @@ import {
   LINK_MIN_USD,
   cleanPayerNote,
   feePayerFromDb,
+  maskAddressLike,
   type PaymentLinkAvailability,
   type PublicLinkSessionCreated,
   type PublicLinkSessionInput,
@@ -28,7 +29,7 @@ import { scopedDb } from '../db/scoped.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
-import { publishedDisplayName } from '../checkout/theme-name.js';
+import { resolveShopperTheme } from '../themes/resolve.js';
 import { assertAboveFloor, linkAvailability, linkUrls } from './links.js';
 
 export { LINK_MAX_QUOTED_SESSIONS };
@@ -109,17 +110,21 @@ export async function getPublicLink(
   const [availability, rate, theme] = await Promise.all([
     availabilityOf(r, now),
     link.amountCurrency === 'USD' ? null : usdRate(link.amountCurrency, now, livemode),
-    r.ctx.db.checkoutTheme.findFirst({
-      where: link.themeId
-        ? { id: link.themeId, status: 'published' }
-        : { isDefault: true, status: 'published' },
-      select: { published: true },
+    resolveShopperTheme(r.ctx.db, {
+      merchantId: r.ctx.merchantId,
+      merchantName: r.merchant.name,
+      themeId: link.themeId,
+      livemode,
+      kind: 'link',
+      link: { title: link.title, description: link.description },
     }),
   ]);
+  // Text saved before the address rule existed is masked on the way out.
   return {
-    merchant: { name: publishedDisplayName(theme?.published) ?? r.merchant.name, logo_url: null },
-    title: link.title,
-    description: link.description,
+    merchant: { name: r.merchant.name },
+    theme,
+    title: maskAddressLike(link.title),
+    description: link.description === null ? null : maskAddressLike(link.description),
     amount_type: link.openAmount ? 'open' : 'fixed',
     amount: link.amount === null ? null : link.amount.toFixed(minor),
     currency: link.amountCurrency,

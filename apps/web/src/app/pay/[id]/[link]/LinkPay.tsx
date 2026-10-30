@@ -3,6 +3,7 @@
 import type { PaymentLinkAvailability, PublicPaymentLinkView } from '@tendr/contracts';
 import { PAYER_NOTE_MAX } from '@tendr/contracts';
 import { useEffect, useState } from 'react';
+import { themeDisplayName, themeLogoUrl } from '@/lib/checkout/brand';
 import { safeHttpUrl } from '@/lib/checkout/format';
 import {
   decimalLess,
@@ -184,9 +185,9 @@ export function LinkPayBody({
   onNote,
   onSubmit,
 }: BodyProps) {
-  const logo = view.merchant.logo_url?.startsWith('https://')
-    ? safeHttpUrl(view.merchant.logo_url)
-    : null;
+  const logoUrl = themeLogoUrl(view.theme);
+  const logo = logoUrl?.startsWith('https://') ? safeHttpUrl(logoUrl) : null;
+  const storeName = themeDisplayName(view.theme);
   const open = view.amount_type === 'open';
   const typed = open ? parseLinkAmount(state.amount, view.minor_units) : null;
   const usd = open
@@ -206,7 +207,7 @@ export function LinkPayBody({
             // eslint-disable-next-line @next/next/no-img-element -- the store's own logo, any host
             <img src={logo} alt="" width={28} height={28} className="pay-logo" />
           ) : null}
-          <span className="pay-store-name">{view.merchant.name}</span>
+          <span className="pay-store-name">{storeName}</span>
         </div>
         {!view.livemode ? (
           <p className="pay-test-banner small" role="note">
@@ -288,7 +289,7 @@ export function LinkPayBody({
 
             {view.note === 'optional' ? (
               <label className="field">
-                <span>Note to {view.merchant.name} (optional)</span>
+                <span>Note to {storeName} (optional)</span>
                 <input
                   name="note"
                   maxLength={PAYER_NOTE_MAX}

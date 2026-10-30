@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { publicEnv } from './env';
 import { fetchPublicLink, payerIpFrom } from './payment-links';
+import { tendrShopperTheme } from '@/lib/checkout/brand';
 
 const TOKEN = 'x'.repeat(40);
 
@@ -30,7 +31,8 @@ describe('payerIpFrom', () => {
 
 describe('fetchPublicLink', () => {
   const VIEW = {
-    merchant: { name: 'Acme', logo_url: null },
+    merchant: { name: 'Acme' },
+    theme: tendrShopperTheme('Acme'),
     title: 'T-shirt',
     description: null,
     amount_type: 'fixed',

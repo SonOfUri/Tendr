@@ -96,7 +96,9 @@ describe('shopper checkout routes', () => {
     expect(res.statusCode, res.body).toBe(200);
     const v = res.json();
     expect(v.id).toBe(s.id);
-    expect(v.merchant).toEqual({ name: 'Bean Shop', logo_url: null });
+    expect(v.merchant).toEqual({ name: 'Bean Shop' });
+    expect(v.theme).toMatchObject({ id: null, payee: 'Bean Shop', trading_as: null });
+    expect(v.line_items).toEqual([]);
     expect(v.amount).toBe('25');
     expect(v.amount_currency).toBe('USD');
     expect(v.status).toBe('PENDING_DEPOSIT');
@@ -108,6 +110,98 @@ describe('shopper checkout routes', () => {
     expect(raw).not.toContain(accountId);
     expect(raw).not.toContain('client_secret');
     expect(raw).not.toContain('external_ref');
+  });
+
+  describe('theme', () => {
+    let liveKey: string;
+    const asLive = { authorization: '' };
+
+    beforeEach(async () => {
+      liveKey = (await createApiKey(merchant.id, { livemode: true })).raw;
+      asLive.authorization = `Bearer ${liveKey}`;
+    });
+
+    async function editAndPublish(id: string, draft: unknown) {
+      const edit = await app.inject({
+        method: 'PATCH',
+        url: `/v1/themes/${id}`,
+        headers: asLive,
+        payload: { draft },
+      });
+      expect(edit.statusCode, edit.body).toBe(200);
+      const pub = await app.inject({
+        method: 'POST',
+        url: `/v1/themes/${id}/publish`,
+        headers: asLive,
+      });
+      expect(pub.statusCode, pub.body).toBe(200);
+    }
+
+    /** A published theme showing `displayName`; `isDefault` makes it the store's default. */
+    async function publishedTheme(displayName: string, isDefault = false) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/themes',
+        headers: asLive,
+        payload: { name: displayName, from: 'blank' },
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const t = res.json() as { id: string; draft: { settings: Record<string, unknown> } };
+      await editAndPublish(t.id, {
+        ...t.draft,
+        settings: { ...t.draft.settings, display_name: displayName },
+      });
+      if (isDefault) {
+        const d = await app.inject({
+          method: 'POST',
+          url: `/v1/themes/${t.id}/default`,
+          headers: asLive,
+        });
+        expect(d.statusCode, d.body).toBe(200);
+      }
+      return t.id;
+    }
+
+    it('session view carries theme, payee and trading_as', async () => {
+      await publishedTheme('Bean Shop', true);
+      const named = await publishedTheme('Beans & Co');
+      const s = await newSession();
+      const plain = (await call('GET', 'session', s.client_secret)).json();
+      expect(plain.merchant).toEqual({ name: 'Bean Shop' });
+      expect(plain.theme).toMatchObject({ payee: 'Bean Shop', trading_as: null });
+      expect(plain.theme.document.settings.display_name).toBe('Bean Shop');
+
+      // Session creation's theme_id lands in Task 6; set the column directly.
+      await prisma.session.update({ where: { id: s.id }, data: { themeId: named } });
+      const v = (await call('GET', 'session', s.client_secret)).json();
+      expect(v.merchant).toEqual({ name: 'Bean Shop' });
+      expect(v.theme).toMatchObject({ id: named, payee: 'Bean Shop', trading_as: 'Beans & Co' });
+    });
+
+    it('republish mid-session changes only theme fields', async () => {
+      const id = await publishedTheme('Bean Shop', true);
+      const s = await newSession();
+      const q = await call('POST', 'quote', s.client_secret, { origin_asset: ETH });
+      expect(q.statusCode, q.body).toBe(201);
+      const before = (await call('GET', 'session', s.client_secret)).json();
+      expect(before.quote).not.toBeNull();
+
+      const row = await prisma.checkoutTheme.findUniqueOrThrow({ where: { id } });
+      const draft = row.draft as { settings: Record<string, unknown> };
+      await editAndPublish(id, {
+        ...draft,
+        settings: { ...draft.settings, button_label: 'Complete order' },
+      });
+
+      const after = (await call('GET', 'session', s.client_secret)).json();
+      expect(after.theme.version).toBeGreaterThan(before.theme.version);
+      expect(after.theme.document.settings.button_label).toBe('Complete order');
+      for (const key of ['amount', 'expires_at', 'status', 'quote']) {
+        expect(after[key], key).toEqual(before[key]);
+      }
+      // Nothing but the theme changed.
+      expect({ ...after, theme: null }).toEqual({ ...before, theme: null });
+    });
   });
 
   it('lists tokens with popular ones first', async () => {

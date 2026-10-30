@@ -13,6 +13,7 @@ import {
   savePendingPayment,
   type PayState,
 } from './LinkPay';
+import { tendrShopperTheme } from '@/lib/checkout/brand';
 
 vi.mock('next/headers', () => ({
   headers: async () => new Headers({ 'x-forwarded-for': '203.0.113.7' }),
@@ -21,7 +22,8 @@ vi.mock('next/headers', () => ({
 const SESSION = 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0';
 
 const FIXED: PublicPaymentLinkView = {
-  merchant: { name: 'Acme Studio', logo_url: null },
+  merchant: { name: 'Acme Studio' },
+  theme: tendrShopperTheme('Acme Studio'),
   title: 'Logo design',
   description: 'Line one\nLine two https://evil.example',
   amount_type: 'fixed',

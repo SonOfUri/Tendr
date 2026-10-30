@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import type { Merchant } from '@prisma/client';
-import type { PaymentLinkCreate } from '@tendr/contracts';
+import type { Prisma } from '@prisma/client';
+import { type Merchant } from '@prisma/client';
+import { TENDR_DEFAULT_THEME, type PaymentLinkCreate } from '@tendr/contracts';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetFxCache } from '../checkout/fx.js';
 import { LINK_UNQUOTED_TTL_MS } from '../checkout/sessions.js';
@@ -96,15 +97,17 @@ describe('public payment links', () => {
           'min_amount',
           'minor_units',
           'note',
+          'theme',
           'title',
           'usd_rate',
         ].sort(),
       );
-      expect(Object.keys(v.merchant).sort()).toEqual(['logo_url', 'name']);
+      expect(Object.keys(v.merchant)).toEqual(['name']);
+      expect(v.theme).toMatchObject({ id: null, payee: 'Acme Church', trading_as: null });
       // The page formats and checks amounts with the API's ISO 4217 table, never its own.
       expect(v.minor_units).toBe(2);
       expect(v).toMatchObject({
-        merchant: { name: 'Acme Church', logo_url: null },
+        merchant: { name: 'Acme Church' },
         title: 'Offering',
         description: null,
         amount_type: 'open',
@@ -119,6 +122,38 @@ describe('public payment links', () => {
       });
       expect(JSON.stringify(v)).not.toContain(merchant.id);
       expect(JSON.stringify(v)).not.toContain('plink_');
+    });
+
+    it('public link view masks address-like description from before the rule', async () => {
+      const addr = '0x52908400098527886E0F7030069857D2E4169EE7';
+      // Written straight to the table: the create schema refuses such text today.
+      await createRow('PaymentLink', merchant.id, false, {
+        slug: 'old',
+        title: `Send to ${addr}`,
+        description: `Pay ${addr} directly`,
+      });
+      const v = await getPublicLink('acme', 'old', false);
+      expect(JSON.stringify(v)).not.toContain(addr);
+      expect(v.description).toMatch(/^Pay .+ directly$/);
+      expect(v.title).toMatch(/^Send to /);
+    });
+
+    it('the link names its theme; the payee stays the account name', async () => {
+      const doc = TENDR_DEFAULT_THEME('Acme Youth') as unknown as Prisma.InputJsonValue;
+      // A test-mode page shows the theme's draft; a live one its published version.
+      const theme = await createRow('CheckoutTheme', merchant.id, false, {
+        status: 'published',
+        draft: doc,
+        published: doc,
+      });
+      await createLink(ctx(), { ...fixedUsd, theme_id: theme.id });
+      const v = await getPublicLink('acme', 'tshirt', false);
+      expect(v.merchant).toEqual({ name: 'Acme Church' });
+      expect(v.theme).toMatchObject({
+        id: theme.id,
+        payee: 'Acme Church',
+        trading_as: 'Acme Youth',
+      });
     });
 
     it('unknown merchant and unknown link give the same 404', async () => {

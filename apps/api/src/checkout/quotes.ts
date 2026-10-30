@@ -21,6 +21,7 @@ import {
   SMALL_OVERPAY_USD,
   feePayerFromDb,
   gasPayerFromDb,
+  maskAddressLike,
   type FeePayer,
 } from '@tendr/contracts';
 import { z } from 'zod';
@@ -37,7 +38,6 @@ import {
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { linkUrls } from '../payment-links/links.js';
-import { publishedDisplayName } from './theme-name.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { toJsonDecimal } from '../lib/serialize.js';
@@ -68,10 +68,20 @@ import { screenAddress } from './screening.js';
 import { PUBLIC_LINK_SESSION_WHERE, publicLinkSession } from './session-refs.js';
 import type { CheckoutCtx } from './sessions.js';
 import { tokenInfo, tokenList } from './tokens.js';
+import { resolveShopperTheme } from '../themes/resolve.js';
 import { markSessionViewed, topupEnabled, watcherNow } from './watcher.js';
 
 /** The tenant plus the one session the client secret opened. */
 export type ShopperCtx = CheckoutCtx & { sessionId: string };
+
+/** A cart line as the shopper sees it. */
+export type ShopperLineItem = {
+  name: string;
+  quantity: number;
+  unit_amount: string;
+  description: string | null;
+  image_url: string | null;
+};
 
 // ---------------------------------------------------------------------------------------------
 // Inputs
@@ -274,19 +284,19 @@ function shopperState(p: {
 }
 
 async function storeInfo(ctx: ShopperCtx, s: SessionRow) {
-  const [merchant, theme] = await Promise.all([
-    ctx.db.merchant.findFirstOrThrow({
-      select: { name: true, slug: true, checkoutDomains: true },
-    }),
-    ctx.db.checkoutTheme.findFirst({
-      where: s.themeId
-        ? { id: s.themeId, status: 'published' }
-        : { isDefault: true, status: 'published' },
-      select: { published: true },
-    }),
-  ]);
+  const merchant = await ctx.db.merchant.findFirstOrThrow({
+    select: { name: true, slug: true, checkoutDomains: true },
+  });
+  const theme = await resolveShopperTheme(ctx.db, {
+    merchantId: ctx.merchantId,
+    merchantName: merchant.name,
+    themeId: s.themeId,
+    livemode: ctx.livemode,
+    kind: 'checkout',
+  });
   return {
-    display: { name: publishedDisplayName(theme?.published) ?? merchant.name, logo_url: null },
+    name: merchant.name,
+    theme,
     checkoutDomains: [...merchant.checkoutDomains],
     slug: merchant.slug,
   };
@@ -307,7 +317,10 @@ async function linkInfo(
     select: { title: true, slug: true },
   });
   if (!link) return null;
-  return { title: link.title, url: linkUrls(merchantSlug, link.slug, s.livemode).url };
+  return {
+    title: maskAddressLike(link.title),
+    url: linkUrls(merchantSlug, link.slug, s.livemode).url,
+  };
 }
 
 /** Base units → a decimal string ("0.005"). */
@@ -390,7 +403,7 @@ async function depositSubmittedAt(ctx: ShopperCtx, sessionId: string): Promise<D
 }
 
 /**
- * The shopper-safe view: merchant display name and logo, amount, status, expiry, the current quote
+ * The shopper-safe view: the payee and the resolved theme, amount, status, expiry, the current quote
  * and payments with shopper-facing states. Never merchant ids, account ids, metadata, the external
  * reference or other sessions.
  */
@@ -410,7 +423,10 @@ export async function shopperSessionView(ctx: ShopperCtx) {
   return {
     id: s.id,
     livemode: s.livemode,
-    merchant: store.display,
+    /** The account's name (the payee); the shown store name and logo live in `theme`. */
+    merchant: { name: store.name },
+    /** The resolved theme: re-read on every view, so a republish shows on the next poll. */
+    theme: store.theme,
     /** Origins allowed to frame the page: the embed bridge posts only to one of these. */
     checkout_domains: store.checkoutDomains,
     amount: s.amount.toFixed(),
@@ -424,6 +440,8 @@ export async function shopperSessionView(ctx: ShopperCtx) {
     cancel_url: s.cancelUrl,
     /** The payment link this session came from (title and page); null otherwise. */
     payment_link: await linkInfo(ctx, s, store.slug),
+    /** Cart lines shown in the order summary (filled from the session by Task 6). */
+    line_items: [] as ShopperLineItem[],
     quote: quote ? quoteView(quote, feePayer, s.amount) : null,
     /** The current quote's network fee (who pays, how, why); null without a quote. */
     network_fee: quote ? networkFeeView(quote, 'shopper') : null,

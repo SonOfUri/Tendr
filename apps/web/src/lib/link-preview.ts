@@ -1,5 +1,6 @@
 // What a payment link's preview card says (spec §4.1), shared by the page metadata and the image.
 import type { PublicPaymentLinkView } from '@tendr/contracts';
+import { themeDisplayName } from './checkout/brand';
 import { formatLinkAmount, linkFractionDigits } from './payment-links-client';
 
 /** The price line, or null when the link no longer takes payments (no price on its card). */
@@ -12,7 +13,8 @@ export function linkPriceText(view: PublicPaymentLinkView): string | null {
 /** `og:description`: "<merchant> · <price>", prefixed "Test · " on a test link. */
 export function linkDescription(view: PublicPaymentLinkView, test: boolean): string {
   const price = linkPriceText(view);
-  const text = price ? `${view.merchant.name} · ${price}` : view.merchant.name;
+  const name = themeDisplayName(view.theme);
+  const text = price ? `${name} · ${price}` : name;
   return test ? `Test · ${text}` : text;
 }
 

@@ -11,7 +11,7 @@ vi.mock('next/headers', () => ({ headers: async () => new Headers() }));
 
 import { GET } from './route';
 
-const VIEW = { merchant: { name: 'Acme', logo_url: null }, title: 'T' };
+const VIEW = { merchant: { name: 'Acme' }, title: 'T' };
 const ctx = (id = 'acme', link = 'tee') => ({ params: Promise.resolve({ id, link }) });
 const req = (qs = '') => new Request(`http://localhost:3000/pay/acme/tee/qr${qs}`);
 

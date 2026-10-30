@@ -2,6 +2,7 @@ import { isTerminalSession, SessionStatusValues } from '@tendr/contracts';
 import { describe, expect, it } from 'vitest';
 import type { SessionPayment, SessionRefund, SessionView } from './api';
 import { POLL_MS, screenFor, SLOW_POLL_MS } from './status';
+import { tendrShopperTheme } from '@/lib/checkout/brand';
 
 const NOW = new Date('2026-10-26T12:00:00Z');
 const LATER = '2026-10-26T12:20:00Z';
@@ -11,7 +12,8 @@ function view(over: Partial<SessionView> = {}): SessionView {
   return {
     id: 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0',
     livemode: false,
-    merchant: { name: 'Bean Shop', logo_url: null },
+    merchant: { name: 'Bean Shop' },
+    theme: tendrShopperTheme('Bean Shop'),
     checkout_domains: [],
     amount: '25',
     amount_currency: 'USD',

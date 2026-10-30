@@ -10,11 +10,13 @@ import { StatusScreen } from './StatusScreens';
 import { canPay } from './WalletPanel';
 import { NetworkFee, showFeeChoice } from './NetworkFee';
 import { SendDetails } from './SendDetails';
+import { tendrShopperTheme } from '@/lib/checkout/brand';
 
 const VIEW = {
   id: 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0',
   livemode: true,
-  merchant: { name: 'Bean Shop', logo_url: null },
+  merchant: { name: 'Bean Shop' },
+  theme: tendrShopperTheme('Bean Shop'),
   checkout_domains: ['https://shop.example'],
   amount: '84',
   amount_currency: 'USD',

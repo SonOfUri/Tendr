@@ -36,6 +36,7 @@ import { refundRoutes } from './routes/refunds.js';
 import { relayerRoutes } from './routes/relayers.js';
 import { reviewRoutes } from './routes/review.js';
 import { teamRoutes } from './routes/team.js';
+import { themeRoutes } from './routes/themes.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { randomUUID } from 'node:crypto';
 
@@ -257,6 +258,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(gasRoutes);
   await app.register(relayerRoutes);
   await app.register(hookRoutes);
+  await app.register(themeRoutes);
   opts.extraRoutes?.(app);
 
   return app;

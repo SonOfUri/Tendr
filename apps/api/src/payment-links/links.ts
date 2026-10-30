@@ -53,6 +53,8 @@ export interface PaymentLinkView {
   /** Null = the store's default. */
   gas_payer: 'merchant' | 'shopper' | null;
   gas_max_usd: string | null;
+  /** The theme the link's page uses; null = the store's default. */
+  theme_id: string | null;
   status: 'active' | 'inactive';
   archived: boolean;
   availability: PaymentLinkAvailability;
@@ -221,6 +223,7 @@ function toView(
     fee_payer: link.feePayer ? feePayerFromDb(link.feePayer) : null,
     gas_payer: link.gasSponsor === 'default' ? null : gasPayerFromDb(link.gasSponsor),
     gas_max_usd: link.gasMaxUsd === null ? null : link.gasMaxUsd.toFixed(),
+    theme_id: link.themeId,
     status: link.status === 'active' ? 'active' : 'inactive',
     archived: link.archivedAt !== null,
     availability: linkAvailability(link, { now, merchantReady }),
@@ -327,6 +330,13 @@ async function freeSlug(db: ScopedDb, base: string, skip: number): Promise<strin
   }
 }
 
+/** A link may name only one of the store's own themes: NOT_FOUND (404) otherwise. */
+async function assertThemeExists(db: ScopedDb, themeId: string | null | undefined): Promise<void> {
+  if (!themeId) return;
+  const theme = await db.checkoutTheme.findFirst({ where: { id: themeId }, select: { id: true } });
+  if (!theme) throw notFound('No theme with that id');
+}
+
 const isP2002 = (err: unknown): boolean =>
   err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 
@@ -350,6 +360,7 @@ export async function createLink(ctx: LinkCtx, input: PaymentLinkCreate): Promis
   if (expiresAt && expiresAt <= now)
     throw invalid('expires_at', 'expires_at must be in the future');
   if (!open) await assertAboveFloor(input.amount!, input.currency, now, { livemode: ctx.livemode });
+  await assertThemeExists(ctx.db, input.theme_id);
 
   const data = {
     title: input.title,
@@ -365,6 +376,7 @@ export async function createLink(ctx: LinkCtx, input: PaymentLinkCreate): Promis
     maxUses: input.max_uses ?? null,
     expiresAt,
     status: input.status ?? ('active' as const),
+    themeId: input.theme_id ?? null,
   };
 
   for (let attempt = 0; ; attempt++) {
@@ -475,6 +487,8 @@ export async function updateLink(
     await assertAboveFloor(amount, currency, new Date(), { livemode: ctx.livemode });
   }
 
+  await assertThemeExists(ctx.db, input.theme_id);
+
   const archivedAt =
     input.archived === undefined
       ? undefined
@@ -507,6 +521,7 @@ export async function updateLink(
       maxUses: input.max_uses,
       expiresAt,
       status: input.status,
+      themeId: input.theme_id,
       archivedAt,
     },
   });

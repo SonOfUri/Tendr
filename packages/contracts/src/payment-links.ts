@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { FeePayerSchema, GasPayerSchema } from './checkout.js';
 import { containsAddressLike, containsSendInstruction } from './theme-text.js';
+import type { ShopperTheme } from './themes.js';
 
 /** Smallest amount a link can take, in USD (the Intents routes' practical floor). */
 export const LINK_MIN_USD = '1.00';
@@ -127,7 +128,10 @@ export type PublicLinkSessionCreated = { url: string; expires_at: string };
 
 /** What the public link page may see: no ids, use counts or limits. */
 export type PublicPaymentLinkView = {
-  merchant: { name: string; logo_url: string | null };
+  /** The account's legal name (the payee); the shown store name and logo live in `theme`. */
+  merchant: { name: string };
+  /** The resolved theme (link's, else the store default, else Tendr's), ready to render. */
+  theme: ShopperTheme;
   title: string;
   description: string | null;
   amount_type: 'fixed' | 'open';

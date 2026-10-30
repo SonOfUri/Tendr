@@ -1,4 +1,5 @@
 import type { Quote, SessionView, Token } from '@/lib/checkout/api';
+import { tendrShopperTheme } from '@/lib/checkout/brand';
 import type { DemoCheckoutBootstrap } from '@/lib/demo';
 import { buildDemoAssetOptions, DEMO_KNOWN_ASSETS } from '@/lib/demo-assets';
 
@@ -222,10 +223,8 @@ export function buildDemoUiBootstrap(opts: {
   const session: SessionView = {
     id: sessionId,
     livemode: false,
-    merchant: {
-      name: opts.merchantName,
-      logo_url: opts.merchantLogoUrl,
-    },
+    merchant: { name: opts.merchantName },
+    theme: tendrShopperTheme(opts.merchantName, opts.merchantLogoUrl),
     checkout_domains: ['*'],
     amount: opts.amount,
     amount_currency: opts.currency,

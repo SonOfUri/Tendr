@@ -388,6 +388,18 @@ const EnvSchema = z
      * limits on it. Unset = never trusted. Required (≥ 32 chars) in production. Never logged.
      */
     WEB_INTERNAL_TOKEN: z.preprocess(blankAsUnset, z.string().min(32).optional()),
+    /**
+     * The origin theme assets are served from. Custom theme CSS and HTML may load images and fonts
+     * from this origin only.
+     */
+    TENDR_ASSET_ORIGIN: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .url()
+        .refine((u) => /^https?:\/\//i.test(u), 'must be an http(s) URL')
+        .default('http://localhost:9100/tendr-assets'),
+    ),
   })
   .superRefine((e, ctx) => {
     if (e.MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO > e.FUNDING_PER_ACCOUNT_YOCTO) {

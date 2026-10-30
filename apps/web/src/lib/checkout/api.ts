@@ -2,6 +2,7 @@
 // session client secret as `Authorization: Bearer <secret>`. The secret goes in that header only:
 // never in a URL, a body, a cookie or web storage. Requests carry no cookies (`credentials:
 // 'omit'`) and no referrer. Errors use the API's `{ error: { code, message, details? } }` envelope.
+import type { ShopperTheme } from '@tendr/contracts';
 import type { FeeMode, GaslessApi, GaslessMethod } from '@/lib/wallets/gasless/index';
 
 export class CheckoutApiError extends Error {
@@ -16,9 +17,9 @@ export class CheckoutApiError extends Error {
   }
 }
 
+/** The account the shopper pays (the payee); the shown store name and logo are in the theme. */
 export interface MerchantDisplay {
   name: string;
-  logo_url: string | null;
 }
 
 export interface FeeLine {
@@ -99,6 +100,8 @@ export interface SessionView {
   id: string;
   livemode: boolean;
   merchant: MerchantDisplay;
+  /** The resolved theme (named, else the store default, else Tendr's). */
+  theme: ShopperTheme;
   /** Origins allowed to frame the page. */
   checkout_domains: string[];
   amount: string;

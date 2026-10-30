@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/payment-links', () => ({
+vi.mock('@/lib/payment-links', async () => ({
   fetchPublicLink: async () => ({
-    merchant: { name: 'Acme', logo_url: null },
+    merchant: { name: 'Acme' },
+    theme: (await import('@/lib/checkout/brand')).tendrShopperTheme('Acme'),
     title: 'T-shirt',
     amount_type: 'open',
     amount: null,

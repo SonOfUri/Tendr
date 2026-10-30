@@ -28,7 +28,12 @@ type AnyBlock = ThemeBlock | ThemeLeafBlock;
 const IMAGE_KINDS: readonly ThemeAssetKind[] = ['logo', 'image'];
 const FONT_KINDS: readonly ThemeAssetKind[] = ['font'];
 
-function eachBlock(list: AnyBlock[], path: Path, fn: (b: AnyBlock, path: Path) => void): void {
+/** Calls `fn` on every block of `list`, depth first, including those inside columns and sections. */
+export function eachBlock(
+  list: AnyBlock[],
+  path: Path,
+  fn: (b: AnyBlock, path: Path) => void,
+): void {
   list.forEach((b, i) => {
     const p = [...path, i];
     fn(b, p);
@@ -70,6 +75,11 @@ function assetRefs(doc: ThemeDocument): Array<[Path, string, readonly ThemeAsset
     });
   }
   return refs;
+}
+
+/** The distinct asset ids a document references (logo, font, background and blocks). */
+export function referencedAssetIds(doc: ThemeDocument): string[] {
+  return [...new Set(assetRefs(doc).map(([, id]) => id))];
 }
 
 /**

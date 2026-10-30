@@ -1,6 +1,7 @@
 import { LINK_SLUG_RE } from '@tendr/contracts';
 import { headers } from 'next/headers';
 import { ImageResponse } from 'next/og';
+import { themeLogoUrl } from '@/lib/checkout/brand';
 import { CARD_SIZE, LinkCard } from '@/lib/link-card';
 import { safeLogo } from '@/lib/og-logo';
 import { fetchPublicLink, payerIpFrom } from '@/lib/payment-links';
@@ -23,7 +24,7 @@ export async function GET(
   const view = await fetchPublicLink(merchant, link, test, payerIpFrom(await headers()));
   if (!view) return new Response('Not found', { status: 404 });
 
-  const logo = await safeLogo(view.merchant.logo_url);
+  const logo = await safeLogo(themeLogoUrl(view.theme));
   return new ImageResponse(<LinkCard view={view} logo={logo} test={test} />, {
     ...CARD_SIZE,
     headers: { 'cache-control': 'public, max-age=300' },

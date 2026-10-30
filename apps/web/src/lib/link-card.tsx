@@ -1,6 +1,7 @@
 // The 1200×630 preview card (rendered by `next/og`): logo (or the merchant's initial), merchant
 // name, link title and price. Only inline styles with flex layout, which is all Satori supports.
 import type { PublicPaymentLinkView } from '@tendr/contracts';
+import { themeDisplayName } from './checkout/brand';
 import { linkCardPrice } from './link-preview';
 
 export const CARD_SIZE = { width: 1200, height: 630 } as const;
@@ -21,7 +22,7 @@ export function LinkCard({
   test: boolean;
 }) {
   const price = linkCardPrice(view);
-  const name = view.merchant.name;
+  const name = themeDisplayName(view.theme);
   const initial = Array.from(name.trim())[0]?.toUpperCase() ?? '?';
   return (
     <div

@@ -22,6 +22,8 @@ export const ScopeValues = [
   'webhooks:read',
   'webhooks:write',
   'events:read',
+  'themes:read',
+  'themes:write',
 ] as const;
 export type Scope = (typeof ScopeValues)[number];
 export const ScopeSchema = z.enum(ScopeValues);

@@ -572,6 +572,34 @@ describe('payment link service', () => {
     });
   });
 
+  describe('theme_id', () => {
+    it('a link names one of the store own themes; null clears it', async () => {
+      const theme = await createRow('CheckoutTheme', merchant.id, false);
+      const a = await createLink(ctxOf(), { ...fixedUsd, theme_id: theme.id });
+      expect(a.theme_id).toBe(theme.id);
+      // Themes are shared by both modes: a live link may name it too.
+      const live = await createLink(ctxOf(true), { ...fixedUsd, theme_id: theme.id });
+      expect(live.theme_id).toBe(theme.id);
+      expect((await updateLink(ctxOf(), a.id, { title: 'Kept' })).theme_id).toBe(theme.id);
+      expect((await updateLink(ctxOf(), a.id, { theme_id: null })).theme_id).toBeNull();
+      expect((await createLink(ctxOf(), fixedUsd)).theme_id).toBeNull();
+    });
+
+    it('an unknown or other-store theme id is 404', async () => {
+      const other = await createMerchant();
+      const foreign = await createRow('CheckoutTheme', other.id, false);
+      for (const id of ['thm_missing', foreign.id]) {
+        const err = await rejection(createLink(ctxOf(), { ...fixedUsd, theme_id: id }));
+        expect(err.status).toBe(404);
+        expect(err.message).toBe('No theme with that id');
+      }
+      const a = await createLink(ctxOf(), fixedUsd);
+      expect((await rejection(updateLink(ctxOf(), a.id, { theme_id: foreign.id }))).status).toBe(
+        404,
+      );
+    });
+  });
+
   describe('linkUrls', () => {
     it('builds live and test URLs', () => {
       expect(linkUrls('acme', 'give', true)).toEqual({
@@ -586,7 +614,12 @@ describe('payment link service', () => {
   });
 
   describe('update clears and validates', () => {
-    const open = { title: 'Tithe', amount_type: 'open', currency: 'USD', note: 'optional' } as const;
+    const open = {
+      title: 'Tithe',
+      amount_type: 'open',
+      currency: 'USD',
+      note: 'optional',
+    } as const;
     it('PATCH expires_at:null removes the expiry', async () => {
       const l = await createLink(ctxOf(), {
         ...open,

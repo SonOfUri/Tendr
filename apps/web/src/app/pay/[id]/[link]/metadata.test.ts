@@ -22,10 +22,12 @@ vi.mock('react', async (orig) => ({
 vi.mock('next/navigation', () => ({ notFound: () => undefined }));
 
 import PaymentLinkPage, { generateMetadata } from './page';
+import { tendrShopperTheme } from '@/lib/checkout/brand';
 
 let req = 0;
 const base: PublicPaymentLinkView = {
-  merchant: { name: 'Acme', logo_url: null },
+  merchant: { name: 'Acme' },
+  theme: tendrShopperTheme('Acme'),
   title: 'T-shirt',
   description: null,
   amount_type: 'fixed',
