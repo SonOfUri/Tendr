@@ -6,11 +6,12 @@
 //   see) need a live key or a dashboard user, who also needs step-up. A test key gets 403.
 // - Drafts are checked by the theme validator, not the route: a bad document is THEME_INVALID
 //   (400) with `details.problems` as `[{ path, message }]`.
-import { ThemeCreateSchema } from '@tendr/contracts';
+import { ThemeCreateSchema, ThemePreviewSchema } from '@tendr/contracts';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { requireMerchantPrincipal, requirePrincipal, requireStepUp } from '../gateway/principal.js';
 import { forbidden, unauthorized } from '../lib/errors.js';
+import { createPreviewToken } from '../themes/preview.js';
 import {
   createTheme,
   deleteTheme,
@@ -107,6 +108,16 @@ export const themeRoutes: FastifyPluginAsync = async (app) => {
     '/v1/themes/:id',
     { config: { auth: write } },
     async (req) => deleteTheme(ctxOf(req, 'settings:manage'), req.params.id),
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/v1/themes/:id/preview',
+    { config: { auth: read } },
+    async (req, reply) => {
+      const ctx = ctxOf(req, 'account:read');
+      const opts = ThemePreviewSchema.parse(req.body ?? {});
+      return reply.status(201).send(await createPreviewToken(ctx, req.params.id, opts));
+    },
   );
 
   app.post<{ Params: { id: string } }>(

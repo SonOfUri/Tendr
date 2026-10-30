@@ -39,6 +39,7 @@ import { reviewRoutes } from './routes/review.js';
 import { teamRoutes } from './routes/team.js';
 import { themeAssetRoutes } from './routes/theme-assets.js';
 import { themeBrandRoutes } from './routes/theme-brand.js';
+import { themePreviewPublicRoutes } from './routes/theme-preview-public.js';
 import { themeRoutes } from './routes/themes.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { randomUUID } from 'node:crypto';
@@ -265,6 +266,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(hookRoutes);
   const objectStore = opts.objectStore ?? createObjectStore(env());
   await app.register(themeRoutes);
+  await app.register(themePreviewPublicRoutes, { readRateLimit: limiters.paymentLinkRead });
   await app.register(themeAssetRoutes, { store: objectStore });
   await app.register(themeBrandRoutes, {
     store: objectStore,
