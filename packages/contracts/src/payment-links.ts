@@ -63,7 +63,11 @@ const CreateFields = z.object({
   gas_max_usd: AMOUNT_STR.optional(),
 });
 
-type Amounts = { amount_type?: 'fixed' | 'open'; amount?: string; min_amount?: string };
+type Amounts = {
+  amount_type?: 'fixed' | 'open';
+  amount?: string;
+  min_amount?: string | null;
+};
 
 function checkAmounts(v: Amounts, ctx: z.RefinementCtx): void {
   if (v.amount_type === 'fixed' && v.amount === undefined) {
@@ -72,7 +76,7 @@ function checkAmounts(v: Amounts, ctx: z.RefinementCtx): void {
   if (v.amount_type === 'open' && v.amount !== undefined) {
     ctx.addIssue({ code: 'custom', path: ['amount'], message: 'not allowed for open links' });
   }
-  if (v.amount_type === 'fixed' && v.min_amount !== undefined) {
+  if (v.amount_type === 'fixed' && v.min_amount != null) {
     ctx.addIssue({ code: 'custom', path: ['min_amount'], message: 'only allowed for open links' });
   }
 }
@@ -80,9 +84,19 @@ function checkAmounts(v: Amounts, ctx: z.RefinementCtx): void {
 export const PaymentLinkCreateSchema = CreateFields.superRefine(checkAmounts);
 export type PaymentLinkCreate = z.infer<typeof PaymentLinkCreateSchema>;
 
+/** In an update, `null` clears the field and an omitted key leaves it unchanged. */
 export const PaymentLinkUpdateSchema = CreateFields.omit({ slug: true })
   .partial()
-  .extend({ archived: z.boolean().optional() })
+  .extend({
+    description: CreateFields.shape.description.nullable(),
+    min_amount: CreateFields.shape.min_amount.nullable(),
+    expires_at: CreateFields.shape.expires_at.nullable(),
+    max_uses: CreateFields.shape.max_uses.nullable(),
+    fee_payer: CreateFields.shape.fee_payer.nullable(),
+    gas_payer: CreateFields.shape.gas_payer.nullable(),
+    gas_max_usd: CreateFields.shape.gas_max_usd.nullable(),
+    archived: z.boolean().optional(),
+  })
   .superRefine(checkAmounts);
 export type PaymentLinkUpdate = z.infer<typeof PaymentLinkUpdateSchema>;
 

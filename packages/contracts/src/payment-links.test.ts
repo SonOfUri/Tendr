@@ -93,3 +93,21 @@ describe('cleanPayerNote', () => {
     expect(out).not.toMatch(/[\ud800-\udbff]$/);
   });
 });
+
+describe('null clears optional fields (update only)', () => {
+  const clearable = ['expires_at', 'max_uses', 'description', 'min_amount', 'fee_payer', 'gas_payer', 'gas_max_usd'];
+  it('update accepts null on each clearable field', () => {
+    for (const f of clearable) {
+      expect(PaymentLinkUpdateSchema.safeParse({ [f]: null }).success, f).toBe(true);
+    }
+  });
+  it('create rejects null on each clearable field', () => {
+    for (const f of clearable) {
+      const r = PaymentLinkCreateSchema.safeParse({ ...base, amount_type: 'open', [f]: null });
+      expect(r.success, f).toBe(false);
+    }
+  });
+  it('omitted stays undefined', () => {
+    expect(PaymentLinkUpdateSchema.parse({ title: 'x' }).expires_at).toBeUndefined();
+  });
+});

@@ -441,9 +441,14 @@ export async function updateLink(
   let minAmount: string | null = null;
   if (open) {
     if (input.amount !== undefined) throw invalid('amount', 'amount is not allowed for open links');
-    minAmount = input.min_amount ?? (typeChanged ? null : (link.minAmount?.toFixed() ?? null));
+    minAmount =
+      input.min_amount !== undefined
+        ? input.min_amount
+        : typeChanged
+          ? null
+          : (link.minAmount?.toFixed() ?? null);
   } else {
-    if (input.min_amount !== undefined) {
+    if (input.min_amount !== undefined && input.min_amount !== null) {
       throw invalid('min_amount', 'min_amount is only allowed for open links');
     }
     amount = input.amount ?? (typeChanged ? null : (link.amount?.toFixed() ?? null));
@@ -451,8 +456,15 @@ export async function updateLink(
   }
   if (amount !== null) checkAmountField(amount, minor, currency, 'amount');
   if (minAmount !== null) checkAmountField(minAmount, minor, currency, 'min_amount');
-  if (input.gas_max_usd !== undefined) {
+  if (input.gas_max_usd) {
     checkAmountField(input.gas_max_usd, GAS_MAX_DECIMALS, 'USD', 'gas_max_usd');
+  }
+  let expiresAt: Date | null | undefined;
+  if (input.expires_at !== undefined) {
+    expiresAt = input.expires_at === null ? null : new Date(input.expires_at);
+    if (expiresAt && expiresAt <= new Date()) {
+      throw invalid('expires_at', 'expires_at must be in the future');
+    }
   }
   if (amount !== null && (input.amount !== undefined || currencyChanged || typeChanged)) {
     await assertAboveFloor(amount, currency, new Date(), { livemode: ctx.livemode });
@@ -468,17 +480,27 @@ export async function updateLink(
     where: { id },
     data: {
       title: input.title,
-      description: input.description,
+      description: input.description === null ? null : input.description,
       amount,
       amountCurrency: currency,
       openAmount: open,
       minAmount,
       noteMode: input.note,
-      feePayer: input.fee_payer ? feePayerToDb(input.fee_payer) : undefined,
-      gasSponsor: input.gas_payer ? gasPayerToDb(input.gas_payer) : undefined,
+      feePayer:
+        input.fee_payer === null
+          ? null
+          : input.fee_payer
+            ? feePayerToDb(input.fee_payer)
+            : undefined,
+      gasSponsor:
+        input.gas_payer === null
+          ? 'default'
+          : input.gas_payer
+            ? gasPayerToDb(input.gas_payer)
+            : undefined,
       gasMaxUsd: input.gas_max_usd,
       maxUses: input.max_uses,
-      expiresAt: input.expires_at ? new Date(input.expires_at) : undefined,
+      expiresAt,
       status: input.status,
       archivedAt,
     },

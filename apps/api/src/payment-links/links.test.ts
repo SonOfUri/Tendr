@@ -557,4 +557,53 @@ describe('payment link service', () => {
       });
     });
   });
+
+  describe('update clears and validates', () => {
+    const open = { title: 'Tithe', amount_type: 'open', currency: 'USD', note: 'optional' } as const;
+    it('PATCH expires_at:null removes the expiry', async () => {
+      const l = await createLink(ctxOf(), {
+        ...open,
+        expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+      });
+      const u = await updateLink(ctxOf(), l.id, { expires_at: null });
+      expect(u.expires_at).toBeNull();
+    });
+    it('PATCH max_uses:null removes the limit', async () => {
+      const l = await createLink(ctxOf(), { ...open, max_uses: 3 });
+      const u = await updateLink(ctxOf(), l.id, { max_uses: null });
+      expect(u.max_uses).toBeNull();
+    });
+    it('null clears description, min_amount, payers and gas cap', async () => {
+      const l = await createLink(ctxOf(), {
+        ...open,
+        description: 'd',
+        min_amount: '5',
+        fee_payer: 'shopper',
+        gas_payer: 'merchant',
+        gas_max_usd: '0.5',
+      });
+      const u = await updateLink(ctxOf(), l.id, {
+        description: null,
+        min_amount: null,
+        fee_payer: null,
+        gas_payer: null,
+        gas_max_usd: null,
+      });
+      expect(u).toMatchObject({
+        description: null,
+        min_amount: null,
+        fee_payer: null,
+        gas_payer: null,
+        gas_max_usd: null,
+      });
+    });
+    it('PATCH past expires_at is rejected', async () => {
+      const l = await createLink(ctxOf(), open);
+      const e = await rejection(
+        updateLink(ctxOf(), l.id, { expires_at: new Date(Date.now() - 1000).toISOString() }),
+      );
+      expect(e.status).toBe(400);
+      expect(e.details).toMatchObject({ field: 'expires_at' });
+    });
+  });
 });
