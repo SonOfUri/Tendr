@@ -1380,6 +1380,14 @@ async function settle(
         await transitionSession(tx, ctx, s.id, 'PROCESSING', { payment_id: p.id });
       }
       await transitionSession(tx, ctx, s.id, 'SETTLED', { payment_id: p.id });
+      // A payment link counts successful payments, in the transaction that records the success
+      // (a session settles once; a later refund does not give the use back).
+      if (s.paymentLinkId) {
+        await tx.paymentLink.updateMany({
+          where: { id: s.paymentLinkId, merchantId: ctx.merchantId, livemode: ctx.livemode },
+          data: { useCount: { increment: 1 } },
+        });
+      }
       await recordRevenue(tx, ctx, p.id);
       // The proceeds are collected here: a held gas sponsorship is charged at its estimate.
       await onPaymentCollected(tx, ctx, q, p.id);

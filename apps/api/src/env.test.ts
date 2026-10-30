@@ -14,6 +14,7 @@ const webauthn = {
   WEBAUTHN_ORIGINS: 'https://dashboard.usetendr.tech',
   ONECLICK_API_KEY: 'jwt',
   FX_API_KEY: 'oxr',
+  WEB_INTERNAL_TOKEN: 'i'.repeat(32),
 };
 
 describe('loadEnv keyvault rules', () => {
@@ -188,6 +189,7 @@ describe('loadEnv dashboard auth and mail', () => {
     WEBAUTHN_ORIGINS: 'https://dashboard.usetendr.tech',
     ONECLICK_API_KEY: 'jwt',
     FX_API_KEY: 'oxr',
+    WEB_INTERNAL_TOKEN: 'i'.repeat(32),
   };
 
   it('defaults WebAuthn to localhost and parses the origin list', () => {
@@ -218,6 +220,25 @@ describe('loadEnv dashboard auth and mail', () => {
     expect(() => loadEnv({ ...prod, WEBAUTHN_ORIGINS: 'http://localhost:3000' })).toThrow(
       /WEBAUTHN_ORIGINS/,
     );
+  });
+});
+
+describe('loadEnv web internal token', () => {
+  const prod = {
+    ...base,
+    ...gcp,
+    ...webauthn,
+    NODE_ENV: 'production',
+    KEYVAULT_DRIVER: 'gcp',
+  };
+
+  it('WEB_INTERNAL_TOKEN required and ≥ 32 chars in production', () => {
+    const { WEB_INTERNAL_TOKEN: _unused, ...withoutToken } = prod;
+    expect(() => loadEnv(withoutToken)).toThrow(/WEB_INTERNAL_TOKEN/);
+    expect(() => loadEnv({ ...prod, WEB_INTERNAL_TOKEN: 'short' })).toThrow(/WEB_INTERNAL_TOKEN/);
+    expect(loadEnv(prod).WEB_INTERNAL_TOKEN).toBe(prod.WEB_INTERNAL_TOKEN);
+    // Optional elsewhere.
+    expect(loadEnv({ ...base, NODE_ENV: 'development' }).WEB_INTERNAL_TOKEN).toBeUndefined();
   });
 });
 

@@ -126,6 +126,15 @@ export const ErrorCodes = [
   'AMOUNT_TOO_LOW',
   /** Payment links are not available for this store (an integrator settling into its own contract). */
   'LINK_NOT_SUPPORTED',
+  /**
+   * The payment link takes no payments right now (switched off, archived, expired, used up, or
+   * the store is not ready); `details.availability` says which.
+   */
+  'LINK_UNAVAILABLE',
+  /** Every remaining use of the link is held by an open session; try again shortly. */
+  'LINK_RESERVED',
+  /** The link has too many open quoted sessions; try again later. */
+  'LINK_BUSY',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

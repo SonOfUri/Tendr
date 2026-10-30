@@ -4,8 +4,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { buildApp } from '../app.js';
 import { fixedFxProvider, resetFxCache } from '../checkout/fx.js';
 import { simulatedOneClick } from '../checkout/oneclick/index.js';
+import { createSession } from '../checkout/sessions.js';
 import { resetTokenCache } from '../checkout/tokens.js';
 import { env, loadEnv } from '../env.js';
+import { scopedDb } from '../db/scoped.js';
 import { sha256 } from '../lib/crypto.js';
 import { prisma } from '../lib/prisma.js';
 import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
@@ -157,6 +159,114 @@ describe('checkout session routes', () => {
     const liveLink = await createRow('PaymentLink', merchant.id, true, {});
     const res = await create(body({ payment_link_id: liveLink.id }));
     expect(res.statusCode, res.body).toBe(404);
+  });
+
+  describe('payment links on the store path', () => {
+    it('refuses a session for a switched-off link', async () => {
+      const off = await createRow('PaymentLink', merchant.id, false, { status: 'inactive' });
+      const res = await create(body({ payment_link_id: off.id }));
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toMatchObject({
+        code: 'LINK_UNAVAILABLE',
+        details: { availability: 'inactive' },
+      });
+      const archived = await createRow('PaymentLink', merchant.id, false, {
+        archivedAt: new Date(),
+      });
+      const res2 = await create(body({ payment_link_id: archived.id, external_ref: 'o-2' }));
+      expect(res2.statusCode).toBe(409);
+      expect(res2.json().error.details.availability).toBe('archived');
+      const expired = await createRow('PaymentLink', merchant.id, false, {
+        expiresAt: new Date(Date.now() - 1000),
+      });
+      const res3 = await create(body({ payment_link_id: expired.id, external_ref: 'o-3' }));
+      expect(res3.json().error.details.availability).toBe('expired');
+      expect(await prisma.session.count()).toBe(0);
+    });
+
+    it('uses the link fee payer', async () => {
+      // Merchant default is `merchant`; the link says the shopper pays.
+      const link = await createRow('PaymentLink', merchant.id, false, { feePayer: 'payer' });
+      const res = await create(body({ payment_link_id: link.id }));
+      expect(res.statusCode, res.body).toBe(201);
+      const row = await prisma.session.findUniqueOrThrow({ where: { id: res.json().id } });
+      expect(row.feePayer).toBe('payer');
+      // The session override still wins.
+      const res2 = await create(
+        body({ payment_link_id: link.id, external_ref: 'o-2', fee_payer: 'merchant' }),
+      );
+      const row2 = await prisma.session.findUniqueOrThrow({ where: { id: res2.json().id } });
+      expect(row2.feePayer).toBe('merchant');
+    });
+
+    it('store-path session naming a max_uses link also reserves', async () => {
+      const link = await createRow('PaymentLink', merchant.id, false, { maxUses: 1 });
+      const first = await create(body({ payment_link_id: link.id }));
+      expect(first.statusCode, first.body).toBe(201);
+      // The store's caller keeps its own expiry (no 5-minute link TTL on this path).
+      const exp = new Date(first.json().expires_at).getTime();
+      expect(exp).toBeGreaterThan(Date.now() + 29 * 60_000);
+      const second = await create(body({ payment_link_id: link.id, external_ref: 'o-2' }));
+      expect(second.statusCode, second.body).toBe(409);
+      expect(second.json().error).toMatchObject({
+        code: 'LINK_RESERVED',
+        message: 'Someone is paying this link right now, try again shortly.',
+      });
+    });
+
+    it('stores the payer note and shows it in the view', async () => {
+      const link = await createRow('PaymentLink', merchant.id, false, {});
+      const ctx = {
+        merchantId: merchant.id,
+        livemode: false,
+        db: scopedDb({ merchantId: merchant.id, livemode: false }),
+      };
+      const out = await createSession(
+        ctx,
+        {
+          amount: '5.00',
+          amount_currency: 'USD',
+          success_url: 'https://x.example/a',
+          cancel_url: 'https://x.example/a',
+        },
+        {
+          fromLink: { linkId: link.id, payerNote: 'for Sunday', returnUrl: 'https://x.example/l' },
+        },
+      );
+      const view = (await get(out.id)).json();
+      expect(view.payer_note).toBe('for Sunday');
+      expect(view.external_ref).toBeNull();
+      expect(view.success_url).toBe('https://x.example/l');
+      expect(view.cancel_url).toBe('https://x.example/l');
+      const plain = (await get((await create(body())).json().id)).json();
+      expect(plain.payer_note).toBeNull();
+    });
+
+    it('sweep does not expire other sessions when external_ref is absent', async () => {
+      // An overdue PENDING_DEPOSIT session the sweeper has not reached yet.
+      const overdue = await createRow('Session', merchant.id, false, {
+        externalRef: 'order-old',
+        expiresAt: new Date(Date.now() - 60_000),
+      });
+      const link = await createRow('PaymentLink', merchant.id, false, {});
+      const ctx = {
+        merchantId: merchant.id,
+        livemode: false,
+        db: scopedDb({ merchantId: merchant.id, livemode: false }),
+      };
+      await createSession(
+        ctx,
+        {
+          amount: '5.00',
+          amount_currency: 'USD',
+          success_url: 'https://x.example/a',
+          cancel_url: 'https://x.example/a',
+        },
+        { fromLink: { linkId: link.id, payerNote: null, returnUrl: 'https://x.example/l' } },
+      );
+      const row = await prisma.session.findUniqueOrThrow({ where: { id: overdue.id } });
+      expect(row.status).toBe('PENDING_DEPOSIT');
+    });
   });
 
   it('honours expires_in within 60–1800 s', async () => {

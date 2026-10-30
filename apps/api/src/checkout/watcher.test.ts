@@ -263,6 +263,59 @@ describe('payment watcher', () => {
     expect((await eventsOf('payment.succeeded')).length).toBe(1);
   });
 
+  async function linkSession(linkId: string, ref = `order-${Math.random().toString(36).slice(2)}`) {
+    return app.inject({
+      method: 'POST',
+      url: '/v1/checkout/sessions',
+      headers: { authorization: `Bearer ${testKey}` },
+      payload: {
+        amount: '25.00',
+        amount_currency: 'USD',
+        external_ref: ref,
+        success_url: 'https://shop.example/thanks',
+        cancel_url: 'https://shop.example/cart',
+        payment_link_id: linkId,
+      },
+    });
+  }
+
+  it('increments use_count once when a link session settles', async () => {
+    const link = await createRow('PaymentLink', merchant.id, false, {});
+    const res = await linkSession(link.id);
+    expect(res.statusCode, res.body).toBe(201);
+    const s = res.json() as { id: string; client_secret: string };
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'exact');
+    await poll(q.deposit_address);
+    expect((await sessionOf(s.id)).status).toBe('SETTLED');
+    expect((await prisma.paymentLink.findUniqueOrThrow({ where: { id: link.id } })).useCount).toBe(
+      1,
+    );
+    // Further polls of the settled address change nothing.
+    await poll(q.deposit_address);
+    expect((await prisma.paymentLink.findUniqueOrThrow({ where: { id: link.id } })).useCount).toBe(
+      1,
+    );
+  });
+
+  it('used_up after max_uses settled', async () => {
+    const link = await createRow('PaymentLink', merchant.id, false, { maxUses: 1 });
+    const res = await linkSession(link.id);
+    const s = res.json() as { id: string; client_secret: string };
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'exact');
+    await poll(q.deposit_address);
+    expect((await prisma.paymentLink.findUniqueOrThrow({ where: { id: link.id } })).useCount).toBe(
+      1,
+    );
+    const again = await linkSession(link.id);
+    expect(again.statusCode, again.body).toBe(409);
+    expect(again.json().error).toMatchObject({
+      code: 'LINK_UNAVAILABLE',
+      details: { availability: 'used_up' },
+    });
+  });
+
   describe('I-2: test mode settles with the rpc driver (NODE_ENV=production)', () => {
     /** The deployed driver: testnet answers UNKNOWN_TRANSACTION (null) for a simulator hash. */
     function rpcLike(livemode: boolean): NearClient {

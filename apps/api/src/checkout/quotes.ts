@@ -17,6 +17,7 @@ import { Prisma } from '@prisma/client';
 import {
   FeeModeSchema,
   GaslessMethodSchema,
+  SESSION_TTL_MS,
   SMALL_OVERPAY_USD,
   feePayerFromDb,
   gasPayerFromDb,
@@ -35,6 +36,7 @@ import {
 } from '../gas/quote-fee.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
+import { linkUrls } from '../payment-links/links.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { toJsonDecimal } from '../lib/serialize.js';
@@ -271,7 +273,9 @@ function shopperState(p: {
 
 async function storeInfo(ctx: ShopperCtx, s: SessionRow) {
   const [merchant, theme] = await Promise.all([
-    ctx.db.merchant.findFirstOrThrow({ select: { name: true, checkoutDomains: true } }),
+    ctx.db.merchant.findFirstOrThrow({
+      select: { name: true, slug: true, checkoutDomains: true },
+    }),
     ctx.db.checkoutTheme.findFirst({
       where: s.themeId
         ? { id: s.themeId, status: 'published' }
@@ -282,7 +286,23 @@ async function storeInfo(ctx: ShopperCtx, s: SessionRow) {
   return {
     display: { name: theme?.displayName ?? merchant.name, logo_url: theme?.logoUrl ?? null },
     checkoutDomains: [...merchant.checkoutDomains],
+    slug: merchant.slug,
   };
+}
+
+/** The payment link a session came from: its title and page (the "Back to …" link). */
+async function linkInfo(
+  ctx: ShopperCtx,
+  s: SessionRow,
+  merchantSlug: string,
+): Promise<{ title: string; url: string } | null> {
+  if (!s.paymentLinkId) return null;
+  const link = await ctx.db.paymentLink.findFirst({
+    where: { id: s.paymentLinkId },
+    select: { title: true, slug: true },
+  });
+  if (!link) return null;
+  return { title: link.title, url: linkUrls(merchantSlug, link.slug, s.livemode).url };
 }
 
 /** Base units → a decimal string ("0.005"). */
@@ -397,6 +417,8 @@ export async function shopperSessionView(ctx: ShopperCtx) {
     gas_payer: gasPayerFromDb(s.gasSponsor),
     success_url: s.successUrl,
     cancel_url: s.cancelUrl,
+    /** The payment link this session came from (title and page); null otherwise. */
+    payment_link: await linkInfo(ctx, s, store.slug),
     quote: quote ? quoteView(quote, feePayer, s.amount) : null,
     /** The current quote's network fee (who pays, how, why); null without a quote. */
     network_fee: quote ? networkFeeView(quote, 'shopper') : null,
@@ -626,7 +648,7 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
       refundTo,
       refundType,
       feeAccount: feeAccountFor(ctx.livemode),
-      sessionExpiresAt: s.expiresAt,
+      sessionExpiresAt: await pricingExpiry(ctx, s),
     });
     const writtenId = await storeQuote(ctx, s.id, origin, refundTo, refundType, priced, plan, {
       walletAddress: walletAddress ?? null,
@@ -639,6 +661,19 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
     if (pass < 2) plan = await planFor('budget');
   }
   throw new Error('unreachable: a shopper-paid quote never needs a reservation');
+}
+
+/**
+ * The expiry a quote's deadline is bounded by. A link session's first quote extends the session
+ * to `createdAt + SESSION_TTL_MS` (storeQuote), so that quote is priced against the extended
+ * expiry rather than the short unquoted one.
+ */
+async function pricingExpiry(ctx: ShopperCtx, s: SessionRow): Promise<Date> {
+  if (!s.paymentLinkId) return s.expiresAt;
+  const quoted = await ctx.db.quote.count({ where: { sessionId: s.id } });
+  if (quoted > 0) return s.expiresAt;
+  const extended = new Date(s.createdAt.getTime() + SESSION_TTL_MS);
+  return extended > s.expiresAt ? extended : s.expiresAt;
 }
 
 /** Sum of two USD decimal strings (exact, via Prisma.Decimal). */
@@ -723,8 +758,8 @@ async function storeQuote(
   await tenantTransaction(ctx, async (tx, t) => {
     const tenant = { merchantId: t.merchantId, livemode: t.livemode };
     // Serialise quotes for this session and re-check it is still open.
-    const locked = await tx.$queryRaw<{ status: string; expires_at: Date }[]>`
-      SELECT status::text AS status, expires_at FROM sessions
+    const locked = await tx.$queryRaw<{ status: string; expires_at: Date; created_at: Date }[]>`
+      SELECT status::text AS status, expires_at, created_at FROM sessions
       WHERE id = ${sessionId} AND merchant_id = ${t.merchantId} AND livemode = ${t.livemode}
       FOR UPDATE`;
     const row = locked[0];
@@ -765,6 +800,12 @@ async function storeQuote(
       walletAddress: extra.walletAddress,
     };
 
+    // A payment link session starts with a short expiry (LINK_UNQUOTED_TTL_MS); its first quote
+    // extends it to the normal lifetime, counted from creation. Later quotes leave it alone.
+    await tx.session.updateMany({
+      where: { ...tenant, id: sessionId, paymentLinkId: { not: null }, quotes: { none: {} } },
+      data: { expiresAt: new Date(row.created_at.getTime() + SESSION_TTL_MS) },
+    });
     await tx.quote.updateMany({
       where: { ...tenant, sessionId, supersededAt: null },
       data: { supersededAt: now },
