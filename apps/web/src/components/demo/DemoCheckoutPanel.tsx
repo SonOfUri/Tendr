@@ -23,6 +23,7 @@ import type { DemoCheckoutBootstrap, DemoSlug } from '@/lib/demo';
 import { buildDemoUiQuote } from '@/lib/demo-ui-checkout';
 import { DemoAssetModal } from './DemoAssetModal';
 import { DemoStatusCard } from './DemoStatusCard';
+import { DemoTendrAiFab } from './DemoTendrAiFab';
 import { DemoTransferDetails } from './DemoTransferDetails';
 
 type Props = {
@@ -390,6 +391,18 @@ export function DemoCheckoutPanel({
                 setPhase('pay');
               }}
             />
+
+            {!assetPickerOpen ? (
+              <DemoTendrAiFab
+                options={assetOptions}
+                amountLabel={amountUsd}
+                skin={skin}
+                onPickRoute={(id) => {
+                  setTokenId(id);
+                  setPhase('pay');
+                }}
+              />
+            ) : null}
 
             <div className="demo-pay-methods" role="tablist" aria-label="Payment method">
               <button

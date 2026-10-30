@@ -1,6 +1,6 @@
 import type { Quote, SessionView, Token } from '@/lib/checkout/api';
 import type { DemoCheckoutBootstrap } from '@/lib/demo';
-import { DEMO_KNOWN_ASSETS } from '@/lib/demo-assets';
+import { buildDemoAssetOptions, DEMO_KNOWN_ASSETS } from '@/lib/demo-assets';
 
 /** UI-only playground — no API, no fetch, never "fetch failed" on stage. */
 export const DEMO_UI_ONLY = true;
@@ -212,9 +212,11 @@ export function buildDemoUiBootstrap(opts: {
   productName: string;
   merchantName: string;
   merchantLogoUrl: string;
+  /** Live 1Click catalog when available; falls back to curated mock assets. */
+  tokens?: Token[];
 }): DemoCheckoutBootstrap & { sessionId: string; clientSecret: string } {
-  const tokens = buildDemoUiTokens();
-  const token = tokens[0]!;
+  const tokens = opts.tokens?.length ? opts.tokens : buildDemoUiTokens();
+  const token = buildDemoAssetOptions(tokens).find((o) => o.token)?.token ?? tokens[0];
   const tokenId = token?.asset_id ?? '';
   const sessionId = `demo_sess_${Date.now().toString(36)}`;
   const session: SessionView = {

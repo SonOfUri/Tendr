@@ -126,6 +126,9 @@ export interface Token {
   decimals: number;
   price_usd: string | number | null;
   popular: boolean;
+  /** Optional logo from CoinGecko (demo live catalog). */
+  logo_url?: string | null;
+  coingecko_id?: string | null;
 }
 
 export interface QuoteInput {
