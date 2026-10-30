@@ -24,7 +24,7 @@ export async function GET(
   const view = await fetchPublicLink(merchant, link, test, payerIpFrom(await headers()));
   if (!view) return new Response('Not found', { status: 404 });
 
-  const target = `${serverEnv().webUrl.replace(/\/+$/, '')}/pay/${merchant}/${link}${modeQuery(test)}`;
+  const target = `${serverEnv().linkBaseUrl}/pay/${merchant}/${link}${modeQuery(test)}`;
   const opts = { margin: 4, errorCorrectionLevel: 'M' as const };
   if (url.searchParams.get('format') === 'svg') {
     const svg = await QRCode.toString(target, { ...opts, type: 'svg' });

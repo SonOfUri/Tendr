@@ -65,6 +65,17 @@ describe('qr route', () => {
     expect(fetchPublicLink).toHaveBeenCalledWith('acme', 'tee', true, '203.0.113.7');
   });
 
+  it('qr encodes the CHECKOUT_BASE_URL link when it differs from WEB_URL', async () => {
+    vi.stubEnv('CHECKOUT_BASE_URL', 'https://pay.example.com/');
+    const res = await GET(req('?format=svg'), ctx());
+    const expected = await QRCode.toString('https://pay.example.com/pay/acme/tee', {
+      type: 'svg',
+      margin: 4,
+      errorCorrectionLevel: 'M',
+    });
+    expect(await res.text()).toBe(expected);
+  });
+
   it('qr 404 for unknown link', async () => {
     fetchPublicLink.mockResolvedValue(null);
     expect((await GET(req(), ctx())).status).toBe(404);

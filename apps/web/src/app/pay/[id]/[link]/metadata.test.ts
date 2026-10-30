@@ -7,10 +7,23 @@ vi.mock('@/lib/payment-links', () => ({
   payerIpFrom: () => null,
 }));
 vi.mock('next/headers', () => ({ headers: async () => new Headers() }));
+vi.mock('react', async (orig) => ({
+  ...(await orig<typeof import('react')>()),
+  // The server build dedupes per request; the test build doesn't, so memoize by arguments.
+  cache: <T extends (...a: never[]) => unknown>(fn: T) => {
+    const seen = new Map<string, unknown>();
+    return ((...a: never[]) => {
+      const k = `${(globalThis as { __req?: number }).__req}:${JSON.stringify(a)}`;
+      if (!seen.has(k)) seen.set(k, fn(...a));
+      return seen.get(k);
+    }) as T;
+  },
+}));
 vi.mock('next/navigation', () => ({ notFound: () => undefined }));
 
-import { generateMetadata } from './page';
+import PaymentLinkPage, { generateMetadata } from './page';
 
+let req = 0;
 const base: PublicPaymentLinkView = {
   merchant: { name: 'Acme', logo_url: null },
   title: 'T-shirt',
@@ -28,19 +41,43 @@ const base: PublicPaymentLinkView = {
 };
 const meta = (view: PublicPaymentLinkView | null, mode?: string) => {
   fetchPublicLink.mockResolvedValue(view);
+  (globalThis as { __req?: number }).__req = ++req; // each call is its own request
   return generateMetadata({
     params: Promise.resolve({ id: 'acme', link: 'tee' }),
     searchParams: Promise.resolve(mode ? { mode } : {}),
   });
 };
 
-beforeEach(() => vi.stubEnv('WEB_URL', 'https://usetendr.tech'));
+beforeEach(() => {
+  // A new "request" per test: React's cache is scoped to one server request.
+  (globalThis as { __req?: number }).__req = ++req;
+  vi.stubEnv('WEB_URL', 'https://usetendr.tech');
+});
 afterEach(() => {
   vi.unstubAllEnvs();
   fetchPublicLink.mockReset();
 });
 
 describe('generateMetadata', () => {
+  it('uses CHECKOUT_BASE_URL (not WEB_URL) for the image URL', async () => {
+    vi.stubEnv('CHECKOUT_BASE_URL', 'https://pay.example.com/');
+    const m = await meta(base);
+    expect(m.openGraph?.images).toEqual([
+      { url: 'https://pay.example.com/pay/acme/tee/opengraph-image', width: 1200, height: 630 },
+    ]);
+  });
+
+  it('one render path reads the link once', async () => {
+    fetchPublicLink.mockResolvedValue(base);
+    const props = {
+      params: Promise.resolve({ id: 'acme', link: 'tee' }),
+      searchParams: Promise.resolve({}),
+    };
+    await generateMetadata(props);
+    await PaymentLinkPage(props);
+    expect(fetchPublicLink).toHaveBeenCalledTimes(1);
+  });
+
   it('metadata for fixed, open, test and inactive links', async () => {
     const fixed = await meta(base);
     expect(fixed.title).toBe('T-shirt');

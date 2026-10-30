@@ -2,10 +2,15 @@ import { LINK_SLUG_RE } from '@tendr/contracts';
 import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import { notFound } from 'next/navigation';
+import { cache } from 'react';
 import { serverEnv } from '@/lib/env';
 import { linkDescription, modeQuery } from '@/lib/link-preview';
 import { fetchPublicLink, payerIpFrom } from '@/lib/payment-links';
 import { LinkPay } from './LinkPay';
+
+// `generateMetadata` and the page both read the link; one render path makes one API call (and one
+// hit on the payer's per-IP limit).
+const readLink = cache(fetchPublicLink);
 
 const SESSION_ID = /^ses_[0-9A-HJKMNP-TV-Z]{26}$/;
 /** Signup slugs: lower-case letters, digits and hyphens (NEAR account labels). */
@@ -24,11 +29,11 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
     return missing;
   }
   const test = (await searchParams).mode === 'test';
-  const view = await fetchPublicLink(merchant, link, test, payerIpFrom(await headers()));
+  const view = await readLink(merchant, link, test, payerIpFrom(await headers()));
   if (!view) return missing;
 
   const description = linkDescription(view, test);
-  const base = `${serverEnv().webUrl.replace(/\/+$/, '')}/pay/${merchant}/${link}`;
+  const base = `${serverEnv().linkBaseUrl}/pay/${merchant}/${link}`;
   const image = { url: `${base}/opengraph-image${modeQuery(test)}`, width: 1200, height: 630 };
   return {
     title: view.title,
@@ -48,7 +53,7 @@ export default async function PaymentLinkPage({ params, searchParams }: PageProp
     notFound();
   }
   const test = (await searchParams).mode === 'test';
-  const view = await fetchPublicLink(merchant, link, test, payerIpFrom(await headers()));
+  const view = await readLink(merchant, link, test, payerIpFrom(await headers()));
   if (!view) notFound();
   return <LinkPay view={view} merchant={merchant} link={link} test={test} />;
 }

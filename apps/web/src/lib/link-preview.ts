@@ -33,7 +33,7 @@ export function linkCardPrice(view: PublicPaymentLinkView): string | null {
       maximumFractionDigits: view.minor_units,
     })
       .format(view.amount as unknown as number)
-      .replace(/ /g, ' ');
+      .replace(/\u00A0/g, ' ');
   } catch {
     return `${view.amount} ${view.currency}`;
   }

@@ -50,6 +50,15 @@ export function serverEnv() {
   return {
     apiBaseUrl: process.env.API_BASE_URL ?? publicEnv.apiBaseUrl,
     webUrl: process.env.WEB_URL ?? 'http://localhost:3000',
+    /**
+     * Origin of payment-link addresses, no trailing slash: the API's CHECKOUT_BASE_URL (what its
+     * `url` / `qr_url` use), falling back to WEB_URL when unset. The QR code and preview tags
+     * must name exactly the address the API reports.
+     */
+    linkBaseUrl: (process.env.CHECKOUT_BASE_URL || process.env.WEB_URL || 'http://localhost:3000').replace(
+      /\/+$/,
+      '',
+    ),
     /** Demo Merchant secret test key from seed — never expose to the browser. */
     tendrSecretKeyTest: process.env.TENDR_SECRET_KEY_TEST ?? '',
     /**
