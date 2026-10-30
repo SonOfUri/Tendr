@@ -12,7 +12,7 @@ const client = new TendrClient({
 });
 ```
 
-The client currently handles authentication, `Idempotency-Key` headers, timeouts and typed errors (`TendrApiError`). Endpoint methods so far: `client.paymentLinks` (below). Sessions, quotes and payments are coming in the checkout project.
+The client currently handles authentication, `Idempotency-Key` headers, timeouts and typed errors (`TendrApiError`). Endpoint methods so far: `client.paymentLinks`, `client.themes`, `client.themeAssets` and `client.checkoutSessions.create` (below). Quotes and payments are coming in the checkout project.
 
 ## Payment links
 
@@ -32,6 +32,40 @@ await client.paymentLinks.archive(link.id);
 [payment links API](/api-reference/payment-links) and throw `TendrApiError` with its error codes
 (`LINK_NOT_SUPPORTED`, `AMOUNT_TOO_LOW`, and so on). The key needs `payment_links:read` or
 `payment_links:write`.
+
+## Checkout themes
+
+```ts
+const theme = await client.themes.create({ name: 'Spring', from: { preset: 'fashion' } });
+
+const logo = await client.themeAssets.upload({
+  kind: 'logo',
+  file: new Blob([await readFile('logo.png')], { type: 'image/png' }),
+  filename: 'logo.png',
+});
+
+const { valid, problems } = await client.themes.validate(theme.draft);
+const { url } = await client.themes.preview(theme.id, {
+  sample: 'checkout',
+  scheme: 'dark',
+  viewport: 'phone',
+});
+
+await client.themes.publish(theme.id); // needs a live key
+await client.themes.setDefault(theme.id);
+
+await client.checkoutSessions.create({
+  amount: '35.00',
+  amount_currency: 'USD',
+  external_ref: 'order-1042',
+  success_url: 'https://shop.example/thanks',
+  cancel_url: 'https://shop.example/cart',
+  theme_id: theme.id,
+  line_items: [{ name: 'Linen tee', quantity: 2, unit_amount: '12.50' }],
+});
+```
+
+`client.themes` has `presets`, `list`, `create`, `retrieve`, `update`, `delete`, `publish`, `setDefault`, `validate`, `preview`, `fromWebsite` and `fromStore`. `client.themeAssets` has `upload` (multipart), `list` and `delete`. Errors such as `THEME_INVALID` carry `details.problems`. See the [themes API](/api-reference/themes). The key needs `themes:read` or `themes:write`.
 
 ## Webhooks
 

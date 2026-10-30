@@ -1,0 +1,191 @@
+---
+title: Branding your checkout
+description: Make the Tendr checkout and payment link pages look like your store with themes, blocks, fonts, colours and light or dark mode.
+---
+
+A **theme** controls how your checkout and your payment link pages look: your name and logo, colours, font, the blocks around the payment details, and the thank-you page. Shoppers always pay through the same sealed payment block, so a theme can change the look of the page but never what the shopper pays or where the money goes.
+
+The API is in the [themes API reference](/api-reference/themes). What themes can and cannot contain is in the [theme safety rules](/themes/safety-rules).
+
+## Start from a preset or your brand
+
+<CardGroup cols={2}>
+  <Card title="Presets" icon="palette">
+    `GET /v1/themes/presets` lists five starting points: Tendr default, Fashion, Gaming, Nonprofit and Minimal. Create a theme from one with `from: { "preset": "fashion" }`.
+  </Card>
+  <Card title="Your website" icon="globe">
+    `POST /v1/themes/from-website` reads your site's name, logo and colours and saves a draft theme.
+  </Card>
+  <Card title="Your WooCommerce store" icon="store">
+    `POST /v1/themes/from-store` builds a draft from the brand your connected store sent. Plugin 0.2.0 sends it when you connect and on **Refresh brand from my store**.
+  </Card>
+  <Card title="Another theme" icon="copy">
+    `from: { "theme_id": "..." }` copies a theme's draft.
+  </Card>
+</CardGroup>
+
+Brand pulls always create a **draft**. They never publish. Each store can pull 10 times an hour. Tendr fetches your site with a 5 second timeout, at most 2 MB per file and at most 3 redirects, and it never fetches private addresses. If the page cannot be read the call fails with `BRAND_FETCH_FAILED` and `details.reason` says why.
+
+## A theme document
+
+A theme has a `draft` and, after publishing, a `published` copy. Both are the same document:
+
+```json
+{
+  "schema_version": 1,
+  "settings": {
+    "display_name": "Acme",
+    "mode": "auto",
+    "palettes": {
+      "light": { "accent": "#4035f5", "background": "#ffffff", "surface": "#f4f4f8", "text": "#111322" },
+      "dark": { "accent": "#7a72ff", "background": "#0b1020", "surface": "#161c30", "text": "#eef0fa" }
+    },
+    "font": { "kind": "curated", "id": "sora" },
+    "corner": "soft",
+    "button_label": "Complete purchase",
+    "celebration": "confetti"
+  },
+  "blocks": [
+    { "id": "header", "type": "header", "show_logo": true, "show_name": true },
+    { "id": "summary", "type": "order_summary" },
+    { "id": "payment", "type": "payment" }
+  ],
+  "success_blocks": [
+    { "id": "thank-you", "type": "thank_you" },
+    { "id": "back", "type": "back_to_store" }
+  ],
+  "custom_css": ".my-note { color: #555; }"
+}
+```
+
+### Settings
+
+| Field | Meaning |
+| --- | --- |
+| `display_name` | The store name shown in the header and anywhere outside the payment block. 1 to 80 characters. |
+| `logo_asset_id` | An uploaded logo or image. See [assets](/api-reference/themes#theme-assets). |
+| `mode` | `light`, `dark` or `auto` (follows the shopper's device). |
+| `palettes` | `light` and `dark` palettes, each with `accent`, `background`, `surface` and `text` as `#rrggbb`. `auto` needs both, otherwise the one you use. |
+| `font` | A curated font (`{ "kind": "curated", "id": "sora" }`) or an uploaded `.woff2` (`{ "kind": "asset", "asset_id": "..." }`). |
+| `corner` | `square`, `soft`, `round` or `pill`. |
+| `button_label` | Words for the main Pay button. See [button words](#the-pay-button-words). |
+| `success_message` | Text on the thank-you page, up to 500 characters. |
+| `support_url`, `terms_url` | `https://` links. |
+| `celebration` | `none`, `confetti` or `pulse` on success. |
+| `language` | A BCP-47 tag for your own text. |
+| `background_image_asset_id` | An uploaded image behind the page. |
+
+Every palette must be readable. Tendr checks the colours with the WCAG contrast formula: text on background and text on surface need at least 4.5 to 1, and the accent on background needs at least 3 to 1. A palette that fails is refused on save with a message that names the pair.
+
+### Light, dark and auto
+
+With `auto`, the shopper's device decides. The page, its native controls and Tendr's own warning, error and timer colours follow the palette's background: a background darker than a luminance of 0.4 gets Tendr's dark state colours, anything lighter gets the light ones.
+
+### Fonts
+
+Choose a curated font from this list: Inter, DM Sans, Manrope, Plus Jakarta Sans, Space Grotesk, Outfit, Sora, Instrument Sans, Bricolage Grotesque, Playfair Display, Cormorant Garamond, Lora, Fraunces, DM Serif Display and JetBrains Mono. Or upload your own `.woff2` file of up to 500 KB.
+
+Your font styles your own blocks. Inside the payment block a curated font styles only its headings and the Pay button label. An uploaded font never applies there.
+
+## Blocks
+
+A page is a list of blocks in `blocks`, and the thank-you page is a list in `success_blocks`. A page holds at most 40 blocks, with 2 levels of nesting, and every block needs a unique `id` of lowercase letters, digits and hyphens.
+
+| Block | Props |
+| --- | --- |
+| `header` | `show_logo`, `show_name` |
+| `heading` | `text`, `level` (2 or 3) |
+| `rich_text` | `markdown` (up to 5,000 characters; no HTML, no inline images, `https://` links only) |
+| `image` | `asset_id`, `alt`, optional `link_url` |
+| `banner` | optional `text`, `asset_id`, `background` |
+| `video` | `provider` (`youtube` or `vimeo`), `video_id` |
+| `divider` | none |
+| `spacer` | `size` (`sm`, `md`, `lg`) |
+| `order_summary` | none. Shows the cart lines and total. |
+| `trust_badges` | `badges`, up to 8. `{ "kind": "tendr", "id": "non-custodial" \| "refund-promise" \| "secure-checkout" \| "verified-merchant" }` or `{ "kind": "asset", "asset_id", "alt" }` |
+| `reviews` | `items` (up to 10): `quote`, `author`, optional `rating` 1 to 5 |
+| `faq` | `items` (up to 20): `q`, `a` |
+| `countdown` | `label`, `ends_at` (ISO date with offset) |
+| `delivery_note` | `text` |
+| `social_links` | `links` (up to 10): `network` (`instagram`, `x`, `tiktok`, `facebook`, `whatsapp`, `youtube`, `website`), `url` |
+| `footer_links` | `links` (up to 10): `label`, `url` |
+| `custom_html` | `html`, up to 20 KB, sanitised on save |
+| `columns` | `columns`: exactly two lists of blocks |
+| `section` | optional `background`, `background_asset_id`, and `blocks` |
+| `payment` | none. Exactly one, on the main page, at the top level. |
+| `thank_you` | none. Thank-you page only. |
+| `back_to_store` | optional `label`. Thank-you page only. |
+
+Any block can set `hidden: true`. `columns` and `section` can hold any block above except `payment`, `thank_you`, `back_to_store`, `columns` and `section`.
+
+### Order summary and line items
+
+When you create a session with `line_items`, the `order_summary` block lists them: name, quantity, unit price and an optional image. See [checkout sessions](/api-reference/themes#sessions-with-themes-and-line-items). Names that look like a wallet address are masked, and product images are fetched, checked, re-encoded and served by Tendr, never hot-linked.
+
+## The sealed payment block
+
+The `payment` block is Tendr's. It holds the amount, the payee line, the token and network choice, the Pay button, the address and QR, warnings, timers, errors and status, the refund promise and the hold notice.
+
+A theme cannot select, cover, move or restyle it, and nothing in a theme can change its words:
+
+- The payee line reads "You're paying *your account name*". If your display name differs from your account name, a second line reads "*account name* · trading as *display name*".
+- Amounts, addresses, the QR caption, warnings, errors and timers always use Tendr's fonts. Addresses use Tendr's monospace font.
+- Warning, error, success and timer colours are Tendr's fixed light and dark values, never your palette.
+- No theme can add a form, input, button, select or editable text anywhere on the page.
+
+### The Pay button words
+
+`button_label` sets the words on the **main Pay button** only: the Pay button on the link page, the main wallet Pay button in the checkout and in previews. Secondary buttons keep Tendr's words. Leave it unset for the default wording.
+
+The label can contain `{amount}`, which Tendr replaces with the real, formatted amount. It cannot contain numbers, currency symbols, currency codes or any other `{...}` placeholder, so a theme can never state a different price.
+
+### Words Tendr writes
+
+Tendr's own words, such as "You're paying", warnings and errors, stay in English until the languages project ships. A theme's `language` applies to your own text.
+
+## Preview, publish and make default
+
+**Edit freely.** `PATCH /v1/themes/:id` saves the draft. Live shoppers keep seeing the published copy.
+
+**Validate.** `POST /v1/themes/validate` checks a document and returns `problems` with a `path` and a plain message for each, without saving. Use it to show problems as the merchant types.
+
+**Preview.** `POST /v1/themes/:id/preview` with `sample` (`checkout` or `link`), `scheme` (`light` or `dark`) and `viewport` (`phone` or `desktop`) returns a link that renders your draft with sample data. The link works for 15 minutes without sign-in, is never cached or indexed, and never creates a session.
+
+**Publish.** `POST /v1/themes/:id/publish` copies the draft to the published version and bumps `version`. **Make default.** `POST /v1/themes/:id/default` sets the theme used when a session or link names none.
+
+Publishing and changing the default affect live shoppers, so they need:
+
+- a **live** secret key, or
+- a dashboard user with `settings:manage` who has done a recent step-up check.
+
+A test key gets `403 FORBIDDEN`. Everything else (drafts, uploads, previews, validation and brand pulls) works with test keys.
+
+### Which theme a shopper sees
+
+| Session | Renders |
+| --- | --- |
+| Live | The published version of the named theme. A draft-only theme is not used. |
+| Test | The **draft** of the named theme, so you can try changes before publishing. |
+| Names no theme | A payment link's theme, else your default theme, else the Tendr default. |
+
+An open test session picks up draft edits after a reload. If a live theme is republished while a shopper is mid-payment, their next refresh shows the new look and nothing else changes: the amount, address, timer and status stay the same.
+
+If a theme is missing, invalid or cannot be read at render time, the page falls back to the Tendr default theme. A theme never stops a payment.
+
+## Limits
+
+| What | Limit |
+| --- | --- |
+| Themes per store | 20 |
+| Assets per store | 200 |
+| Blocks per page | 40 |
+| Nesting | 2 levels |
+| Text per block | 5,000 characters |
+| Custom CSS | 50 KB |
+| Custom HTML block | 20 KB |
+| Image | 2 MB (PNG, JPEG, WebP, GIF) |
+| SVG | 512 KB, sanitised |
+| Font | 500 KB (`.woff2`) |
+| Line items per session | 50 |
+| Preview link life | 15 minutes |
+| Brand pulls | 10 per store per hour |

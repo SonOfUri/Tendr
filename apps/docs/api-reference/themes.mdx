@@ -1,0 +1,196 @@
+---
+title: Themes API
+description: Create, edit, preview, publish and delete checkout themes, upload their assets, pull a brand, and name a theme on a session.
+---
+
+See [Branding your checkout](/themes/overview) for what a theme contains and the [theme safety rules](/themes/safety-rules) for what it may not.
+
+## Who can call
+
+| | Read | Write |
+| --- | --- | --- |
+| Secret key | scope `themes:read` | scope `themes:write` |
+| Dashboard user | `account:read` | `settings:manage` |
+
+Publishable keys and shopper sessions are refused. Themes and assets belong to the store and are shared by test and live mode.
+
+**Publish and make default** change what live shoppers see. They need a **live** secret key, or a dashboard user with `settings:manage` who has completed step-up. A test key gets `403 FORBIDDEN`. Drafts, uploads, previews, validation and brand pulls work with either kind of key.
+
+## Theme endpoints
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v1/themes/presets` | The five presets, each with a ready document using your store name. |
+| `GET /v1/themes` | List themes, newest first. `limit` (1 to 100, default 20), `starting_after`. |
+| `POST /v1/themes` | Create a theme. Returns `201`. Honours `Idempotency-Key`. |
+| `GET /v1/themes/:id` | Read one theme. |
+| `PATCH /v1/themes/:id` | Rename it and/or replace its draft. |
+| `DELETE /v1/themes/:id` | Delete a theme. |
+| `POST /v1/themes/validate` | Check a document without saving. |
+| `POST /v1/themes/:id/preview` | Mint a 15 minute preview link. Returns `201`. |
+| `POST /v1/themes/:id/publish` | Publish the draft. Live key or stepped-up dashboard user. |
+| `POST /v1/themes/:id/default` | Make this the store's default. Live key or stepped-up dashboard user. |
+| `POST /v1/themes/from-website` | Create a draft from a website's brand. Returns `201`. |
+| `POST /v1/themes/from-store` | Create a draft from a connected store's brand. Returns `201`. |
+
+### The theme object
+
+```json
+{
+  "id": "thm_01J...",
+  "object": "theme",
+  "name": "Spring sale",
+  "is_default": false,
+  "version": 3,
+  "status": "published",
+  "draft": { "schema_version": 1, "settings": {}, "blocks": [], "success_blocks": [] },
+  "published": { "schema_version": 1, "settings": {}, "blocks": [], "success_blocks": [] },
+  "published_at": "2026-10-30T09:00:00.000Z",
+  "created_at": "2026-10-30T08:00:00.000Z",
+  "updated_at": "2026-10-30T09:00:00.000Z",
+  "used_by_links": 2
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `draft` until first published, then `published`. Later edits stay in `draft` until the next publish. |
+| `version` | Increases on every publish. |
+| `draft`, `published` | A [theme document](/themes/overview#a-theme-document). `published` is `null` before the first publish. |
+| `used_by_links` | Payment links, in either mode, that name this theme. |
+
+### Create
+
+```json
+{ "name": "Spring sale", "from": { "preset": "fashion" } }
+```
+
+`from` is `{ "preset": "blank" | "fashion" | "gaming" | "nonprofit" | "minimal" }`, `{ "theme_id": "..." }` to copy another theme's draft, or `"blank"`. A store can have 20 themes; the 21st is `THEME_LIMIT`.
+
+### Update
+
+`PATCH /v1/themes/:id` takes `name` and/or `draft`. Unknown fields are rejected. The draft is validated in full: a document with any problem is a `THEME_INVALID` error and nothing is saved.
+
+### Validate
+
+```json
+POST /v1/themes/validate
+{ "document": { "schema_version": 1, "settings": {}, "blocks": [], "success_blocks": [] } }
+```
+
+```json
+{ "valid": false, "problems": [{ "path": "blocks.1.html", "message": "`<form>` isn't allowed — custom HTML can't collect shopper input" }] }
+```
+
+### Preview
+
+```json
+POST /v1/themes/thm_01J.../preview
+{ "sample": "checkout", "scheme": "dark", "viewport": "phone" }
+```
+
+`sample` is `checkout` or `link`; `scheme` is `light` or `dark`; `viewport` is `phone` or `desktop`.
+
+```json
+{ "url": "https://usetendr.tech/preview/theme/…", "expires_at": "2026-10-30T09:15:00.000Z" }
+```
+
+The link needs no sign-in and expires after 15 minutes. It shows the draft with sample data, is never cached or indexed, and never creates a session.
+
+### Delete
+
+Deleting a theme is refused with `THEME_IN_USE` while it is the store's default (`details.reason: "default"`) or while any payment link names it (`details.reason: "links"`, `details.links`: the link ids). Sessions that already used the theme are not blocked; they render the default theme afterwards.
+
+### Brand pulls
+
+```json
+POST /v1/themes/from-website
+{ "url": "https://acme.example", "name": "Acme (from site)" }
+
+POST /v1/themes/from-store
+{ "connection_id": "conn_01J...", "name": "Acme (from store)" }
+```
+
+Both return the new **draft** theme. `name` is optional. A store can pull 10 times an hour (`429 RATE_LIMITED`). An unreadable site is `BRAND_FETCH_FAILED` (`422`) with `details.reason` of `not_https`, `private_address`, `too_large`, `timeout`, `too_many_redirects`, `bad_status` or `network_error`.
+
+## Theme assets
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/theme-assets` | Upload a file. `multipart/form-data`, returns `201`. |
+| `GET /v1/theme-assets` | List the store's assets. |
+| `DELETE /v1/theme-assets/:id` | Delete an asset. |
+
+```bash
+curl -X POST https://api.example/v1/theme-assets \
+  -H "Authorization: Bearer $TENDR_SECRET_KEY" \
+  -F kind=logo \
+  -F file=@logo.png
+```
+
+Send exactly one `file` and a `kind` of `logo`, `image` or `font`. Limits: PNG, JPEG, WebP or GIF up to 2 MB; SVG up to 512 KB (sanitised); `.woff2` fonts up to 500 KB. Images are checked by content, re-encoded and stored on Tendr's asset origin. A store can hold 200 assets.
+
+```json
+{
+  "id": "tasset_01J...",
+  "object": "theme_asset",
+  "kind": "logo",
+  "url": "https://assets.usetendr.tech/tendr-assets/assets/…/tasset_01J….png",
+  "mime": "image/png",
+  "size_bytes": 18211,
+  "checksum": "…",
+  "created_at": "2026-10-30T08:00:00.000Z"
+}
+```
+
+Reference an asset in a theme by `id`, never by URL. An asset that a theme's draft or published version still uses (by id, or by URL in its CSS or HTML) cannot be deleted: `ASSET_IN_USE` with `details.themes`.
+
+## Sessions with themes and line items
+
+`POST /v1/checkout/sessions` accepts two more fields:
+
+| Field | Meaning |
+| --- | --- |
+| `theme_id` | One of the store's themes. An unknown id is `404 NOT_FOUND`. A live session renders the theme's **published** version; a test session renders its **draft**. Omit it to use the payment link's theme or the store default. |
+| `line_items` | Up to 50 cart lines for the order summary. |
+
+```json
+{
+  "amount": "35.00",
+  "amount_currency": "USD",
+  "external_ref": "order-1042",
+  "success_url": "https://shop.example/thanks",
+  "cancel_url": "https://shop.example/cart",
+  "theme_id": "thm_01J...",
+  "line_items": [
+    { "name": "Linen tee", "quantity": 2, "unit_amount": "12.50", "image_url": "https://shop.example/tee.jpg" },
+    { "name": "Shipping", "quantity": 1, "unit_amount": "10.00" }
+  ]
+}
+```
+
+| Line item field | Meaning |
+| --- | --- |
+| `name` | 1 to 200 characters. A name that looks like a wallet address is masked when shown. |
+| `quantity` | Whole number, 1 to 10,000. |
+| `unit_amount` | Decimal string with no more places than the session currency allows, for example `"12.50"`. |
+| `image_url` | Optional `https://` image. Tendr fetches, checks, re-encodes and serves it itself; a failed or private-address image simply shows no picture. |
+| `description` | Optional, up to 500 characters. |
+
+A 51st item is `400 VALIDATION_ERROR`; a `unit_amount` with too many decimals is `400 VALIDATION_ERROR` with the item index in `details.field`. Line items are display data for the order summary: the `amount` you send is what the shopper pays.
+
+Payment links name a theme with `theme_id` on create and update; `null` clears it.
+
+## Errors
+
+| Code | Status | When |
+| --- | --- | --- |
+| `THEME_INVALID` | 400 | A theme document breaks a rule. `details.problems` is a list of `{ path, message }`. |
+| `THEME_LIMIT` | 409 | The store already has 20 themes. |
+| `THEME_IN_USE` | 409 | Deleting the default theme or a theme that payment links use. `details.reason` is `default` or `links`. |
+| `ASSET_INVALID` | 400 | An upload is the wrong type, too large, damaged, unsafe, or the store has 200 assets. |
+| `ASSET_IN_USE` | 409 | Deleting an asset that a theme still uses. `details.themes` lists the theme ids. |
+| `BRAND_FETCH_FAILED` | 422 | A website could not be read. `details.reason` says why. |
+| `FORBIDDEN` | 403 | A test key tried to publish or set the default, or a dashboard user lacks the permission or step-up. |
+| `VALIDATION_ERROR` | 400 | A malformed request body, including a bad `line_items` entry. |
+| `RATE_LIMITED` | 429 | More than 10 brand pulls in an hour. |

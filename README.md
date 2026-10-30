@@ -530,6 +530,39 @@ fixed or open amount, in USD or an ISO 4217 currency, and shares `CHECKOUT_BASE_
 - Docs: `apps/docs/payment-links/`, `apps/docs/api-reference/payment-links.mdx`; handover for the
   dashboard: `docs/handover/2026-10-30-payment-links.md`.
 
+### Checkout themes
+
+Merchants brand the hosted checkout and payment link pages with **themes**: a settings block
+(name, logo, light/dark/auto palettes, font, corners, Pay button words), a list of blocks around
+a sealed payment block, a thank-you page, and optional custom CSS and HTML. Start from a preset or
+pull a brand from a website or a connected WooCommerce store. Details: `apps/docs/themes/` (guide
+and safety rules), `apps/docs/api-reference/themes.mdx`, and the handover note
+`docs/handover/2026-10-30-checkout-themes.md`.
+
+- API: `/v1/themes` (CRUD, `validate`, `preview`, `publish`, `default`, `from-website`,
+  `from-store`) and `/v1/theme-assets`. Publish and default need a live key or a stepped-up
+  dashboard user; a test key can draft, preview and validate. Sessions take `theme_id` and
+  `line_items` (up to 50).
+- A live session renders only a published theme; a test session may name a draft. A broken theme
+  falls back to the Tendr default look and never stops a payment.
+- The SDK has `client.themes`, `client.themeAssets` and `client.checkoutSessions.create`.
+
+Environment (API; `TENDR_ASSET_ORIGIN` also in the web app, where the middleware uses it for the
+CSP and which Next bakes in at build):
+
+| Variable | Meaning |
+| --- | --- |
+| `TENDR_ASSET_ORIGIN` | Public base URL of the asset bucket. Must be `https://` in production. |
+| `ASSET_STORE_DRIVER` | `s3` or `memory`. Defaults to `memory` outside production; production requires `s3`. |
+| `ASSET_S3_ENDPOINT`, `ASSET_S3_REGION` | S3 or R2 endpoint and region (`auto` for R2). |
+| `ASSET_S3_BUCKET`, `ASSET_S3_ACCESS_KEY_ID`, `ASSET_S3_SECRET_ACCESS_KEY` | Bucket and credentials; required with `s3`. |
+| `ASSET_S3_FORCE_PATH_STYLE` | `true` for MinIO, `false` for R2/S3. |
+
+The compose file has a `minio` service (and a `minio-init` bucket setup) on ports 9100 and 9101 for
+a local S3 bucket. Docker Hub no longer serves the `minio/minio` image, so the service does not
+start until its image is replaced; local runs use the in-memory store by default. Production needs
+Postgres 15 or newer, and response headers on the asset origin (see the handover note).
+
 ### Test mode
 
 Test keys (`tdr_test_`) use a simulated 1Click and the mock intents verifier. No real swap runs.
@@ -958,6 +991,8 @@ WooCommerce 8.5+, GPL-2.0-or-later, text domain `tendr`). Stores install it from
 take crypto payments in the classic and Blocks checkouts. Refunds clicked in WooCommerce become
 signer-approved proposals. Everything PHP runs in Docker through `@wordpress/env`; nothing is
 installed on the host.
+
+Version 0.2.0 sends the cart's line items with each checkout (exact unit prices, or a "Name × n" line total when the price does not divide evenly; at most 50, and it retries without items if the API rejects them) and the store's brand (name, logo, colours) on connect and on **Refresh brand from my store**, so a merchant can build a theme from their store.
 
 | Command (all `--workspace=@tendr/woocommerce`) | What it does                                                    |
 | ---------------------------------------------- | --------------------------------------------------------------- |

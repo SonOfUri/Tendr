@@ -32,10 +32,18 @@
             ]
           },
           {
+            "group": "Checkout themes",
+            "pages": [
+              "themes/overview",
+              "themes/safety-rules"
+            ]
+          },
+          {
             "group": "API reference",
             "pages": [
               "api-reference/overview",
               "api-reference/payment-links",
+              "api-reference/themes",
               "api-reference/webhooks"
             ]
           },

@@ -1,0 +1,173 @@
+---
+title: Theme safety rules
+description: What custom CSS, custom HTML and theme text may and may not contain, every refusal message, and the risks Tendr accepts.
+---
+
+Themes are written by merchants, and shoppers pay on the page they produce. These rules keep the payment block honest. They are checked when a theme is saved (`PATCH /v1/themes/:id`, `POST /v1/themes/validate`) and a refused document is a `THEME_INVALID` error with a list of `problems`:
+
+```json
+{
+  "error": {
+    "code": "THEME_INVALID",
+    "message": "The theme has problems; see details.problems",
+    "details": {
+      "problems": [
+        { "path": "custom_css", "message": "Line 3: `position: fixed` isn't allowed — it could cover the payment details" },
+        { "path": "blocks.2.html", "message": "`<script>` isn't allowed — custom HTML can't run code" }
+      ]
+    }
+  }
+}
+```
+
+`path` is dotted: `blocks.2.html`, `blocks.4.columns.0.1.alt`, `settings.button_label`, `custom_css`. CSS problems start with `Line N:`.
+
+At render time the same checks protect the page again, and a theme that cannot be parsed falls back to the Tendr default look.
+
+## What themes can never do
+
+- Select, cover, move or restyle the sealed payment block.
+- Add any shopper input: no forms, inputs, buttons, selects, textareas or editable text.
+- Load code, other pages, or files from outside Tendr.
+- Show a wallet address, payment instructions or a payment timer of their own.
+- Write words with CSS.
+
+Your CSS only applies inside your own blocks. Each of your blocks is clipped and isolated, so negative margins, `transform`, large `z-index` values and similar tricks stay inside the block and cannot reach the payment block.
+
+## Custom CSS
+
+Maximum 50 KB. Your rules are scoped to your blocks, so selectors need no prefix.
+
+### Selectors
+
+| Refused | Message |
+| --- | --- |
+| `body`, `html` | `` `body` can't be styled — your CSS only applies inside your blocks `` |
+| `:root`, `:host`, `:host-context()`, `:scope` | `` `:root` can't be styled — your CSS only applies inside your blocks `` |
+| `:has()` | `` `:has()` isn't allowed — it can reach outside your block `` |
+| `::part()`, `::slotted()`, `::view-transition*` | `` `::part` isn't allowed — your CSS only applies inside your blocks `` |
+| `*` on its own, or with only pseudo-elements | `A selector can't be `*` on its own — name the elements you want to style` |
+| A selector starting with a combinator (`> p`, `+ p`) | `A selector can't start with `>` — it would reach outside your block` |
+| Classes or ids starting with `tdr-` or `pay-`, and attribute selectors that mention them | `` `.pay-card` is reserved for Tendr's checkout and can't be styled `` and `Selectors can't match Tendr's own class names (`tdr-…`, `pay-…`)` |
+| Escapes (`\`) | `Escaped characters (`\`) aren't allowed in selectors` |
+| Namespaces (`svg\|a`) | `Namespaced selectors (\|) aren't allowed` |
+| Nested rules and `&` | `Nested rules aren't supported — write each rule at the top level` |
+
+`*` is fine as part of a longer selector, such as `.card *`.
+
+### At-rules
+
+Only `@media`, `@supports` and `@keyframes` are allowed. Everything else, including `@import` and `@font-face`, is refused with `` `@import` isn't allowed — only `@media`, `@supports` and `@keyframes` are ``. To use your own font, upload it and choose it in the theme settings.
+
+`@keyframes` needs a plain name and frame selectors that are `from`, `to` or percentages. Tendr prefixes your animation names so they cannot replace its own.
+
+### Properties and values
+
+| Refused | Message |
+| --- | --- |
+| `position: fixed`, `position: sticky` | `` `position: fixed` isn't allowed — it could cover the payment details `` |
+| `behavior`, `-moz-binding`, `expression()`, `paint()` | `… isn't allowed — it can run code` |
+| `user-modify` | `` `user-modify` isn't allowed — themes can't make text editable `` |
+| `view-transition-name`, `view-transition-class` | `… isn't allowed — it could draw over the payment details` |
+| Anchor positioning (`anchor-name`, `position-anchor`, `position-area`, `anchor()`, `anchor-size()` and related) | `… could move content over the payment details` |
+| `element()` | `` `element()` isn't allowed — it can copy the payment details `` |
+| `image-set()`, `src()` | `` … isn't allowed — use `url()` with an uploaded image `` |
+| `attr()` | `` `attr()` isn't allowed — CSS can't put text on the page `` |
+| `url()` to anything that is not an image or font uploaded to Tendr | `` `url()` can only point to images and fonts uploaded to Tendr `` |
+| `<` anywhere in the CSS | ``CSS text and links can't contain `<` `` |
+| Escapes in property names or values | `Escaped characters (`\`) aren't allowed in values` |
+| Address-like or send-instruction text in any string | `Text can't contain wallet addresses or payment instructions` |
+| CSS over 50 KB | `CSS is over 50 KB` |
+| Anything the parser cannot read | ``This part of the CSS couldn't be read — check for a missing `{`, `}` or `;` `` |
+
+### CSS cannot draw text
+
+An address can be assembled from short strings spread over several pseudo-elements or keyframes, and no pattern check can catch that reliably. So CSS may not draw any text at all. These properties accept only text-free values, and anything else is refused with `CSS can't add text — put words in a text block instead`:
+
+- `content`: `none`, `normal`, `""`, the quote keywords (`open-quote`, `close-quote`, `no-open-quote`, `no-close-quote`), one `counter(name)` and `url()` of an uploaded image. Not `attr()`, `counters()`, `var()`, `env()`, `string()`, `symbols()` or any non-empty string.
+- `quotes`: `none` or `auto`.
+- `list-style`, `list-style-type`, `text-emphasis`, `text-emphasis-style`, `text-overflow` and `hyphenate-character`: keywords only.
+- `var()` in any of these properties.
+
+Counters and list markers draw digits or bullets only:
+
+- `counter()` and `list-style-type` accept `decimal`, `decimal-leading-zero`, `disc`, `circle`, `square` or `none`. Anything else: `` Counters and list markers can only use `decimal`, `decimal-leading-zero`, `disc`, `circle`, `square` or `none` ``.
+- `content` can show at most one `counter()`: `` `content` can show at most one `counter()` ``.
+- `counter-reset`, `counter-set` and `counter-increment` take whole numbers from -999 to 999: `Counter values must be whole numbers from -999 to 999`.
+
+## Custom HTML
+
+The `custom_html` block takes up to 20 KB (`HTML block is over 20 KB`). Tendr sanitises it on save and stores the cleaned HTML.
+
+Allowed tags: `p br span div strong em b i u s small h2 h3 h4 ul ol li blockquote a img figure figcaption hr table thead tbody tr th td`. Allowed attributes: `class` and `style` on any tag, `href`, `rel` and `target` on `a`, `src` and `alt` on `img`. Other tags are dropped, and these are refused outright:
+
+| Refused | Message |
+| --- | --- |
+| `<script>`, `<noscript>`, `<template>`, `<svg>`, `<math>` | `` `<script>` isn't allowed — custom HTML can't run code `` |
+| `<style>` | `` `<style>` isn't allowed — custom HTML can't carry its own stylesheet — use the theme's custom CSS `` |
+| `<form>`, `<input>`, `<button>`, `<select>`, `<option>`, `<datalist>`, `<textarea>`, `<keygen>`, `<output>`, `<dialog>` | `` `<form>` isn't allowed — custom HTML can't collect shopper input `` |
+| `<iframe>`, `<frame>`, `<frameset>`, `<object>`, `<embed>`, `<applet>`, `<portal>`, `<fencedframe>`, `<link>`, `<meta>`, `<base>` | `` `<iframe>` isn't allowed — custom HTML can't load other pages or files `` |
+| Event attributes (`onerror`, `onclick`, any `on…`) | `` `onerror` isn't allowed — custom HTML can't run code `` |
+| `contenteditable` | `` `contenteditable` isn't allowed — custom HTML can't collect shopper input `` |
+| `javascript:` and `vbscript:` URLs | `` `javascript:` links aren't allowed — custom HTML can't run code `` |
+| Links that are not `https://` | `Links must start with https://` |
+| Images from anywhere but Tendr's asset origin | `Images must be uploaded to Tendr — links to other sites are not allowed` |
+| Classes starting with `tdr-` or `pay-` | ``The class `tdr-wrap` is reserved for Tendr's checkout`` |
+| A `style` attribute that breaks a CSS rule above | `` In a `style` attribute: … `` followed by the CSS message |
+| Address-like or send-instruction text | `Text can't contain wallet addresses or payment instructions` |
+
+Links get `rel="noopener noreferrer"` and `target="_blank"` automatically.
+
+## Text rules
+
+These apply to every text a theme carries: headings, rich text, banners, alt text, FAQ, reviews, delivery notes, footer link labels, countdown labels, the display name, the success message and the button label.
+
+**Address-like text.** Refused with `Text can't contain wallet addresses or payment instructions`:
+
+- EVM addresses: `0x` followed by 40 hex characters.
+- Bitcoin bech32: `bc1…` or `tb1…`.
+- Base58 strings of 25 to 44 characters that mix letters and digits.
+- 64 hex characters (NEAR implicit accounts).
+- NEAR names ending in `.near`, `.testnet` or `.tg`.
+
+Invisible and format characters are stripped before checking, and in HTML the checks run on the visible text of the whole block, so splitting an address across tags does not hide it.
+
+**Payment instructions.** A phrase like "send ... to the address", "transfer ... to wallet", "deposit ... to account 0x" or "pay ... to bc1" is refused with the same message.
+
+**Countdown labels.** A `countdown` label cannot look like the payment timer: no *expire*, *expires*, *expiring*, *expiry*, *session*, *deadline*, *time left*, *pay within* or *left to pay*. The message is `Countdown text can't look like the payment timer (avoid words like expires, session, deadline, time left)`.
+
+**Button words.** `settings.button_label` follows these rules:
+
+| Refused | Message |
+| --- | --- |
+| Any digit | `Button text can't contain numbers` |
+| Any currency symbol | `Button text can't contain currency symbols` |
+| A currency code as a whole word, such as `USD` or `eur` (any case) | `Button text can't contain currency codes` |
+| Any `{...}` other than `{amount}` | `Button text can only use the {amount} placeholder` |
+
+`{amount}` is filled in by Tendr with the real amount. The label applies to the main Pay button only.
+
+**Rich text.** `rich_text` cannot contain HTML (`Text can't contain HTML`), inline images (`Text can't contain inline images`), reference-style links (`Reference-style links are not supported`), or links that do not start with `https://` (`Links in text must start with https://`).
+
+**Other document rules.**
+
+| Refused | Message |
+| --- | --- |
+| No payment block, or more than one | `The page needs exactly one payment block` |
+| Payment block nested or on the thank-you page | `The payment block must be on the main page, not nested or on the thank-you page` |
+| `thank_you` or `back_to_store` on the main page or nested | `The thank you block belongs on the thank-you page only` |
+| Repeated block id | `Block id "x" is used twice` |
+| More than 40 blocks on a page | `A page can have at most 40 blocks` |
+| A missing palette for the mode | `A light palette is required for light mode` |
+| Low contrast | `Text is too hard to read on the background (needs a contrast of at least 4.5:1)` |
+| An asset that does not exist | `This file can't be found — upload it again` |
+| An asset of the wrong kind | `This file must be an uploaded font` or `This file must be an uploaded image or logo` |
+
+## Risks Tendr accepts
+
+Pattern checks on text are best effort. These cases cannot be fully detected:
+
+- **Address-like text split by hidden elements or punctuation.** Pieces of an address separated by invisible spans (`display: none`, zero font size) or by punctuation can read as an address to a shopper without matching a pattern.
+- **An image showing a fake QR code or address.** Tendr can validate that a file is an image, not what the picture shows.
+
+The payment block is the defence. It always shows the real address and QR code, in Tendr's own type, and states that funds go only there. A merchant who dresses a fake address up in their own blocks is attacking their own customers, and the sealed block still tells the shopper the truth.
