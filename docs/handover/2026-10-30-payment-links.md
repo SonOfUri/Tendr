@@ -120,7 +120,7 @@ existing `/pay/<session id>` URLs, which keep working unchanged, as does `/refun
 
 | Variable | Where | Meaning |
 | --- | --- | --- |
-| `WEB_INTERNAL_TOKEN` | API and web | Shared secret, at least 32 characters. Required in production for the API. Must be identical in both apps. Without it every payer shares the web server's rate limit bucket. |
+| `WEB_INTERNAL_TOKEN` | API and web | Shared secret, at least 32 characters. Required in production in both apps: each refuses to start without it (the web server checks at boot, `src/instrumentation.ts`). Must be identical in both apps. Without it every payer shares the web server's rate limit bucket. |
 | `TENDR_ASSET_ORIGIN` | web | Origin Tendr hosts merchant logos from. Preview cards load logos only from here; unset means no logo is ever fetched. |
 | `CHECKOUT_BASE_URL` | API and web | Canonical base of every link: `https://usetendr.tech` in production. The API builds `url`/`qr_url` with it and the web app builds QR targets and meta tags. They must agree. |
 

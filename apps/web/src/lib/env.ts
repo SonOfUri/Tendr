@@ -45,8 +45,43 @@ export const publicEnv = {
   gasFeeRecipients: parseRecipients(process.env.NEXT_PUBLIC_GAS_FEE_RECIPIENTS),
 };
 
+/** The API's minimum for WEB_INTERNAL_TOKEN (apps/api/src/env.ts): a shorter one is refused there. */
+const WEB_INTERNAL_TOKEN_MIN = 32;
+
+/**
+ * Why WEB_INTERNAL_TOKEN cannot be used, or null. Required (≥ 32 characters) in production, like
+ * the API; elsewhere it may be unset, but a set one is never shorter than the API accepts.
+ */
+export function webInternalTokenProblem(
+  token: string | undefined,
+  production: boolean,
+): string | null {
+  if (!token) {
+    return production
+      ? 'WEB_INTERNAL_TOKEN is required in production (the payment link page reads the API with it)'
+      : null;
+  }
+  return token.length < WEB_INTERNAL_TOKEN_MIN
+    ? `WEB_INTERNAL_TOKEN must be at least ${WEB_INTERNAL_TOKEN_MIN} characters`
+    : null;
+}
+
+/**
+ * Throws on server config a running server cannot use: called at boot (instrumentation.ts) and on
+ * every `serverEnv()`. Skipped while `next build` runs, which serves no requests.
+ */
+export function assertServerEnv(): void {
+  if (process.env.NEXT_PHASE === 'phase-production-build') return;
+  const problem = webInternalTokenProblem(
+    process.env.WEB_INTERNAL_TOKEN,
+    process.env.NODE_ENV === 'production',
+  );
+  if (problem) throw new Error(`Invalid web server config: ${problem}`);
+}
+
 /** Server-only config. */
 export function serverEnv() {
+  assertServerEnv();
   return {
     apiBaseUrl: process.env.API_BASE_URL ?? publicEnv.apiBaseUrl,
     webUrl: process.env.WEB_URL ?? 'http://localhost:3000',
@@ -55,10 +90,11 @@ export function serverEnv() {
      * `url` / `qr_url` use), falling back to WEB_URL when unset. The QR code and preview tags
      * must name exactly the address the API reports.
      */
-    linkBaseUrl: (process.env.CHECKOUT_BASE_URL || process.env.WEB_URL || 'http://localhost:3000').replace(
-      /\/+$/,
-      '',
-    ),
+    linkBaseUrl: (
+      process.env.CHECKOUT_BASE_URL ||
+      process.env.WEB_URL ||
+      'http://localhost:3000'
+    ).replace(/\/+$/, ''),
     /** Demo Merchant secret test key from seed — never expose to the browser. */
     tendrSecretKeyTest: process.env.TENDR_SECRET_KEY_TEST ?? '',
     /**
