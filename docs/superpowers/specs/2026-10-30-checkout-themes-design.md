@@ -1,6 +1,6 @@
 # Checkout Themes — Design (Project 5c)
 
-Status: draft for the user's review, 2026-10-30. Revised after the user's review (fonts, block wrappers and pay bar, state colours, "trading as", button-word rule, proxied product images, language of custom words). Builds on foundation (1), merchant accounts (2), checkout core (3), WooCommerce plugin (4), gasless payments (5a) and payment links (5b), all merged on local main.
+Status: approved by the user 2026-10-30. Revised after the user's review (fonts, block wrappers and pay bar, state colours, "trading as", button-word rule, proxied product images, language of custom words). Builds on foundation (1), merchant accounts (2), checkout core (3), WooCommerce plugin (4), gasless payments (5a) and payment links (5b), all merged on local main.
 
 As in every project 5 design, **we do not build dashboard screens**. We build the API, the shopper-facing pages and the infrastructure, document how they work, and only *suggest* screens to the dashboard owner *(user: "We would suggest and not map out. The only thing we map out is how the api's, and infra we have built works")*.
 
