@@ -7,7 +7,6 @@ import { safeHttpUrl } from '@/lib/checkout/format';
 import {
   decimalLess,
   formatLinkAmount,
-  fractionDigits,
   parseLinkAmount,
   startLinkPayment,
   usdEquivalent,
@@ -54,8 +53,12 @@ export function initialPayState(view: PublicPaymentLinkView): PayState {
   };
 }
 
-const minimumLine = (min: string, currency: string) =>
-  `The minimum is ${formatLinkAmount(min, currency)}.`;
+/** An amount in the link's currency, with exactly its minor units (from the API). */
+const money = (amount: string, view: PublicPaymentLinkView) =>
+  formatLinkAmount(amount, view.currency, view.minor_units);
+
+const minimumLine = (min: string, view: PublicPaymentLinkView) =>
+  `The minimum is ${money(min, view)}.`;
 
 /** The page after the API refused "Pay". */
 export function applyPayError(
@@ -86,7 +89,7 @@ export function applyPayError(
         typeof details.min_amount === 'string' ? details.min_amount : (view.min_amount ?? null);
       return {
         ...next,
-        fieldError: min ? minimumLine(min, view.currency) : 'This amount is too small.',
+        fieldError: min ? minimumLine(min, view) : 'This amount is too small.',
       };
     }
     case 'VALIDATION_ERROR':
@@ -112,7 +115,7 @@ export function LinkPayBody({ view, state, onAmount, onNote, onSubmit }: BodyPro
     ? safeHttpUrl(view.merchant.logo_url)
     : null;
   const open = view.amount_type === 'open';
-  const typed = open ? parseLinkAmount(state.amount, view.currency) : null;
+  const typed = open ? parseLinkAmount(state.amount, view.minor_units) : null;
   const usd = open
     ? typed?.ok
       ? usdEquivalent(typed.amount, view.currency, view.usd_rate)
@@ -164,7 +167,7 @@ export function LinkPayBody({ view, state, onAmount, onNote, onSubmit }: BodyPro
                   <span>Amount ({view.currency})</span>
                   <input
                     name="amount"
-                    inputMode={fractionDigits(view.currency) === 0 ? 'numeric' : 'decimal'}
+                    inputMode={view.minor_units === 0 ? 'numeric' : 'decimal'}
                     autoComplete="off"
                     placeholder="0"
                     value={state.amount}
@@ -180,9 +183,7 @@ export function LinkPayBody({ view, state, onAmount, onNote, onSubmit }: BodyPro
                     </p>
                   ) : null}
                   {view.min_amount ? (
-                    <p className="muted small">
-                      Minimum {formatLinkAmount(view.min_amount, view.currency)}
-                    </p>
+                    <p className="muted small">Minimum {money(view.min_amount, view)}</p>
                   ) : null}
                   {usd ? (
                     <p className="muted small" aria-live="polite">
@@ -194,7 +195,7 @@ export function LinkPayBody({ view, state, onAmount, onNote, onSubmit }: BodyPro
             ) : (
               <p className="pay-link-price">
                 <strong className="pay-total">
-                  {view.amount ? formatLinkAmount(view.amount, view.currency) : null}
+                  {view.amount ? money(view.amount, view) : null}
                 </strong>
                 {usd ? <span className="muted"> ≈ {usd}</span> : null}
               </p>
@@ -267,7 +268,7 @@ export function LinkPay({
     if (state.busy) return;
     const body: { amount?: string; note?: string } = {};
     if (view.amount_type === 'open') {
-      const parsed = parseLinkAmount(state.amount, view.currency);
+      const parsed = parseLinkAmount(state.amount, view.minor_units);
       if (!parsed.ok) {
         setState((s) => ({ ...s, fieldError: parsed.error, message: null }));
         return;
@@ -275,7 +276,7 @@ export function LinkPay({
       if (view.min_amount && decimalLess(parsed.amount, view.min_amount)) {
         setState((s) => ({
           ...s,
-          fieldError: minimumLine(view.min_amount!, view.currency),
+          fieldError: minimumLine(view.min_amount!, view),
           message: null,
         }));
         return;

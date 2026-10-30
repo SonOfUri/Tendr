@@ -10,36 +10,41 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('parseLinkAmount', () => {
   it('amount input rejects bad formats', () => {
-    expect(parseLinkAmount('5,000', 'NGN').ok).toBe(false);
-    expect(parseLinkAmount('1.2.3', 'NGN').ok).toBe(false);
-    expect(parseLinkAmount('12.345', 'NGN').ok).toBe(false);
-    expect(parseLinkAmount('100.5', 'JPY').ok).toBe(false);
-    expect(parseLinkAmount('-5', 'USD').ok).toBe(false);
-    expect(parseLinkAmount('', 'USD').ok).toBe(false);
-    expect(parseLinkAmount('1e3', 'USD').ok).toBe(false);
-    expect(parseLinkAmount('.5', 'USD').ok).toBe(false);
-    expect(parseLinkAmount('0', 'USD').ok).toBe(false);
+    expect(parseLinkAmount('5,000', 2).ok).toBe(false);
+    expect(parseLinkAmount('1.2.3', 2).ok).toBe(false);
+    expect(parseLinkAmount('12.345', 2).ok).toBe(false); // NGN
+    expect(parseLinkAmount('100.5', 0).ok).toBe(false); // JPY
+    expect(parseLinkAmount('5.5', 0).ok).toBe(false); // IRT (Intl says 2)
+    expect(parseLinkAmount('-5', 2).ok).toBe(false);
+    expect(parseLinkAmount('', 2).ok).toBe(false);
+    expect(parseLinkAmount('1e3', 2).ok).toBe(false);
+    expect(parseLinkAmount('.5', 2).ok).toBe(false);
+    expect(parseLinkAmount('0', 2).ok).toBe(false);
   });
 
-  it('accepts amounts within the currency precision', () => {
-    expect(parseLinkAmount(' 2500.50 ', 'NGN')).toEqual({ ok: true, amount: '2500.50' });
-    expect(parseLinkAmount('1500', 'JPY')).toEqual({ ok: true, amount: '1500' });
-    expect(parseLinkAmount('1.234', 'BHD')).toEqual({ ok: true, amount: '1.234' });
+  it('accepts amounts within the currency precision from the API, not Intl', () => {
+    expect(parseLinkAmount(' 2500.50 ', 2)).toEqual({ ok: true, amount: '2500.50' });
+    expect(parseLinkAmount('1500', 0)).toEqual({ ok: true, amount: '1500' });
+    expect(parseLinkAmount('1.234', 3)).toEqual({ ok: true, amount: '1.234' }); // BHD
+    expect(parseLinkAmount('100.50', 2)).toEqual({ ok: true, amount: '100.50' }); // RSD (Intl 0)
+    expect(parseLinkAmount('0.001', 8)).toEqual({ ok: true, amount: '0.001' }); // BTC (Intl 2)
   });
 
   it('says how many decimals the currency takes', () => {
-    const jpy = parseLinkAmount('100.5', 'JPY');
+    const jpy = parseLinkAmount('100.5', 0);
     expect(jpy.ok ? null : jpy.error).toBe('Enter a whole number, like 2500.');
-    const ngn = parseLinkAmount('5,000', 'NGN');
+    const ngn = parseLinkAmount('5,000', 2);
     expect(ngn.ok ? null : ngn.error).toBe('Enter an amount like 2500.50.');
   });
 });
 
 describe('formatting', () => {
-  it('formats the link amount in its currency', () => {
-    expect(formatLinkAmount('25000.00', 'NGN')).toBe('₦25,000');
-    expect(formatLinkAmount('15.20', 'USD')).toBe('$15.20');
-    expect(formatLinkAmount('1500', 'JPY')).toBe('¥1,500');
+  it('formats the link amount with exactly the currency minor units, never rounding', () => {
+    expect(formatLinkAmount('25000.00', 'NGN', 2)).toBe('₦25,000.00');
+    expect(formatLinkAmount('15.20', 'USD', 2)).toBe('$15.20');
+    expect(formatLinkAmount('1500', 'JPY', 0)).toBe('¥1,500');
+    expect(formatLinkAmount('100.50', 'RSD', 2)).toBe('RSD\u00a0100.50');
+    expect(formatLinkAmount('0.001', 'BTC', 8)).toBe('BTC\u00a00.00100000');
   });
 
   it('gives the USD equivalent from the rate, or null without one', () => {

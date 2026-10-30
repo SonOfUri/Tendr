@@ -114,6 +114,11 @@ export type PublicPaymentLinkView = {
   amount_type: 'fixed' | 'open';
   amount: string | null;
   currency: string;
+  /**
+   * The currency's decimal places (Tendr's ISO 4217 table; USD 2). The page formats and checks
+   * amounts with this, never the browser's own currency data, which disagrees for some codes.
+   */
+  minor_units: number;
   /** Effective minimum (open links only), rounded up to the currency's minor units. */
   min_amount: string | null;
   /** 1 USD = X currency; null for USD or when FX is unavailable. */

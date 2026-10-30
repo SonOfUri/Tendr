@@ -121,6 +121,7 @@ export async function getPublicLink(
     amount_type: link.openAmount ? 'open' : 'fixed',
     amount: link.amount === null ? null : link.amount.toFixed(minor),
     currency: link.amountCurrency,
+    minor_units: minor,
     min_amount: link.openAmount ? effectiveMin(link, rate, minor) : null,
     usd_rate: rate,
     note: link.noteMode,

@@ -94,12 +94,15 @@ describe('public payment links', () => {
           'livemode',
           'merchant',
           'min_amount',
+          'minor_units',
           'note',
           'title',
           'usd_rate',
         ].sort(),
       );
       expect(Object.keys(v.merchant).sort()).toEqual(['logo_url', 'name']);
+      // The page formats and checks amounts with the API's ISO 4217 table, never its own.
+      expect(v.minor_units).toBe(2);
       expect(v).toMatchObject({
         merchant: { name: 'Acme Church', logo_url: null },
         title: 'Offering',
@@ -150,7 +153,13 @@ describe('public payment links', () => {
       expect(await getPublicLink('acme', 'usd', false)).toMatchObject({
         min_amount: '1.00',
         usd_rate: null,
+        minor_units: 2,
       });
+      // minor_units is the ISO 4217 table's (RSD 2, where Intl says 0).
+      await createLink(ctx(), { ...openNgn, slug: 'rsd', currency: 'RSD' });
+      const rsd = await getPublicLink('acme', 'rsd', false);
+      expect(rsd.minor_units).toBe(2);
+      expect(rsd.min_amount).toMatch(/^\d+\.\d{2}$/);
       // Fixed links have no minimum.
       await createLink(ctx(), fixedUsd);
       expect((await getPublicLink('acme', 'tshirt', false)).min_amount).toBeNull();

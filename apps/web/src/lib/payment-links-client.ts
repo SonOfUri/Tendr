@@ -7,23 +7,15 @@ import { publicEnv } from './env';
 
 const DECIMAL = /^(\d+)(?:\.(\d+))?$/;
 
-/** The currency's minor units (JPY 0, NGN 2, BHD 3), from the runtime's ISO 4217 data. */
-export function fractionDigits(currency: string): number {
-  try {
-    return (
-      new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions()
-        .maximumFractionDigits ?? 2
-    );
-  } catch {
-    return 2;
-  }
-}
-
 export type ParsedAmount = { ok: true; amount: string } | { ok: false; error: string };
 
-/** What the payer typed in an open link's amount box: digits, at most the currency's decimals. */
-export function parseLinkAmount(raw: string, currency: string): ParsedAmount {
-  const digits = fractionDigits(currency);
+/**
+ * What the payer typed in an open link's amount box: digits, at most `minorUnits` decimals (the
+ * link's `minor_units` from the API's ISO 4217 table; the browser's Intl data disagrees for some
+ * currencies, e.g. RSD and BTC).
+ */
+export function parseLinkAmount(raw: string, minorUnits: number): ParsedAmount {
+  const digits = minorUnits;
   const error = digits === 0 ? 'Enter a whole number, like 2500.' : 'Enter an amount like 2500.50.';
   const s = raw.trim();
   const m = DECIMAL.exec(s);
@@ -47,19 +39,19 @@ export function decimalLess(a: string, b: string): boolean {
   return x !== null && y !== null && x < y;
 }
 
-/** "25000.00" NGN → "₦25,000"; whole amounts drop their zero decimals, others keep them all. */
-export function formatLinkAmount(amount: string, currency: string): string {
-  const m = DECIMAL.exec(amount.trim());
-  if (!m) return `${amount} ${currency}`;
-  const digits = fractionDigits(currency);
-  const whole = !/[1-9]/.test(m[2] ?? '');
+/**
+ * "25000.00" NGN → "₦25,000.00": always exactly `minorUnits` decimals (the link's `minor_units`),
+ * so Intl's own idea of the currency never rounds the amount.
+ */
+export function formatLinkAmount(amount: string, currency: string, minorUnits: number): string {
+  if (!DECIMAL.test(amount.trim())) return `${amount} ${currency}`;
   try {
     return new Intl.NumberFormat('en', {
       style: 'currency',
       currency,
       currencyDisplay: 'narrowSymbol',
-      minimumFractionDigits: whole ? 0 : digits,
-      maximumFractionDigits: digits,
+      minimumFractionDigits: minorUnits,
+      maximumFractionDigits: minorUnits,
       // A decimal string is formatted exactly (Intl.NumberFormat v3).
     }).format(amount.trim() as unknown as number);
   } catch {

@@ -50,6 +50,31 @@ describe('checkout components', () => {
     expect(header(false)).not.toContain('Close checkout');
   });
 
+  it('the header back link reads "Back to <title>" for a session from a payment link', () => {
+    const render = (view: SessionView) =>
+      renderToStaticMarkup(
+        <CheckoutHeader
+          view={view}
+          settlementSymbol={null}
+          now={Date.parse('2026-10-26T12:00:00Z')}
+          showTimer
+          canClose={false}
+          onClose={() => {}}
+        />,
+      );
+    const linked = render({
+      ...VIEW,
+      cancel_url: 'https://usetendr.tech/pay/acme/tip-jar',
+      payment_link: { title: 'Tip <jar>', url: 'https://usetendr.tech/pay/acme/tip-jar' },
+    } as SessionView);
+    expect(linked).toContain('Back to Tip &lt;jar&gt;');
+    expect(linked).toContain('href="https://usetendr.tech/pay/acme/tip-jar"');
+    expect(linked).not.toContain('Back to store');
+    const plain = render({ ...VIEW, payment_link: null } as SessionView);
+    expect(plain).toContain('Back to store');
+    expect(plain).toContain('href="https://shop.example/cart"');
+  });
+
   it('CopyButton announces "Copied" from a live region outside the button', () => {
     const html = renderToStaticMarkup(<CopyButton value="0xabc" label="Copy the address" />);
     const button = html.slice(html.indexOf('<button'), html.indexOf('</button>'));
