@@ -122,6 +122,10 @@ export const ErrorCodes = [
    * was prepared) or was not issued for this quote. Nothing spent; call prepare again and re-sign.
    */
   'GASLESS_EXPIRED',
+  /** A payment link amount is below the $1.00 USD floor; `details.min_amount` is the floor in the link's currency. */
+  'AMOUNT_TOO_LOW',
+  /** Payment links are not available for this store (an integrator settling into its own contract). */
+  'LINK_NOT_SUPPORTED',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

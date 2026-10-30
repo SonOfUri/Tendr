@@ -54,7 +54,7 @@ export const DEFAULT_FEE_BPS = 50;
 /** `sessions.amount` is `Decimal(38, 18)`: at most 20 integer digits and 18 fraction digits. */
 const AMOUNT_MAX_INT_DIGITS = 20;
 const AMOUNT_MAX_SCALE = 18;
-const USD_DECIMALS = 2;
+export const USD_DECIMALS = 2;
 
 const AMOUNT_RE = /^(\d+)(?:\.(\d+))?$/;
 
@@ -116,7 +116,7 @@ const amountInvalid = (message: string) =>
   new AppError('VALIDATION_ERROR', message, 400, { field: 'amount' });
 
 /** Positive, ≤ `maxDecimals` fraction digits, and representable in `Decimal(38, 18)`. */
-function assertAmount(amount: string, maxDecimals: number, currency: string): void {
+export function assertAmount(amount: string, maxDecimals: number, currency: string): void {
   const m = AMOUNT_RE.exec(amount);
   if (!m) throw amountInvalid('amount must be a decimal string like "25.10"');
   const [, int, frac = ''] = m;
