@@ -6,6 +6,9 @@ import { readPreview } from '../themes/preview.js';
 
 type Hook = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
+/** The public preview read's path prefix: the pay host's preview page calls it from the browser. */
+export const THEME_PREVIEW_PUBLIC_PREFIX = '/v1/themes/preview/';
+
 export type ThemePreviewPublicRouteOptions = { readRateLimit: Hook };
 
 export const themePreviewPublicRoutes: FastifyPluginAsync<ThemePreviewPublicRouteOptions> = async (
@@ -17,7 +20,7 @@ export const themePreviewPublicRoutes: FastifyPluginAsync<ThemePreviewPublicRout
     reply.header('x-robots-tag', 'noindex');
   };
   app.get<{ Params: { token: string } }>(
-    '/v1/themes/preview/:token',
+    `${THEME_PREVIEW_PUBLIC_PREFIX}:token`,
     {
       config: { auth: 'public' as const, publicLimit: 'route' as const },
       onRequest: [headers, opts.readRateLimit],

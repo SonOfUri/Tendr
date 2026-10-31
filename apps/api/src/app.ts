@@ -29,6 +29,7 @@ import {
   paymentLinkPublicRoutes,
 } from './routes/payment-links-public.js';
 import { paymentLinkRoutes } from './routes/payment-links.js';
+import { THEME_PREVIEW_PUBLIC_PREFIX } from './routes/theme-preview-public.js';
 import { paymentRoutes } from './routes/payments.js';
 import { pingRoutes } from './routes/ping.js';
 import { proposalRoutes } from './routes/proposals.js';
@@ -121,7 +122,9 @@ export async function buildApp(opts: BuildAppOptions = {}) {
         url.startsWith(CHECKOUT_CLIENT_PREFIX) ||
         url.split('?')[0] === CHECKOUT_REFUND_ADDRESS_PATH ||
         // The payer's link page creates its session from the browser ("Pay").
-        url.startsWith(PAYMENT_LINK_PUBLIC_PREFIX)
+        url.startsWith(PAYMENT_LINK_PUBLIC_PREFIX) ||
+        // The pay host's theme preview page reads the token-gated preview (no credential).
+        url.startsWith(THEME_PREVIEW_PUBLIC_PREFIX)
       ) {
         cb(null, { origin: [checkoutOrigin], credentials: false });
       } else {

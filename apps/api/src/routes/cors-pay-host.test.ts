@@ -18,6 +18,7 @@ const ROUTES: { name: string; method: 'GET' | 'POST'; url: string }[] = [
   { name: 'checkout client POST', method: 'POST', url: '/v1/checkout/client/email' },
   { name: 'refund address', method: 'POST', url: '/v1/checkout/refund-address' },
   { name: 'public link read', method: 'GET', url: '/v1/payment_links/public/acme/nope' },
+  { name: 'theme preview', method: 'GET', url: '/v1/themes/preview/sometoken' },
   { name: 'wallet paymaster', method: 'POST', url: '/v1/checkout/paymaster/sometoken' },
 ];
 
@@ -69,18 +70,14 @@ describe('pay-host CORS', () => {
     expect(allow === PAY || allow === '*').toBe(true);
   });
 
-  // CONCERN (not changed here): `GET /v1/themes/preview/:token` is read from the browser on the
-  // pay host's /preview/theme/[token] page, but the CORS delegator in app.ts only allows the pay
-  // origin on the checkout client, refund-address and public link routes. The pay origin gets the
-  // dashboard branch (origin list = CORS_ORIGINS, credentialed), so the preview page is blocked
-  // when served from the pay host. `it.fails` flips to a failure once the route is allowed.
-  it.fails('theme preview: the response allows the pay origin', async () => {
+  it('theme preview: the pay origin is allowed without credentials', async () => {
     const res = await app.inject({
       method: 'GET',
       url: '/v1/themes/preview/sometoken',
       headers: { origin: PAY },
     });
     expect(res.headers['access-control-allow-origin']).toBe(PAY);
+    expect(res.headers['access-control-allow-credentials']).toBeUndefined();
   });
 
   it('the dashboard origin stays credentialed on dashboard routes, the pay origin does not', async () => {
