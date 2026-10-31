@@ -166,11 +166,39 @@ describe('routeForHost: any other host', () => {
     }
   });
 
-  it('is next everywhere when the pay and app origins are the same (one-origin dev)', () => {
+  it('is next for every other path when the pay and app origins are the same (one-origin dev)', () => {
     const same = { payOrigin: 'http://localhost:3000', appOrigin: 'http://localhost:3000' };
     for (const path of ['/', '/pay/ses_1', '/dashboard', '/demo']) {
       expect(route('localhost:3000', path, same)).toEqual(next);
     }
+  });
+});
+
+describe('routeForHost: one origin for pay and app (the demo deployment)', () => {
+  const DEMO = 'https://demo.usetendr.tech';
+  const single = { payOrigin: DEMO, appOrigin: DEMO };
+
+  it.each(['demo.usetendr.tech', 'x.up.railway.app'])(
+    'rewrites the root forms on %s, outside development too',
+    (host) => {
+      expect(route(host, '/ses_1', single)).toEqual(rewrite('/pay/ses_1'));
+      expect(route(host, '/ses_1/refund-address', single)).toEqual(
+        rewrite('/pay/ses_1/refund-address'),
+      );
+      expect(route(host, '/acme/coffee', single)).toEqual(rewrite('/pay/acme/coffee'));
+    },
+  );
+
+  it.each([
+    '/dashboard',
+    '/dashboard/payments',
+    '/pay/ses_1',
+    '/pay/acme/coffee',
+    '/demo',
+    '/',
+    '/privacy/x',
+  ])('leaves %s to Next (known paths never rewrite; the old /pay/ form still works)', (path) => {
+    expect(route('demo.usetendr.tech', path, single)).toEqual(next);
   });
 });
 

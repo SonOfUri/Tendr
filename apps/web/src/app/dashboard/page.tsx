@@ -1,9 +1,9 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Spinner, StatusBadge } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
+import { GoLiveChecklist } from '@/components/dashboard/GoLiveChecklist';
 import { api, errorMessage, type AccountView, type Balances, type GoLiveStatus } from '@/lib/api';
 import { withStepUp } from '@/lib/webauthn';
 
@@ -139,21 +139,7 @@ export default function AccountHomePage() {
           </p>
         ) : (
           <>
-            <ul className="checklist">
-              <ChecklistItem done label="Your passkey">
-                You sign in and approve with it.
-              </ChecklistItem>
-              <ChecklistItem done={!checklist.missing.includes('second_key')} label="A second key">
-                {checklist.signerCount} signer{checklist.signerCount === 1 ? '' : 's'}
-                {checklist.recoveryKeySet ? ' and a recovery kit' : ', no recovery kit yet'}.{' '}
-                {checklist.missing.includes('second_key') && (
-                  <Link href="/dashboard/onboarding/second-key">Add one</Link>
-                )}
-              </ChecklistItem>
-              <ChecklistItem done={!checklist.missing.includes('threshold')} label="Approval rule">
-                One signer’s approval moves money to start with; you can require more later.
-              </ChecklistItem>
-            </ul>
+            <GoLiveChecklist checklist={checklist} />
             {isOwner ? (
               <Button
                 disabled={!checklist.ok || busy}
@@ -235,26 +221,5 @@ function AccountCard({
         </Button>
       )}
     </section>
-  );
-}
-
-function ChecklistItem({
-  done,
-  label,
-  children,
-}: {
-  done: boolean;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <li className={done ? 'done' : 'todo'}>
-      <span aria-hidden>{done ? '✓' : '○'}</span>
-      <div>
-        <strong>{label}</strong>
-        <span className="sr-only">{done ? ' (done)' : ' (to do)'}</span>
-        <p className="muted small">{children}</p>
-      </div>
-    </li>
   );
 }

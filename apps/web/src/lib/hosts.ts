@@ -5,8 +5,10 @@
 //   `/pay/…` form redirects to the root form; merchant pages go to the app host.
 // - the app host (WEB_URL's): sign-in, the dashboard, settings and the Connect screen. Shopper
 //   paths go to the pay host in their new form.
-// - any other host (Railway's own name, localhost, the demo deployment): everything as before. On
-//   localhost in development the root forms work too, so both URL shapes can be tried on one origin.
+// - one origin for both (CHECKOUT_BASE_URL and WEB_URL the same, as on the demo deployment): the
+//   root forms are rewritten on every host; everything else, the old `/pay/…` form included, as before.
+// - any other host (Railway's own name, localhost): everything as before. On localhost in
+//   development the root forms work too, so both URL shapes can be tried on one origin.
 //
 // `/demo…` and `/api/demo/…` are 404 on the pay and app hosts: production has no demo merchant.
 // Hosts come from env, never from hard-coded names. Pure: the middleware passes everything in.
@@ -138,8 +140,11 @@ export function routeForHost(input: {
   const { host, pathname, search } = input;
   const pay = parseOrigin(input.payOrigin);
   const app = parseOrigin(input.appOrigin);
-  // Unknown hosts, or one origin for both (local dev): behave as before.
-  if (!pay || !app || pay.host === app.host) return otherHost(input);
+  // Unknown hosts: behave as before.
+  if (!pay || !app) return otherHost(input);
+  // One origin for both (the demo deployment, one-origin dev): the API hands out root-form URLs on
+  // that origin, so they work on every host; everything else, the old /pay/ form included, as before.
+  if (pay.host === app.host) return rootFormOrNext(input.pathname);
 
   if (sameHost(host, pay)) {
     if (pathname === '/') return redirect(input.landingUrl);
@@ -172,5 +177,9 @@ function otherHost(input: { host: string; pathname: string; dev?: boolean }): Ho
   if (!input.dev) return NEXT;
   const hostname = input.host.replace(/:\d+$/, '').toLowerCase();
   if (hostname !== 'localhost' && hostname !== '127.0.0.1') return NEXT;
-  return isRootForm(input.pathname) ? { kind: 'rewrite', pathname: `/pay${input.pathname}` } : NEXT;
+  return rootFormOrNext(input.pathname);
+}
+
+function rootFormOrNext(pathname: string): HostRoute {
+  return isRootForm(pathname) ? { kind: 'rewrite', pathname: `/pay${pathname}` } : NEXT;
 }
