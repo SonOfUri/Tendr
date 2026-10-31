@@ -47,6 +47,30 @@ describe('safeLogo', () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it('accepts the full asset origin prefix when it carries a path', async () => {
+    vi.stubEnv('TENDR_ASSET_ORIGIN', 'https://cdn.example.com/tendr/');
+    fetchSpy.mockResolvedValue(image(10));
+    expect((await safeLogo('https://cdn.example.com/tendr/assets/m/l.png'))?.byteLength).toBe(10);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    for (const bad of [
+      'https://cdn.example.com/other/l.png',
+      'https://cdn.example.com/tendrx/l.png',
+      'https://cdn.example.com/tendr/../other/l.png',
+      'https://cdn.example.com/tendr',
+      'https://cdn.example.com.evil.example/tendr/l.png',
+      'http://cdn.example.com/tendr/l.png',
+    ]) {
+      expect(await safeLogo(bad), bad).toBeNull();
+    }
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('compares origins after parsing (case, default port)', async () => {
+    vi.stubEnv('TENDR_ASSET_ORIGIN', 'https://Assets.UseTendr.tech:443');
+    fetchSpy.mockResolvedValue(image(10));
+    expect((await safeLogo(`${ORIGIN}/l.png`))?.byteLength).toBe(10);
+  });
+
   it('returns null on a redirect (fetch rejects), a non-image type, or more than 1 MB', async () => {
     fetchSpy.mockRejectedValueOnce(new TypeError('redirect'));
     expect(await safeLogo(`${ORIGIN}/l.png`)).toBeNull();

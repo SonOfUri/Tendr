@@ -97,7 +97,13 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "public/v1/tendr.js"],
+      "outputs": [
+        "dist/**",
+        ".next/**",
+        "!.next/cache/**",
+        "public/v1/tendr.js",
+        "public/fonts/**"
+      ],
       "env": [
         "TENDR_CHECKOUT_BASE_URL",
         "CHECKOUT_BASE_URL",

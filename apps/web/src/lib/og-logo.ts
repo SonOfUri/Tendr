@@ -1,10 +1,27 @@
 // The preview card's merchant logo (spec §4.1). `logo_url` is merchant-supplied free text, so the
-// renderer never fetches an arbitrary URL: only an https URL on Tendr's own asset origin
-// (`TENDR_ASSET_ORIGIN`), with a short timeout, no redirects, an image content type and a size cap.
+// renderer never fetches an arbitrary URL: only an https URL under Tendr's own asset origin
+// (`TENDR_ASSET_ORIGIN`, including its path prefix when it has one), with a short timeout, no redirects, an image content type and a size cap.
 // Anything else yields null and the card draws the merchant's initial.
 
 export const LOGO_MAX_BYTES = 1_000_000;
 const LOGO_TIMEOUT_MS = 3000;
+
+/**
+ * Whether `url` is under `assetOrigin`: same origin (compared as `URL.origin`) and, when the asset
+ * origin carries a path prefix (`https://cdn.example/tendr`), a path inside that prefix. Paths are
+ * compared after URL parsing, so `..` segments cannot climb out of the prefix.
+ */
+function isUnderAssetOrigin(url: URL, assetOrigin: string): boolean {
+  let base: URL;
+  try {
+    base = new URL(assetOrigin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:' || url.origin !== base.origin) return false;
+  const prefix = base.pathname.replace(/\/+$/, '');
+  return prefix === '' || url.pathname.startsWith(`${prefix}/`);
+}
 
 /** The logo's bytes, or null when it must not (or cannot) be fetched. */
 export async function safeLogo(url: string | null): Promise<ArrayBuffer | null> {
@@ -16,7 +33,7 @@ export async function safeLogo(url: string | null): Promise<ArrayBuffer | null> 
   } catch {
     return null;
   }
-  if (parsed.protocol !== 'https:' || parsed.origin !== origin) return null;
+  if (!isUnderAssetOrigin(parsed, origin)) return null;
 
   try {
     const res = await fetch(parsed, {
