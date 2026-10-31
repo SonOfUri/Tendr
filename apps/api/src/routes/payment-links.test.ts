@@ -1,10 +1,22 @@
 import type { Merchant } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { prisma } from '../lib/prisma.js';
 import { dashHeaders, loginAs } from '../test/dashboard.js';
-import { createApiKey, createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
+import {
+  createApiKey,
+  createMerchant,
+  createRow,
+  createUser,
+  resetDb,
+  setLiveMode,
+} from '../test/helpers.js';
+
+// Live writes here assume live mode is open (LIVE_MODE_ENABLED); the switch-off behaviour is
+// tested in gateway/live-mode.test.ts.
+beforeAll(() => setLiveMode(true));
+afterAll(() => setLiveMode(undefined));
 
 describe('payment link routes', () => {
   let app: FastifyInstance;

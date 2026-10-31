@@ -28,6 +28,7 @@ import { recordEvent } from '../events/record.js';
 import { sha256 } from '../lib/crypto.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
+import { liveModeOpen, liveModeUnavailable } from '../lib/live-mode.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { deleteSecret, putSecret, takeSecret } from '../secrets/secrets.js';
@@ -399,6 +400,10 @@ export const CONNECT_STATUS_PATHS = {
 } as const;
 
 const BLOCKING: Record<ConnectBlockingCode, { message: string; path: string }> = {
+  live_mode_unavailable: {
+    message: liveModeUnavailable().message,
+    path: CONNECT_STATUS_PATHS.goLive,
+  },
   store_inactive: {
     message: 'Your tendr store is not active. Contact tendr support',
     path: CONNECT_STATUS_PATHS.goLive,
@@ -427,7 +432,9 @@ const BLOCKING: Record<ConnectBlockingCode, { message: string; path: string }> =
 export async function connectStatus(
   ctx: CheckoutCtx & { connectionId: string },
 ): Promise<ConnectStatusResponse> {
-  const blocking: ConnectBlockingCode[] = [];
+  // While the live-mode switch is off, a live connection is blocked on that first of all.
+  const blocking: ConnectBlockingCode[] =
+    ctx.livemode && !liveModeOpen() ? ['live_mode_unavailable'] : [];
   const merchant = await prisma.merchant.findUniqueOrThrow({
     where: { id: ctx.merchantId },
     select: { status: true },

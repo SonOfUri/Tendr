@@ -245,6 +245,19 @@ const EnvSchema = z
         .transform((v) => v === 'true' || v === '1'),
     ),
     /**
+     * Platform switch for live mode (deploy spec §6). Off by default: until the merchant-account
+     * contract is audited, no store goes live, no live account is provisioned on mainnet, and
+     * every write in live mode is refused with `403 LIVE_MODE_UNAVAILABLE` (`lib/live-mode.ts`).
+     * Live reads and test mode are unaffected.
+     */
+    LIVE_MODE_ENABLED: z.preprocess(
+      blankAsUnset,
+      z
+        .enum(['true', 'false', '1', '0'])
+        .default('false')
+        .transform((v) => v === 'true' || v === '1'),
+    ),
+    /**
      * A gas-fee account's token is swept once it is worth at least this much (USD), or weekly.
      * A decimal string, never parsed as a float. Default 20.
      */

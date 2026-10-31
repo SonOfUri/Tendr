@@ -30,6 +30,7 @@ import {
   createRow,
   createUser,
   resetDb,
+  setLiveMode,
 } from '../test/helpers.js';
 
 const SITE = 'https://shop.example.com';
@@ -49,6 +50,9 @@ describe('connect routes', () => {
 
   beforeEach(async () => {
     await resetDb();
+    // These tests cover live connections as they behave once live mode is open; the switch-off
+    // behaviour has its own tests below.
+    setLiveMode(true);
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     app = await buildApp();
     await app.ready();
@@ -65,6 +69,7 @@ describe('connect routes', () => {
     setBeforeFanOutWriteHook(null);
     logSpy.mockRestore();
     vi.useRealTimers();
+    setLiveMode(undefined);
   });
   afterAll(async () => {
     await prisma.$disconnect();
@@ -316,6 +321,68 @@ describe('connect routes', () => {
         },
       ],
     });
+  });
+
+  it('switch off: live status blocks first on live_mode_unavailable; test status is unaffected', async () => {
+    setLiveMode(undefined);
+    await signerWithPasskeys(1);
+    await createRow('MerchantAccount', merchant.id, false, { status: 'active' });
+    await createRow('SettlementConfig', merchant.id, false, {
+      payoutMode: 'intents',
+      payoutAddress: null,
+      isDefault: true,
+    });
+    const creds = await connect();
+    const res = await status(creds.live.secret_key);
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({ mode: 'live', ready: false });
+    expect(body.blocking).toEqual([
+      {
+        code: 'live_mode_unavailable',
+        message: 'Live payments are not open yet. Test mode works as usual.',
+        href: 'http://localhost:3000/dashboard',
+      },
+      {
+        code: 'live_account_missing',
+        message: 'Finish going live on your tendr dashboard',
+        href: 'http://localhost:3000/dashboard',
+      },
+    ]);
+    // Even with an active live account and payout, live stays blocked while the switch is off.
+    await createRow('MerchantAccount', merchant.id, true, { status: 'active' });
+    await createRow('SettlementConfig', merchant.id, true, {
+      payoutMode: 'intents',
+      payoutAddress: null,
+      isDefault: true,
+    });
+    const after = (await status(creds.live.secret_key)).json();
+    expect(after.ready).toBe(false);
+    expect(after.blocking.map((b: { code: string }) => b.code)).toEqual(['live_mode_unavailable']);
+
+    const test = (await status(creds.test.secret_key)).json();
+    expect(test).toMatchObject({ mode: 'test', ready: true, blocking: [] });
+  });
+
+  it('switch off: a live connection key cannot create a session (403) but still reads status', async () => {
+    setLiveMode(undefined);
+    const creds = await connect();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout/sessions',
+      headers: { authorization: `Bearer ${creds.live.secret_key}` },
+      payload: {
+        amount: '10.00',
+        amount_currency: 'USD',
+        external_ref: 'order-live',
+        success_url: `${SITE}/thanks`,
+        cancel_url: `${SITE}/cart`,
+      },
+    });
+    expect(res.statusCode, res.body).toBe(403);
+    expect(res.json().error.code).toBe('LIVE_MODE_UNAVAILABLE');
+    expect(await prisma.session.count({ where: { livemode: true } })).toBe(0);
+    expect((await status(creds.live.secret_key)).statusCode).toBe(200);
   });
 
   it('status: a live account still provisioning, then no payout method', async () => {

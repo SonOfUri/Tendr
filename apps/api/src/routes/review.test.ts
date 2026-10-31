@@ -1,7 +1,7 @@
 import type { Merchant } from '@prisma/client';
 import { HOLD_NOTICE, LEGAL_ACK_PHRASE, type MerchantUserRole } from '@tendr/contracts';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { MemoryMailer, setMailer } from '../auth/mailer.js';
 import { setExchangeAddresses } from '../checkout/exchanges.js';
@@ -29,7 +29,14 @@ import { prisma } from '../lib/prisma.js';
 import { fakeNearClient, resetNearClients } from '../near/client.js';
 import type { FakeNearClient } from '../near/fake.js';
 import { dashHeaders, loginAs, type Login } from '../test/dashboard.js';
-import { createApiKey, createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
+import {
+  createApiKey,
+  createMerchant,
+  createRow,
+  createUser,
+  resetDb,
+  setLiveMode,
+} from '../test/helpers.js';
 import { isolatedSimStore } from '../test/sim-1click.js';
 
 const sim1click = isolatedSimStore();
@@ -39,6 +46,11 @@ const SANCTIONED = '0x000000000000000000000000000000000000dEaD';
 const BINANCE = '0x28C6c06298d514Db089934071355E5743bf21d60';
 const NEAR_DEST = 'legal-cleared.testnet';
 const NEAR_FEE = 10_000n; // $0.01 NEAR return fee in USDC base units
+
+// Live writes here assume live mode is open (LIVE_MODE_ENABLED); the switch-off behaviour is
+// tested in gateway/live-mode.test.ts.
+beforeAll(() => setLiveMode(true));
+afterAll(() => setLiveMode(undefined));
 
 describe('review queue', () => {
   let app: FastifyInstance;

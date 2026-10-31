@@ -10,7 +10,14 @@ import { prisma } from '../lib/prisma.js';
 import { setSafeFetchResolver, setSafeFetchTransport } from '../lib/safe-fetch.js';
 import { memoryObjectStore } from '../storage/object-store.js';
 import { dashHeaders, loginAs } from '../test/dashboard.js';
-import { createApiKey, createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
+import {
+  createApiKey,
+  createMerchant,
+  createRow,
+  createUser,
+  resetDb,
+  setLiveMode,
+} from '../test/helpers.js';
 
 // Tests never touch the network: names resolve through `dns`, and the guarded connection is sent
 // to a local plain-http server that answers from `routes` (host + path).
@@ -63,6 +70,11 @@ function useLocalServer(): void {
 
 const serve = (path: string, type: string, body: Buffer | string) =>
   routes.set(path, (res) => res.writeHead(200, { 'content-type': type }).end(body));
+
+// Live writes here assume live mode is open (LIVE_MODE_ENABLED); the switch-off behaviour is
+// tested in gateway/live-mode.test.ts.
+beforeAll(() => setLiveMode(true));
+afterAll(() => setLiveMode(undefined));
 
 describe('theme brand routes', () => {
   let app: FastifyInstance;

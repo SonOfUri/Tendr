@@ -31,6 +31,7 @@ import fp from 'fastify-plugin';
 import { scopedDb } from '../db/scoped.js';
 import { safeEqualHex, sha256 } from '../lib/crypto.js';
 import { AppError, forbidden, unauthorized } from '../lib/errors.js';
+import { liveModeOpen, liveModeUnavailable } from '../lib/live-mode.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { getSecret } from '../secrets/secrets.js';
@@ -361,6 +362,18 @@ const authPlugin: FastifyPluginAsync = async (app) => {
         requestLog(req, principal, { outcome: 'forbidden', statusCode: 403 });
         throw forbidden('This recovery session is no longer valid');
       }
+    }
+
+    // The live-mode switch: while it is off, a principal in live mode (a live key, a live session
+    // client, a dashboard request in live mode, a live connection) may read but never write.
+    if (
+      principal.kind !== 'user_session' &&
+      principal.livemode &&
+      !SAFE_METHODS.has(req.method) &&
+      !liveModeOpen()
+    ) {
+      requestLog(req, principal, { outcome: 'live_mode_unavailable', statusCode: 403 });
+      throw liveModeUnavailable();
     }
 
     // Step-up: a recent passkey assertion on the session, for routes that ask for it and for every

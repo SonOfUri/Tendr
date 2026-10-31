@@ -32,6 +32,7 @@ import { hookDeliveryFor } from '../hooks/destination.js';
 import { sha256 } from '../lib/crypto.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
+import { assertLiveModeOpen } from '../lib/live-mode.js';
 import { linkAvailability } from '../payment-links/links.js';
 import { toJsonDecimal } from '../lib/serialize.js';
 import {
@@ -380,6 +381,9 @@ export async function createSession(
   input: InternalSessionInput,
   opts: { fromLink?: FromLink } = {},
 ): Promise<CreatedSession> {
+  // Every way a session is made (API key, connection, payment link) comes through here, so the
+  // live-mode switch is checked here too, not only at the gateway.
+  if (ctx.livemode) assertLiveModeOpen();
   const { fromLink } = opts;
   const linkId = fromLink?.linkId ?? input.payment_link_id;
   const { db } = ctx;

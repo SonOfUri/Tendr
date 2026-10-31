@@ -136,6 +136,35 @@ describe('public payment link routes', () => {
     expect(Date.parse(ok.json().expires_at)).toBeGreaterThan(Date.now());
   });
 
+  it('switch off: a live link answers its page but makes no session (403 LIVE_MODE_UNAVAILABLE)', async () => {
+    await createRow('MerchantAccount', merchant.id, true, { status: 'active' });
+    await createRow('SettlementConfig', merchant.id, true, {
+      destAssetId: 'nep141:usdc.test',
+      destChain: 'near',
+      payoutMode: 'intents',
+      payoutAddress: null,
+      isDefault: true,
+    });
+    const live = {
+      merchantId: merchant.id,
+      livemode: true,
+      db: scopedDb({ merchantId: merchant.id, livemode: true }),
+    };
+    await createLink(live, {
+      title: 'Live shirt',
+      slug: 'live-shirt',
+      amount_type: 'fixed',
+      amount: '25.00',
+      currency: 'USD',
+      note: 'optional',
+    });
+    expect((await read('acme/live-shirt')).statusCode).toBe(200);
+    const res = await pay('acme/live-shirt');
+    expect(res.statusCode, res.body).toBe(403);
+    expect(res.json().error.code).toBe('LIVE_MODE_UNAVAILABLE');
+    expect(await prisma.session.count({ where: { livemode: true } })).toBe(0);
+  });
+
   it('the payer page origin may call the session route (CORS, no credentials)', async () => {
     const origin = new URL(env().CHECKOUT_BASE_URL).origin;
     const res = await app.inject({

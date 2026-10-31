@@ -4,6 +4,7 @@ import { Prisma, type ApiKey, type Merchant, type User, type WebauthnCredential 
 import { ALL_SCOPES, TENDR_DEFAULT_THEME, type Scope } from '@tendr/contracts';
 import { ulid } from 'ulid';
 import { PER_MODE_MODELS, READ_ONLY_PER_MODE_MODELS, SHARED_MODELS } from '../db/models.js';
+import { loadEnv } from '../env.js';
 import { newId } from '../lib/ids.js';
 import { prisma } from '../lib/prisma.js';
 import { putSecret } from '../secrets/secrets.js';
@@ -562,4 +563,15 @@ export async function createRow(
     throw new Error(`createRow: unknown merchant-owned model "${model}"`);
   }
   return builders[model as MerchantOwnedModel](merchantId, livemode, overrides);
+}
+
+/**
+ * Sets `LIVE_MODE_ENABLED` (`undefined` unsets it: the switch is off) and reloads the env. Tests
+ * that exercise live writes turn it on in their own setup and unset it afterwards, since
+ * `process.env` outlives a test file.
+ */
+export function setLiveMode(on: boolean | undefined): void {
+  if (on === undefined) delete process.env.LIVE_MODE_ENABLED;
+  else process.env.LIVE_MODE_ENABLED = on ? 'true' : 'false';
+  loadEnv();
 }

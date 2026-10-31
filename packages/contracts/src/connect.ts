@@ -94,6 +94,8 @@ export type ConnectAuthorizeResponse = z.infer<typeof ConnectAuthorizeResponseSc
 
 /** Why a connection cannot take payments in its key's mode yet (`GET /v1/connect/status`). */
 export const ConnectBlockingCodeValues = [
+  /** Live mode is switched off platform-wide; listed first in live mode while it is. */
+  'live_mode_unavailable',
   'store_inactive',
   'live_account_missing',
   'live_account_pending',

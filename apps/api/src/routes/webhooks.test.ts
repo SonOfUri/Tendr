@@ -1,7 +1,7 @@
 import type { Merchant } from '@prisma/client';
 import type { MerchantUserRole } from '@tendr/contracts';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import {
   fanOutEvent,
@@ -13,7 +13,12 @@ import { verifyRequestSignature } from '../gateway/signing.js';
 import { prisma } from '../lib/prisma.js';
 import { getSecret } from '../secrets/secrets.js';
 import { dashHeaders, loginAs, type Login } from '../test/dashboard.js';
-import { createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
+import { createMerchant, createRow, createUser, resetDb, setLiveMode } from '../test/helpers.js';
+
+// Live writes here assume live mode is open (LIVE_MODE_ENABLED); the switch-off behaviour is
+// tested in gateway/live-mode.test.ts.
+beforeAll(() => setLiveMode(true));
+afterAll(() => setLiveMode(undefined));
 
 describe('webhook endpoint routes', () => {
   let app: FastifyInstance;

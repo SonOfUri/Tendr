@@ -147,6 +147,12 @@ export const ErrorCodes = [
   'ASSET_IN_USE',
   /** The brand pull could not read the site or store; `details.reason` says why. */
   'BRAND_FETCH_FAILED',
+  /**
+   * Live mode is switched off platform-wide (`LIVE_MODE_ENABLED`): going live, and every write in
+   * live mode (a live key, a dashboard request in live mode, a live connection), is refused with
+   * 403. Live reads and everything in test mode work as usual.
+   */
+  'LIVE_MODE_UNAVAILABLE',
 ] as const;
 
 export type ErrorCode = (typeof ErrorCodes)[number];

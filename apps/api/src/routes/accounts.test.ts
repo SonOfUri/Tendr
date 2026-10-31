@@ -9,7 +9,7 @@ import { prisma } from '../lib/prisma.js';
 import { fakeNearClient, resetNearClients } from '../near/client.js';
 import type { FakeNearClient } from '../near/fake.js';
 import { dashHeaders, loginAs, type Login } from '../test/dashboard.js';
-import { createCredential, createRow, createUser, resetDb } from '../test/helpers.js';
+import { createCredential, createRow, createUser, resetDb, setLiveMode } from '../test/helpers.js';
 
 describe('account routes', () => {
   let app: FastifyInstance;
@@ -21,6 +21,8 @@ describe('account routes', () => {
 
   beforeEach(async () => {
     await resetDb();
+    // These tests cover going live once live mode is open; the switch-off tests turn it off.
+    setLiveMode(true);
     resetNearClients();
     test = fakeNearClient(false);
     live = fakeNearClient(true);
@@ -51,6 +53,7 @@ describe('account routes', () => {
     await app.close();
     logSpy.mockRestore();
     resetNearClients();
+    setLiveMode(undefined);
   });
   afterAll(async () => {
     await prisma.$disconnect();
@@ -158,6 +161,64 @@ describe('account routes', () => {
     expect(seen.statusCode).toBe(200);
     expect(Object.keys(seen.json().live).sort()).toEqual(['nearAccountId', 'status']);
     expect(seen.body).not.toMatch(/threshold"?:\s*2|signerEpoch|createdTx/);
+  });
+
+  it('switch off: go-live is 403 LIVE_MODE_UNAVAILABLE, creates no live account and calls no NEAR', async () => {
+    setLiveMode(undefined);
+    await member('admin', true);
+    const res = await post('/v1/account/go-live', ownerLogin, { threshold: 1 });
+    expect(res.statusCode, res.body).toBe(403);
+    expect(res.json().error).toMatchObject({
+      code: 'LIVE_MODE_UNAVAILABLE',
+      message: 'Live payments are not open yet. Test mode works as usual.',
+    });
+    expect(await prisma.merchantAccount.count({ where: { merchantId, livemode: true } })).toBe(0);
+    expect(live.calls).toHaveLength(0);
+
+    // The checklist names it first; the rest of the rule is still reported.
+    const check = await get('/v1/account/go-live', ownerLogin);
+    expect(check.statusCode).toBe(200);
+    expect(check.json().checklist).toMatchObject({
+      ok: false,
+      missing: ['live_mode_unavailable'],
+      signerCount: 2,
+    });
+    const viewer = await member('viewer');
+    expect((await get('/v1/account/go-live', viewer)).json().checklist.missing).toEqual([
+      'live_mode_unavailable',
+    ]);
+  });
+
+  it('switch off: the checklist lists live_mode_unavailable before the two-key items', async () => {
+    setLiveMode(undefined);
+    const check = await get('/v1/account/go-live', ownerLogin);
+    expect(check.json().checklist).toMatchObject({
+      ok: false,
+      missing: ['live_mode_unavailable', 'second_key'],
+    });
+  });
+
+  it('switch off: a queued live provisioning makes no NEAR call and leaves the row as it is', async () => {
+    await member('admin', true);
+    expect((await post('/v1/account/go-live', ownerLogin)).statusCode).toBe(202);
+    setLiveMode(undefined);
+    const row = await provisionMerchantAccount(merchantId, true);
+    expect(row.status).toBe('provisioning');
+    expect(row.provisionClaimedAt).toBeNull();
+    expect(live.calls).toHaveLength(0);
+
+    setLiveMode(true);
+    expect((await provisionMerchantAccount(merchantId, true)).status).toBe('active');
+  });
+
+  it('switch off: a dashboard request in live mode can read but not write', async () => {
+    setLiveMode(undefined);
+    expect((await get('/v1/account', ownerLogin, true)).statusCode).toBe(200);
+    const res = await post('/v1/account/retry', ownerLogin, {}, true);
+    expect(res.statusCode, res.body).toBe(403);
+    expect(res.json().error.code).toBe('LIVE_MODE_UNAVAILABLE');
+    // Test mode is unaffected.
+    expect((await get('/v1/account', ownerLogin, false)).statusCode).toBe(200);
   });
 
   it('recovery key: owner only, with step-up; stored before go-live', async () => {

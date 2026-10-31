@@ -238,7 +238,8 @@ export interface Balances {
 export interface GoLiveStatus {
   checklist: {
     ok: boolean;
-    missing: ('second_key' | 'threshold')[];
+    /** `live_mode_unavailable` (listed first) while the platform's live-mode switch is off. */
+    missing: ('live_mode_unavailable' | 'second_key' | 'threshold')[];
     signerCount: number;
     recoveryKeySet: boolean;
   };

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { ed25519 } from '@noble/curves/ed25519';
 import type { Merchant, User, WebauthnCredential } from '@prisma/client';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getEventHandler, handlerJobOptions } from '../jobs/handlers.js';
 import '../jobs/register-handlers.js';
 import { providerNotConfigured } from '../lib/errors.js';
@@ -12,7 +12,7 @@ import { closeRedis, getRedis, whenReady } from '../lib/redis.js';
 import { createStore, MAX_OWNED_STORES } from '../merchants/signup.js';
 import { fakeNearClient, resetNearClients } from '../near/client.js';
 import type { FakeNearClient } from '../near/fake.js';
-import { createCredential, createRow, createUser, resetDb } from '../test/helpers.js';
+import { createCredential, createRow, createUser, resetDb, setLiveMode } from '../test/helpers.js';
 import {
   balancesCacheKey,
   getBalances,
@@ -34,6 +34,11 @@ const ed25519Key = () =>
   Buffer.from(ed25519.getPublicKey(ed25519.utils.randomPrivateKey())).toString('base64');
 
 type Owner = { user: User; cred: WebauthnCredential; merchant: Merchant };
+
+// Live writes here assume live mode is open (LIVE_MODE_ENABLED); the switch-off behaviour is
+// tested in gateway/live-mode.test.ts.
+beforeAll(() => setLiveMode(true));
+afterAll(() => setLiveMode(undefined));
 
 describe('merchant accounts', () => {
   let test: FakeNearClient;

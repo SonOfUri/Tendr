@@ -105,6 +105,8 @@ export default defineConfig({
         // Any well-formed code hash: the fake client never deploys anything.
         MERCHANT_ACCOUNT_CODE_HASH_TEST: E2E_CODE_HASH,
         MERCHANT_ACCOUNT_CODE_HASH_LIVE: E2E_CODE_HASH,
+        // The specs walk go-live end to end, so live mode is open here (it is off by default).
+        LIVE_MODE_ENABLED: 'true',
         MAIL_DRIVER: 'log',
         KEYVAULT_DRIVER: 'local',
         LOG_LEVEL: 'warn',

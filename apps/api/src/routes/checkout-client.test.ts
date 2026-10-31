@@ -1,6 +1,6 @@
 import type { Merchant } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { resetOneClickProviders, SimulatedOneClick } from '../checkout/oneclick/index.js';
 import { resetTokenCache } from '../checkout/tokens.js';
@@ -10,7 +10,7 @@ import { RESERVATION_GRACE_MS, releaseStaleReservations } from '../gas/quote-fee
 import { env } from '../env.js';
 import { sha256 } from '../lib/crypto.js';
 import { prisma } from '../lib/prisma.js';
-import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
+import { createApiKey, createMerchant, createRow, resetDb, setLiveMode } from '../test/helpers.js';
 import { isolatedSimStore } from '../test/sim-1click.js';
 
 const sim1click = isolatedSimStore();
@@ -18,6 +18,11 @@ const ETH = 'nep141:eth.test'; // blockchain "eth", 18 decimals, $2500 in the si
 const USDC = 'nep141:usdc.test'; // blockchain "near", 6 decimals, $1
 const WALLET = '0x1111111111111111111111111111111111111111';
 const SANCTIONED = '0x000000000000000000000000000000000000dEaD';
+
+// Live writes here assume live mode is open (LIVE_MODE_ENABLED); the switch-off behaviour is
+// tested in gateway/live-mode.test.ts.
+beforeAll(() => setLiveMode(true));
+afterAll(() => setLiveMode(undefined));
 
 describe('shopper checkout routes', () => {
   let app: FastifyInstance;

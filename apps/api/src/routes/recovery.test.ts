@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { ed25519 } from '@noble/curves/ed25519';
 import type { Merchant, MerchantAccount } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConfigView } from '../accounts/accounts.js';
 import { recoveryMessage, type SignerJson } from '../accounts/encoding.js';
 import { eventLog } from '../accounts/events.js';
@@ -13,7 +13,7 @@ import { fakeNearClient, resetNearClients } from '../near/client.js';
 import type { FakeNearClient } from '../near/fake.js';
 import { SoftAuthenticator } from '../test/authenticator.js';
 import { dashHeaders, loginAs, responseCookies, type Login } from '../test/dashboard.js';
-import { createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
+import { createMerchant, createRow, createUser, resetDb, setLiveMode } from '../test/helpers.js';
 import { CSRF_COOKIE, SESSION_COOKIE } from '@tendr/contracts';
 import { onRecoveryPasskeyRegistered, onRecoverySessionOpened } from '../jobs/account-notices.js';
 import { memoryMailer } from '../test/dashboard.js';
@@ -22,6 +22,11 @@ import { RECOVERY_LIMIT } from './recovery.js';
 const HOUR = 3_600_000;
 const ns = (ms: number) => (BigInt(ms) * 1_000_000n).toString();
 const b64 = (b: Uint8Array) => Buffer.from(b).toString('base64');
+
+// Live writes here assume live mode is open (LIVE_MODE_ENABLED); the switch-off behaviour is
+// tested in gateway/live-mode.test.ts.
+beforeAll(() => setLiveMode(true));
+afterAll(() => setLiveMode(undefined));
 
 describe('recovery API', () => {
   let app: FastifyInstance;

@@ -374,6 +374,17 @@ describe('loadEnv TENDR_SPONSOR_LOSS_CAP_USD', () => {
   });
 });
 
+describe('loadEnv live-mode switch', () => {
+  it('is off by default and parses like FEE_SWEEP_ENABLED', () => {
+    expect(loadEnv(base).LIVE_MODE_ENABLED).toBe(false);
+    expect(loadEnv({ ...base, LIVE_MODE_ENABLED: ' ' }).LIVE_MODE_ENABLED).toBe(false);
+    expect(loadEnv({ ...base, LIVE_MODE_ENABLED: 'true' }).LIVE_MODE_ENABLED).toBe(true);
+    expect(loadEnv({ ...base, LIVE_MODE_ENABLED: '1' }).LIVE_MODE_ENABLED).toBe(true);
+    expect(loadEnv({ ...base, LIVE_MODE_ENABLED: '0' }).LIVE_MODE_ENABLED).toBe(false);
+    expect(() => loadEnv({ ...base, LIVE_MODE_ENABLED: 'yes' })).toThrow(/LIVE_MODE_ENABLED/);
+  });
+});
+
 describe('loadEnv gas-fee sweep and alerts', () => {
   it('defaults: sweep off, $20 threshold, no fee account, $50 low-balance alert', () => {
     const e = loadEnv(base);

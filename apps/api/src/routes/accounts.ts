@@ -13,6 +13,7 @@ import {
 } from '../accounts/accounts.js';
 import { settlementView } from '../accounts/settlement.js';
 import { requireDashboardUser } from '../gateway/principal.js';
+import { assertLiveModeOpen } from '../lib/live-mode.js';
 import { prisma } from '../lib/prisma.js';
 
 const read = { principals: ['dashboard_user' as const], permission: 'account:read' as const };
@@ -100,6 +101,8 @@ export const accountRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post('/v1/account/go-live', { config: { auth: owner } }, async (req, reply) => {
+    // The live-mode switch: refused before anything is read, written or queued.
+    assertLiveModeOpen();
     const p = requireDashboardUser(req);
     const { threshold } = z
       .object({ threshold: Threshold.optional() })

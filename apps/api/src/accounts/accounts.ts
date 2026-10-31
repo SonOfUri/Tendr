@@ -31,6 +31,7 @@ import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
 import { AppError, conflict, forbidden, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
+import { assertLiveModeOpen, liveModeOpen } from '../lib/live-mode.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { getRedis } from '../lib/redis.js';
@@ -349,6 +350,15 @@ export async function provisionMerchantAccount(
   const row = await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } });
   if (!row) throw notFound('No account to provision');
   if (row.status === 'active') return row;
+  // The live-mode switch: no mainnet account is created while it is off. The row is left as it is
+  // (unclaimed), so nothing is spent; the job completes without retrying.
+  if (livemode && !liveModeOpen()) {
+    log('warn', 'live provisioning skipped: live mode is switched off', {
+      merchantId,
+      accountId: row.id,
+    });
+    return row;
+  }
   const attempt = await claim(row);
   if (!attempt) {
     const current = await prisma.merchantAccount.findFirstOrThrow({ where: { id: row.id } });
@@ -650,7 +660,8 @@ export async function retryProvisioning(ctx: ScopeContext): Promise<MerchantAcco
 
 // ─── go-live ─────────────────────────────────────────────────────────────────
 
-export type GoLiveMissing = 'second_key' | 'threshold';
+/** `live_mode_unavailable`: the platform's live-mode switch is off (always listed first). */
+export type GoLiveMissing = 'live_mode_unavailable' | 'second_key' | 'threshold';
 
 function goLiveRule(
   signerCount: number,
@@ -692,8 +703,17 @@ export async function goLiveStatus(merchantId: string, threshold = 1): Promise<G
     prisma.merchantAccount.findFirst({ where: { merchantId, livemode: true } }),
     goLiveCheck(merchantId, threshold),
   ]);
+  // While the live-mode switch is off, that is the first thing missing, whatever else is.
+  const missing: GoLiveMissing[] = liveModeOpen()
+    ? check.missing
+    : ['live_mode_unavailable', ...check.missing];
   return {
-    checklist: { ...check, signerCount: signers.length, recoveryKeySet: recovery !== null },
+    checklist: {
+      ok: missing.length === 0,
+      missing,
+      signerCount: signers.length,
+      recoveryKeySet: recovery !== null,
+    },
     live: live ? { status: live.status, nearAccountId: live.nearAccountId } : null,
   };
 }
@@ -755,6 +775,8 @@ export async function goLiveOutcome(
   actor: OwnerActor,
   opts: { threshold?: number } = {},
 ): Promise<{ account: MerchantAccount; created: boolean }> {
+  // The route checks this first too; here it also covers any other caller.
+  assertLiveModeOpen();
   await requireOwner(actor);
   const threshold = opts.threshold ?? 1;
   const ctx = { merchantId: actor.merchantId, livemode: true };

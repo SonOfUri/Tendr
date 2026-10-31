@@ -1,6 +1,6 @@
 import type { Merchant } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { fixedFxProvider, resetFxCache } from '../checkout/fx.js';
 import { simulatedOneClick } from '../checkout/oneclick/index.js';
@@ -10,9 +10,14 @@ import { env, loadEnv } from '../env.js';
 import { scopedDb } from '../db/scoped.js';
 import { sha256 } from '../lib/crypto.js';
 import { prisma } from '../lib/prisma.js';
-import { createApiKey, createMerchant, createRow, resetDb } from '../test/helpers.js';
+import { createApiKey, createMerchant, createRow, resetDb, setLiveMode } from '../test/helpers.js';
 
 const SECRET_RE = /^(ses_[0-9A-HJKMNP-TV-Z]{26})_secret_[0-9a-f]{32}$/;
+
+// Live writes here assume live mode is open (LIVE_MODE_ENABLED); the switch-off behaviour is
+// tested in gateway/live-mode.test.ts.
+beforeAll(() => setLiveMode(true));
+afterAll(() => setLiveMode(undefined));
 
 describe('checkout session routes', () => {
   let app: FastifyInstance;
