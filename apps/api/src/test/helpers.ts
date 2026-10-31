@@ -575,3 +575,10 @@ export function setLiveMode(on: boolean | undefined): void {
   else process.env.LIVE_MODE_ENABLED = on ? 'true' : 'false';
   loadEnv();
 }
+
+/** Sets `GASLESS_LIVE_ENABLED` for a test and reloads the env (pass `undefined` to unset). */
+export function setGaslessLive(on: boolean | undefined): void {
+  if (on === undefined) delete process.env.GASLESS_LIVE_ENABLED;
+  else process.env.GASLESS_LIVE_ENABLED = on ? 'true' : 'false';
+  loadEnv();
+}

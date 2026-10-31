@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { chainFamily, isValidAddress } from '../checkout/address-format.js';
 import type { ShopperCtx } from '../checkout/quotes.js';
 import { tokenInfo, tokenList } from '../checkout/tokens.js';
+import { env } from '../env.js';
 import { isNativeToken, nativeUsd } from '../gas/fees.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
@@ -52,9 +53,11 @@ const relayers = new Map<string, GaslessRelayer>();
 /**
  * The gasless relayer for a chain family and mode. Test mode always gets the simulated relayer
  * (Solana's, NEAR's and Tron's simulate inside `SolanaGasless` / `NearMetaGasless` /
- * `TronGasless`: no Pimlico, no RPC).
+ * `TronGasless`: no Pimlico, no RPC). Live mode gets none (null) unless `GASLESS_LIVE_ENABLED`.
  */
 export function relayerFor(family: ChainFamily, livemode: boolean): GaslessRelayer | null {
+  // Checked before the cache, so a cached live relayer is never handed out while the switch is off.
+  if (livemode && !env().GASLESS_LIVE_ENABLED) return null;
   const key = `${family}:${livemode}`;
   const hit = relayers.get(key);
   if (hit) return hit;

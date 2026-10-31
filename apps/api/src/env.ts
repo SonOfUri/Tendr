@@ -258,6 +258,19 @@ const EnvSchema = z
         .transform((v) => v === 'true' || v === '1'),
     ),
     /**
+     * Gasless (sponsored) payments in live mode. Off by default: live mode launches without them
+     * until the TendrForwarder is externally reviewed. While off, `relayerFor(family, true)` is
+     * null for every family (the checkout is told no gasless option exists). Test mode's
+     * simulated gasless is unaffected.
+     */
+    GASLESS_LIVE_ENABLED: z.preprocess(
+      blankAsUnset,
+      z
+        .enum(['true', 'false', '1', '0'])
+        .default('false')
+        .transform((v) => v === 'true' || v === '1'),
+    ),
+    /**
      * A gas-fee account's token is swept once it is worth at least this much (USD), or weekly.
      * A decimal string, never parsed as a float. Default 20.
      */
