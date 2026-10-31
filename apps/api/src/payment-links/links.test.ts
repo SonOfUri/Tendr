@@ -100,8 +100,8 @@ describe('payment link service', () => {
         total_refunded_usd: '0.00',
       });
       expect(a.id).toMatch(/^plink_/);
-      expect(a.url).toBe('http://localhost:3000/pay/acme/sunday-offering?mode=test');
-      expect(a.qr_url).toBe('http://localhost:3000/pay/acme/sunday-offering/qr?mode=test');
+      expect(a.url).toBe('http://localhost:3000/acme/sunday-offering?mode=test');
+      expect(a.qr_url).toBe('http://localhost:3000/acme/sunday-offering/qr?mode=test');
       const b = await createLink(ctxOf(), fixedNgn);
       expect(b.slug).not.toBe(a.slug);
       expect(b.slug).toMatch(LINK_SLUG_RE);
@@ -129,7 +129,7 @@ describe('payment link service', () => {
       expect(t.slug).toBe('give');
       expect(l.slug).toBe('give');
       expect(t.url).toContain('?mode=test');
-      expect(l.url).toBe('http://localhost:3000/pay/acme/give');
+      expect(l.url).toBe('http://localhost:3000/acme/give');
       expect(l.livemode).toBe(true);
     });
 
@@ -603,12 +603,12 @@ describe('payment link service', () => {
   describe('linkUrls', () => {
     it('builds live and test URLs', () => {
       expect(linkUrls('acme', 'give', true)).toEqual({
-        url: 'http://localhost:3000/pay/acme/give',
-        qr_url: 'http://localhost:3000/pay/acme/give/qr',
+        url: 'http://localhost:3000/acme/give',
+        qr_url: 'http://localhost:3000/acme/give/qr',
       });
       expect(linkUrls('acme', 'give', false)).toEqual({
-        url: 'http://localhost:3000/pay/acme/give?mode=test',
-        qr_url: 'http://localhost:3000/pay/acme/give/qr?mode=test',
+        url: 'http://localhost:3000/acme/give?mode=test',
+        qr_url: 'http://localhost:3000/acme/give/qr?mode=test',
       });
     });
   });

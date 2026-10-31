@@ -24,7 +24,7 @@ import {
 import { z } from 'zod';
 import { scopedDb, type ScopeContext, type ScopedDb } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
-import { env } from '../env.js';
+import { checkoutUrl } from './urls.js';
 import { recordEvent } from '../events/record.js';
 import { transitionSession } from '../events/transitions.js';
 import { networkFeeView } from '../gas/quote-fee.js';
@@ -321,7 +321,7 @@ export async function readinessFor(
 
 /** The hosted checkout page of a session (no secret). */
 export function hostedUrl(id: string): string {
-  return `${env().CHECKOUT_BASE_URL.replace(/\/+$/, '')}/pay/${id}`;
+  return checkoutUrl(id);
 }
 
 /** Statuses that hold an `external_ref` (the partial unique index's predicate). */

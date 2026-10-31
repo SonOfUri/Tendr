@@ -12,7 +12,7 @@ export const LINK_DESCRIPTION_MAX = 500;
 /** 3 to 60 chars, lower-case letters, digits and inner hyphens. */
 export const LINK_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/;
 
-/** Slugs a link may not take: they collide with routes under `/pay/<merchant>/…`. */
+/** Slugs a link may not take: they collide with routes under `/<merchant>/…` on the pay host. */
 export const RESERVED_LINK_SLUGS: readonly string[] = [
   'refund-address',
   'qr',
@@ -30,6 +30,20 @@ export const RESERVED_LINK_SLUGS: readonly string[] = [
   'cancel',
   'null',
   'undefined',
+  'preview',
+  'v1',
+  'downloads',
+  'privacy',
+  'terms',
+  'demo',
+  'dashboard',
+  'connect',
+  'login',
+  'signup',
+  'verify',
+  'invite',
+  'recover',
+  'settings',
 ];
 
 export const PaymentLinkAvailabilitySchema = z.enum([

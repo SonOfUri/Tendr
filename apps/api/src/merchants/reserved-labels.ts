@@ -80,6 +80,22 @@ const STATIC: ReadonlySet<string> = new Set([
   '1click',
   'swap',
   'bridge',
+  // Top-level routes and folders of the web app: the pay host serves `/<merchant>/<link>` at its
+  // root, so a store slug must not shadow them.
+  'preview',
+  'v1',
+  'downloads',
+  'privacy',
+  'terms',
+  'demo',
+  'connect',
+  'login',
+  'signup',
+  'verify',
+  'invite',
+  'recover',
+  'settings',
+  'icons',
 ]);
 
 /** Prefixes Tendr keeps for families of system accounts (`gas-tron`, `fee-usdc`, `intents-…`) and session ids (`ses_…`, `ses-…`, which route under /pay/[id]). */

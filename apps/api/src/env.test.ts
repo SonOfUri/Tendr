@@ -9,6 +9,13 @@ const gcp = {
   GCP_KMS_KEYRING: 'tendr',
   GCP_CREDENTIALS_JSON: '{"type":"service_account","client_email":"a@b","private_key":"k"}',
 };
+/** Production's public origins: all https, none local. */
+const origins = {
+  CHECKOUT_BASE_URL: 'https://pay.usetendr.tech',
+  WEB_URL: 'https://app.usetendr.tech',
+  API_BASE_URL: 'https://api.usetendr.tech',
+  CORS_ORIGINS: 'https://app.usetendr.tech',
+};
 /** Production's theme-asset store: an s3 bucket served from an https origin. */
 const assets = {
   TENDR_ASSET_ORIGIN: 'https://assets.usetendr.tech',
@@ -27,6 +34,7 @@ const webauthn = {
   ONECLICK_API_KEY: 'jwt',
   FX_API_KEY: 'oxr',
   WEB_INTERNAL_TOKEN: 'i'.repeat(32),
+  ...origins,
   ...assets,
 };
 
@@ -203,6 +211,7 @@ describe('loadEnv dashboard auth and mail', () => {
     ONECLICK_API_KEY: 'jwt',
     FX_API_KEY: 'oxr',
     WEB_INTERNAL_TOKEN: 'i'.repeat(32),
+    ...origins,
     ...assets,
   };
 
@@ -233,6 +242,35 @@ describe('loadEnv dashboard auth and mail', () => {
     expect(() => loadEnv({ ...prod, WEBAUTHN_RP_ID: 'localhost' })).toThrow(/WEBAUTHN_RP_ID/);
     expect(() => loadEnv({ ...prod, WEBAUTHN_ORIGINS: 'http://localhost:3000' })).toThrow(
       /WEBAUTHN_ORIGINS/,
+    );
+  });
+});
+
+describe('loadEnv production origins', () => {
+  const prod = { ...base, ...gcp, ...webauthn, NODE_ENV: 'production', KEYVAULT_DRIVER: 'gcp' };
+
+  it('accepts four https, non-local origins', () => {
+    const e = loadEnv(prod);
+    expect(e.CHECKOUT_BASE_URL).toBe('https://pay.usetendr.tech');
+  });
+
+  it.each([
+    ['CHECKOUT_BASE_URL', { CHECKOUT_BASE_URL: 'http://pay.usetendr.tech' }],
+    ['WEB_URL', { WEB_URL: 'http://localhost:3000' }],
+    ['CORS_ORIGINS', { CORS_ORIGINS: 'https://app.usetendr.tech,http://localhost:3000' }],
+    ['CORS_ORIGINS', { CORS_ORIGINS: 'https://127.0.0.1' }],
+  ])('rejects a bad %s', (name, patch) => {
+    expect(() => loadEnv({ ...prod, ...patch })).toThrow(new RegExp(name));
+  });
+
+  it('rejects an unset API_BASE_URL (localhost default)', () => {
+    const { API_BASE_URL: _unused, ...without } = prod;
+    expect(() => loadEnv(without)).toThrow(/API_BASE_URL/);
+  });
+
+  it('keeps the localhost defaults outside production', () => {
+    expect(loadEnv({ ...base, NODE_ENV: 'development' }).API_BASE_URL).toBe(
+      'http://localhost:4000',
     );
   });
 });

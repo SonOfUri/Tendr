@@ -210,7 +210,7 @@ describe('public payment links', () => {
 
   describe('create', () => {
     const sessionOf = async (url: string) => {
-      const id = /\/pay\/(ses_[0-9A-Z]+)#cs=/.exec(url)![1]!;
+      const id = /\/(ses_[0-9A-Z]+)#cs=/.exec(url)![1]!;
       return prisma.session.findUniqueOrThrow({ where: { id } });
     };
 
@@ -219,12 +219,12 @@ describe('public payment links', () => {
       const out = await createLinkSession('acme', 'tshirt', false, {}, IP);
       expect(Object.keys(out)).toEqual(['url', 'expires_at']);
       expect(out.url).toMatch(
-        /^http:\/\/localhost:3000\/pay\/ses_[0-9A-Z]{26}#cs=ses_[0-9A-Z]{26}_secret_[0-9a-f]{32}$/,
+        /^http:\/\/localhost:3000\/ses_[0-9A-Z]{26}#cs=ses_[0-9A-Z]{26}_secret_[0-9a-f]{32}$/,
       );
       const s = await sessionOf(out.url);
       expect(s.externalRef).toBeNull();
       expect(s.paymentLinkId).toBe(l.id);
-      expect(s.successUrl).toBe('http://localhost:3000/pay/acme/tshirt?mode=test');
+      expect(s.successUrl).toBe('http://localhost:3000/acme/tshirt?mode=test');
       expect(s.cancelUrl).toBe(s.successUrl);
       expect(s.amount.toFixed()).toBe('5');
       expect(s.connectionId).toBeNull();

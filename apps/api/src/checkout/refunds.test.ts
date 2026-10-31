@@ -319,7 +319,7 @@ describe('return to sender', () => {
       data: { merchant_name: 'Bean Shop', refund_id: r!.id },
     });
     expect(mailer.sent[0]!.data.refund_address_url).toMatch(
-      new RegExp(`/pay/${s.id}/refund-address\\?t=${r!.id}\\.`),
+      new RegExp(`/${s.id}/refund-address\\?t=${r!.id}\\.`),
     );
     let view = (await call('GET', 'session', s.client_secret)).json();
     expect(view.needs_email).toBe(false); // the store gave one

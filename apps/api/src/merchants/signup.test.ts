@@ -40,6 +40,28 @@ describe('signup', () => {
     expect(await prisma.merchant.count()).toBe(0);
   });
 
+  it.each([
+    'pay',
+    'preview',
+    'v1',
+    'downloads',
+    'privacy',
+    'terms',
+    'api',
+    'demo',
+    'dashboard',
+    'connect',
+    'login',
+    'signup',
+    'verify',
+    'invite',
+    'recover',
+    'settings',
+  ])('%s is a reserved label: it would shadow a pay-host route', (label) => {
+    expect(isReservedLabel(label)).toBe(true);
+    expect(isReservedLabel(slugBase(label))).toBe(false);
+  });
+
   it('reserved slugs (Tendr accounts and names) are never given to a store', async () => {
     for (const reserved of [
       'intents-mock',

@@ -372,7 +372,7 @@ const EnvSchema = z
     ),
     /**
      * Base URL of the hosted checkout page; a session's `url` is
-     * `${CHECKOUT_BASE_URL}/pay/{id}#cs={client_secret}`. No trailing slash needed.
+     * `${CHECKOUT_BASE_URL}/{id}#cs={client_secret}` (root of the pay host). No trailing slash needed.
      */
     CHECKOUT_BASE_URL: z.preprocess(
       blankAsUnset,
@@ -487,6 +487,33 @@ const EnvSchema = z
       });
     }
     if (e.NODE_ENV === 'production') {
+      // Every public origin is https and not local: the defaults are localhost, so an unset
+      // variable fails here by name.
+      const publicOrigins: [string, string][] = [
+        ['CHECKOUT_BASE_URL', e.CHECKOUT_BASE_URL],
+        ['WEB_URL', e.WEB_URL],
+        ['API_BASE_URL', e.API_BASE_URL],
+        ...e.CORS_ORIGINS.split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((o): [string, string] => ['CORS_ORIGINS', o]),
+      ];
+      for (const [name, value] of publicOrigins) {
+        let ok = false;
+        try {
+          const u = new URL(value);
+          ok = u.protocol === 'https:' && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1';
+        } catch {
+          ok = false;
+        }
+        if (!ok) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [name],
+            message: `must be an https URL on a non-local host in production (got ${value})`,
+          });
+        }
+      }
       if (!e.WEBAUTHN_RP_ID || e.WEBAUTHN_RP_ID === 'localhost') {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

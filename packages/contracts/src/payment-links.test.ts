@@ -9,6 +9,32 @@ import {
 
 const base = { title: 'Tithe', currency: 'USD' };
 
+describe('reserved link slugs on the pay host root', () => {
+  it.each([
+    'pay',
+    'preview',
+    'v1',
+    'downloads',
+    'privacy',
+    'terms',
+    'api',
+    'demo',
+    'dashboard',
+    'connect',
+    'login',
+    'signup',
+    'verify',
+    'invite',
+    'recover',
+    'settings',
+  ])('refuses %s as a link slug', (slug) => {
+    expect(RESERVED_LINK_SLUGS).toContain(slug);
+    expect(PaymentLinkCreateSchema.safeParse({ ...base, amount_type: 'open', slug }).success).toBe(
+      false,
+    );
+  });
+});
+
 describe('PaymentLinkCreateSchema', () => {
   it('rejects fixed links without amount and open links with amount', () => {
     expect(PaymentLinkCreateSchema.safeParse({ ...base, amount_type: 'fixed' }).success).toBe(

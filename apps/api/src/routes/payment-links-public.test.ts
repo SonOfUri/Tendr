@@ -132,7 +132,7 @@ describe('public payment link routes', () => {
     });
     expect(ok.statusCode, ok.body).toBe(201);
     expect(ok.headers['cache-control']).toBe('no-store');
-    expect(ok.json().url).toMatch(/\/pay\/ses_[0-9A-Z]{26}#cs=ses_/);
+    expect(ok.json().url).toMatch(/\/ses_[0-9A-Z]{26}#cs=ses_/);
     expect(Date.parse(ok.json().expires_at)).toBeGreaterThan(Date.now());
   });
 
@@ -233,9 +233,9 @@ describe('public payment link routes', () => {
       expect(res.statusCode, res.body).toBe(200);
       expect(res.json().payment_link).toEqual({
         title: 'T-shirt',
-        url: 'http://localhost:3000/pay/acme/tshirt?mode=test',
+        url: 'http://localhost:3000/acme/tshirt?mode=test',
       });
-      expect(res.json().success_url).toBe('http://localhost:3000/pay/acme/tshirt?mode=test');
+      expect(res.json().success_url).toBe('http://localhost:3000/acme/tshirt?mode=test');
     });
 
     it('a store-path session naming a link keeps the store as its way back', async () => {

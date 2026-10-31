@@ -20,7 +20,7 @@ import {
 import { getUsdRate, minorUnits, unsupportedCurrency, type FxOptions } from '../checkout/fx.js';
 import { assertAmount, readinessFor } from '../checkout/sessions.js';
 import type { ScopedDb } from '../db/scoped.js';
-import { env } from '../env.js';
+import { paymentLinkUrl } from '../checkout/urls.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 
@@ -97,7 +97,7 @@ export function linkUrls(
   linkSlug: string,
   livemode: boolean,
 ): { url: string; qr_url: string } {
-  const base = `${env().CHECKOUT_BASE_URL.replace(/\/+$/, '')}/pay/${merchantSlug}/${linkSlug}`;
+  const base = paymentLinkUrl(merchantSlug, linkSlug);
   const mode = livemode ? '' : '?mode=test';
   return { url: `${base}${mode}`, qr_url: `${base}/qr${mode}` };
 }

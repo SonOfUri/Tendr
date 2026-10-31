@@ -101,7 +101,7 @@ describe('checkout session routes', () => {
     expect(out.status).toBe('PENDING_DEPOSIT');
     const m = SECRET_RE.exec(out.client_secret);
     expect(m?.[1]).toBe(out.id);
-    expect(out.url).toBe(`${env().CHECKOUT_BASE_URL}/pay/${out.id}#cs=${out.client_secret}`);
+    expect(out.url).toBe(`${env().CHECKOUT_BASE_URL}/${out.id}#cs=${out.client_secret}`);
     expect(out.url.endsWith(`#cs=${out.client_secret}`)).toBe(true);
     const exp = new Date(out.expires_at).getTime();
     expect(exp).toBeGreaterThanOrEqual(before + 30 * 60_000 - 1000);
@@ -874,7 +874,7 @@ describe('checkout session routes', () => {
         fee_bps: 50,
         settlement_asset: 'nep141:usdc.test',
         expired_reason: null,
-        url: `${env().CHECKOUT_BASE_URL}/pay/${id}`,
+        url: `${env().CHECKOUT_BASE_URL}/${id}`,
       });
       expect(v.client_secret).toBeUndefined();
       expect(JSON.stringify(v)).not.toContain('secret_');

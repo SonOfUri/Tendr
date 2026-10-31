@@ -60,7 +60,7 @@ import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { recordEvent } from '../events/record.js';
 import { transitionPayment, transitionSession } from '../events/transitions.js';
-import { env } from '../env.js';
+import { checkoutUrl } from './urls.js';
 import { AppError, conflict, notFound, unauthorized } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
@@ -1251,7 +1251,6 @@ export async function emailNeedsAddress(ctx: ScopeContext, refundId: string): Pr
     // Token list unavailable: base units.
   }
   const token = await mintAddressToken(ctx, r.id);
-  const base = env().CHECKOUT_BASE_URL.replace(/\/+$/, '');
   try {
     await getMailer().send({
       to: s.customerEmail,
@@ -1260,7 +1259,7 @@ export async function emailNeedsAddress(ctx: ScopeContext, refundId: string): Pr
         merchant_name: s.merchant.name,
         amount,
         refund_id: r.id,
-        refund_address_url: `${base}/pay/${s.id}/refund-address?t=${encodeURIComponent(token)}`,
+        refund_address_url: `${checkoutUrl(s.id)}/refund-address?t=${encodeURIComponent(token)}`,
       },
     });
     return true;
