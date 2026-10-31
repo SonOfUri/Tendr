@@ -398,6 +398,8 @@ const EnvSchema = z
         .string()
         .url()
         .refine((u) => /^https?:\/\//i.test(u), 'must be an http(s) URL')
+        // Trailing slashes dropped, so `${origin}/${key}` never has `//`.
+        .transform((u) => u.replace(/\/+$/, ''))
         .default('http://localhost:9100/tendr-assets'),
     ),
     /**

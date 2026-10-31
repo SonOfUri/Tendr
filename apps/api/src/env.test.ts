@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadEnv } from './env.js';
+import { assetUrl } from './storage/object-store.js';
 
 const base = { DATABASE_URL: 'postgresql://x/y', REDIS_URL: 'redis://localhost:6380' };
 const gcp = {
@@ -555,5 +556,18 @@ describe('loadEnv theme asset store', () => {
     );
     const { TENDR_ASSET_ORIGIN: _o, ...noOrigin } = prod;
     expect(() => loadEnv(noOrigin)).toThrow(/TENDR_ASSET_ORIGIN/);
+  });
+});
+
+describe('loadEnv asset origin', () => {
+  it('drops trailing slashes so asset urls never have //', () => {
+    expect(
+      loadEnv({ ...base, TENDR_ASSET_ORIGIN: 'https://cdn.example/tendr//' }).TENDR_ASSET_ORIGIN,
+    ).toBe('https://cdn.example/tendr');
+    expect(assetUrl('assets/m/a.png')).toBe('https://cdn.example/tendr/assets/m/a.png');
+    expect(
+      loadEnv({ ...base, TENDR_ASSET_ORIGIN: 'https://cdn.example/' }).TENDR_ASSET_ORIGIN,
+    ).toBe('https://cdn.example');
+    expect(loadEnv(base).TENDR_ASSET_ORIGIN).toBe('http://localhost:9100/tendr-assets');
   });
 });

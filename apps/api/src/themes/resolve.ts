@@ -104,10 +104,13 @@ export async function resolveShopperTheme(
 
   const document = chosen?.document ?? TENDR_DEFAULT_THEME(input.merchantName);
   const displayName = document.settings.display_name;
+  // The merchant's CSS source is not sent: shoppers get only the scoped, checked `css`.
+  const shown: ThemeDocument = { ...document };
+  delete shown.custom_css;
   return {
     id: chosen?.id ?? null,
     version: chosen?.version ?? 0,
-    document,
+    document: shown,
     rendered: renderedText(document),
     assets: await assetMap(db, document),
     css: chosen?.css ?? null,

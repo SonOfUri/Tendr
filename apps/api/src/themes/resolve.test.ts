@@ -75,6 +75,17 @@ describe('resolveShopperTheme', () => {
     expect(t.css).toBe('.tdr-scope .x{color:red}');
   });
 
+  it('never sends the custom_css source to shoppers, only the scoped css', async () => {
+    const named = await theme({
+      published: doc('Styled Shop', { custom_css: '.x { color: red }' }),
+      publishedCss: '.tdr-scope .x{color:red}',
+    });
+    const t = await resolve({ themeId: named.id });
+    expect(t.document.settings.display_name).toBe('Styled Shop');
+    expect('custom_css' in t.document).toBe(false);
+    expect(t.css).toBe('.tdr-scope .x{color:red}');
+  });
+
   it('test session renders named draft, live session ignores draft', async () => {
     const def = await theme({ published: doc('Default Shop'), isDefault: true });
     const draftOnly = await theme({ draft: doc('Draft Shop'), draftCss: '.tdr-scope a{}' });
