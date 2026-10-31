@@ -1,0 +1,29 @@
+FROM node:22-bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY . .
+RUN npm ci --include=dev
+
+# Only public build-time configuration is accepted here. No vault/provider secrets are build args.
+ARG NEXT_PUBLIC_API_BASE_URL
+ARG NEXT_PUBLIC_WEBAUTHN_RP_ID
+ARG NEXT_PUBLIC_REOWN_PROJECT_ID
+ARG NEXT_PUBLIC_EVM_FORWARDER_ADDRESS
+ARG NEXT_PUBLIC_TRON_FORWARDER_ADDRESS
+ARG NEXT_PUBLIC_GAS_FEE_RECIPIENTS
+ARG TENDR_CHECKOUT_BASE_URL
+ARG CHECKOUT_BASE_URL
+ARG WEB_URL
+ARG API_BASE_URL
+ARG TENDR_ASSET_ORIGIN
+ENV NODE_ENV=production
+RUN npx turbo run build --filter=@tendr/web...
+
+# Next's runtime image cache must remain writable by the unprivileged process.
+RUN chown -R node:node /app/apps/web/.next
+USER node
+EXPOSE 3000
+CMD ["npm", "run", "start", "--workspace=@tendr/web"]

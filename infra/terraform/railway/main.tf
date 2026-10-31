@@ -1,7 +1,7 @@
 # Railway project for Tendr production: api, worker, web, Postgres and Redis on private
 # networking, plus the custom domains pay/app (web) and api (api).
 #
-# NOT APPLIED. Apply only when the user decides to deploy — see ../README.md.
+# Deployment and private-state instructions: see ../README.md.
 #
 # The community provider has no "plugin" resource, so Postgres and Redis are image services
 # with volumes, as Railway's own database templates are. `$${{service.VAR}}` is Railway's
@@ -218,7 +218,7 @@ resource "railway_service" "api" {
   source_repo_branch = var.source_repo_branch
   regions            = local.regions
 
-  build_command = "npm ci --include=dev && npm run db:generate && npx turbo run build --filter=@tendr/api..."
+  dockerfile_path = "infra/docker/Dockerfile.api"
   # Migrations run here only, as the owner (DATABASE_MIGRATE_URL); the worker never migrates.
   predeploy_command = "npm run db:migrate"
   start_command     = "npm run start --workspace=@tendr/api"
@@ -234,8 +234,8 @@ resource "railway_service" "worker" {
   source_repo_branch = var.source_repo_branch
   regions            = local.regions
 
-  build_command = "npm ci --include=dev && npm run db:generate && npx turbo run build --filter=@tendr/api..."
-  start_command = "npm run start:worker --workspace=@tendr/api"
+  dockerfile_path = "infra/docker/Dockerfile.api"
+  start_command   = "npm run start:worker --workspace=@tendr/api"
 
   # The worker's health server listens on WORKER_HEALTH_PORT; PORT points Railway's check at it.
   healthcheck_path    = "/health"
@@ -249,9 +249,8 @@ resource "railway_service" "web" {
   source_repo_branch = var.source_repo_branch
   regions            = local.regions
 
-  # The build runs `prebuild` (build:embed and the font copy). NEXT_PUBLIC_* and
-  # TENDR_CHECKOUT_BASE_URL are inlined at build time, so they are service variables.
-  build_command = "npm ci --include=dev && npx turbo run build --filter=@tendr/web..."
+  # The Dockerfile declares the public build arguments Next.js inlines, and runs prebuild.
+  dockerfile_path = "infra/docker/Dockerfile.web"
   # The package's `start` script listens on 3000, the port PORT is pinned to below.
   start_command = "npm run start --workspace=@tendr/web"
 

@@ -9,6 +9,7 @@ gcp_project_id = "your-gcp-project-id"
 # env_keyvault_json = "<private v1 key bundle; prefer TF_VAR_env_keyvault_json>"
 # asset_s3_endpoint = "<Railway bucket endpoint>"
 # asset_s3_region = "auto"
+# asset_s3_force_path_style = false # Railway virtual-host buckets
 # asset_public_proxy = true
 # tendr_asset_origin = "https://api.usetendr.tech/v1/assets"
 

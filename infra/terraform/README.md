@@ -1,9 +1,8 @@
 # Tendr infrastructure (Terraform)
 
-> **Not applied. Apply only when the user decides to deploy.** Tendr runs locally first
-> (docker compose Postgres + Redis, `LocalKeyVault`). Nothing here has been planned or applied
-> against the real GCP or Railway accounts. Do not run `terraform plan` or `terraform apply`
-> against them without that decision.
+These stacks provision production infrastructure. Use the selected deployment workspace and keep
+Terraform state private: it contains credentials. Local development uses Docker Compose and
+`LocalKeyVault`; production supports Cloud KMS or the explicitly selected software vault below.
 
 Two independent stacks, applied in this order:
 
@@ -159,14 +158,18 @@ Required inputs: `source_repo`, `gcp_project_id`, and the sensitive `gcp_credent
 
 | Service    | Source                                         | Start / checks                                                                                                                                               |
 | ---------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `api`      | repo                                           | pre-deploy `npm run db:migrate`; start `npm run start --workspace=@tendr/api`; healthcheck `/v1/health`                                                      |
-| `worker`   | repo                                           | start `npm run start:worker --workspace=@tendr/api`; healthcheck `/health` on `WORKER_HEALTH_PORT` (4100); never migrates                                    |
-| `web`      | repo                                           | build `npm ci --include=dev && npx turbo run build --filter=@tendr/web...`; start `npm run start --workspace=@tendr/web` (port 3000); healthcheck `/privacy` |
+| `api`      | repo, `infra/docker/Dockerfile.api`             | pre-deploy `npm run db:migrate`; start `npm run start --workspace=@tendr/api`; healthcheck `/v1/health`                                                      |
+| `worker`   | repo, `infra/docker/Dockerfile.api`             | start `npm run start:worker --workspace=@tendr/api`; healthcheck `/health` on `WORKER_HEALTH_PORT` (4100); never migrates                                    |
+| `web`      | repo, `infra/docker/Dockerfile.web`             | start `npm run start --workspace=@tendr/web` (port 3000); healthcheck `/privacy` |
 | `postgres` | `ghcr.io/railwayapp-templates/postgres-ssl:16` | volume `/var/lib/postgresql/data`                                                                                                                            |
 | `redis`    | `redis:7-alpine`                               | volume `/data`, password, AOF, `maxmemory-policy noeviction` (BullMQ requires it)                                                                            |
 
 The community provider has no database "plugin" resource, so Postgres and Redis are image services
 with volumes, as Railway's own templates are.
+
+Application images use Node 22 and run as the unprivileged `node` user. `.dockerignore` excludes
+local secrets, state, dependencies and build outputs. The web Dockerfile accepts only public
+build configuration as build arguments; runtime tokens and vault keys are not baked into images.
 
 Custom domains (`railway_custom_domain`): the hosts of `checkout_base_url` (`pay.usetendr.tech`)
 and `web_url` (`app.usetendr.tech`) on `web` (port 3000), the host of `api_base_url`
@@ -225,13 +228,12 @@ The provider covers services, variables, the pre-deploy command and custom domai
 - **Health check vs rate limit.** `/v1/health` is limited to 60 requests/min per IP. Railway's
   healthcheck polls during deploys; confirm its probe frequency (and whether all probes share one
   source IP) stays well under that, or exempt the health route from the per-IP limit.
-- **Build command.** `npm ci --include=dev && npm run db:generate && npx turbo run build --filter=@tendr/api...`
-  builds the API and its workspace dependencies. Confirm Railway's Nixpacks/Railpack picks Node 22.
-- **Dev dependencies at build time.** Railway exposes service variables (including
-  `NODE_ENV=production`) during the build, and a plain `npm ci` then skips devDependencies — turbo,
-  typescript, prisma, dotenv-cli — which the build, `db:generate` and the pre-deploy `db:migrate`
-  all need. Keep `--include=dev` in every build command (api, worker, web), and confirm the first build log installs
-  them.
+- **Container builds.** The API Dockerfile runs `npm ci --include=dev`, `npm run db:generate` and
+  `npx turbo run build --filter=@tendr/api...`. The web Dockerfile builds `@tendr/web` and its
+  workspace dependencies. Both use Node 22 explicitly. Terraform sets `dockerfile_path`; do not
+  also set its conflicting `build_command` field.
+- **Dev dependencies at build time.** Keep `--include=dev` in both Dockerfiles: turbo, TypeScript,
+  Prisma and dotenv-cli are needed by the builds, and tsx/Prisma are also needed for migrations.
 
 ## Postgres roles: least privilege
 
