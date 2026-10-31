@@ -130,6 +130,8 @@ These apply to every text a theme carries: headings, rich text, banners, alt tex
 - 64 hex characters (NEAR implicit accounts).
 - NEAR names ending in `.near`, `.testnet` or `.tg`.
 
+In rich text, link targets (the `https://…` part of `[text](https://…)`) are not checked for base58 strings, because they are not shown and URL paths often look like one; the link text is checked like any other text.
+
 Invisible and format characters are stripped before checking, and in HTML the checks run on the visible text of the whole block, so splitting an address across tags does not hide it.
 
 **Payment instructions.** A phrase like "send ... to the address", "transfer ... to wallet", "deposit ... to account 0x" or "pay ... to bc1" is refused with the same message.
@@ -142,8 +144,11 @@ Invisible and format characters are stripped before checking, and in HTML the ch
 | --- | --- |
 | Any digit | `Button text can't contain numbers` |
 | Any currency symbol | `Button text can't contain currency symbols` |
-| A currency code as a whole word, such as `USD` or `eur` (any case) | `Button text can't contain currency codes` |
+| A currency code written in capitals as a whole word, such as `TRY` or `NGN` (any ISO 4217 code) | `Button text can't contain currency codes ("TRY")` |
+| A major currency code in any case: `USD`, `EUR`, `GBP`, `NGN`, `KES`, `GHS`, `ZAR`, `CAD`, `AUD`, `JPY`, `CNY`, `INR`, `BRL` (so `usd` and `Eur` too) | `Button text can't contain currency codes ("usd")` |
 | Any `{...}` other than `{amount}` | `Button text can only use the {amount} placeholder` |
+
+The message names the word that was refused. Everyday words that are also codes, such as *Try*, *all*, *top* or *cup*, are fine unless written in capitals.
 
 `{amount}` is filled in by Tendr with the real amount. The label applies to the main Pay button only.
 
@@ -170,5 +175,6 @@ Pattern checks on text are best effort. These cases cannot be fully detected:
 
 - **Address-like text split by hidden elements or punctuation.** Pieces of an address separated by invisible spans (`display: none`, zero font size) or by punctuation can read as an address to a shopper without matching a pattern.
 - **An image showing a fake QR code or address.** Tendr can validate that a file is an image, not what the picture shows.
+- **A video showing a fake QR code or address.** Like images, an embedded video can show anything; Tendr does not inspect what it shows.
 
-The payment block is the defence. It always shows the real address and QR code, in Tendr's own type, and states that funds go only there. A merchant who dresses a fake address up in their own blocks is attacking their own customers, and the sealed block still tells the shopper the truth.
+The sealed payment block is the source of truth, and the defence. It always shows the real address and QR code, in Tendr's own type, and states that funds go only there. A merchant who dresses a fake address up in their own blocks is attacking their own customers, and the sealed block still tells the shopper the truth.

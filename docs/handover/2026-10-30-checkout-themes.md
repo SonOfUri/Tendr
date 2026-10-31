@@ -94,14 +94,15 @@ Rulings made during the build, which the docs reflect:
 1. Address-like text split by hidden elements (`display: none`, zero font size spans) or by
    punctuation.
 2. An image showing a fake QR code or address.
+3. A video showing a fake QR code or address (like images, Tendr does not inspect what it shows).
 
-The defence is the sealed block: it always shows the real address and QR in Tendr's fonts and states
+The defence, and the source of truth, is the sealed block: it always shows the real address and QR in Tendr's fonts and states
 that funds go only there.
 
-Known gap to fix in a final wave: the ISO 4217 rule in button words matches codes case-insensitively
-as whole words, so everyday words that are also codes (`try`, `all`, `top`, `sos`) are refused. The
-intended fix (ruling R5) matches ALL-CAPS codes case-sensitively plus a short list of major codes
-case-insensitively; it is not yet in.
+Button words and currency codes (ruling R5): any ISO 4217 code written ALL-CAPS as a whole word is
+refused (`TRY`, `ALL`), and the major codes USD EUR GBP NGN KES GHS ZAR CAD AUD JPY CNY INR BRL are
+refused in any case (`usd`). Everyday words that are also codes (`Try`, `all`, `top`, `cup`) pass.
+The message names the refused word.
 
 ### Assets and the asset origin
 
@@ -110,7 +111,10 @@ case-insensitively; it is not yet in.
   `assets/<merchant id>/<asset id>.<ext>` in an S3-compatible bucket and served from
   `TENDR_ASSET_ORIGIN`.
 - Product images from `line_items` are fetched through `safeFetch`, validated, re-encoded and cached
-  on the same origin. Shoppers never load images from the merchant's own host.
+  on the same origin. Shoppers never load images from the merchant's own host. The work runs on its
+  own BullMQ queue (`tendr-product-images`, 2 jobs at once), never the shared events queue: each
+  job fetches 3 images at a time, skips failures from the last hour, and starts no fetch after
+  30 s (the rest stay `pending` for a later session).
 - The web CSP allows images and fonts from `TENDR_ASSET_ORIGIN` only
   (`apps/web/src/lib/csp.ts`, applied by `apps/web/src/middleware.ts`).
 
@@ -154,11 +158,10 @@ All of the vars are in `turbo.json` `globalPassThroughEnv`, `.env.example` and
 `apps/api/src/env.ts`. Never store them in Postgres.
 
 **`TENDR_ASSET_ORIGIN` in the web app.** `apps/web/src/middleware.ts` reads
-`process.env.TENDR_ASSET_ORIGIN` on every request to build the checkout CSP. Next 15 compiles
-middleware for the edge runtime, which replaces `process.env.X` with its value at **build time**.
-Treat the value as baked in: set `TENDR_ASSET_ORIGIN` in the web build environment as well as at
-runtime, and rebuild the web app if the origin changes. (`og-logo.ts` reads it at runtime from the
-Node route, which is unaffected.) Not verified against a production build in this project.
+`process.env.TENDR_ASSET_ORIGIN` on every request to build the checkout CSP. Under `next start` the
+middleware reads it at request time, from the web app's runtime environment, so set it there; a
+change takes effect on restart. Setting it in the build environment too is harmless. (`og-logo.ts`
+reads it at runtime from the Node route as well.)
 
 **Response headers on the asset origin.** The bucket serves merchant-uploaded files, so the origin
 must add these to every response, with an R2 transform rule (Rules, Transform Rules, Modify Response
@@ -174,6 +177,18 @@ For SVG responses (`*.svg`) also send `Content-Security-Policy: sandbox; default
 'self'; style-src 'unsafe-inline'` (the `sandbox` token stops scripts and top-level navigation if
 the file is opened directly). `Cross-Origin-Resource-Policy: cross-origin` lets the checkout page,
 which is on another origin, load the images and fonts.
+
+**CORS on the asset bucket.** Browsers fetch web fonts in CORS mode, so an uploaded `.woff2` font
+fails to load on the checkout page unless the asset origin answers with
+`Access-Control-Allow-Origin`. Add a CORS rule on the bucket (R2: bucket Settings, CORS policy)
+allowing `GET` (and `HEAD`) from the checkout origin(s), for example:
+
+```json
+[{ "AllowedOrigins": ["https://checkout.tendr.example"], "AllowedMethods": ["GET", "HEAD"] }]
+```
+
+or send `Access-Control-Allow-Origin: <checkout origin>` (plus `Vary: Origin` when there is more
+than one) with the same transform rule as the headers above. Images do not need it.
 
 **Prisma and the FK.** `schema.prisma` keeps `onDelete: Restrict` on `Session.theme` with a comment,
 because Prisma cannot express `ON DELETE SET NULL (theme_id)`. The migration changes the FK by hand.
