@@ -46,3 +46,39 @@ variable "service_account_id" {
   type        = string
   default     = "tendr-api"
 }
+
+variable "assets_bucket_name" {
+  description = "Production theme-asset bucket (ASSET_S3_BUCKET); TENDR_ASSET_ORIGIN is https://storage.googleapis.com/<name>."
+  type        = string
+  default     = "tendr-assets-prod"
+}
+
+variable "assets_location" {
+  description = "Location of the asset buckets. Kept next to the Railway region."
+  type        = string
+  default     = "us-east4"
+}
+
+variable "assets_cors_origins" {
+  description = "Origins allowed to GET/HEAD assets cross-origin (fonts): the pay and app hosts."
+  type        = list(string)
+  default     = ["https://pay.usetendr.tech", "https://app.usetendr.tech"]
+}
+
+variable "dev_assets_enabled" {
+  description = "Create the tendr-assets-dev bucket, its own service account and HMAC key, for local development in place of MinIO."
+  type        = bool
+  default     = true
+}
+
+variable "dev_assets_bucket_name" {
+  description = "Development theme-asset bucket (only when dev_assets_enabled)."
+  type        = string
+  default     = "tendr-assets-dev"
+}
+
+variable "dev_assets_extra_cors_origins" {
+  description = "CORS origins the development bucket allows on top of assets_cors_origins."
+  type        = list(string)
+  default     = ["http://localhost:3000"]
+}

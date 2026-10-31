@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. Placeholders only: never commit real values.
+
+project_id = "your-gcp-project-id"
+
+# Defaults, shown for reference.
+# location                      = "us-east4"
+# key_ring_name                 = "tendr-prod"
+# protection_level              = "HSM"
+# protection_level_overrides    = {} # e.g. { "relayer-near" = "SOFTWARE" }
+# service_account_id            = "tendr-api"
+# assets_bucket_name            = "tendr-assets-prod"
+# assets_location               = "us-east4"
+# assets_cors_origins           = ["https://pay.usetendr.tech", "https://app.usetendr.tech"]
+# dev_assets_enabled            = true
+# dev_assets_bucket_name        = "tendr-assets-dev"
+# dev_assets_extra_cors_origins = ["http://localhost:3000"]

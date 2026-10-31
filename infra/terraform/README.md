@@ -7,18 +7,32 @@
 
 Two independent stacks, applied in this order:
 
-| Stack      | Provider                                      | Creates                                                                                         |
-| ---------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `gcp/`     | `hashicorp/google`                            | Cloud KMS key ring `tendr-prod`, KEK `tendr-kek`, the named signing keys, service account + IAM |
-| `railway/` | `terraform-community-providers/railway` (0.6) | Project with `api`, `worker`, `postgres`, `redis` services, shared and per-service variables    |
+| Stack      | Provider                                      | Creates                                                                                                                                      |
+| ---------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gcp/`     | `hashicorp/google`                            | Cloud KMS key ring `tendr-prod`, KEK `tendr-kek`, the named signing keys, service account + IAM + its JSON key, asset buckets with HMAC keys |
+| `railway/` | `terraform-community-providers/railway` (0.6) | Project with `api`, `worker`, `web`, `postgres`, `redis` services, shared and per-service variables, custom domains `pay`/`app`/`api`        |
 
-Neither stack configures a remote backend. Pick one (e.g. a GCS bucket) before the first apply;
-state contains the Postgres/Redis passwords and `GCP_CREDENTIALS_JSON`, so it must not live in git
-(`*.tfstate` and `*.tfvars` are gitignored).
+## Remote state (create once, by hand)
+
+Both stacks keep state in the GCS bucket `tendr-tfstate` (`backend.tf`; prefix `gcp` and
+`railway`). Terraform cannot keep its state in a bucket it creates, so create it once, private and
+versioned, before the first `init`:
+
+```bash
+gcloud storage buckets create gs://tendr-tfstate --project=<project> --location=us-east4 \
+  --uniform-bucket-level-access --public-access-prevention
+gcloud storage buckets update gs://tendr-tfstate --versioning
+```
+
+State holds every secret: the Postgres/Redis/`tendr_app` passwords, `WEB_INTERNAL_TOKEN`, the HMAC
+secrets, the `tendr-api` service-account key and every key passed to Railway. Keep the bucket
+private to your account; never commit state or `terraform.tfvars` (`*.tfstate` and `*.tfvars` are
+gitignored; `terraform.tfvars.example` holds placeholders only).
 
 ## Validating without touching any account
 
-Terraform is not required on the host; use the pinned image:
+Terraform is not required on the host; use the pinned image. `-backend=false` skips the GCS
+backend, so nothing contacts GCP or Railway:
 
 ```bash
 docker run --rm -v "$PWD/infra/terraform:/tf" -w /tf hashicorp/terraform:1.9.8 fmt -check -recursive
@@ -58,37 +72,97 @@ docker run --rm -v "$PWD/infra/terraform:/tf" -w /tf/gcp hashicorp/terraform:1.9
 - Every key has `prevent_destroy`. Cloud KMS keys cannot be deleted anyway (only their versions are
   scheduled for destruction), and losing a signing key loses the on-chain account it controls.
 
-The service-account JSON key is created outside Terraform so it never enters state:
+The service-account JSON key (`google_service_account_key.api`) is created by Terraform and
+read from the `api_credentials_json` output (sensitive), so no key file is copied by hand. The
+cost is that the private key also sits in state, which is why the state bucket stays private.
 
-```bash
-gcloud iam service-accounts keys create tendr-api.json \
-  --iam-account "$(terraform -chdir=infra/terraform/gcp output -raw service_account_email)"
-```
+### Theme asset storage
 
-Pass its contents as `gcp_credentials_json` to the Railway stack (e.g. `TF_VAR_gcp_credentials_json`),
-then delete the local file.
+- `tendr-assets-prod` (`var.assets_location`, default `us-east4`): uniform bucket-level access,
+  `allUsers` as `roles/storage.objectViewer` (assets are public), CORS `GET`/`HEAD` from
+  `https://pay.usetendr.tech` and `https://app.usetendr.tech` (response header `Content-Type`,
+  max age 3600) so fonts load cross-origin.
+- Service account `tendr-assets` with `roles/storage.objectAdmin` on that bucket only, and an HMAC
+  key for it. The API writes through GCS's S3 interop: `ASSET_S3_ENDPOINT=https://storage.googleapis.com`,
+  `ASSET_S3_REGION=auto`, `ASSET_S3_FORCE_PATH_STYLE=true`, `TENDR_ASSET_ORIGIN=https://storage.googleapis.com/tendr-assets-prod`.
+- `var.dev_assets_enabled` (default `true`) adds `tendr-assets-dev`, its own service account
+  `tendr-assets-dev` and HMAC key, with the same shape plus CORS for `http://localhost:3000`: local
+  development uses it in place of MinIO. Its outputs are `null` when off.
+
+Outputs: `assets_bucket`, `assets_hmac_access_id`, `assets_hmac_secret`, `dev_assets_bucket`,
+`dev_assets_hmac_access_id`, `dev_assets_hmac_secret`, `api_credentials_json` (all secrets
+`sensitive`).
 
 ## `railway/` — services
 
-Authenticates with `RAILWAY_TOKEN`. Required inputs: `source_repo`, `api_base_url`, `web_url`,
-`cors_origins`, `gcp_project_id`, `gcp_credentials_json` (sensitive).
+Authenticates with `RAILWAY_TOKEN`. Copy `terraform.tfvars.example` to `terraform.tfvars`, or
+export the secrets so they never touch disk:
 
-| Service    | Source                                         | Start / checks                                                                                            |
-| ---------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `api`      | repo                                           | pre-deploy `npm run db:migrate`; start `npm run start --workspace=@tendr/api`; healthcheck `/v1/health`   |
-| `worker`   | repo                                           | start `npm run start:worker --workspace=@tendr/api`; healthcheck `/health` on `WORKER_HEALTH_PORT` (4100) |
-| `postgres` | `ghcr.io/railwayapp-templates/postgres-ssl:16` | volume `/var/lib/postgresql/data`                                                                         |
-| `redis`    | `redis:7-alpine`                               | volume `/data`, password, AOF, `maxmemory-policy noeviction` (BullMQ requires it)                         |
+```bash
+export TF_VAR_gcp_credentials_json="$(terraform -chdir=infra/terraform/gcp output -raw api_credentials_json)"
+export TF_VAR_asset_s3_access_key_id="$(terraform -chdir=infra/terraform/gcp output -raw assets_hmac_access_id)"
+export TF_VAR_asset_s3_secret_access_key="$(terraform -chdir=infra/terraform/gcp output -raw assets_hmac_secret)"
+# plus TF_VAR_resend_api_key, TF_VAR_oneclick_api_key, TF_VAR_fx_api_key
+```
+
+Required inputs: `source_repo`, `gcp_project_id`, and the sensitive `gcp_credentials_json`,
+`asset_s3_access_key_id`, `asset_s3_secret_access_key`, `resend_api_key`, `oneclick_api_key`,
+`fx_api_key`. The hosts default to the production values (`api_base_url`, `web_url`,
+`checkout_base_url`, `cors_origins`, `webauthn_rp_id`, `webauthn_origins`, `tendr_asset_origin`).
+
+| Service    | Source                                         | Start / checks                                                                                                                                                          |
+| ---------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api`      | repo                                           | pre-deploy `npm run db:migrate`; start `npm run start --workspace=@tendr/api`; healthcheck `/v1/health`                                                                 |
+| `worker`   | repo                                           | start `npm run start:worker --workspace=@tendr/api`; healthcheck `/health` on `WORKER_HEALTH_PORT` (4100); never migrates                                               |
+| `web`      | repo                                           | build `npm ci --include=dev && npx turbo run build --filter=@tendr/web...`; start `npm run start --workspace=@tendr/web -- --port $PORT` (3000); healthcheck `/privacy` |
+| `postgres` | `ghcr.io/railwayapp-templates/postgres-ssl:16` | volume `/var/lib/postgresql/data`                                                                                                                                       |
+| `redis`    | `redis:7-alpine`                               | volume `/data`, password, AOF, `maxmemory-policy noeviction` (BullMQ requires it)                                                                                       |
 
 The community provider has no database "plugin" resource, so Postgres and Redis are image services
 with volumes, as Railway's own templates are.
 
-Shared variables: `NODE_ENV=production`, `KEYVAULT_DRIVER=gcp`, `GCP_PROJECT_ID`,
-`GCP_KMS_LOCATION`, `GCP_KMS_KEYRING`, `GCP_KMS_KEK`, `GCP_CREDENTIALS_JSON` (sensitive),
-`WORKER_HEALTH_PORT`, `LOG_LEVEL`, `API_BASE_URL`, `WEB_URL`, `CORS_ORIGINS`. `NODE_ENV=production`
-with `KEYVAULT_DRIVER=gcp` is mandatory: env validation refuses to boot production on the local key
-vault. `DATABASE_URL` and `REDIS_URL` are per-service references to the `postgres` and `redis`
-services over private networking.
+Custom domains (`railway_custom_domain`): the hosts of `checkout_base_url` (`pay.usetendr.tech`)
+and `web_url` (`app.usetendr.tech`) on `web` (port 3000), the host of `api_base_url`
+(`api.usetendr.tech`) on `api` (port 4000). The `custom_domain_dns` output lists, per domain, the
+CNAME (`host_label` → `dns_record_value`) and any ownership TXT record
+(`verification_host_label` → `verification_record_value`) to create at Namecheap.
+
+Variables:
+
+- **Shared** (project-level; a service sees only the ones it references): `NODE_ENV=production`,
+  `KEYVAULT_DRIVER=gcp`, `GCP_PROJECT_ID`, `GCP_KMS_LOCATION`, `GCP_KMS_KEYRING`, `GCP_KMS_KEK`,
+  `GCP_CREDENTIALS_JSON` (sensitive), `WORKER_HEALTH_PORT`, `LOG_LEVEL`, `API_BASE_URL`, `WEB_URL`,
+  `CHECKOUT_BASE_URL`, `CORS_ORIGINS`, `TENDR_ASSET_ORIGIN`, `WEB_INTERNAL_TOKEN`
+  (`random_password`, 48 characters). `NODE_ENV=production` with `KEYVAULT_DRIVER=gcp` is
+  mandatory: env validation refuses to boot production on the local key vault.
+- **api and worker** (both load the same env schema, so both get everything production
+  requires): every shared variable; `REDIS_URL`; `DATABASE_URL` (the `tendr_app` URL, see below);
+  `LIVE_MODE_ENABLED`, `GASLESS_LIVE_ENABLED`, `FEE_SWEEP_ENABLED` all `"false"`; `WEBAUTHN_RP_ID`,
+  `WEBAUTHN_ORIGINS`; `MAIL_DRIVER=resend`, `MAIL_FROM`, `RESEND_API_KEY`; `ASSET_STORE_DRIVER=s3`
+  and the `ASSET_S3_*` settings; `ONECLICK_API_KEY`; `FX_PROVIDER=openexchangerates`, `FX_API_KEY`;
+  and `NEAR_PARENT_ACCOUNT_*`, `FEE_ACCOUNT_*`, `MERCHANT_ACCOUNT_CODE_HASH_*` only when the
+  Terraform variable is non-empty (the API rejects an empty value; unset takes its default). The
+  api also gets `DATABASE_MIGRATE_URL`, `DATABASE_APP_PASSWORD`, `API_HOST`, `API_PORT`, `PORT`;
+  the worker `WORKER_HEALTH_HOST` and `PORT`.
+- **web**: `NODE_ENV`, `API_BASE_URL`, `WEB_URL`, `CHECKOUT_BASE_URL`, `TENDR_ASSET_ORIGIN`,
+  `WEB_INTERNAL_TOKEN` (shared references); `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_WEBAUTHN_RP_ID`,
+  `TENDR_CHECKOUT_BASE_URL`, `PORT=3000`; and, when non-empty, `NEXT_PUBLIC_REOWN_PROJECT_ID`,
+  `NEXT_PUBLIC_EVM_FORWARDER_ADDRESS`, `NEXT_PUBLIC_TRON_FORWARDER_ADDRESS`,
+  `NEXT_PUBLIC_GAS_FEE_RECIPIENTS`. `NEXT_PUBLIC_*` and `TENDR_CHECKOUT_BASE_URL` are inlined at
+  build time, which is why they are service variables (present during the build).
+
+The Chainalysis screening key is not an env var: it is a stored secret (`putSecret`, purpose
+`chainalysis`), put after the first deploy (see the runbook).
+
+### Manual steps the provider cannot do
+
+The provider covers services, variables, the pre-deploy command and custom domains. Left by hand:
+
+- Create the `tendr-tfstate` bucket (above) before the first `init`.
+- Create the DNS records from `custom_domain_dns` at Namecheap; Railway issues the certificates
+  once they resolve.
+- Connect the GitHub repository to Railway (the GitHub app must see `source_repo`) before the
+  first apply, or the repo-sourced services cannot build.
 
 ### Check before the first deploy
 
@@ -107,7 +181,7 @@ services over private networking.
 - **Dev dependencies at build time.** Railway exposes service variables (including
   `NODE_ENV=production`) during the build, and a plain `npm ci` then skips devDependencies — turbo,
   typescript, prisma, dotenv-cli — which the build, `db:generate` and the pre-deploy `db:migrate`
-  all need. Keep `--include=dev` in both build commands, and confirm the first build log installs
+  all need. Keep `--include=dev` in every build command (api, worker, web), and confirm the first build log installs
   them.
 
 ## Postgres roles: least privilege
@@ -124,10 +198,10 @@ never logged); if unset it leaves the password alone and logs one line saying so
 
 Variables (Terraform sets them):
 
-| Service  | `DATABASE_URL`                 | `DATABASE_MIGRATE_URL`  | `DATABASE_APP_PASSWORD` |
-| -------- | ------------------------------ | ----------------------- | ----------------------- |
-| `api`    | `tendr_app` (private network)  | owner (`postgres`) URL  | the `tendr_app` password |
-| `worker` | `tendr_app` (private network)  | unset                   | unset                   |
+| Service  | `DATABASE_URL`                | `DATABASE_MIGRATE_URL` | `DATABASE_APP_PASSWORD`  |
+| -------- | ----------------------------- | ---------------------- | ------------------------ |
+| `api`    | `tendr_app` (private network) | owner (`postgres`) URL | the `tendr_app` password |
+| `worker` | `tendr_app` (private network) | unset                  | unset                    |
 
 Verify: as `tendr_app`, `UPDATE events SET type = type` and `CREATE TABLE x (id int)` must fail with
 `permission denied`.

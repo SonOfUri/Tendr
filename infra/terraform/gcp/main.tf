@@ -1,5 +1,6 @@
 # Cloud KMS for Tendr production: one key ring, the envelope-encryption KEK and the named
-# signing keys (spec §5), plus the service account the API and worker run as.
+# signing keys (spec §5), plus the service account the API and worker run as and its JSON key.
+# Also the theme asset buckets (deploy spec §4) and their HMAC keys.
 #
 # NOT APPLIED. Apply only when the user decides to deploy — see ../README.md.
 
@@ -119,4 +120,99 @@ resource "google_kms_crypto_key_iam_member" "public_key_viewer" {
   crypto_key_id = each.value.id
   role          = "roles/cloudkms.publicKeyViewer"
   member        = google_service_account.api.member
+}
+
+# The JSON key the api and worker authenticate to Cloud KMS with (GCP_CREDENTIALS_JSON). Created
+# here and handed to the Railway stack through the `api_credentials_json` output, so no key file is
+# copied by hand. The cost: the private key also sits in state, which is a private bucket.
+resource "google_service_account_key" "api" {
+  service_account_id = google_service_account.api.name
+}
+
+# ---------------------------------------------------------------------------------------------
+# Theme asset storage (spec §4). The API writes through GCS's S3 interop (ASSET_STORE_DRIVER=s3,
+# ASSET_S3_ENDPOINT=https://storage.googleapis.com) with an HMAC key; pages read the objects
+# publicly at https://storage.googleapis.com/<bucket> (TENDR_ASSET_ORIGIN).
+# ---------------------------------------------------------------------------------------------
+
+resource "google_project_service" "storage" {
+  service            = "storage.googleapis.com"
+  disable_on_destroy = false
+}
+
+locals {
+  # One entry per asset bucket: production always, development when var.dev_assets_enabled.
+  asset_buckets = merge(
+    {
+      prod = {
+        name            = var.assets_bucket_name
+        service_account = "tendr-assets"
+        display_name    = "Tendr theme assets"
+        cors_origins    = var.assets_cors_origins
+      }
+    },
+    var.dev_assets_enabled ? {
+      dev = {
+        name            = var.dev_assets_bucket_name
+        service_account = "tendr-assets-dev"
+        display_name    = "Tendr theme assets (local development)"
+        cors_origins    = concat(var.assets_cors_origins, var.dev_assets_extra_cors_origins)
+      }
+    } : {},
+  )
+}
+
+resource "google_storage_bucket" "assets" {
+  for_each = local.asset_buckets
+
+  name                        = each.value.name
+  location                    = var.assets_location
+  uniform_bucket_level_access = true
+  # Objects are read publicly (allUsers below), so public access prevention must not be enforced.
+  public_access_prevention = "inherited"
+
+  # Fonts are fetched cross-origin by the checkout (pay host) and the dashboard (app host).
+  cors {
+    origin          = each.value.cors_origins
+    method          = ["GET", "HEAD"]
+    response_header = ["Content-Type"]
+    max_age_seconds = 3600
+  }
+
+  depends_on = [google_project_service.storage]
+}
+
+# Public read: every theme asset is shown to shoppers.
+resource "google_storage_bucket_iam_member" "assets_public_read" {
+  for_each = google_storage_bucket.assets
+
+  bucket = each.value.name
+  role   = "roles/storage.objectViewer"
+  member = "allUsers"
+}
+
+# One service account per bucket, with object admin on that bucket only (no project roles), so the
+# development key can never touch production assets.
+resource "google_service_account" "assets" {
+  for_each = local.asset_buckets
+
+  account_id   = each.value.service_account
+  display_name = each.value.display_name
+  description  = "Writes theme assets to ${each.value.name} through the S3 interop (HMAC key)."
+}
+
+resource "google_storage_bucket_iam_member" "assets_object_admin" {
+  for_each = google_storage_bucket.assets
+
+  bucket = each.value.name
+  role   = "roles/storage.objectAdmin"
+  member = google_service_account.assets[each.key].member
+}
+
+# ASSET_S3_ACCESS_KEY_ID / ASSET_S3_SECRET_ACCESS_KEY. The secret is only readable at creation
+# and lives in state.
+resource "google_storage_hmac_key" "assets" {
+  for_each = local.asset_buckets
+
+  service_account_email = google_service_account.assets[each.key].email
 }

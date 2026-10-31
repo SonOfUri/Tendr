@@ -1,0 +1,48 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. Placeholders only: never commit real values.
+# Secrets can instead be exported as TF_VAR_<name> (see ../README.md), which keeps them off disk.
+
+source_repo    = "your-github-owner/tendr"
+gcp_project_id = "your-gcp-project-id"
+
+# From the ../gcp stack outputs (sensitive):
+#   terraform -chdir=../gcp output -raw api_credentials_json
+#   terraform -chdir=../gcp output -raw assets_hmac_access_id
+#   terraform -chdir=../gcp output -raw assets_hmac_secret
+gcp_credentials_json       = "<service-account JSON from api_credentials_json>"
+asset_s3_access_key_id     = "<assets_hmac_access_id>"
+asset_s3_secret_access_key = "<assets_hmac_secret>"
+
+# Outside services.
+resend_api_key   = "<Resend API key>"
+oneclick_api_key = "<1Click JWT>"
+fx_api_key       = "<Open Exchange Rates app id>"
+
+# Optional: null generates the tendr_app password.
+# database_app_password = "<at least 24 alphanumeric characters>"
+
+# NEAR, empty until published (empty = the API's default / unset).
+# near_parent_account_live        = ""
+# near_parent_account_test        = ""
+# fee_account_live                = ""
+# fee_account_test                = ""
+# merchant_account_code_hash_live = ""
+# merchant_account_code_hash_test = "<base58 hash from onchain:publish:testnet>"
+
+# Web, build-time (empty = unset).
+# next_public_reown_project_id       = "<Reown project id>"
+# next_public_evm_forwarder_address  = ""
+# next_public_tron_forwarder_address = ""
+# next_public_gas_fee_recipients     = ""
+
+# Defaults, shown for reference.
+# source_repo_branch = "main"
+# region             = "us-east4-eqdc4a"
+# api_base_url       = "https://api.usetendr.tech"
+# web_url            = "https://app.usetendr.tech"
+# checkout_base_url  = "https://pay.usetendr.tech"
+# cors_origins       = "https://app.usetendr.tech"
+# webauthn_rp_id     = "usetendr.tech"
+# webauthn_origins   = "https://app.usetendr.tech"
+# tendr_asset_origin = "https://storage.googleapis.com/tendr-assets-prod"
+# asset_s3_bucket    = "tendr-assets-prod"
+# mail_from          = "Tendr <no-reply@usetendr.tech>"
