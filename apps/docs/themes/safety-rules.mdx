@@ -46,10 +46,10 @@ Maximum 50 KB. Your rules are scoped to your blocks, so selectors need no prefix
 | `:root`, `:host`, `:host-context()`, `:scope` | `` `:root` can't be styled — your CSS only applies inside your blocks `` |
 | `:has()` | `` `:has()` isn't allowed — it can reach outside your block `` |
 | `::part()`, `::slotted()`, `::view-transition*` | `` `::part` isn't allowed — your CSS only applies inside your blocks `` |
-| `*` on its own, or with only pseudo-elements | `A selector can't be `*` on its own — name the elements you want to style` |
-| A selector starting with a combinator (`> p`, `+ p`) | `A selector can't start with `>` — it would reach outside your block` |
-| Classes or ids starting with `tdr-` or `pay-`, and attribute selectors that mention them | `` `.pay-card` is reserved for Tendr's checkout and can't be styled `` and `Selectors can't match Tendr's own class names (`tdr-…`, `pay-…`)` |
-| Escapes (`\`) | `Escaped characters (`\`) aren't allowed in selectors` |
+| `*` on its own, or with only pseudo-elements | ``A selector can't be `*` on its own — name the elements you want to style`` |
+| A selector starting with a combinator (`> p`, `+ p`) | ``A selector can't start with `>` — it would reach outside your block`` |
+| Classes or ids starting with `tdr-` or `pay-`, and attribute selectors that mention them | `` `.pay-card` is reserved for Tendr's checkout and can't be styled `` and ``Selectors can't match Tendr's own class names (`tdr-…`, `pay-…`)`` |
+| Escapes (`\`) | ``Escaped characters (`\`) aren't allowed in selectors`` |
 | Namespaces (`svg\|a`) | `Namespaced selectors (\|) aren't allowed` |
 | Nested rules and `&` | `Nested rules aren't supported — write each rule at the top level` |
 
@@ -75,7 +75,7 @@ Only `@media`, `@supports` and `@keyframes` are allowed. Everything else, includ
 | `attr()` | `` `attr()` isn't allowed — CSS can't put text on the page `` |
 | `url()` to anything that is not an image or font uploaded to Tendr | `` `url()` can only point to images and fonts uploaded to Tendr `` |
 | `<` anywhere in the CSS | ``CSS text and links can't contain `<` `` |
-| Escapes in property names or values | `Escaped characters (`\`) aren't allowed in values` |
+| Escapes in property names or values | ``Escaped characters (`\`) aren't allowed in values`` |
 | Address-like or send-instruction text in any string | `Text can't contain wallet addresses or payment instructions` |
 | CSS over 50 KB | `CSS is over 50 KB` |
 | Anything the parser cannot read | ``This part of the CSS couldn't be read — check for a missing `{`, `}` or `;` `` |
@@ -155,7 +155,8 @@ Invisible and format characters are stripped before checking, and in HTML the ch
 | --- | --- |
 | No payment block, or more than one | `The page needs exactly one payment block` |
 | Payment block nested or on the thank-you page | `The payment block must be on the main page, not nested or on the thank-you page` |
-| `thank_you` or `back_to_store` on the main page or nested | `The thank you block belongs on the thank-you page only` |
+| `thank_you` on the main page or nested | `The thank you block belongs on the thank-you page only` |
+| `back_to_store` on the main page or nested | `The back to store block belongs on the thank-you page only` |
 | Repeated block id | `Block id "x" is used twice` |
 | More than 40 blocks on a page | `A page can have at most 40 blocks` |
 | A missing palette for the mode | `A light palette is required for light mode` |

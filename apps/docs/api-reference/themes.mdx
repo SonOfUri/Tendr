@@ -65,7 +65,7 @@ Publishable keys and shopper sessions are refused. Themes and assets belong to t
 { "name": "Spring sale", "from": { "preset": "fashion" } }
 ```
 
-`from` is `{ "preset": "blank" | "fashion" | "gaming" | "nonprofit" | "minimal" }`, `{ "theme_id": "..." }` to copy another theme's draft, or `"blank"`. A store can have 20 themes; the 21st is `THEME_LIMIT`.
+`from` is `{ "preset": "blank" | "fashion" | "gaming" | "nonprofit" | "minimal" }`, `{ "theme_id": "..." }` to copy another theme's draft, or `"blank"` (`{ "name": "Empty", "from": "blank" }`). A store can have 20 themes; the 21st is `THEME_LIMIT`.
 
 ### Update
 
@@ -89,7 +89,7 @@ POST /v1/themes/thm_01J.../preview
 { "sample": "checkout", "scheme": "dark", "viewport": "phone" }
 ```
 
-`sample` is `checkout` or `link`; `scheme` is `light` or `dark`; `viewport` is `phone` or `desktop`.
+`sample`, `scheme` and `viewport` are all required. `sample` is `checkout` or `link`; `scheme` is `light` or `dark`; `viewport` is `phone` or `desktop`.
 
 ```json
 { "url": "https://usetendr.tech/preview/theme/…", "expires_at": "2026-10-30T09:15:00.000Z" }
@@ -99,7 +99,7 @@ The link needs no sign-in and expires after 15 minutes. It shows the draft with 
 
 ### Delete
 
-Deleting a theme is refused with `THEME_IN_USE` while it is the store's default (`details.reason: "default"`) or while any payment link names it (`details.reason: "links"`, `details.links`: the link ids). Sessions that already used the theme are not blocked; they render the default theme afterwards.
+Deleting a theme is refused with `THEME_IN_USE` while it is the store's default (`details.reason: "default"`) or while any payment link names it (`details.reason: "links"`, `details.links`: the link ids). If something else still references the theme when the delete runs, the reason is `referenced`. Sessions that already used the theme are not blocked; they render the default theme afterwards.
 
 ### Brand pulls
 
@@ -111,7 +111,7 @@ POST /v1/themes/from-store
 { "connection_id": "conn_01J...", "name": "Acme (from store)" }
 ```
 
-Both return the new **draft** theme. `name` is optional. A store can pull 10 times an hour (`429 RATE_LIMITED`). An unreadable site is `BRAND_FETCH_FAILED` (`422`) with `details.reason` of `not_https`, `private_address`, `too_large`, `timeout`, `too_many_redirects`, `bad_status` or `network_error`.
+Both return the new **draft** theme. `from-store` returns `404 NOT_FOUND` when the connection is unknown or has not sent a brand yet. `name` is optional. A store can pull 10 times an hour (`429 RATE_LIMITED`). An unreadable site is `BRAND_FETCH_FAILED` (`422`) with `details.reason` of `not_https`, `private_address`, `too_large`, `timeout`, `too_many_redirects`, `bad_status` or `network_error`.
 
 ## Theme assets
 
@@ -187,7 +187,7 @@ Payment links name a theme with `theme_id` on create and update; `null` clears i
 | --- | --- | --- |
 | `THEME_INVALID` | 400 | A theme document breaks a rule. `details.problems` is a list of `{ path, message }`. |
 | `THEME_LIMIT` | 409 | The store already has 20 themes. |
-| `THEME_IN_USE` | 409 | Deleting the default theme or a theme that payment links use. `details.reason` is `default` or `links`. |
+| `THEME_IN_USE` | 409 | Deleting the default theme or a theme that payment links use. `details.reason` is `default`, `links` or `referenced`. |
 | `ASSET_INVALID` | 400 | An upload is the wrong type, too large, damaged, unsafe, or the store has 200 assets. |
 | `ASSET_IN_USE` | 409 | Deleting an asset that a theme still uses. `details.themes` lists the theme ids. |
 | `BRAND_FETCH_FAILED` | 422 | A website could not be read. `details.reason` says why. |

@@ -45,7 +45,7 @@ Routes: `apps/api/src/routes/themes.ts`, `theme-assets.ts`, `theme-brand.ts`,
   step-up (`requireStepUp`). A test key gets `403 FORBIDDEN`. Drafts, uploads, previews, validation
   and brand pulls work in either mode.
 - **Errors**: `THEME_INVALID` (400, `details.problems`), `THEME_LIMIT` (409), `THEME_IN_USE` (409,
-  `details.reason` of `default` or `links`), `ASSET_INVALID` (400, includes the 200 asset limit),
+  `details.reason` of `default`, `links` or `referenced`), `ASSET_INVALID` (400, includes the 200 asset limit),
   `ASSET_IN_USE` (409, `details.themes`), `BRAND_FETCH_FAILED` (422, `details.reason` is a
   `SafeFetchReason`).
 - **Uploads** are read whole into `req.rawBody` and parsed with busboy, so request signing and
