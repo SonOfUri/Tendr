@@ -43,6 +43,7 @@ import { linkUrls } from '../payment-links/links.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { toJsonDecimal } from '../lib/serialize.js';
+import { familyOf, relayerFor } from '../relayer/index.js';
 import { gaslessToken } from '../relayer/evm/tokens.js';
 import { nearGaslessToken } from '../relayer/near-meta.js';
 import { solanaGaslessToken } from '../relayer/solana-tx.js';
@@ -413,9 +414,7 @@ async function shopperLineItems(ctx: ShopperCtx, s: SessionRow): Promise<Shopper
   const parsed = LineItemSchema.array().safeParse(s.lineItems ?? []);
   if (!parsed.success) return [];
   const items = parsed.data;
-  const hashes = [
-    ...new Set(items.flatMap((i) => (i.image_url ? [sha256(i.image_url)] : []))),
-  ];
+  const hashes = [...new Set(items.flatMap((i) => (i.image_url ? [sha256(i.image_url)] : [])))];
   const cached = new Map<string, string>();
   if (hashes.length > 0) {
     const rows = await ctx.db.productImage.findMany({
@@ -534,6 +533,27 @@ export async function shopperTokens(livemode: boolean) {
 
 /** Merchant-pays quotes are retried once when the price moved between dry and real. */
 const PRICE_MOVED_ATTEMPTS = 2;
+
+/**
+ * Live gasless is switched off (GASLESS_LIVE_ENABLED): a live quote asking for a gasless method
+ * is refused before anything is planned, priced or reserved (no fee RPC, no sponsor decision, no
+ * budget), so quotes never include a sponsored path. Test mode is unaffected.
+ */
+export function assertGaslessAvailable(
+  livemode: boolean,
+  chain: string,
+  method: string | undefined,
+): void {
+  if (!livemode || !method) return;
+  const family = familyOf(chain);
+  if (family && relayerFor(family, true) === null) {
+    throw new AppError(
+      'GASLESS_NOT_AVAILABLE',
+      'Gasless payments are not available in live mode yet',
+      409,
+    );
+  }
+}
 
 /**
  * Prices and allocates a deposit address for the session, replacing its previous quote.
@@ -671,6 +691,7 @@ export async function createQuote(ctx: ShopperCtx, input: QuoteInput) {
       field: 'gasless_method',
     });
   }
+  assertGaslessAvailable(ctx.livemode, origin.blockchain, method);
   const planFor = (forceShopper?: NetworkFeePlan['reason']) =>
     planNetworkFee({
       livemode: ctx.livemode,

@@ -49,7 +49,7 @@ import { newId } from '../../lib/ids.js';
 import { log } from '../../lib/logger.js';
 import { prisma } from '../../lib/prisma.js';
 import { deleteSecret, getSecret, putSecret } from '../../secrets/secrets.js';
-import { gaslessQuote } from '../index.js';
+import { gaslessQuote, relayerFor } from '../index.js';
 import { SIMULATED_GAS_USED } from '../simulated.js';
 import {
   ACTIVE,
@@ -562,6 +562,15 @@ export async function handlePaymasterUrl(
     select: { id: true, merchantId: true, livemode: true, sessionId: true },
   });
   if (!quote) throw unauthorized();
+  if (relayerFor('evm', quote.livemode) === null) {
+    return rpcError(
+      envelopeId(body),
+      toRpcError(
+        new AppError('GASLESS_NOT_AVAILABLE', 'Gasless payments are not available', 409),
+        quote.sessionId,
+      ),
+    );
+  }
   const scope = { merchantId: quote.merchantId, livemode: quote.livemode };
   const shopper: ShopperCtx = { ...scope, db: scopedDb(scope), sessionId: quote.sessionId };
   try {
