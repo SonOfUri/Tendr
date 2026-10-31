@@ -31,6 +31,8 @@ services:
       timeout: 5s
       retries: 10
 
+  # NOTE: MinIO's image is no longer pullable, so this service may not start. Use the GCS dev
+  # bucket instead (the GCS block in .env.example: tendr-assets-dev).
   # Theme asset storage (S3-compatible). The API writes with the root credentials; the bucket is
   # publicly readable, served at http://localhost:9100/tendr-assets (TENDR_ASSET_ORIGIN).
   minio:

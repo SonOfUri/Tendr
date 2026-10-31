@@ -1,7 +1,12 @@
-// Where theme assets (and later product images) are stored: an S3-compatible bucket (MinIO in
-// development, R2/S3 in production) served publicly from TENDR_ASSET_ORIGIN, or an in-memory map
+// Where theme assets (and later product images) are stored: an S3-compatible bucket (MinIO or a GCS
+// dev bucket in development, GCS/R2/S3 in production) served publicly from TENDR_ASSET_ORIGIN, or an in-memory map
 // in tests. Keys are never reused (a new upload gets a new id), so objects are cached forever.
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  PutObjectCommand,
+  S3Client,
+  type S3ClientConfig,
+} from '@aws-sdk/client-s3';
 import { env, type Env } from '../env.js';
 
 export interface ObjectStore {
@@ -55,7 +60,17 @@ export function s3ObjectStore(client: S3Client, bucket: string): ObjectStore {
 /** The store `ASSET_STORE_DRIVER` names (env.ts checks the s3 settings are present). */
 export function createObjectStore(env: Env): ObjectStore {
   if (env.ASSET_STORE_DRIVER === 'memory') return memoryObjectStore();
-  const client = new S3Client({
+  return s3ObjectStore(createS3Client(env), env.ASSET_S3_BUCKET!);
+}
+
+/**
+ * The S3 client for the asset bucket. Checksums are computed only where an operation requires
+ * them: newer SDKs add CRC headers by default, which GCS's S3 interop endpoint rejects.
+ */
+export function createS3Client(env: Env, overrides: Partial<S3ClientConfig> = {}): S3Client {
+  return new S3Client({
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
     region: env.ASSET_S3_REGION,
     ...(env.ASSET_S3_ENDPOINT ? { endpoint: env.ASSET_S3_ENDPOINT } : {}),
     forcePathStyle: env.ASSET_S3_FORCE_PATH_STYLE,
@@ -63,6 +78,6 @@ export function createObjectStore(env: Env): ObjectStore {
       accessKeyId: env.ASSET_S3_ACCESS_KEY_ID!,
       secretAccessKey: env.ASSET_S3_SECRET_ACCESS_KEY!,
     },
+    ...overrides,
   });
-  return s3ObjectStore(client, env.ASSET_S3_BUCKET!);
 }
