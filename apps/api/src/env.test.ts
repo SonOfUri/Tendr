@@ -34,6 +34,7 @@ const webauthn = {
   ONECLICK_API_KEY: 'jwt',
   FX_API_KEY: 'oxr',
   WEB_INTERNAL_TOKEN: 'i'.repeat(32),
+  RESEND_API_KEY: 're_test',
   ...origins,
   ...assets,
 };
@@ -211,6 +212,7 @@ describe('loadEnv dashboard auth and mail', () => {
     ONECLICK_API_KEY: 'jwt',
     FX_API_KEY: 'oxr',
     WEB_INTERNAL_TOKEN: 'i'.repeat(32),
+    RESEND_API_KEY: 're_test',
     ...origins,
     ...assets,
   };
@@ -230,10 +232,10 @@ describe('loadEnv dashboard auth and mail', () => {
     ]);
   });
 
-  it('defaults the mail driver: log in development, memory in test, unconfigured in production', () => {
+  it('defaults the mail driver: log in development, memory in test, resend in production', () => {
     expect(loadEnv({ ...base, NODE_ENV: 'development' }).MAIL_DRIVER).toBe('log');
     expect(loadEnv({ ...base, NODE_ENV: 'test' }).MAIL_DRIVER).toBe('memory');
-    expect(loadEnv(prod).MAIL_DRIVER).toBe('unconfigured');
+    expect(loadEnv(prod).MAIL_DRIVER).toBe('resend');
   });
 
   it('refuses the memory and log mail drivers and a localhost RP ID in production', () => {

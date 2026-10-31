@@ -104,10 +104,14 @@ const EnvSchema = z
     /** Comma-separated origins allowed in WebAuthn client data (the dashboard's). */
     WEBAUTHN_ORIGINS: optionalString,
     /**
-     * `log` (dev: logger + `apps/api/.mail/*.json`), `memory` (tests), `unconfigured` (sending
-     * fails loudly; production's default until a real provider is wired). Defaults per NODE_ENV.
+     * `log` (dev: logger + `apps/api/.mail/*.json`), `memory` (tests), `resend` (Resend's HTTP
+     * API; production's default), `unconfigured` (sending fails loudly). Defaults per NODE_ENV.
      */
-    MAIL_DRIVER: z.enum(['log', 'memory', 'unconfigured']).optional(),
+    MAIL_DRIVER: z.enum(['log', 'memory', 'resend', 'unconfigured']).optional(),
+    /** Resend API key; required when the mail driver is `resend`. Secret: env only. */
+    RESEND_API_KEY: optionalString,
+    /** The From header of every outgoing mail. */
+    MAIL_FROM: z.string().min(3).default('Tendr <no-reply@usetendr.tech>'),
     // 1Click (checkout swaps). Live mode only; test mode uses the simulated provider.
     ONECLICK_BASE_URL: z.string().url().default('https://1click.chaindefuser.com'),
     /** 1Click JWT, sent as `X-API-Key`. Required in production. */
@@ -577,6 +581,16 @@ const EnvSchema = z
         });
       }
     }
+    const mailDriver =
+      e.MAIL_DRIVER ??
+      ({ development: 'log', test: 'memory', production: 'resend' } as const)[e.NODE_ENV];
+    if (mailDriver === 'resend' && !e.RESEND_API_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['RESEND_API_KEY'],
+        message: 'required when MAIL_DRIVER is resend (production sends mail through Resend)',
+      });
+    }
     const assetDriver = e.ASSET_STORE_DRIVER ?? (e.NODE_ENV === 'production' ? 's3' : 'memory');
     if (e.NODE_ENV === 'production') {
       if (assetDriver !== 's3') {
@@ -656,7 +670,7 @@ const EnvSchema = z
       e.ASSET_STORE_DRIVER ?? (e.NODE_ENV === 'production' ? ('s3' as const) : ('memory' as const)),
     MAIL_DRIVER:
       e.MAIL_DRIVER ??
-      ({ development: 'log', test: 'memory', production: 'unconfigured' } as const)[e.NODE_ENV],
+      ({ development: 'log', test: 'memory', production: 'resend' } as const)[e.NODE_ENV],
   }));
 
 function splitList(value: string | undefined): string[] {

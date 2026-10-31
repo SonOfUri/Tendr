@@ -2,13 +2,16 @@
 //   log           development: one log line per mail, and the full message as JSON in
 //                 `apps/api/.mail/` (git-ignored), so magic links can be clicked locally;
 //   memory        tests: messages are kept in `MemoryMailer.sent`;
-//   unconfigured  production's default until a provider is wired: every send fails loudly.
+//   resend        production's default: delivered through Resend's HTTP API (needs
+//                 `RESEND_API_KEY`; the sender is `MAIL_FROM`);
+//   unconfigured  every send fails loudly (an explicit opt-out of mail).
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { env } from '../env.js';
 import { providerNotConfigured } from '../lib/errors.js';
 import { log } from '../lib/logger.js';
+import { ResendMailer } from './resend-mailer.js';
 
 export const MailTemplateValues = [
   'verify_email',
@@ -87,13 +90,16 @@ let current: Mailer | null = null;
 
 export function getMailer(): Mailer {
   if (!current) {
-    const driver = env().MAIL_DRIVER;
+    const e = env();
+    const driver = e.MAIL_DRIVER;
     current =
       driver === 'memory'
         ? new MemoryMailer()
         : driver === 'log'
           ? new LogMailer()
-          : new UnconfiguredMailer();
+          : driver === 'resend' && e.RESEND_API_KEY
+            ? new ResendMailer({ apiKey: e.RESEND_API_KEY, from: e.MAIL_FROM })
+            : new UnconfiguredMailer();
   }
   return current;
 }
