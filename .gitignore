@@ -20,6 +20,9 @@ apps/api/prisma/*.db-journal
 # Dev mail driver output (magic links)
 apps/api/.mail/
 
+# Temporary GCP service-account keys (runbook step 3.1 keeps them outside the repo; backstop)
+kms-verify*.json
+
 # Terraform (provider lock files are committed)
 .terraform/
 *.tfstate

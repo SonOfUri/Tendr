@@ -114,7 +114,7 @@ Required inputs: `source_repo`, `gcp_project_id`, and the sensitive `gcp_credent
 | ---------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `api`      | repo                                           | pre-deploy `npm run db:migrate`; start `npm run start --workspace=@tendr/api`; healthcheck `/v1/health`                                                                 |
 | `worker`   | repo                                           | start `npm run start:worker --workspace=@tendr/api`; healthcheck `/health` on `WORKER_HEALTH_PORT` (4100); never migrates                                               |
-| `web`      | repo                                           | build `npm ci --include=dev && npx turbo run build --filter=@tendr/web...`; start `npm run start --workspace=@tendr/web -- --port $PORT` (3000); healthcheck `/privacy` |
+| `web`      | repo                                           | build `npm ci --include=dev && npx turbo run build --filter=@tendr/web...`; start `npm run start --workspace=@tendr/web` (port 3000); healthcheck `/privacy` |
 | `postgres` | `ghcr.io/railwayapp-templates/postgres-ssl:16` | volume `/var/lib/postgresql/data`                                                                                                                                       |
 | `redis`    | `redis:7-alpine`                               | volume `/data`, password, AOF, `maxmemory-policy noeviction` (BullMQ requires it)                                                                                       |
 

@@ -189,11 +189,17 @@ prints `True enforced`. The bucket holds every secret in state; keep it private 
    gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
      --member="serviceAccount:tendr-kms-verify@$GCP_PROJECT.iam.gserviceaccount.com" \
      --role=roles/cloudkms.admin --condition=None
-   gcloud iam service-accounts keys create /work/kms-verify.json \
-     --iam-account="tendr-kms-verify@$GCP_PROJECT.iam.gserviceaccount.com"
-   GCP_PROJECT_ID="$GCP_PROJECT" GCP_KMS_LOCATION="$GCP_REGION" \
-     GCP_CREDENTIALS_JSON="$(cat kms-verify.json)" npm run kms:verify --workspace=@tendr/api
-   rm kms-verify.json
+   # The key file goes in ~/.config/gcloud (the gcloud container's /root/.config/gcloud), never
+   # in the repo, and is deleted when the subshell exits, even if a step fails.
+   (
+     KEY_FILE="$HOME/.config/gcloud/kms-verify.json"
+     trap 'rm -f "$KEY_FILE"' EXIT
+     gcloud iam service-accounts keys create /root/.config/gcloud/kms-verify.json \
+       --iam-account="tendr-kms-verify@$GCP_PROJECT.iam.gserviceaccount.com" &&
+       GCP_PROJECT_ID="$GCP_PROJECT" GCP_KMS_LOCATION="$GCP_REGION" \
+         GCP_CREDENTIALS_JSON="$(cat "$KEY_FILE")" npm run kms:verify --workspace=@tendr/api
+   )
+   ls "$HOME/.config/gcloud/kms-verify.json" 2>/dev/null && echo 'key file left behind: delete it'
    gcloud projects remove-iam-policy-binding "$GCP_PROJECT" \
      --member="serviceAccount:tendr-kms-verify@$GCP_PROJECT.iam.gserviceaccount.com" \
      --role=roles/cloudkms.admin --condition=None
@@ -334,11 +340,6 @@ testnet code hash.
      it must be `usetendr.tech` on the first deploy;
    - `LIVE_MODE_ENABLED`, `GASLESS_LIVE_ENABLED` and `FEE_SWEEP_ENABLED` all `"false"`;
    - `MAIL_DRIVER=resend`;
-   - **the web service's start command expands `$PORT`.** It must read exactly
-     `npm run start --workspace=@tendr/web -- --port $PORT` (a single `$`, not `$$PORT` or a
-     quoted `'$PORT'`). `PORT` is pinned to 3000 on web, so if Railway does not run the start
-     command through a shell, `next start` gets the literal text `$PORT` and exits. The first web
-     deploy log confirms it (step 6).
 
 4. Apply, once you confirm:
 
@@ -408,10 +409,8 @@ Checks:
   authentication failure for `tendr_app` and Railway restarts it. That is expected on the first
   deploy. It turns healthy (`/health`) once the api migration has finished; if it does not within a
   few minutes of that, restart the worker once from the dashboard.
-- **web listens on 3000.** The web deploy log shows Next starting on port 3000 (the `$PORT` check
-  from step 4). If it fails on `--port $PORT`, change the start command in
-  `infra/terraform/railway/main.tf` to `npm run start --workspace=@tendr/web` (its `start` script
-  already passes `--port 3000`) and apply again.
+- **web listens on 3000.** The web deploy log shows Next starting on port 3000 (its `start` script
+  passes `--port 3000`, and `PORT` is pinned to 3000 on web).
 - `curl -sS https://api.usetendr.tech/v1/health` → `{"status":"ok"}`.
 - `curl -sSI https://app.usetendr.tech/login` → `200`; `curl -sSI https://pay.usetendr.tech/privacy` → `200`.
 - The least-privilege role holds (**who: me, after you confirm**):
@@ -433,7 +432,7 @@ after you confirm, for the rest.** The operator script reads the key from stdin 
 `printf '%s'`: a trailing space or newline from `echo` or a padded paste is stored as part of the
 key.
 
-The script's own header suggests `railway run --service api npm run secrets:put …`. That runs
+Not `railway run --service api npm run secrets:put …`: that runs
 the command on your machine (here, in the CLI's container) with the api's variables, but the api's
 `DATABASE_URL` points at Railway's private network (`postgres.railway.internal`), which only
 Railway's containers reach. So run it inside the api container, where the repo is built with its
@@ -660,3 +659,8 @@ Set up now, checked with our own small funds. Every money-moving step is confirm
 - **Old links.** An old `/pay/…` path on `pay.usetendr.tech` redirects to the root form (checked in
   step 8). The old `https://usetendr.tech/pay/…` form, which earlier docs showed, lands on the
   Vercel landing page, which this deploy does not change; no live store or link used it.
+- **WooCommerce 0.2.0 installs do not see 0.3.0.** A store on 0.2.0 polls
+  `https://usetendr.tech/v1/plugins/woocommerce/update.json` (its old default checkout base, the
+  Vercel landing page) for updates, not `pay.usetendr.tech`, so it is never offered 0.3.0 and has
+  to be updated by hand (upload the 0.3.0 zip). No stores are connected today, so nothing is
+  stranded; if one is connected before this deploy, update it by hand.

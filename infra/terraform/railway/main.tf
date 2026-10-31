@@ -231,8 +231,8 @@ resource "railway_service" "web" {
   # The build runs `prebuild` (build:embed and the font copy). NEXT_PUBLIC_* and
   # TENDR_CHECKOUT_BASE_URL are inlined at build time, so they are service variables.
   build_command = "npm ci --include=dev && npx turbo run build --filter=@tendr/web..."
-  # The package's `start` script passes --port 3000; the later --port wins.
-  start_command = "npm run start --workspace=@tendr/web -- --port $PORT"
+  # The package's `start` script listens on 3000, the port PORT is pinned to below.
+  start_command = "npm run start --workspace=@tendr/web"
 
   # A static page that does not call the API, so a web deploy never waits on the api.
   healthcheck_path    = "/privacy"
