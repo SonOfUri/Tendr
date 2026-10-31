@@ -47,6 +47,13 @@ import {
   type DeliverHookJobData,
 } from './hooks/deliver.js';
 import { sweepNotificationEmailLinks } from './merchants/notification-email.js';
+import {
+  PRODUCT_IMAGES_CONCURRENCY,
+  PRODUCT_IMAGES_QUEUE,
+  runProductImageJob,
+  setProductImageQueue,
+  type CacheProductImagesJobData,
+} from './themes/product-images.js';
 import { runFeeSweep } from './jobs/fee-sweep.js';
 import { CHECK_GAS_BALANCES_EVERY_MS, checkGasBalances } from './jobs/gas-alerts.js';
 import { startDispatcher } from './jobs/dispatcher.js';
@@ -349,9 +356,9 @@ export interface WorkerOptions {
 }
 
 /**
- * Starts the worker process: event-job, maintenance, merchant-account and checkout workers, the
- * hourly `purge-idempotency` schedule, the per-minute account jobs (reconciliation, ready
- * timelocks, ready recoveries), the payment watcher (5 s deposit scan, per-minute session
+ * Starts the worker process: event-job, maintenance, merchant-account, checkout and product-image
+ * workers, the hourly `purge-idempotency` schedule, the per-minute account jobs (reconciliation,
+ * ready timelocks, ready recoveries), the payment watcher (5 s deposit scan, per-minute session
  * expiry), the outbox dispatcher and the health server.
  */
 export async function startWorker(
@@ -397,8 +404,18 @@ export async function startWorker(
     ...setup,
     concurrency: 20,
   });
+  // Product images: fetches from store sites (up to ~30 s a job) on their own queue and worker,
+  // so they never hold up the events queue.
+  const productImagesQueue = new Queue(PRODUCT_IMAGES_QUEUE, setup);
+  setProductImageQueue(productImagesQueue);
+  const productImagesWorker = new Worker<CacheProductImagesJobData>(
+    PRODUCT_IMAGES_QUEUE,
+    (job) => runProductImageJob(job.data),
+    { ...setup, concurrency: PRODUCT_IMAGES_CONCURRENCY },
+  );
   const workers = [
     webhooksWorker,
+    productImagesWorker,
     eventsWorker,
     maintenanceWorker,
     accountsWorker,
@@ -525,10 +542,12 @@ export async function startWorker(
           executorsQueue,
           checkoutQueue,
           webhooksQueue,
+          productImagesQueue,
         ].map((q) => q.close()),
       );
       setAccountJobs(null);
       setWebhookQueue(null);
+      setProductImageQueue(null);
       setHookQueue(null);
       await closeConnection(connection);
       await health.close();

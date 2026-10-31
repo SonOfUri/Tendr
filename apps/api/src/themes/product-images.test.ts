@@ -14,7 +14,15 @@ import {
 import { memoryObjectStore } from '../storage/object-store.js';
 import { clearEventHandlers, getEventHandler, handlerNamesFor } from '../jobs/handlers.js';
 import { createMerchant, createRow, minimalSession, resetDb } from '../test/helpers.js';
-import { cacheProductImages, registerProductImageHandler } from './product-images.js';
+import {
+  CACHE_PRODUCT_IMAGES_JOB,
+  cacheProductImages,
+  PRODUCT_IMAGE_PARALLELISM,
+  registerProductImageHandler,
+  runProductImageJob,
+  setProductImageQueue,
+  type CacheProductImagesJobData,
+} from './product-images.js';
 
 type Fetch = typeof safeFetch;
 
@@ -126,7 +134,60 @@ describe('product images', () => {
     expect((await rows())[0]).toMatchObject({ status: 'ok' });
   });
 
-  it('session.created handler caches the line item images', async () => {
+  it('does not refetch a failed image within an hour', async () => {
+    const url = 'https://shop.example/gone.png';
+    const fetch = fakeFetch({});
+    await cacheProductImages(merchant.id, [url], { store, fetch });
+    await cacheProductImages(merchant.id, [url], { store, fetch });
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    await prisma.productImage.updateMany({
+      where: { merchantId: merchant.id },
+      data: { fetchedAt: new Date(Date.now() - 61 * 60_000) },
+    });
+    await cacheProductImages(merchant.id, [url], { store, fetch });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('fetches at most three images at once', async () => {
+    const urls = Array.from({ length: 8 }, (_, i) => `https://shop.example/${i}.png`);
+    let inFlight = 0;
+    let peak = 0;
+    const fetch = vi.fn<Fetch>(async (url) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 20));
+      inFlight -= 1;
+      return { status: 200, contentType: 'image/png', body: png, finalUrl: url } as SafeFetchResult;
+    });
+    await cacheProductImages(merchant.id, urls, { store, fetch });
+    expect(PRODUCT_IMAGE_PARALLELISM).toBe(3);
+    expect(peak).toBe(3);
+    expect(fetch).toHaveBeenCalledTimes(8);
+    expect((await rows()).every((r) => r.status === 'ok')).toBe(true);
+  });
+
+  it('starts no fetch after the job budget; the rest stay pending', async () => {
+    const urls = Array.from({ length: 9 }, (_, i) => `https://shop.example/${i}.png`);
+    const fetch = vi.fn<Fetch>(async (url) => {
+      await new Promise((r) => setTimeout(r, 400));
+      return { status: 200, contentType: 'image/png', body: png, finalUrl: url } as SafeFetchResult;
+    });
+    await cacheProductImages(merchant.id, urls, { store, fetch, budgetMs: 200 });
+    // Three lanes each start one fetch before the 200 ms budget runs out, then stop.
+    expect(fetch).toHaveBeenCalledTimes(3);
+    const all = await rows();
+    expect(all).toHaveLength(9);
+    expect(all.filter((r) => r.status === 'ok')).toHaveLength(3);
+    expect(all.filter((r) => r.status === 'pending')).toHaveLength(6);
+
+    // A later job picks up the pending ones.
+    await cacheProductImages(merchant.id, urls, { store, fetch });
+    expect(fetch).toHaveBeenCalledTimes(9);
+    expect((await rows()).every((r) => r.status === 'ok')).toBe(true);
+  });
+
+  it('session.created handler queues a job that caches the line item images', async () => {
     const url = 'https://shop.example/p.png';
     const session = await prisma.session.create({
       data: minimalSession({
@@ -139,13 +200,32 @@ describe('product images', () => {
       }),
     });
     clearEventHandlers();
-    const fetch = fakeFetch({ [url]: png });
-    registerProductImageHandler({ store, fetch });
-    const [name] = handlerNamesFor('session.created');
-    const event = await createRow('Event', merchant.id, false, { aggregateId: session.id });
-    await getEventHandler('session.created', name!)!(event as unknown as Event);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect((await rows())[0]).toMatchObject({ sourceUrl: url, status: 'ok' });
-    clearEventHandlers();
+    const add = vi.fn(async () => ({}) as never);
+    setProductImageQueue({ add });
+    try {
+      registerProductImageHandler();
+      const [name] = handlerNamesFor('session.created');
+      const event = await createRow('Event', merchant.id, false, { aggregateId: session.id });
+      await getEventHandler('session.created', name!)!(event as unknown as Event);
+      expect(add).toHaveBeenCalledTimes(1);
+      const [jobName, data, opts] = add.mock.calls[0] as unknown as [
+        string,
+        CacheProductImagesJobData,
+        { jobId: string },
+      ];
+      expect(jobName).toBe(CACHE_PRODUCT_IMAGES_JOB);
+      expect(data).toEqual({ merchantId: merchant.id, urls: [url] });
+      expect(opts.jobId).toBe(`pimg__${event.id}`);
+      // Nothing is fetched on the events queue; the job does it.
+      expect(await rows()).toHaveLength(0);
+
+      const fetch = fakeFetch({ [url]: png });
+      await runProductImageJob(data, { store, fetch });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect((await rows())[0]).toMatchObject({ sourceUrl: url, status: 'ok' });
+    } finally {
+      setProductImageQueue(null);
+      clearEventHandlers();
+    }
   });
 });
