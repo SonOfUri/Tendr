@@ -31,6 +31,7 @@ import {
 import { paymentLinkRoutes } from './routes/payment-links.js';
 import { THEME_PREVIEW_PUBLIC_PREFIX } from './routes/theme-preview-public.js';
 import { paymentRoutes } from './routes/payments.js';
+import { PUBLIC_ASSET_PREFIX, publicAssetRoutes } from './routes/public-assets.js';
 import { pingRoutes } from './routes/ping.js';
 import { proposalRoutes } from './routes/proposals.js';
 import { recoveryRoutes } from './routes/recovery.js';
@@ -110,7 +111,9 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(cors, {
     delegator: (req, cb) => {
       const url = req.url ?? '';
-      if (url.startsWith(PAYMASTER_URL_PREFIX)) {
+      if (env().ASSET_PUBLIC_PROXY && url.startsWith(PUBLIC_ASSET_PREFIX)) {
+        cb(null, { origin: '*', credentials: false, methods: ['GET', 'HEAD'] });
+      } else if (url.startsWith(PAYMASTER_URL_PREFIX)) {
         // A wallet (any origin) calls the per-quote paymaster URL; its token is the credential.
         cb(null, {
           origin: '*',
@@ -268,6 +271,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(relayerRoutes);
   await app.register(hookRoutes);
   const objectStore = opts.objectStore ?? createObjectStore(env());
+  if (env().ASSET_PUBLIC_PROXY) await app.register(publicAssetRoutes, { store: objectStore });
   await app.register(themeRoutes);
   await app.register(themePreviewPublicRoutes, { readRateLimit: limiters.paymentLinkRead });
   await app.register(themeAssetRoutes, { store: objectStore });

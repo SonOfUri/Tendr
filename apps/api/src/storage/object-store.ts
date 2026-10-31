@@ -1,8 +1,9 @@
 // Where theme assets (and later product images) are stored: an S3-compatible bucket (MinIO or a GCS
-// dev bucket in development, GCS/R2/S3 in production) served publicly from TENDR_ASSET_ORIGIN, or an in-memory map
-// in tests. Keys are never reused (a new upload gets a new id), so objects are cached forever.
+// dev bucket in development, GCS/R2/S3 in production) served from TENDR_ASSET_ORIGIN, or an in-memory
+// map in tests. Theme keys are immutable; the public proxy gives replaceable product keys a shorter TTL.
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
   type S3ClientConfig,
@@ -12,6 +13,8 @@ import { env, type Env } from '../env.js';
 export interface ObjectStore {
   put(key: string, body: Buffer, contentType: string): Promise<void>;
   delete(key: string): Promise<void>;
+  /** Used only by the opt-in public asset proxy for private S3 buckets. */
+  get?(key: string): Promise<{ body: Buffer; contentType: string; etag?: string } | null>;
 }
 
 export type MemoryObjectStore = ObjectStore & {
@@ -35,6 +38,9 @@ export function memoryObjectStore(): MemoryObjectStore {
     async delete(key) {
       objects.delete(key);
     },
+    async get(key) {
+      return objects.get(key) ?? null;
+    },
   };
 }
 
@@ -53,6 +59,55 @@ export function s3ObjectStore(client: S3Client, bucket: string): ObjectStore {
     },
     async delete(key) {
       await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    },
+    async get(key) {
+      try {
+        const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        if (!result.Body) return null;
+        const stream = result.Body.transformToWebStream();
+        if (!result.ContentType) {
+          await stream.cancel();
+          return null;
+        }
+        // Uploaded theme files are at most 2 MB; allow room for re-encoded product images.
+        const maxBytes = 4 * 1024 * 1024;
+        if ((result.ContentLength ?? 0) > maxBytes) {
+          await stream.cancel();
+          throw new Error('Stored asset exceeds the public asset size limit');
+        }
+        const reader = stream.getReader();
+        const chunks: Uint8Array[] = [];
+        let length = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            length += value.byteLength;
+            if (length > maxBytes)
+              throw new Error('Stored asset exceeds the public asset size limit');
+            chunks.push(value);
+          }
+        } finally {
+          await reader.cancel();
+          reader.releaseLock();
+        }
+        const body = Buffer.concat(chunks, length);
+        return {
+          body,
+          contentType: result.ContentType,
+          ...(result.ETag ? { etag: result.ETag } : {}),
+        };
+      } catch (error) {
+        if (
+          error &&
+          typeof error === 'object' &&
+          (('name' in error && error.name === 'NoSuchKey') ||
+            ('$metadata' in error &&
+              (error.$metadata as { httpStatusCode?: number }).httpStatusCode === 404))
+        )
+          return null;
+        throw error;
+      }
     },
   };
 }

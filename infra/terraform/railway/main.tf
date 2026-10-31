@@ -29,6 +29,13 @@ resource "railway_project" "tendr" {
   name         = var.project_name
   workspace_id = var.workspace_id
   private      = true
+
+  lifecycle {
+    precondition {
+      condition     = var.keyvault_driver == "gcp" ? (var.gcp_project_id != "" && var.gcp_credentials_json != "") : try(jsondecode(var.env_keyvault_json).v == 1, false)
+      error_message = "Supply GCP project and credentials for gcp, or a v1 software key bundle for env."
+    }
+  }
 }
 
 locals {
@@ -133,19 +140,14 @@ resource "railway_variable_collection" "redis" {
 }
 
 # ---------------------------------------------------------------------------------------------
-# Shared variables: origins, NODE_ENV, GCP/KMS. NODE_ENV=production and KEYVAULT_DRIVER=gcp are
-# required: env validation refuses to boot production with the local key vault. A service only
-# sees a shared variable it references, so the web never gets the GCP credentials.
+# Shared variables: origins, NODE_ENV and the selected vault. The local development vault is
+# forbidden in production. A service sees only referenced variables; web never receives keys.
 # ---------------------------------------------------------------------------------------------
 
 locals {
-  shared_variables = {
+  shared_variables = merge({
     NODE_ENV           = "production"
-    KEYVAULT_DRIVER    = "gcp"
-    GCP_PROJECT_ID     = var.gcp_project_id
-    GCP_KMS_LOCATION   = var.gcp_kms_location
-    GCP_KMS_KEYRING    = var.gcp_kms_keyring
-    GCP_KMS_KEK        = var.gcp_kms_kek
+    KEYVAULT_DRIVER    = var.keyvault_driver
     WORKER_HEALTH_PORT = tostring(var.worker_health_port)
     LOG_LEVEL          = var.log_level
     API_BASE_URL       = var.api_base_url
@@ -153,7 +155,12 @@ locals {
     CHECKOUT_BASE_URL  = var.checkout_base_url
     CORS_ORIGINS       = var.cors_origins
     TENDR_ASSET_ORIGIN = var.tendr_asset_origin
-  }
+    }, var.keyvault_driver == "gcp" ? {
+    GCP_PROJECT_ID   = var.gcp_project_id
+    GCP_KMS_LOCATION = var.gcp_kms_location
+    GCP_KMS_KEYRING  = var.gcp_kms_keyring
+    GCP_KMS_KEK      = var.gcp_kms_kek
+  } : {})
 }
 
 resource "railway_shared_variable" "config" {
@@ -166,10 +173,24 @@ resource "railway_shared_variable" "config" {
 }
 
 resource "railway_shared_variable" "gcp_credentials_json" {
+  count          = var.keyvault_driver == "gcp" ? 1 : 0
   environment_id = local.environment_id
   project_id     = railway_project.tendr.id
   name           = "GCP_CREDENTIALS_JSON"
   value          = var.gcp_credentials_json
+}
+
+moved {
+  from = railway_shared_variable.gcp_credentials_json
+  to   = railway_shared_variable.gcp_credentials_json[0]
+}
+
+resource "railway_shared_variable" "env_keyvault_json" {
+  count          = var.keyvault_driver == "env" ? 1 : 0
+  environment_id = local.environment_id
+  project_id     = railway_project.tendr.id
+  name           = "ENV_KEYVAULT_JSON"
+  value          = var.env_keyvault_json
 }
 
 # The web server sends it as `x-tendr-internal` on payment-link reads; the API (and the worker,
@@ -241,7 +262,7 @@ resource "railway_service" "web" {
 
 locals {
   # Railway resolves shared variables into a service only when the service references them.
-  shared_reference = { for name in concat(keys(local.shared_variables), ["GCP_CREDENTIALS_JSON", "WEB_INTERNAL_TOKEN"]) :
+  shared_reference = { for name in concat(keys(local.shared_variables), [var.keyvault_driver == "gcp" ? "GCP_CREDENTIALS_JSON" : "ENV_KEYVAULT_JSON", "WEB_INTERNAL_TOKEN"]) :
     name => { name = name, value = "$${{shared.${name}}}" }
   }
 
@@ -263,8 +284,8 @@ locals {
     [
       { name = "REDIS_URL", value = "$${{redis.REDIS_URL}}" },
       { name = "DATABASE_URL", value = "$${{postgres.APP_DATABASE_URL}}" },
-      # Platform switches (deploy spec §6): live mode, live gasless and the fee sweep stay off.
-      { name = "LIVE_MODE_ENABLED", value = "false" },
+      # Real-money operations are explicit; gasless and fee sweeping remain disabled.
+      { name = "LIVE_MODE_ENABLED", value = tostring(var.live_mode_enabled) },
       { name = "GASLESS_LIVE_ENABLED", value = "false" },
       { name = "FEE_SWEEP_ENABLED", value = "false" },
       # Dashboard sign-in.
@@ -274,11 +295,12 @@ locals {
       { name = "MAIL_DRIVER", value = "resend" },
       { name = "MAIL_FROM", value = var.mail_from },
       { name = "RESEND_API_KEY", value = var.resend_api_key },
-      # Theme assets: GCS through its S3 interop (spec §4).
+      # Theme assets: GCS or another S3-compatible bucket (including Railway private buckets).
       { name = "ASSET_STORE_DRIVER", value = "s3" },
-      { name = "ASSET_S3_ENDPOINT", value = "https://storage.googleapis.com" },
-      { name = "ASSET_S3_REGION", value = "auto" },
-      { name = "ASSET_S3_FORCE_PATH_STYLE", value = "true" },
+      { name = "ASSET_S3_ENDPOINT", value = var.asset_s3_endpoint },
+      { name = "ASSET_S3_REGION", value = var.asset_s3_region },
+      { name = "ASSET_S3_FORCE_PATH_STYLE", value = tostring(var.asset_s3_force_path_style) },
+      { name = "ASSET_PUBLIC_PROXY", value = tostring(var.asset_public_proxy) },
       { name = "ASSET_S3_BUCKET", value = var.asset_s3_bucket },
       { name = "ASSET_S3_ACCESS_KEY_ID", value = var.asset_s3_access_key_id },
       { name = "ASSET_S3_SECRET_ACCESS_KEY", value = var.asset_s3_secret_access_key },
@@ -314,6 +336,7 @@ resource "railway_variable_collection" "api" {
   depends_on = [
     railway_shared_variable.config,
     railway_shared_variable.gcp_credentials_json,
+    railway_shared_variable.env_keyvault_json,
     railway_shared_variable.web_internal_token,
   ]
 }
@@ -331,6 +354,7 @@ resource "railway_variable_collection" "worker" {
   depends_on = [
     railway_shared_variable.config,
     railway_shared_variable.gcp_credentials_json,
+    railway_shared_variable.env_keyvault_json,
     railway_shared_variable.web_internal_token,
   ]
 }

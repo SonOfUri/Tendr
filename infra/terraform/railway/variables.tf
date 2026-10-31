@@ -99,6 +99,47 @@ variable "tendr_asset_origin" {
 variable "gcp_project_id" {
   description = "GCP project holding the key ring (GCP_PROJECT_ID)."
   type        = string
+  default     = ""
+}
+
+variable "keyvault_driver" {
+  description = "gcp uses Cloud KMS; env explicitly opts into application-held software keys."
+  type        = string
+  default     = "gcp"
+
+  validation {
+    condition     = contains(["gcp", "env"], var.keyvault_driver)
+    error_message = "keyvault_driver must be gcp or env."
+  }
+}
+
+variable "env_keyvault_json" {
+  description = "Immutable v1 software key bundle shared by API and worker. Required for keyvault_driver=env. Keep a private backup."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "asset_s3_endpoint" {
+  description = "S3-compatible endpoint; override with Railway bucket endpoint for a GCP-free deployment."
+  type        = string
+  default     = "https://storage.googleapis.com"
+}
+
+variable "asset_s3_region" {
+  type    = string
+  default = "auto"
+}
+
+variable "asset_s3_force_path_style" {
+  type    = bool
+  default = true
+}
+
+variable "asset_public_proxy" {
+  description = "Serve a private bucket through the API. Set tendr_asset_origin to <api origin>/v1/assets."
+  type        = bool
+  default     = false
 }
 
 variable "gcp_kms_location" {
@@ -123,6 +164,7 @@ variable "gcp_credentials_json" {
   description = "JSON key of the tendr-api service account (GCP_CREDENTIALS_JSON); `api_credentials_json` output of ../gcp. Never commit it."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -133,6 +175,12 @@ variable "worker_health_port" {
   description = "Port of the worker's GET /health server (WORKER_HEALTH_PORT)."
   type        = number
   default     = 4100
+}
+
+variable "live_mode_enabled" {
+  description = "Enable real-money merchant operations after the mainnet accounts, contracts and provider secrets are ready."
+  type        = bool
+  default     = false
 }
 
 variable "log_level" {

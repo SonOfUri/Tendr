@@ -2,6 +2,7 @@ import { KeyManagementServiceClient } from '@google-cloud/kms';
 import { env } from '../env.js';
 import { GcpKeyVault } from './gcp.js';
 import { LocalKeyVault } from './local.js';
+import { EnvironmentKeyVault } from './environment.js';
 import type { KeyVault } from './types.js';
 
 export type { Curve, Envelope, KeyName, KeyVault, Signature } from './types.js';
@@ -15,6 +16,9 @@ export function getKeyVault(): KeyVault {
   if (vault) return vault;
   const e = env();
   switch (e.KEYVAULT_DRIVER) {
+    case 'env':
+      vault = new EnvironmentKeyVault(e.ENV_KEYVAULT_JSON!);
+      return vault;
     case 'local':
       vault = new LocalKeyVault(e.LOCAL_KEYVAULT_PATH);
       return vault;

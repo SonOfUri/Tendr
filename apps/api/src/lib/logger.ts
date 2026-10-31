@@ -12,6 +12,7 @@ const REDACT_KEYS = new Set(
     'signature',
     'walletSignature',
     'privateKey',
+    'ENV_KEYVAULT_JSON',
   ].map((k) => k.toLowerCase()),
 );
 

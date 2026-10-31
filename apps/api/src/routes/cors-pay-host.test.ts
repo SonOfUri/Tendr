@@ -9,7 +9,12 @@ import { prisma } from '../lib/prisma.js';
 
 const PAY = 'https://pay.usetendr.tech';
 const APP = 'https://app.usetendr.tech';
-const KEYS = ['CHECKOUT_BASE_URL', 'CORS_ORIGINS'] as const;
+const KEYS = [
+  'CHECKOUT_BASE_URL',
+  'CORS_ORIGINS',
+  'ASSET_PUBLIC_PROXY',
+  'TENDR_ASSET_ORIGIN',
+] as const;
 
 // The routes the pay-host pages call: the shopper checkout client, the refund-address form, the
 // public payment link read and session create, the theme preview read and the wallet paymaster.
@@ -20,6 +25,7 @@ const ROUTES: { name: string; method: 'GET' | 'POST'; url: string }[] = [
   { name: 'public link read', method: 'GET', url: '/v1/payment_links/public/acme/nope' },
   { name: 'theme preview', method: 'GET', url: '/v1/themes/preview/sometoken' },
   { name: 'wallet paymaster', method: 'POST', url: '/v1/checkout/paymaster/sometoken' },
+  { name: 'public asset', method: 'GET', url: '/v1/assets/assets/mer_1/missing.woff2' },
 ];
 
 describe('pay-host CORS', () => {
@@ -30,6 +36,8 @@ describe('pay-host CORS', () => {
     for (const k of KEYS) saved[k] = process.env[k];
     process.env.CHECKOUT_BASE_URL = PAY;
     process.env.CORS_ORIGINS = APP;
+    process.env.ASSET_PUBLIC_PROXY = 'true';
+    process.env.TENDR_ASSET_ORIGIN = `${new URL(process.env.API_BASE_URL ?? 'http://localhost:4000').origin}/v1/assets`;
     loadEnv();
     app = await buildApp();
     await app.ready();

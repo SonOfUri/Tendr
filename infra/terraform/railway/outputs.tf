@@ -1,3 +1,21 @@
+output "project_id" {
+  value = railway_project.tendr.id
+}
+
+output "environment_id" {
+  value = local.environment_id
+}
+
+output "service_ids" {
+  value = {
+    api      = railway_service.api.id
+    worker   = railway_service.worker.id
+    web      = railway_service.web.id
+    postgres = railway_service.postgres.id
+    redis    = railway_service.redis.id
+  }
+}
+
 output "custom_domain_dns" {
   description = <<-EOT
     DNS records to create at the registrar (Namecheap) for each custom domain: a CNAME

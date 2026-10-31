@@ -9,6 +9,7 @@ describe('log', () => {
     log('error', 'x', {
       Authorization: 'Bearer tdr_test_abc',
       apiKey: 'tdr_test_abc',
+      ENV_KEYVAULT_JSON: 'private-key-bundle',
       nested: { privateKey: 'k', clientSecret: 's', walletSignature: 'w' },
       merchantId: 'mer_1',
     });
@@ -16,6 +17,7 @@ describe('log', () => {
     expect(line).toMatchObject({
       Authorization: '[REDACTED]',
       apiKey: '[REDACTED]',
+      ENV_KEYVAULT_JSON: '[REDACTED]',
       nested: {
         privateKey: '[REDACTED]',
         clientSecret: '[REDACTED]',
@@ -79,11 +81,15 @@ describe('RPC URL redaction (final review m4)', () => {
   });
 
   it('logs a URL with a malformed % escape instead of throwing', async () => {
-    process.env.EVM_RPC_URLS = JSON.stringify({ base: 'https://rpc.example.com/v2/%E0%A4%A_bad_escape_key' });
+    process.env.EVM_RPC_URLS = JSON.stringify({
+      base: 'https://rpc.example.com/v2/%E0%A4%A_bad_escape_key',
+    });
     (await import('../env.js')).loadEnv();
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     expect(() =>
-      log('error', 'boom', { err: 'POST https://x.example.com/rpc%E0%A4%A?apikey=secret_123456 failed' }),
+      log('error', 'boom', {
+        err: 'POST https://x.example.com/rpc%E0%A4%A?apikey=secret_123456 failed',
+      }),
     ).not.toThrow();
     expect(String(spy.mock.calls[0]?.[0])).not.toContain('secret_123456');
   });

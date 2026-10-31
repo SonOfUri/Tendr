@@ -1,6 +1,7 @@
 import bs58 from 'bs58';
 import { DEFAULT_GAS_MAX_USD, DEFAULT_SLIPPAGE_BPS } from '@tendr/contracts';
 import { z } from 'zod';
+import { validEnvironmentKeyBundle } from './keyvault/environment.js';
 
 const optionalString = z.string().min(1).optional();
 
@@ -52,8 +53,10 @@ const EnvSchema = z
     CORS_ORIGINS: z.string().default('http://localhost:3000'),
     LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
     REDIS_URL: z.string().url(),
-    KEYVAULT_DRIVER: z.enum(['local', 'gcp']).default('local'),
+    KEYVAULT_DRIVER: z.enum(['local', 'gcp', 'env']).default('local'),
     LOCAL_KEYVAULT_PATH: z.string().min(1).default('.keyvault/local.json'),
+    /** Complete, immutable software key bundle shared by API and worker; never log this value. */
+    ENV_KEYVAULT_JSON: optionalString,
     // Cloud KMS (required only when KEYVAULT_DRIVER=gcp).
     GCP_PROJECT_ID: optionalString,
     GCP_KMS_LOCATION: optionalString,
@@ -435,9 +438,14 @@ const EnvSchema = z
     /**
      * Where uploaded theme assets are stored: `s3` (any S3-compatible bucket — MinIO locally, R2
      * or S3 in production) or `memory` (tests). Defaults to memory outside production; production
-     * must use s3. The bucket must be publicly readable at TENDR_ASSET_ORIGIN.
+     * must use s3. Assets are publicly readable at TENDR_ASSET_ORIGIN, directly or via the proxy.
      */
     ASSET_STORE_DRIVER: z.preprocess(blankAsUnset, z.enum(['s3', 'memory']).optional()),
+    /** Serve validated images/fonts from a private S3 bucket through the API. */
+    ASSET_PUBLIC_PROXY: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
     /** S3 endpoint (MinIO: http://localhost:9100). Unset = AWS S3 for the region. */
     ASSET_S3_ENDPOINT: z.preprocess(blankAsUnset, z.string().url().optional()),
     ASSET_S3_REGION: z.preprocess(blankAsUnset, z.string().default('auto')),
@@ -475,7 +483,17 @@ const EnvSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['KEYVAULT_DRIVER'],
-        message: 'local is not allowed in production (set KEYVAULT_DRIVER=gcp)',
+        message: 'local is not allowed in production (set KEYVAULT_DRIVER=gcp or env)',
+      });
+    }
+    if (
+      e.KEYVAULT_DRIVER === 'env' &&
+      (!e.ENV_KEYVAULT_JSON || !validEnvironmentKeyBundle(e.ENV_KEYVAULT_JSON))
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ENV_KEYVAULT_JSON'],
+        message: 'required valid v1 software key bundle when KEYVAULT_DRIVER=env',
       });
     }
     const driver = e.NEAR_CLIENT_DRIVER ?? (e.NODE_ENV === 'production' ? 'rpc' : 'fake');
@@ -592,6 +610,19 @@ const EnvSchema = z
       });
     }
     const assetDriver = e.ASSET_STORE_DRIVER ?? (e.NODE_ENV === 'production' ? 's3' : 'memory');
+    let proxyAssetOrigin: string | undefined;
+    try {
+      proxyAssetOrigin = `${new URL(e.API_BASE_URL).origin}/v1/assets`;
+    } catch {
+      // The API_BASE_URL schema reports malformed URLs; keep refinement errors structured.
+    }
+    if (e.ASSET_PUBLIC_PROXY && e.TENDR_ASSET_ORIGIN !== proxyAssetOrigin) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['TENDR_ASSET_ORIGIN'],
+        message: 'must be the API origin followed by /v1/assets when ASSET_PUBLIC_PROXY=true',
+      });
+    }
     if (e.NODE_ENV === 'production') {
       if (assetDriver !== 's3') {
         ctx.addIssue({

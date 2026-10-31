@@ -14,6 +14,53 @@ Two independent stacks, applied in this order:
 
 ## Remote state (create once, by hand)
 
+### Railway-only deployment without GCP
+
+The API also supports an explicitly selected software vault (`KEYVAULT_DRIVER=env`). Set
+`keyvault_driver="env"` and provide `env_keyvault_json` to the Railway stack. The API and worker
+receive the same bundle; the web service never receives it. Local-file key vaults remain blocked
+in production. With the software vault, signing keys and the encryption master key are present
+in the application process and secret variables. This does not provide KMS isolation.
+
+Generate keys once from the deploy worktree root:
+
+```bash
+node --import tsx apps/api/scripts/generate-env-keyvault.ts .keyvault/railway-keyvault.json
+python3 scripts/prepare-railway-local.py
+```
+
+The generator refuses to overwrite an existing bundle. Back it up privately and reuse it on
+every deployment. Changing the encryption key loses access to existing encrypted secrets;
+changing signing keys changes on-chain identities. Migrating to KMS later requires an explicit
+secret re-encryption and on-chain key migration, not just switching the driver.
+
+`prepare-railway-local.py` copies the Railway configuration into `.keyvault/railway-terraform`
+without the GCS backend. Run Terraform in that directory with `umask 077`. Its state and plan
+files contain secrets; keep them private, backed up, and never commit them. No Google login or
+GCS state bucket is needed for this variant. Do not use this directory to independently manage
+resources already managed by another Terraform state.
+
+Create a Railway storage bucket in the chosen workspace/project, then supply its S3 credentials
+and endpoint. Set `asset_public_proxy=true` and
+`tendr_asset_origin="https://api.usetendr.tech/v1/assets"` (adjust for the chosen API origin).
+The API serves only Tendr image/font asset paths from the private bucket, with public CORS and
+safe content types. Both API and worker use the same bucket. GCP credentials and project ID
+are unnecessary when `keyvault_driver="env"`.
+
+Use `source_repo="SonOfUri/Tendr"` and `source_repo_branch="deploy"` for this worktree. When
+passing secrets with `TF_VAR_*`, remove the corresponding placeholder assignments from the
+copied `terraform.tfvars.example`: values in tfvars override environment variables.
+
+This changes the vault, asset storage and state backend only. The Terraform defaults still
+disable live payments, live gasless and fee sweeping. Resend, 1Click, FX, the selected NEAR
+network's account/contract setup, and domain DNS remain separate deployment prerequisites.
+Set `live_mode_enabled=true` when those prerequisites and the stored Chainalysis key are ready.
+Gasless and fee sweeping remain disabled independently. To collect provider credentials without
+echoing them or putting them in shell history, run `python3 scripts/collect-deploy-secrets.py`
+in your own interactive terminal. It writes `.keyvault/provider-secrets.json` with mode 0600.
+
+### GCS state for the GCP deployment
+
 Both stacks keep state in the GCS bucket `tendr-tfstate` (`backend.tf`; prefix `gcp` and
 `railway`). Terraform cannot keep its state in a bucket it creates, so create it once, private and
 versioned, before the first `init`:
@@ -110,13 +157,13 @@ Required inputs: `source_repo`, `gcp_project_id`, and the sensitive `gcp_credent
 `fx_api_key`. The hosts default to the production values (`api_base_url`, `web_url`,
 `checkout_base_url`, `cors_origins`, `webauthn_rp_id`, `webauthn_origins`, `tendr_asset_origin`).
 
-| Service    | Source                                         | Start / checks                                                                                                                                                          |
-| ---------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api`      | repo                                           | pre-deploy `npm run db:migrate`; start `npm run start --workspace=@tendr/api`; healthcheck `/v1/health`                                                                 |
-| `worker`   | repo                                           | start `npm run start:worker --workspace=@tendr/api`; healthcheck `/health` on `WORKER_HEALTH_PORT` (4100); never migrates                                               |
+| Service    | Source                                         | Start / checks                                                                                                                                               |
+| ---------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `api`      | repo                                           | pre-deploy `npm run db:migrate`; start `npm run start --workspace=@tendr/api`; healthcheck `/v1/health`                                                      |
+| `worker`   | repo                                           | start `npm run start:worker --workspace=@tendr/api`; healthcheck `/health` on `WORKER_HEALTH_PORT` (4100); never migrates                                    |
 | `web`      | repo                                           | build `npm ci --include=dev && npx turbo run build --filter=@tendr/web...`; start `npm run start --workspace=@tendr/web` (port 3000); healthcheck `/privacy` |
-| `postgres` | `ghcr.io/railwayapp-templates/postgres-ssl:16` | volume `/var/lib/postgresql/data`                                                                                                                                       |
-| `redis`    | `redis:7-alpine`                               | volume `/data`, password, AOF, `maxmemory-policy noeviction` (BullMQ requires it)                                                                                       |
+| `postgres` | `ghcr.io/railwayapp-templates/postgres-ssl:16` | volume `/var/lib/postgresql/data`                                                                                                                            |
+| `redis`    | `redis:7-alpine`                               | volume `/data`, password, AOF, `maxmemory-policy noeviction` (BullMQ requires it)                                                                            |
 
 The community provider has no database "plugin" resource, so Postgres and Redis are image services
 with volumes, as Railway's own templates are.
@@ -133,11 +180,13 @@ Variables:
   `KEYVAULT_DRIVER=gcp`, `GCP_PROJECT_ID`, `GCP_KMS_LOCATION`, `GCP_KMS_KEYRING`, `GCP_KMS_KEK`,
   `GCP_CREDENTIALS_JSON` (sensitive), `WORKER_HEALTH_PORT`, `LOG_LEVEL`, `API_BASE_URL`, `WEB_URL`,
   `CHECKOUT_BASE_URL`, `CORS_ORIGINS`, `TENDR_ASSET_ORIGIN`, `WEB_INTERNAL_TOKEN`
-  (`random_password`, 48 characters). `NODE_ENV=production` with `KEYVAULT_DRIVER=gcp` is
-  mandatory: env validation refuses to boot production on the local key vault.
+  (`random_password`, 48 characters). For the Railway-only variant, `KEYVAULT_DRIVER=env` and
+  `ENV_KEYVAULT_JSON` replace the GCP variables. Both variants use `NODE_ENV=production`;
+  env validation refuses to boot production on the local-file key vault.
 - **api and worker** (both load the same env schema, so both get everything production
   requires): every shared variable; `REDIS_URL`; `DATABASE_URL` (the `tendr_app` URL, see below);
-  `LIVE_MODE_ENABLED`, `GASLESS_LIVE_ENABLED`, `FEE_SWEEP_ENABLED` all `"false"`; `WEBAUTHN_RP_ID`,
+  `LIVE_MODE_ENABLED` follows `live_mode_enabled` (default `false`), while `GASLESS_LIVE_ENABLED`
+  and `FEE_SWEEP_ENABLED` stay `"false"`; `WEBAUTHN_RP_ID`,
   `WEBAUTHN_ORIGINS`; `MAIL_DRIVER=resend`, `MAIL_FROM`, `RESEND_API_KEY`; `ASSET_STORE_DRIVER=s3`
   and the `ASSET_S3_*` settings; `ONECLICK_API_KEY`; `FX_PROVIDER=openexchangerates`, `FX_API_KEY`;
   and `NEAR_PARENT_ACCOUNT_*`, `FEE_ACCOUNT_*`, `MERCHANT_ACCOUNT_CODE_HASH_*` only when the

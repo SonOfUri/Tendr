@@ -1,4 +1,9 @@
-import { DeleteObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  type S3Client,
+} from '@aws-sdk/client-s3';
 import { describe, expect, it } from 'vitest';
 import { loadEnv } from '../env.js';
 import {
@@ -9,6 +14,83 @@ import {
 } from './object-store.js';
 
 describe('object store', () => {
+  it('reads private bucket assets and preserves their content type and ETag', async () => {
+    let sent: unknown;
+    const client = {
+      send: async (command: unknown) => {
+        sent = command;
+        return {
+          ContentType: 'image/png',
+          ContentLength: 3,
+          ETag: '"abc"',
+          Body: {
+            transformToWebStream: () =>
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue(Buffer.from('png'));
+                  controller.close();
+                },
+              }),
+          },
+        };
+      },
+    } as unknown as S3Client;
+    const asset = await s3ObjectStore(client, 'private-assets').get!('assets/mer_1/a.png');
+    expect(sent).toBeInstanceOf(GetObjectCommand);
+    expect((sent as GetObjectCommand).input).toEqual({
+      Bucket: 'private-assets',
+      Key: 'assets/mer_1/a.png',
+    });
+    expect(asset).toEqual({ body: Buffer.from('png'), contentType: 'image/png', etag: '"abc"' });
+  });
+
+  it.each([undefined, 1, 5 * 1024 * 1024])(
+    'cancels oversized reads even with absent or inaccurate ContentLength (%s)',
+    async (contentLength) => {
+      let cancelled = false;
+      let reads = 0;
+      const client = {
+        send: async () => ({
+          ContentType: 'image/png',
+          ContentLength: contentLength,
+          Body: {
+            transformToWebStream: () =>
+              new ReadableStream({
+                pull(controller) {
+                  reads++;
+                  controller.enqueue(Buffer.alloc(1024 * 1024));
+                },
+                cancel() {
+                  cancelled = true;
+                },
+              }),
+          },
+        }),
+      } as unknown as S3Client;
+      await expect(s3ObjectStore(client, 'private-assets').get!('assets/m/a.png')).rejects.toThrow(
+        'size limit',
+      );
+      expect(cancelled).toBe(true);
+      expect(reads).toBeLessThanOrEqual(6);
+    },
+  );
+
+  it('maps missing objects to null but preserves permission failures', async () => {
+    const missing = {
+      send: async () => {
+        throw { name: 'NoSuchKey' };
+      },
+    } as unknown as S3Client;
+    expect(await s3ObjectStore(missing, 'private-assets').get!('assets/m/a.png')).toBeNull();
+    const forbidden = {
+      send: async () => {
+        throw new Error('AccessDenied');
+      },
+    } as unknown as S3Client;
+    await expect(s3ObjectStore(forbidden, 'private-assets').get!('assets/m/a.png')).rejects.toThrow(
+      'AccessDenied',
+    );
+  });
   it('memory store keeps puts and forgets deletes', async () => {
     const store = memoryObjectStore();
     await store.put('assets/m/a.png', Buffer.from('x'), 'image/png');

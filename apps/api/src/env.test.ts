@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { loadEnv } from './env.js';
 import { assetUrl } from './storage/object-store.js';
+import { createHash } from 'node:crypto';
+import { KEY_NAMES } from './keyvault/keys.js';
 
 const base = { DATABASE_URL: 'postgresql://x/y', REDIS_URL: 'redis://localhost:6380' };
 const gcp = {
@@ -40,6 +42,32 @@ const webauthn = {
 };
 
 describe('loadEnv keyvault rules', () => {
+  it('accepts an explicit software vault in production and rejects missing or malformed bundles', () => {
+    const key = (name: string) => createHash('sha256').update(name).digest('base64');
+    const serialized = JSON.stringify({
+      v: 1,
+      kek: key('kek'),
+      keys: Object.fromEntries(KEY_NAMES.map((name) => [name, key(name)])),
+    });
+    const settings = { ...base, ...webauthn, NODE_ENV: 'production', KEYVAULT_DRIVER: 'env' };
+    expect(() => loadEnv(settings)).toThrow(/ENV_KEYVAULT_JSON/);
+    expect(() => loadEnv({ ...settings, ENV_KEYVAULT_JSON: 'invalid-secret' })).toThrow(
+      /ENV_KEYVAULT_JSON/,
+    );
+    expect(loadEnv({ ...settings, ENV_KEYVAULT_JSON: serialized }).KEYVAULT_DRIVER).toBe('env');
+  });
+
+  it('requires the API asset URL when serving a private bucket publicly', () => {
+    expect(() => loadEnv({ ...base, ASSET_PUBLIC_PROXY: 'true' })).toThrow(/TENDR_ASSET_ORIGIN/);
+    expect(
+      loadEnv({
+        ...base,
+        ASSET_PUBLIC_PROXY: 'true',
+        TENDR_ASSET_ORIGIN: 'http://localhost:4000/v1/assets',
+      }).ASSET_PUBLIC_PROXY,
+    ).toBe(true);
+    expect(loadEnv(base).ASSET_PUBLIC_PROXY).toBe(false);
+  });
   it('rejects KEYVAULT_DRIVER=local in production', () => {
     expect(() => loadEnv({ ...base, NODE_ENV: 'production', KEYVAULT_DRIVER: 'local' })).toThrow(
       /KEYVAULT_DRIVER.*production/,

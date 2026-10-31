@@ -4,6 +4,14 @@
 source_repo    = "your-github-owner/tendr"
 gcp_project_id = "your-gcp-project-id"
 
+# Railway-only software-vault variant: see ../README.md. Leave GCP inputs unset/empty.
+# keyvault_driver   = "env"
+# env_keyvault_json = "<private v1 key bundle; prefer TF_VAR_env_keyvault_json>"
+# asset_s3_endpoint = "<Railway bucket endpoint>"
+# asset_s3_region = "auto"
+# asset_public_proxy = true
+# tendr_asset_origin = "https://api.usetendr.tech/v1/assets"
+
 # From the ../gcp stack outputs (sensitive):
 #   terraform -chdir=../gcp output -raw api_credentials_json
 #   terraform -chdir=../gcp output -raw assets_hmac_access_id
@@ -19,6 +27,7 @@ fx_api_key       = "<Open Exchange Rates app id>"
 
 # Optional: null generates the tendr_app password.
 # database_app_password = "<at least 24 alphanumeric characters>"
+# live_mode_enabled = false # set true only once mainnet prerequisites are configured
 
 # NEAR, empty until published (empty = the API's default / unset).
 # near_parent_account_live        = ""
