@@ -28,6 +28,10 @@ const nextConfig: NextConfig = {
   transpilePackages: ['@tendr/ui', '@tendr/contracts', '@tendr/sdk'],
   // The strict CSP for the dashboard and sign-in pages needs a per-request nonce, so it is set in
   // src/middleware.ts (see src/lib/csp.ts). Framing is refused here for every dashboard route.
+  // These rules match the public path on every host (no `has: host` condition), so merchant pages
+  // keep them on the app host and on any other host. The pay host's root-form checkout and link
+  // URLs (`/<session>`, `/<merchant>/<link>`) don't match `/pay/:path*`: the middleware sets the
+  // same shopper headers on them after its rewrite.
   headers: async () => [
     ...[
       '/dashboard',

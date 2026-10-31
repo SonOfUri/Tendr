@@ -2,16 +2,18 @@
 
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
+import { isShopperPath } from '@/lib/hosts';
 
 /**
  * Renders its children everywhere except surfaces that stand alone:
- * - shopper checkout (`/pay/*`) — also framed inside store embeds
+ * - shopper checkout and payment links (`/pay/*`, or `/<session>` and `/<merchant>/<link>` on the
+ *   pay host) — also framed inside store embeds
  * - theme preview (`/preview/theme/*`) — the checkout as a shopper sees it
  * - demo playground (`/` and `/demo`) — Chainrails-style canvas, no marketing chrome
  */
 export function HideOnCheckout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  if (pathname?.startsWith('/pay/') || pathname?.startsWith('/preview/theme/')) return null;
+  if (pathname && isShopperPath(pathname)) return null;
   if (pathname === '/' || pathname === '/demo' || pathname?.startsWith('/demo/')) return null;
   return <>{children}</>;
 }

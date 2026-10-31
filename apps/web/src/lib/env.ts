@@ -86,9 +86,9 @@ export function serverEnv() {
     apiBaseUrl: process.env.API_BASE_URL ?? publicEnv.apiBaseUrl,
     webUrl: process.env.WEB_URL ?? 'http://localhost:3000',
     /**
-     * Origin of payment-link addresses, no trailing slash: the API's CHECKOUT_BASE_URL (what its
-     * `url` / `qr_url` use), falling back to WEB_URL when unset. The QR code and preview tags
-     * must name exactly the address the API reports.
+     * The pay host's root, no trailing slash: the API's CHECKOUT_BASE_URL, falling back to WEB_URL
+     * when unset. A link's address is `${linkBaseUrl}/<merchant>/<link>`, exactly what the API's
+     * `url` / `qr_url` report; the QR code and preview tags must name that address.
      */
     linkBaseUrl: (
       process.env.CHECKOUT_BASE_URL ||

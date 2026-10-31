@@ -81,7 +81,8 @@ async function createSession(store: Store, amount = '25.00'): Promise<Session> {
     },
   });
   expect(res.status, JSON.stringify(res.body)).toBe(201);
-  expect(res.body.url).toBe(`${WEB_URL}/pay/${res.body.id}#cs=${res.body.client_secret}`);
+  // The root form (`/<session>`): on localhost in development the middleware rewrites it to /pay.
+  expect(res.body.url).toBe(`${WEB_URL}/${res.body.id}#cs=${res.body.client_secret}`);
   return { ...res.body, externalRef };
 }
 
@@ -294,7 +295,7 @@ test.describe('checkout', () => {
     // tendr:resize: the frame takes the checkout page's height.
     const contentHeight = () =>
       page
-        .frame({ url: (u) => u.pathname === `/pay/${session.id}` })!
+        .frame({ url: (u) => u.pathname === `/${session.id}` })!
         .evaluate(() => Math.ceil(document.querySelector('.pay')!.getBoundingClientRect().height));
     await expect
       .poll(async () => {
@@ -325,7 +326,7 @@ test.describe('checkout', () => {
     expect(refusals[0]).not.toContain(OTHER_STORE_URL);
     await otherPage.waitForTimeout(3000);
     expect(await eventTypes(otherPage)).toEqual([]);
-    const loaded = otherPage.frame({ url: (u) => u.pathname === `/pay/${session.id}` });
+    const loaded = otherPage.frame({ url: (u) => u.pathname === `/${session.id}` });
     expect(loaded === null || (await loaded.locator('.pay').count()) === 0).toBe(true);
     await other.close();
   });

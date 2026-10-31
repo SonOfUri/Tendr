@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe('qr route', () => {
   it('qr route returns png and svg encoding the link url', async () => {
-    const url = 'https://usetendr.tech/pay/acme/tee';
+    const url = 'https://usetendr.tech/acme/tee';
     const png = await GET(req(), ctx());
     expect(png.status).toBe(200);
     expect(png.headers.get('content-type')).toBe('image/png');
@@ -56,7 +56,7 @@ describe('qr route', () => {
 
   it('qr for a test link encodes ?mode=test', async () => {
     const res = await GET(req('?mode=test&format=svg'), ctx());
-    const expected = await QRCode.toString('https://usetendr.tech/pay/acme/tee?mode=test', {
+    const expected = await QRCode.toString('https://usetendr.tech/acme/tee?mode=test', {
       type: 'svg',
       margin: 4,
       errorCorrectionLevel: 'M',
@@ -68,7 +68,7 @@ describe('qr route', () => {
   it('qr encodes the CHECKOUT_BASE_URL link when it differs from WEB_URL', async () => {
     vi.stubEnv('CHECKOUT_BASE_URL', 'https://pay.example.com/');
     const res = await GET(req('?format=svg'), ctx());
-    const expected = await QRCode.toString('https://pay.example.com/pay/acme/tee', {
+    const expected = await QRCode.toString('https://pay.example.com/acme/tee', {
       type: 'svg',
       margin: 4,
       errorCorrectionLevel: 'M',

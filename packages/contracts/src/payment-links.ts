@@ -44,6 +44,8 @@ export const RESERVED_LINK_SLUGS: readonly string[] = [
   'invite',
   'recover',
   'settings',
+  'icons',
+  'fonts',
 ];
 
 export const PaymentLinkAvailabilitySchema = z.enum([

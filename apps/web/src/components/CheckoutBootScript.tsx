@@ -3,7 +3,8 @@
 import { usePathname } from 'next/navigation';
 import { CHECKOUT_BOOT_SCRIPT_PATH } from '@/lib/checkout/boot-secret';
 
-const CHECKOUT_PAGE = /^\/pay\/ses_[0-9A-HJKMNP-TV-Z]{26}\/?$/;
+/** `/<session id>` (the pay host's form; SSR may see either) or `/pay/<session id>`. */
+const CHECKOUT_PAGE = /^(?:\/pay)?\/ses_[0-9A-HJKMNP-TV-Z]{26}\/?$/;
 
 /**
  * On a checkout page only: the boot script that moves `#cs=` out of the URL, as a parser-blocking

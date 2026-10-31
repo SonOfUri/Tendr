@@ -83,6 +83,14 @@ describe('which /pay requests need the lookup', () => {
     expect(checkoutSessionIdOf('/dashboard')).toBeNull();
   });
 
+  it('accepts the root form the pay host serves (`/<session id>`) too', () => {
+    expect(checkoutSessionIdOf(`/${SESSION}`)).toBe(SESSION);
+    expect(checkoutSessionIdOf(`/${SESSION}/`)).toBe(SESSION);
+    expect(checkoutSessionIdOf(`/${SESSION}/refund-address`)).toBeNull();
+    expect(checkoutSessionIdOf('/acme/coffee')).toBeNull();
+    expect(checkoutSessionIdOf('/ses_short')).toBeNull();
+  });
+
   it("looks up only for iframe/frame loads; anything else (header missing too) gets 'self' (C29)", () => {
     expect(needsFrameLookup('iframe')).toBe(true);
     expect(needsFrameLookup('frame')).toBe(true);

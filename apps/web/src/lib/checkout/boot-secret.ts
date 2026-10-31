@@ -6,7 +6,8 @@
 // hydration; if `#cs=…` were still there it would live on in history.state and come back on any
 // router update. So the script moves the secret out of the URL first:
 //
-// - `/pay/<session id>` only, and only when the fragment carries `cs`;
+// - the checkout page only (`/<session id>` on the pay host, `/pay/<session id>` elsewhere), and
+//   only when the fragment carries `cs`;
 // - the whole fragment is dropped with history.replaceState (null state: Next has not written
 //   its own yet);
 // - a well-formed secret for this session goes to sessionStorage (`tendr:cs:<id>`, overwriting a
@@ -24,7 +25,7 @@ export const SECRET_HANDOFF = '__tendrCheckoutSecret';
 
 export const CHECKOUT_BOOT_SCRIPT = `(function (w) {
   try {
-    var m = /^\\/pay\\/(ses_[0-9A-HJKMNP-TV-Z]{26})\\/?$/.exec(w.location.pathname);
+    var m = /^(?:\\/pay)?\\/(ses_[0-9A-HJKMNP-TV-Z]{26})\\/?$/.exec(w.location.pathname);
     var hash = w.location.hash || '';
     if (!m || hash.length < 2) return;
     var cs = new URLSearchParams(hash.slice(1)).get('cs');

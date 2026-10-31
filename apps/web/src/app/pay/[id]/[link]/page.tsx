@@ -33,7 +33,7 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
   if (!view) return missing;
 
   const description = linkDescription(view, test);
-  const base = `${serverEnv().linkBaseUrl}/pay/${merchant}/${link}`;
+  const base = `${serverEnv().linkBaseUrl}/${merchant}/${link}`;
   const image = { url: `${base}/opengraph-image${modeQuery(test)}`, width: 1200, height: 630 };
   return {
     title: view.title,
@@ -43,7 +43,8 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
   };
 }
 
-// A payment link: `/pay/<merchant slug>/<link slug>[?mode=test]` (spec §3, §4). Server-rendered so
+// A payment link: `/<merchant slug>/<link slug>[?mode=test]` on the pay host, rewritten here by the
+// middleware; `/pay/<merchant>/<link>` on other hosts (spec §3, §4). Server-rendered so
 // chat apps can read its preview; nothing is created until the payer presses "Pay". A session id
 // in the first segment is a checkout (`/pay/<session>` and its `refund-address` page), never a
 // merchant, so it 404s here. Unknown links 404 too.

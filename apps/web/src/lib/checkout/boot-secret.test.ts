@@ -95,6 +95,18 @@ describe('checkout boot script (runs before Next hydrates)', () => {
     expect(SECRET_HANDOFF in w.win).toBe(false);
   });
 
+  it('runs on the root form the pay host serves (`/<session id>`) as on `/pay/<session id>`', () => {
+    for (const path of [`/${SESSION}`, `/pay/${SESSION}`]) {
+      const w = fakeWindow(`https://pay.tendr.test${path}?x=1#cs=${SECRET}`);
+      boot(w.win);
+      expect(w.storage.data.get(storageKey(SESSION))).toBe(SECRET);
+      expect(w.href()).toBe(`https://pay.tendr.test${path}?x=1`);
+    }
+    const sub = fakeWindow(`https://pay.tendr.test/${SESSION}/refund-address#cs=${SECRET}`);
+    boot(sub.win);
+    expect(sub.history.replaceState).not.toHaveBeenCalled();
+  });
+
   it('leaves other pages and other fragments alone', () => {
     const other = fakeWindow(`https://pay.tendr.test/dashboard#cs=${SECRET}`);
     boot(other.win);

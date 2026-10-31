@@ -48,6 +48,20 @@ describe('the wallet popup fallback', () => {
     expect(features).not.toMatch(/noopener/);
   });
 
+  it('opens the root form when the checkout is on the root form (the pay host)', () => {
+    expect(walletWindowUrl(ORIGIN, SID, SECRET, true)).toBe(
+      `${ORIGIN}/${SID}?wallet=1#cs=${SECRET}`,
+    );
+    const win = { ...fakeWindow(), location: { origin: ORIGIN, pathname: `/${SID}` } };
+    win.open.mockReturnValue({} as Window);
+    openWalletWindow(win as unknown as PopupWindow, SID, SECRET);
+    expect(win.open.mock.calls[0]![0]).toBe(`${ORIGIN}/${SID}?wallet=1#cs=${SECRET}`);
+    const old = { ...fakeWindow(), location: { origin: ORIGIN, pathname: `/pay/${SID}` } };
+    old.open.mockReturnValue({} as Window);
+    openWalletWindow(old as unknown as PopupWindow, SID, SECRET);
+    expect(old.open.mock.calls[0]![0]).toBe(`${ORIGIN}/pay/${SID}?wallet=1#cs=${SECRET}`);
+  });
+
   it('a blocked popup returns null', () => {
     const win = fakeWindow();
     win.open.mockReturnValue(null);

@@ -30,7 +30,8 @@ export interface Tendr {
   open(opts: TendrOptions): { close(): void };
 }
 
-const SESSION_PATH = /^\/pay\/(ses_[0-9A-HJKMNP-TV-Z]{26})\/?$/;
+/** A checkout page: `/<session id>` (the pay host's form) or the old `/pay/<session id>`. */
+const SESSION_PATH = /^(?:\/pay)?\/(ses_[0-9A-HJKMNP-TV-Z]{26})\/?$/;
 /** Highest frame height a checkout may ask for, in CSS px. */
 const MAX_HEIGHT = 5000;
 const FRAME_TITLE = 'Tendr checkout';

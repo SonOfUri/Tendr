@@ -144,6 +144,14 @@ describe('tendr.js', () => {
       expect(t.doc.body.all().some((e) => e.innerHTMLSet)).toBe(false);
     });
 
+    it('accepts the root-form session URL the pay host hands out (`/<session id>`)', () => {
+      const root = `${BASE}/${SESSION}#cs=${SESSION}_secret_0123456789abcdef0123456789abcdef`;
+      const host = t.doc.createElement('div');
+      t.doc.body.appendChild(host);
+      t.tendr.mount(host as unknown as Element, { sessionUrl: root, onEvent: t.onEvent });
+      expect(t.iframes()[0]!.getAttribute('src')).toBe(root);
+    });
+
     it('the modal frames it with ?embed=modal, the #cs fragment untouched', () => {
       t.tendr.open({ sessionUrl: URL_OK, onEvent: t.onEvent });
       const [iframe] = t.iframes();

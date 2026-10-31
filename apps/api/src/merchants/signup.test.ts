@@ -57,6 +57,8 @@ describe('signup', () => {
     'invite',
     'recover',
     'settings',
+    'icons',
+    'fonts',
   ])('%s is a reserved label: it would shadow a pay-host route', (label) => {
     expect(isReservedLabel(label)).toBe(true);
     expect(isReservedLabel(slugBase(label))).toBe(false);

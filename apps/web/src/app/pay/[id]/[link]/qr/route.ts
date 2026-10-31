@@ -8,7 +8,8 @@ import { fetchPublicLink, payerIpFrom } from '@/lib/payment-links';
 const MERCHANT_SLUG = /^[a-z0-9-]{1,64}$/;
 const CACHE = 'public, max-age=300';
 
-// `/pay/<merchant>/<link>/qr[?mode=test][&format=svg]`: the link's address as a QR code (spec §3).
+// `/<merchant>/<link>/qr[?mode=test][&format=svg]` (`/pay/…` off the pay host): the link's address
+// as a QR code (spec §3).
 // PNG by default (1024 px, 4-module quiet zone, error correction M), SVG on request. A real 404
 // for a link that doesn't exist; cached for five minutes so a deleted link disappears soon.
 export async function GET(
@@ -24,7 +25,7 @@ export async function GET(
   const view = await fetchPublicLink(merchant, link, test, payerIpFrom(await headers()));
   if (!view) return new Response('Not found', { status: 404 });
 
-  const target = `${serverEnv().linkBaseUrl}/pay/${merchant}/${link}${modeQuery(test)}`;
+  const target = `${serverEnv().linkBaseUrl}/${merchant}/${link}${modeQuery(test)}`;
   const opts = { margin: 4, errorCorrectionLevel: 'M' as const };
   if (url.searchParams.get('format') === 'svg') {
     const svg = await QRCode.toString(target, { ...opts, type: 'svg' });

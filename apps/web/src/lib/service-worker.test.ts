@@ -52,6 +52,10 @@ describe('service worker', () => {
 
   it('never answers the checkout, even as a top-level page', () => {
     expect(answers({ url: 'https://usetendr.tech/pay/ses_X' })).toBe(false);
+    // The root form the pay host serves.
+    expect(answers({ url: 'https://pay.usetendr.tech/ses_1' })).toBe(false);
+    expect(answers({ url: 'https://pay.usetendr.tech/pay/ses_1' })).toBe(false);
+    expect(answers({ url: 'https://pay.usetendr.tech/ses_1/refund-address' })).toBe(false);
   });
 
   it('still answers top-level navigations elsewhere (offline fallback) and shell assets', () => {

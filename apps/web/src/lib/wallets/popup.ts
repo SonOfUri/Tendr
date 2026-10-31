@@ -1,8 +1,9 @@
 // The wallet step in a popup window, for when a wallet cannot work inside the store's frame
 // (popup blocked, deep link refused, no injected wallet reachable from the frame).
 //
-// - The framed checkout opens `/pay/<id>?wallet=1#cs=<secret>` with window.open (from the
-//   shopper's click). The fragment never reaches a server; the boot script strips it on load.
+// - The framed checkout opens `/<id>?wallet=1#cs=<secret>` on the pay host (`/pay/<id>…` on any
+//   other host: the form the checkout itself is on) with window.open (from the shopper's click).
+//   The fragment never reaches a server; the boot script strips it on load.
 // - The popup completes the wallet step and posts
 //   `{ type: 'tendr:wallet-done', sessionId, txHash, quoteId }` (quoteId: the quote the popup paid,
 //   which may be newer than the opener's)
@@ -21,7 +22,7 @@ export interface WalletDoneMessage {
 }
 
 export interface PopupWindow {
-  location: { origin: string };
+  location: { origin: string; pathname?: string };
   open(url: string, target: string, features: string): Window | null;
   addEventListener(type: 'message', fn: (e: MessageEvent) => void): void;
   removeEventListener(type: 'message', fn: (e: MessageEvent) => void): void;
@@ -30,8 +31,17 @@ export interface PopupWindow {
 const HASH = /^[\x21-\x7e]{1,256}$/;
 const QUOTE_ID = /^quo_[0-9A-HJKMNP-TV-Z]{26}$/;
 
-export function walletWindowUrl(origin: string, sessionId: string, secret: string): string {
-  return `${origin}/pay/${encodeURIComponent(sessionId)}?wallet=1#cs=${encodeURIComponent(secret)}`;
+/** A checkout on the root form (`/ses_…`): the pay host, which redirects the `/pay/` form away. */
+const ROOT_CHECKOUT = /^\/ses_[^/]+\/?$/;
+
+export function walletWindowUrl(
+  origin: string,
+  sessionId: string,
+  secret: string,
+  rootForm = false,
+): string {
+  const path = `${rootForm ? '' : '/pay'}/${encodeURIComponent(sessionId)}`;
+  return `${origin}${path}?wallet=1#cs=${encodeURIComponent(secret)}`;
 }
 
 /** Opens the wallet window (call from a click). Null when the browser blocked it. */
@@ -42,7 +52,12 @@ export function openWalletWindow(
 ): Window | null {
   try {
     return win.open(
-      walletWindowUrl(win.location.origin, sessionId, secret),
+      walletWindowUrl(
+        win.location.origin,
+        sessionId,
+        secret,
+        ROOT_CHECKOUT.test(win.location.pathname ?? ''),
+      ),
       'tendr-wallet',
       'popup,width=440,height=760',
     );

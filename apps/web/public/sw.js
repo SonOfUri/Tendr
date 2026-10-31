@@ -25,8 +25,9 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
   if (url.pathname.startsWith('/api/')) return;
   if (url.pathname.startsWith('/checkout/')) return;
-  // The checkout page itself is never touched.
+  // The checkout page itself is never touched (`/ses_…` is its form on the pay host).
   if (url.pathname.startsWith('/pay/')) return;
+  if (url.pathname.startsWith('/ses_')) return;
   if (url.pathname.includes('session')) return;
 
   // Only top-level pages. A framed navigation (the checkout modal or widget on a store) re-fetched

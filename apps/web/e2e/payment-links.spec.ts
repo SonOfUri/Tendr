@@ -1,6 +1,6 @@
 // End to end: a payment link in test mode. The merchant creates an open-amount NGN link with its
-// secret key; the payer opens `/pay/<merchant>/<link>?mode=test`, types an amount and a note,
-// presses "Pay with crypto", lands in the existing checkout at `/pay/<session>`, pays with the
+// secret key; the payer opens `/<merchant>/<link>?mode=test`, types an amount and a note,
+// presses "Pay with crypto", lands in the existing checkout at `/<session>`, pays with the
 // checkout's test controls, and sees the success screen with "Back to <title>". The fixture store
 // receives the signed `payment.succeeded` webhook carrying the payer's note. Everything is
 // simulated, as in checkout.spec.ts (whose seed script this reuses).
@@ -107,7 +107,7 @@ test.describe('payment links', () => {
     });
     expect(created.status, JSON.stringify(created.body)).toBe(201);
     const linkUrl = created.body.url;
-    expect(linkUrl).toMatch(new RegExp(`^${WEB_URL}/pay/[a-z0-9-]+/[a-z0-9-]+\\?mode=test$`));
+    expect(linkUrl).toMatch(new RegExp(`^${WEB_URL}/[a-z0-9-]+/[a-z0-9-]+\\?mode=test$`));
 
     // Server-rendered: the title is in the first HTML (chat-app previews), and no session exists
     // until "Pay".
@@ -129,8 +129,8 @@ test.describe('payment links', () => {
     await page.getByLabel(/^Note to .* \(optional\)$/).fill(note);
     await page.getByRole('button', { name: 'Pay with crypto' }).click();
 
-    await page.waitForURL(/\/pay\/ses_[0-9A-HJKMNP-TV-Z]{26}$/);
-    const sessionId = /\/pay\/(ses_[0-9A-HJKMNP-TV-Z]{26})/.exec(page.url())![1]!;
+    await page.waitForURL(/\/ses_[0-9A-HJKMNP-TV-Z]{26}$/);
+    const sessionId = /\/(ses_[0-9A-HJKMNP-TV-Z]{26})$/.exec(page.url())![1]!;
     await expect(page.getByRole('heading', { name: 'Pay with' })).toBeVisible();
 
     await page.getByRole('button', { name: 'ETH Base', exact: true }).click();

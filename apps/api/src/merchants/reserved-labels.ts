@@ -96,6 +96,7 @@ const STATIC: ReadonlySet<string> = new Set([
   'recover',
   'settings',
   'icons',
+  'fonts',
 ]);
 
 /** Prefixes Tendr keeps for families of system accounts (`gas-tron`, `fee-usdc`, `intents-…`) and session ids (`ses_…`, `ses-…`, which route under /pay/[id]). */

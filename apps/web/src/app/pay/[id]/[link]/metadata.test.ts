@@ -65,7 +65,7 @@ describe('generateMetadata', () => {
     vi.stubEnv('CHECKOUT_BASE_URL', 'https://pay.example.com/');
     const m = await meta(base);
     expect(m.openGraph?.images).toEqual([
-      { url: 'https://pay.example.com/pay/acme/tee/opengraph-image', width: 1200, height: 630 },
+      { url: 'https://pay.example.com/acme/tee/opengraph-image', width: 1200, height: 630 },
     ]);
   });
 
@@ -86,7 +86,7 @@ describe('generateMetadata', () => {
     expect(fixed.openGraph?.title).toBe('T-shirt');
     expect(fixed.openGraph?.description).toBe('Acme · ₦25,000');
     expect(fixed.openGraph?.images).toEqual([
-      { url: 'https://usetendr.tech/pay/acme/tee/opengraph-image', width: 1200, height: 630 },
+      { url: 'https://usetendr.tech/acme/tee/opengraph-image', width: 1200, height: 630 },
     ]);
 
     const open = await meta({ ...base, amount_type: 'open', amount: null });
@@ -96,7 +96,7 @@ describe('generateMetadata', () => {
     expect(test.openGraph?.description).toBe('Test · Acme · ₦25,000');
     expect(test.openGraph?.images).toEqual([
       {
-        url: 'https://usetendr.tech/pay/acme/tee/opengraph-image?mode=test',
+        url: 'https://usetendr.tech/acme/tee/opengraph-image?mode=test',
         width: 1200,
         height: 630,
       },

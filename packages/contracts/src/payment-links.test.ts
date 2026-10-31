@@ -27,6 +27,8 @@ describe('reserved link slugs on the pay host root', () => {
     'invite',
     'recover',
     'settings',
+    'icons',
+    'fonts',
   ])('refuses %s as a link slug', (slug) => {
     expect(RESERVED_LINK_SLUGS).toContain(slug);
     expect(PaymentLinkCreateSchema.safeParse({ ...base, amount_type: 'open', slug }).success).toBe(

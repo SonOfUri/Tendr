@@ -4,8 +4,11 @@
 // turns into `frame-ancestors 'self'`. Successes are cached briefly in memory; failures are not.
 import { plainOrigins } from '../csp';
 
-/** The checkout page's own path: `/pay/<session id>` (not its sub-pages). */
-const CHECKOUT_PAGE = /^\/pay\/(ses_[0-9A-HJKMNP-TV-Z]{26})\/?$/;
+/**
+ * The checkout page's own path (not its sub-pages): `/<session id>` on the pay host, or the old
+ * `/pay/<session id>` other hosts still serve.
+ */
+const CHECKOUT_PAGE = /^(?:\/pay)?\/(ses_[0-9A-HJKMNP-TV-Z]{26})\/?$/;
 
 /** The session id when `pathname` is a checkout page, else null. */
 export function checkoutSessionIdOf(pathname: string): string | null {
