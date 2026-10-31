@@ -477,16 +477,16 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	}
 
 	/**
-	 * Whether the API refused the session for its `line_items` (`VALIDATION_ERROR`, 400; the
-	 * client keeps only the message, which names `line_items[i]`).
+	 * Whether the API refused the session body (`VALIDATION_ERROR`, 400), for any field. The
+	 * message is not relied on to name `line_items`: any refusal of a body that carried them is
+	 * retried once without them.
 	 *
 	 * @param WP_Error $error Error.
 	 */
-	private static function is_line_items_error( WP_Error $error ): bool {
+	private static function is_validation_error( WP_Error $error ): bool {
 		$data = $error->get_error_data();
 		return 'VALIDATION_ERROR' === $error->get_error_code()
-			&& 400 === (int) ( is_array( $data ) ? ( $data['status'] ?? 0 ) : 0 )
-			&& str_contains( $error->get_error_message(), 'line_items' );
+			&& 400 === (int) ( is_array( $data ) ? ( $data['status'] ?? 0 ) : 0 );
 	}
 
 	/**
@@ -623,9 +623,10 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		if ( is_wp_error( $result ) && 'IDEMPOTENCY_CONFLICT' === $result->get_error_code() ) {
 			$result = self::create_once( $order, $body, $mode );
 		}
-		// Line items are display only: if the API refuses them, pay without them. The refused call
-		// used its key up (a 4xx), so the retry takes the next key and a different body.
-		if ( is_wp_error( $result ) && isset( $body['line_items'] ) && self::is_line_items_error( $result ) ) {
+		// Line items are display only: if the API refuses a body that carried them (any 400
+		// VALIDATION_ERROR), pay without them. The refused call used its key up (a 4xx), so the
+		// retry takes the next key and a different body.
+		if ( is_wp_error( $result ) && isset( $body['line_items'] ) && self::is_validation_error( $result ) ) {
 			unset( $body['line_items'] );
 			$result = self::create_once( $order, $body, $mode );
 		}

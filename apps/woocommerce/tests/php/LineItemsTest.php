@@ -104,14 +104,31 @@ class LineItemsTest extends Tendr_Test_Case {
 		$this->assertSame( "Tom & Jerry's", $line['name'] );
 	}
 
-	public function test_a_session_refused_for_its_line_items_is_retried_without_them_on_a_new_key(): void {
+	/**
+	 * Refusal messages that do and do not name `line_items`: either way the body is retried once
+	 * without them.
+	 *
+	 * @return array<string, array{0: string}>
+	 */
+	public static function validation_messages(): array {
+		return array(
+			'names line_items'  => array( 'line_items[0]: unit_amount in USD allows at most 2 decimal places' ),
+			'names no field'    => array( 'The request body is invalid' ),
+			'names other field' => array( 'description: too long' ),
+		);
+	}
+
+	/**
+	 * @dataProvider validation_messages
+	 */
+	public function test_a_session_refused_with_line_items_is_retried_without_them_on_a_new_key( string $message ): void {
 		self::connect_locally();
 		$order = self::order_with_items( 2 );
 		$order->set_total( '20.00' );
 		$order->save();
 		$calls = 0;
 		$this->mock_http(
-			static function ( $url, $args ) use ( &$calls ) {
+			static function ( $url, $args ) use ( &$calls, $message ) {
 				++$calls;
 				$body = json_decode( (string) $args['body'], true );
 				if ( isset( $body['line_items'] ) ) {
@@ -120,7 +137,7 @@ class LineItemsTest extends Tendr_Test_Case {
 						array(
 							'error' => array(
 								'code'    => 'VALIDATION_ERROR',
-								'message' => 'line_items[0]: unit_amount in USD allows at most 2 decimal places',
+								'message' => $message,
 								'details' => array( 'field' => 'line_items.0.unit_amount' ),
 							),
 						)
