@@ -110,37 +110,24 @@ services over private networking.
   all need. Keep `--include=dev` in both build commands, and confirm the first build log installs
   them.
 
-## Postgres roles: least privilege on `events`
+## Postgres roles: least privilege
 
-`events` is append-only. A trigger already rejects `UPDATE`, `DELETE` and `TRUNCATE`; in production
-the runtime role should also lack those privileges, so the guarantee does not rest on the trigger
-alone. Migrations run as the owner (`postgres`), the services as `tendr_app`.
+`db:migrate` (the api pre-deploy) runs `prisma migrate deploy` and then `prisma/roles.sql` as the
+database owner, using `DATABASE_MIGRATE_URL` (falls back to `DATABASE_URL`). `roles.sql` is
+idempotent: it creates the `tendr_app` login role if absent, grants `SELECT, INSERT, UPDATE, DELETE`
+on all tables and `USAGE, SELECT` on all sequences in `public` (plus default privileges for tables
+the owner creates later), and withholds `CREATE` on the schema, so `tendr_app` cannot change the
+schema. `events` is append-only: a trigger already rejects `UPDATE`, `DELETE` and `TRUNCATE`, and
+`tendr_app` also lacks those privileges. `tendr_app` has no access to `_prisma_migrations`.
+If `DATABASE_APP_PASSWORD` is set the script sets the role's password from it (quoted server-side,
+never logged); if unset it leaves the password alone and logs one line saying so.
 
-After the first deploy (migrations applied by the owner), connect as `postgres` and run:
+Variables (Terraform sets them):
 
-```sql
-CREATE ROLE tendr_app LOGIN PASSWORD '<generated>';
-GRANT CONNECT ON DATABASE tendr TO tendr_app;
-GRANT USAGE ON SCHEMA public TO tendr_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO tendr_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO tendr_app;
-REVOKE UPDATE, DELETE, TRUNCATE ON events FROM tendr_app;
-REVOKE ALL ON _prisma_migrations FROM tendr_app;
--- Tables created by later migrations (run as postgres) get the same grants:
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO tendr_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-  GRANT USAGE, SELECT ON SEQUENCES TO tendr_app;
-```
+| Service  | `DATABASE_URL`                 | `DATABASE_MIGRATE_URL`  | `DATABASE_APP_PASSWORD` |
+| -------- | ------------------------------ | ----------------------- | ----------------------- |
+| `api`    | `tendr_app` (private network)  | owner (`postgres`) URL  | the `tendr_app` password |
+| `worker` | `tendr_app` (private network)  | unset                   | unset                   |
 
-Then:
-
-1. Add `MIGRATION_DATABASE_URL = ${{postgres.DATABASE_URL}}` (the owner URL) to the `api` service.
-2. Point `DATABASE_URL` on `api` and `worker` at
-   `postgresql://tendr_app:<password>@${{postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/tendr`.
-3. Change the `api` pre-deploy to run migrations as the owner:
-   `sh -c 'DATABASE_URL="$MIGRATION_DATABASE_URL" npm run db:migrate'` (`dotenv-cli` does not
-   override variables already set).
-4. Mirror these three changes in `railway/main.tf` so the next apply does not revert them.
-
-Verify: as `tendr_app`, `UPDATE events SET type = type` must fail with `permission denied`.
+Verify: as `tendr_app`, `UPDATE events SET type = type` and `CREATE TABLE x (id int)` must fail with
+`permission denied`.
