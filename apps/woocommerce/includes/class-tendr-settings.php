@@ -136,7 +136,7 @@ final class Tendr_Settings {
 	 */
 	private static function items( $raw ): array {
 		$out  = array();
-		$base = Tendr_Plugin::checkout_base();
+		$base = Tendr_Plugin::app_base();
 		foreach ( is_array( $raw ) ? $raw : array() as $item ) {
 			if ( ! is_array( $item ) || ! isset( $item['message'] ) || ! is_string( $item['message'] ) ) {
 				continue;

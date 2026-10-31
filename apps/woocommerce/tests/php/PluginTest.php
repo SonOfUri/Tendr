@@ -64,9 +64,20 @@ class PluginTest extends Tendr_Test_Case {
 		$this->assertSame( '8.5', $data['wc'] );
 	}
 
-	public function test_api_base_and_checkout_base_default_to_usetendr_tech(): void {
+	public function test_api_app_and_checkout_base_defaults(): void {
 		$this->assertSame( 'https://api.usetendr.tech', Tendr_Plugin::api_base() );
-		$this->assertSame( 'https://usetendr.tech', Tendr_Plugin::checkout_base() );
+		$this->assertSame( 'https://pay.usetendr.tech', Tendr_Plugin::checkout_base() );
+		$this->assertSame( 'https://app.usetendr.tech', Tendr_Plugin::app_base() );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_tendr_app_base_constant_overrides_the_app_base(): void {
+		define( 'TENDR_APP_BASE', 'https://app.example.test/' );
+		$this->assertSame( 'https://app.example.test', Tendr_Plugin::app_base() );
+		$this->assertSame( 'https://pay.usetendr.tech', Tendr_Plugin::checkout_base() );
 	}
 
 	public function test_uninstall_removes_options_and_transients(): void {

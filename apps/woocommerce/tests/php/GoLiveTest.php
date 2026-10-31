@@ -113,7 +113,7 @@ class GoLiveTest extends Tendr_Test_Case {
 		return array(
 			'code'    => 'single_key',
 			'message' => "Add a second device or a co-owner so a lost phone can't lock you out",
-			'href'    => Tendr_Plugin::checkout_base() . '/dashboard/onboarding/second-key',
+			'href'    => Tendr_Plugin::app_base() . '/dashboard/onboarding/second-key',
 		);
 	}
 
@@ -126,12 +126,12 @@ class GoLiveTest extends Tendr_Test_Case {
 				array(
 					'code'    => 'live_account_missing',
 					'message' => 'Finish going live on your tendr dashboard',
-					'href'    => Tendr_Plugin::checkout_base() . '/dashboard',
+					'href'    => Tendr_Plugin::app_base() . '/dashboard',
 				),
 				array(
 					'code'    => 'payout_missing',
 					'message' => 'Add a payout method',
-					'href'    => Tendr_Plugin::checkout_base() . '/dashboard/settings/payout',
+					'href'    => Tendr_Plugin::app_base() . '/dashboard/settings/payout',
 				),
 			),
 			array( self::nudge() )
@@ -148,7 +148,7 @@ class GoLiveTest extends Tendr_Test_Case {
 		$html = Tendr_Settings::render();
 		$this->assertStringContainsString( 'Finish going live on your tendr dashboard', $html );
 		$this->assertStringContainsString( 'Add a payout method', $html );
-		$this->assertStringContainsString( 'href="' . Tendr_Plugin::checkout_base() . '/dashboard/settings/payout"', $html );
+		$this->assertStringContainsString( 'href="' . Tendr_Plugin::app_base() . '/dashboard/settings/payout"', $html );
 		$this->assertStringContainsString( 'lock you out', $html, 'nudges are always shown' );
 		$this->assertStringContainsString( 'Test mode', $html );
 
@@ -194,6 +194,45 @@ class GoLiveTest extends Tendr_Test_Case {
 		$this->assertFalse( $result['switched'] );
 		$this->assertNotNull( $result['error'] );
 		$this->assertSame( 'test', Tendr_Connect::mode() );
+	}
+
+	public function test_live_mode_unavailable_blocking_item_keeps_test_mode_and_shows_its_message(): void {
+		$this->status(
+			false,
+			array(
+				array(
+					'code'    => 'live_mode_unavailable',
+					'message' => 'Live mode is not open yet on tendr.',
+					'href'    => Tendr_Plugin::app_base() . '/dashboard',
+				),
+			)
+		);
+
+		$result = Tendr_Settings::set_mode( 'live' );
+
+		$this->assertFalse( $result['switched'] );
+		$this->assertSame( 'test', Tendr_Connect::mode() );
+		$this->assertStringContainsString( 'Live mode is not open yet on tendr.', Tendr_Settings::render() );
+	}
+
+	public function test_a_403_live_mode_unavailable_keeps_test_mode_and_shows_the_api_message(): void {
+		$this->status_reply = array(
+			403,
+			array(
+				'error' => array(
+					'code'    => 'LIVE_MODE_UNAVAILABLE',
+					'message' => 'Live mode is not available yet.',
+				),
+			),
+		);
+
+		$result = Tendr_Settings::set_mode( 'live' );
+
+		$this->assertFalse( $result['switched'] );
+		$this->assertSame( 'test', Tendr_Connect::mode() );
+		$html = Tendr_Settings::render();
+		$this->assertStringContainsString( 'Live mode is not available yet.', $html );
+		$this->assertStringContainsString( 'notice-error', $html );
 	}
 
 	public function test_a_blocking_link_off_the_tendr_site_is_not_rendered(): void {

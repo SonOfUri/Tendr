@@ -11,8 +11,8 @@
  */
 class UpdaterTest extends Tendr_Test_Case {
 
-	const FEED    = 'https://usetendr.tech/v1/plugins/woocommerce/update.json';
-	const PACKAGE = 'https://usetendr.tech/downloads/woocommerce/tendr-pay-with-crypto-9.9.9.zip';
+	const FEED    = 'https://pay.usetendr.tech/v1/plugins/woocommerce/update.json';
+	const PACKAGE = 'https://pay.usetendr.tech/downloads/woocommerce/tendr-pay-with-crypto-9.9.9.zip';
 	const ZIP     = "PK\x03\x04 not really a zip, but bytes to hash";
 
 	public function set_up(): void {
@@ -49,7 +49,7 @@ class UpdaterTest extends Tendr_Test_Case {
 				if ( self::FEED === $url ) {
 					return null === $feed ? self::response( 404, array( 'error' => array( 'code' => 'NOT_FOUND' ) ) ) : self::response( 200, $feed );
 				}
-				if ( 0 === strpos( $url, 'https://usetendr.tech/downloads/' ) ) {
+				if ( 0 === strpos( $url, 'https://pay.usetendr.tech/downloads/' ) ) {
 					if ( ! empty( $args['filename'] ) ) {
 						file_put_contents( $args['filename'], self::ZIP );
 					}
@@ -135,9 +135,9 @@ class UpdaterTest extends Tendr_Test_Case {
 			'bad version'     => $this->feed( 'latest' ),
 			'bad sha256'      => $this->feed( '9.9.9', 'abc' ),
 			'other host'      => $this->feed( '9.9.9', null, 'https://evil.example/tendr.zip' ),
-			'http package'    => $this->feed( '9.9.9', null, 'http://usetendr.tech/downloads/woocommerce/t.zip' ),
-			'not a zip'       => $this->feed( '9.9.9', null, 'https://usetendr.tech/downloads/woocommerce/t.php' ),
-			'userinfo in url' => $this->feed( '9.9.9', null, 'https://a@usetendr.tech/downloads/woocommerce/t.zip' ),
+			'http package'    => $this->feed( '9.9.9', null, 'http://pay.usetendr.tech/downloads/woocommerce/t.zip' ),
+			'not a zip'       => $this->feed( '9.9.9', null, 'https://pay.usetendr.tech/downloads/woocommerce/t.php' ),
+			'userinfo in url' => $this->feed( '9.9.9', null, 'https://a@pay.usetendr.tech/downloads/woocommerce/t.zip' ),
 		);
 		foreach ( $bad as $label => $feed ) {
 			Tendr_Updater::forget();
@@ -149,13 +149,13 @@ class UpdaterTest extends Tendr_Test_Case {
 	}
 
 	public function test_feed_origin_is_https_except_a_local_origin_outside_production(): void {
-		$this->assertSame( self::FEED, Tendr_Updater::feed_url( 'https://usetendr.tech', 'production' ) );
-		$this->assertNull( Tendr_Updater::feed_url( 'http://usetendr.tech', 'production' ) );
+		$this->assertSame( self::FEED, Tendr_Updater::feed_url( 'https://pay.usetendr.tech', 'production' ) );
+		$this->assertNull( Tendr_Updater::feed_url( 'http://pay.usetendr.tech', 'production' ) );
 		$this->assertNull( Tendr_Updater::feed_url( 'http://localhost:3100', 'production' ) );
 		$this->assertSame( 'http://localhost:3100/v1/plugins/woocommerce/update.json', Tendr_Updater::feed_url( 'http://localhost:3100', 'local' ) );
 		$this->assertSame( 'http://host.docker.internal:3100/v1/plugins/woocommerce/update.json', Tendr_Updater::feed_url( 'http://host.docker.internal:3100', 'development' ) );
 		$this->assertNull( Tendr_Updater::feed_url( 'http://shop.example:3100', 'local' ) );
-		$this->assertNull( Tendr_Updater::feed_url( 'ftp://usetendr.tech', 'local' ) );
+		$this->assertNull( Tendr_Updater::feed_url( 'ftp://pay.usetendr.tech', 'local' ) );
 	}
 
 	public function test_checksum_mismatch_aborts_install(): void {
@@ -183,7 +183,7 @@ class UpdaterTest extends Tendr_Test_Case {
 
 	public function test_package_not_in_the_feed_is_refused(): void {
 		$this->serve( $this->feed() );
-		$reply = apply_filters( 'upgrader_pre_download', false, 'https://usetendr.tech/downloads/woocommerce/other.zip', null, array( 'plugin' => plugin_basename( TENDR_PLUGIN_FILE ) ) );
+		$reply = apply_filters( 'upgrader_pre_download', false, 'https://pay.usetendr.tech/downloads/woocommerce/other.zip', null, array( 'plugin' => plugin_basename( TENDR_PLUGIN_FILE ) ) );
 		$this->assertWPError( $reply );
 		$this->assertSame( 'tendr_package_unknown', $reply->get_error_code() );
 	}

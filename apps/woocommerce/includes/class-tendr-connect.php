@@ -4,7 +4,7 @@
  *
  * 1. "Connect to tendr" opens a popup on `admin-post.php?action=tendr_connect_start`, which makes a
  *    state and a PKCE verifier (kept 60 minutes in a transient keyed by the state, bound to the
- *    admin) and redirects to `<checkout base>/connect`.
+ *    admin) and redirects to `<app base>/connect`.
  * 2. tendr returns the popup to `return_url` — the admin page `admin.php?page=tendr-connect-callback`,
  *    authenticated by the admin's own login cookie — with `code` and `state`, or
  *    `error=access_denied` and `state` when the person cancels.
@@ -234,7 +234,7 @@ final class Tendr_Connect {
 			'platform'              => 'woocommerce',
 			'plugin_version'        => TENDR_VERSION,
 		);
-		return Tendr_Plugin::checkout_base() . '/connect?' . http_build_query( $query, '', '&', PHP_QUERY_RFC3986 );
+		return Tendr_Plugin::app_base() . '/connect?' . http_build_query( $query, '', '&', PHP_QUERY_RFC3986 );
 	}
 
 	/**

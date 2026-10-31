@@ -10,7 +10,7 @@
  *
  * Order meta (HPOS-safe, through the order object):
  * - `_tendr_session_id`   the current session (`ses_…`);
- * - `_tendr_session_url`  its hosted URL with the browser client secret (`…/pay/ses_…#cs=…`);
+ * - `_tendr_session_url`  its hosted URL with the browser client secret (`…/ses_…#cs=…`);
  * - `_tendr_mode`         'test' | 'live': the key the session was created with;
  * - `_tendr_attempt`      how many Idempotency-Keys this order has used up;
  * - `_tendr_external_ref` `wc_<site hash>_<order id>`, kept for the order's life (every later session
@@ -704,7 +704,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	 * @param string $url URL.
 	 */
 	private static function is_session_url( string $url ): bool {
-		$pattern = '#^' . preg_quote( Tendr_Plugin::checkout_base(), '#' ) . '/pay/ses_[0-9A-Za-z]{1,64}(?:\#cs=[0-9A-Za-z_]{1,200})?$#';
+		$pattern = '#^' . preg_quote( Tendr_Plugin::checkout_base(), '#' ) . '/(?:pay/)?ses_[0-9A-Za-z]{1,64}(?:\#cs=[0-9A-Za-z_]{1,200})?$#';
 		return 1 === preg_match( $pattern, $url );
 	}
 

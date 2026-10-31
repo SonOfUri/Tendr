@@ -148,7 +148,7 @@ class LineItemsTest extends Tendr_Test_Case {
 					array(
 						'id'            => 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0',
 						'client_secret' => 'ses_01JABCDEFGHJKMNPQRSTVWXYZ0_secret_0123456789abcdef0123456789abcdef',
-						'url'           => 'https://usetendr.tech/pay/ses_01JABCDEFGHJKMNPQRSTVWXYZ0#cs=ses_01JABCDEFGHJKMNPQRSTVWXYZ0_secret_0123456789abcdef0123456789abcdef',
+						'url'           => 'https://pay.usetendr.tech/ses_01JABCDEFGHJKMNPQRSTVWXYZ0#cs=ses_01JABCDEFGHJKMNPQRSTVWXYZ0_secret_0123456789abcdef0123456789abcdef',
 						'expires_at'    => gmdate( 'c', time() + 600 ),
 						'status'        => 'PENDING_DEPOSIT',
 					)

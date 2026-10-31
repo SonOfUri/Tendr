@@ -57,7 +57,7 @@ class ConnectTest extends Tendr_Test_Case {
 		$this->login_admin();
 		$url = Tendr_Connect::start();
 		$this->assertIsString( $url );
-		$this->assertStringStartsWith( 'https://usetendr.tech/connect?', $url );
+		$this->assertStringStartsWith( 'https://app.usetendr.tech/connect?', $url );
 
 		$q = self::query_of( $url );
 		$this->assertSame( home_url(), $q['site_url'] );
@@ -92,9 +92,10 @@ class ConnectTest extends Tendr_Test_Case {
 		$this->assertEqualsWithDelta( time() + 60 * MINUTE_IN_SECONDS, $timeout, 5 );
 	}
 
-	public function test_checkout_base_is_the_connect_host(): void {
+	public function test_hosts_default_to_the_app_pay_and_api_origins(): void {
 		$this->login_admin();
-		$this->assertSame( 'https://usetendr.tech', Tendr_Plugin::checkout_base() );
+		$this->assertSame( 'https://pay.usetendr.tech', Tendr_Plugin::checkout_base() );
+		$this->assertSame( 'https://app.usetendr.tech', Tendr_Plugin::app_base() );
 		$this->assertSame( 'https://api.usetendr.tech', Tendr_Plugin::api_base() );
 	}
 

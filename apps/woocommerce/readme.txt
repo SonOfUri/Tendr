@@ -4,7 +4,7 @@ Tags: woocommerce, payments, crypto, stablecoin, checkout
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.0
-Stable tag: 0.2.0
+Stable tag: 0.3.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,7 +21,7 @@ Setup is one click: **Connect to tendr** opens a window on usetendr.tech where y
 This plugin talks to the tendr service, run by tendr:
 
 * `https://api.usetendr.tech` — the tendr API. The plugin calls it to finish connecting (exchanging a one-time code for this site's keys), to disconnect, and, in later versions, to create checkouts and refunds. It sends this site's address, the WordPress, WooCommerce and plugin versions (in the User-Agent), and order details needed for a payment.
-* `https://usetendr.tech/connect` — the Connect window, opened in your browser when you click Connect.
+* `https://app.usetendr.tech/connect` — the Connect window, opened in your browser when you click Connect.
 
 Terms: https://usetendr.tech/terms — Privacy: https://usetendr.tech/privacy
 
@@ -52,6 +52,10 @@ tendr closes their open checkouts. A payment already on its way still lands in y
 Uninstalling deletes the plugin's settings, stored keys and its table of processed payment updates from WordPress. It does not contact tendr, so click **Disconnect** first to revoke this site's keys, or remove the site later under Settings → Connected sites on your tendr dashboard.
 
 == Changelog ==
+
+= 0.3.0 =
+* Connects through app.usetendr.tech and opens checkouts on pay.usetendr.tech; the dashboard links point at the app host.
+* While live mode is not open on tendr, the plugin stays in test mode and shows tendr's message.
 
 = 0.2.0 =
 * Sends the order's products (name, quantity, price, image) to the checkout page.

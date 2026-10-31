@@ -16,7 +16,8 @@ final class Tendr_Plugin {
 	const MIN_WC  = '8.5';
 
 	const DEFAULT_API_BASE      = 'https://api.usetendr.tech';
-	const DEFAULT_CHECKOUT_BASE = 'https://usetendr.tech';
+	const DEFAULT_CHECKOUT_BASE = 'https://pay.usetendr.tech';
+	const DEFAULT_APP_BASE      = 'https://app.usetendr.tech';
 
 	/**
 	 * Whether boot() already registered the hooks.
@@ -137,7 +138,16 @@ final class Tendr_Plugin {
 	}
 
 	/**
-	 * The tendr site hosting `/connect` and checkout (`TENDR_CHECKOUT_BASE` overrides it).
+	 * The tendr app, hosting `/connect` and the dashboard (`TENDR_APP_BASE` overrides it).
+	 */
+	public static function app_base(): string {
+		$base = defined( 'TENDR_APP_BASE' ) ? (string) constant( 'TENDR_APP_BASE' ) : self::DEFAULT_APP_BASE;
+		return untrailingslashit( $base );
+	}
+
+	/**
+	 * The tendr checkout host: hosted checkout pages, `tendr.js` and the update feed
+	 * (`TENDR_CHECKOUT_BASE` overrides it).
 	 */
 	public static function checkout_base(): string {
 		$base = defined( 'TENDR_CHECKOUT_BASE' ) ? (string) constant( 'TENDR_CHECKOUT_BASE' ) : self::DEFAULT_CHECKOUT_BASE;
@@ -160,7 +170,7 @@ final class Tendr_Plugin {
 			$args['store'] = $store;
 		}
 		$args['mode'] = 'live' === $mode ? 'live' : 'test';
-		return add_query_arg( $args, self::checkout_base() . $path );
+		return add_query_arg( $args, self::app_base() . $path );
 	}
 
 	/**

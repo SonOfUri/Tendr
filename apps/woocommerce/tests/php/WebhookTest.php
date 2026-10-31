@@ -802,7 +802,7 @@ class WebhookTest extends Tendr_Test_Case {
 		$this->assertSame( 'on-hold', $order->get_status() );
 		$notes = implode( "\n", self::notes( $order ) );
 		$this->assertStringContainsString( 'on hold for review', $notes );
-		$this->assertStringContainsString( Tendr_Plugin::checkout_base() . '/dashboard/review', $notes );
+		$this->assertStringContainsString( Tendr_Plugin::app_base() . '/dashboard/review', $notes );
 	}
 
 	public function test_held_never_moves_to_processing_even_if_succeeded_arrives_later(): void {
@@ -1201,7 +1201,7 @@ class WebhookTest extends Tendr_Test_Case {
 		$this->deliver( self::event( 'payment.held', $order, array( 'held_reason' => 'sanctions' ) ) );
 
 		$notes = implode( "\n", self::notes( self::fresh( $order ) ) );
-		$this->assertStringContainsString( Tendr_Plugin::checkout_base() . '/dashboard/review?store=mer_a&amp;mode=test', $notes );
+		$this->assertStringContainsString( Tendr_Plugin::app_base() . '/dashboard/review?store=mer_a&amp;mode=test', $notes );
 	}
 
 	public function test_an_expiry_without_hold_stock_notes_it_and_leaves_the_order_pending(): void {

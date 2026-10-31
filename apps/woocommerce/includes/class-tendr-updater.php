@@ -42,7 +42,7 @@ final class Tendr_Updater {
 	/**
 	 * The feed URL for a checkout base, or null when that origin may not serve updates.
 	 *
-	 * @param string $base     Checkout base, e.g. `https://usetendr.tech`.
+	 * @param string $base     Checkout base, e.g. `https://pay.usetendr.tech`.
 	 * @param string $env_type `wp_get_environment_type()`.
 	 */
 	public static function feed_url( string $base, string $env_type ): ?string {

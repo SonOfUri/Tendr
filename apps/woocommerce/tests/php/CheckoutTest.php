@@ -85,7 +85,7 @@ class CheckoutTest extends Tendr_Test_Case {
 				array(
 					'id'            => $id,
 					'client_secret' => "{$id}_secret_0123456789abcdef0123456789abcdef",
-					'url'           => "https://usetendr.tech/pay/{$id}#cs={$id}_secret_0123456789abcdef0123456789abcdef",
+					'url'           => "https://pay.usetendr.tech/{$id}#cs={$id}_secret_0123456789abcdef0123456789abcdef",
 					'expires_at'    => gmdate( 'c', time() + 600 ),
 					'status'        => 'PENDING_DEPOSIT',
 				)
@@ -122,7 +122,7 @@ class CheckoutTest extends Tendr_Test_Case {
 			'status'     => $status,
 			'amount'     => '49.01',
 			'expires_at' => gmdate( 'Y-m-d\TH:i:s.000\Z', strtotime( $expires ) ),
-			'url'        => "https://usetendr.tech/pay/{$id}",
+			'url'        => "https://pay.usetendr.tech/{$id}",
 			'payments'   => array_map(
 				static fn( $s ) => array(
 					'id'     => 'pay_1',
@@ -285,7 +285,7 @@ class CheckoutTest extends Tendr_Test_Case {
 		$this->assertSame( 'test', $order->get_meta( '_tendr_mode' ) );
 		$this->assertSame( '1', (string) $order->get_meta( '_tendr_attempt' ) );
 		$this->assertSame( $ref, $order->get_meta( '_tendr_external_ref' ) );
-		$this->assertStringStartsWith( 'https://usetendr.tech/pay/' . self::SESSION_ID . '#cs=', $order->get_meta( '_tendr_session_url' ) );
+		$this->assertStringStartsWith( 'https://pay.usetendr.tech/' . self::SESSION_ID . '#cs=', $order->get_meta( '_tendr_session_url' ) );
 		$this->assertSame( 'pending', $order->get_status() );
 	}
 
@@ -505,6 +505,17 @@ class CheckoutTest extends Tendr_Test_Case {
 
 	// ---------------------------------------------------------------- pages.
 
+	public function test_session_url_check_accepts_root_and_legacy_pay_forms_on_the_checkout_host_only(): void {
+		$check = new ReflectionMethod( Tendr_Gateway::class, 'is_session_url' );
+		$check->setAccessible( true );
+		$this->assertTrue( $check->invoke( null, 'https://pay.usetendr.tech/ses_abc' ) );
+		$this->assertTrue( $check->invoke( null, 'https://pay.usetendr.tech/pay/ses_abc' ) );
+		$this->assertTrue( $check->invoke( null, 'https://pay.usetendr.tech/ses_abc#cs=ses_abc_secret_01' ) );
+		$this->assertFalse( $check->invoke( null, 'https://evil.test/ses_abc' ) );
+		$this->assertFalse( $check->invoke( null, 'https://pay.usetendr.tech.evil.test/ses_abc' ) );
+		$this->assertFalse( $check->invoke( null, 'https://pay.usetendr.tech/dashboard' ) );
+	}
+
 	public function test_the_order_pay_page_opens_the_modal_with_the_session_url_only(): void {
 		$issued = self::connect_locally();
 		$order  = self::order();
@@ -516,7 +527,7 @@ class CheckoutTest extends Tendr_Test_Case {
 		$html = (string) ob_get_clean();
 
 		$this->assertTrue( wp_script_is( 'tendr-js', 'enqueued' ) );
-		$this->assertSame( 'https://usetendr.tech/v1/tendr.js', wp_scripts()->registered['tendr-js']->src );
+		$this->assertSame( 'https://pay.usetendr.tech/v1/tendr.js', wp_scripts()->registered['tendr-js']->src );
 		$this->assertTrue( wp_script_is( 'tendr-checkout', 'enqueued' ) );
 		$this->assertContains( 'tendr-js', wp_scripts()->registered['tendr-checkout']->deps );
 		$data = wp_scripts()->get_data( 'tendr-checkout', 'before' );
