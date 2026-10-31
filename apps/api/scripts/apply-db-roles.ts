@@ -37,6 +37,34 @@ export async function applyDbRoles(opts: ApplyDbRolesOptions): Promise<void> {
   }
 }
 
+/**
+ * What a failure prints. Fixed on purpose: a Postgres error can quote the statement it failed on,
+ * and that statement can be `ALTER ROLE tendr_app PASSWORD '…'`.
+ */
+export const APPLY_ROLES_FAILED = 'applying database roles failed';
+
+/** `applyDbRoles` for the scripts: returns the exit code; on failure prints only the fixed line. */
+export async function runApplyDbRoles(
+  opts: ApplyDbRolesOptions & {
+    error?: (message: string) => void;
+    /** Tests replace the step that touches the database. */
+    apply?: (opts: ApplyDbRolesOptions) => Promise<void>;
+  },
+): Promise<number> {
+  const error = opts.error ?? ((m: string) => console.error(m));
+  try {
+    await (opts.apply ?? applyDbRoles)({
+      url: opts.url,
+      appPassword: opts.appPassword,
+      log: opts.log,
+    });
+    return 0;
+  } catch {
+    error(APPLY_ROLES_FAILED);
+    return 1;
+  }
+}
+
 export function migrateUrlFromEnv(env: NodeJS.ProcessEnv): string | undefined {
   return env.DATABASE_MIGRATE_URL || env.DATABASE_URL || undefined;
 }
@@ -48,10 +76,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.error('DATABASE_MIGRATE_URL or DATABASE_URL must be set');
     process.exit(1);
   }
-  applyDbRoles({ url, appPassword: process.env.DATABASE_APP_PASSWORD || undefined }).catch(
-    (e: unknown) => {
-      console.error('apply-db-roles failed:', e instanceof Error ? e.message : 'unknown error');
-      process.exit(1);
+  void runApplyDbRoles({ url, appPassword: process.env.DATABASE_APP_PASSWORD || undefined }).then(
+    (code) => {
+      if (code !== 0) process.exit(code);
     },
   );
 }

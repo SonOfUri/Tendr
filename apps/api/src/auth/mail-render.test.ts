@@ -160,3 +160,36 @@ describe('renderMail', () => {
     expect(test.subject).toBe(`[Test] ${live.subject}`);
   });
 });
+
+describe('renderMail: proposal_executed after a delayed change', () => {
+  // Summaries as jobs/account-notices.ts summarizeAction writes them: written for approval, with
+  // a delay or an approval warning that no longer holds once the change was carried out.
+  it.each([
+    [
+      'Add signer a@b.co (usr_1) with keys ed25519:ab12 (takes effect 24 h after approval)',
+      'Add signer a@b.co (usr_1) with keys ed25519:ab12',
+    ],
+    [
+      'Add saved address near:abc.near (usable 24 h after approval)',
+      'Add saved address near:abc.near',
+    ],
+    [
+      'Upgrade the account contract to code 9xYz (NOT a Tendr release — do not approve unless you expected this)',
+      'Upgrade the account contract to code 9xYz (NOT a Tendr release)',
+    ],
+    [
+      'Upgrade the account contract to code 9xYz (matches the Tendr release)',
+      'Upgrade the account contract to code 9xYz (matches the Tendr release)',
+    ],
+    ['Withdraw 5 usdc to near:abc', 'Withdraw 5 usdc to near:abc'],
+  ])('states "%s" as carried out, without its approval-time qualifier', (summary, done) => {
+    const { subject, text } = renderMail({
+      to: 'a@b.co',
+      template: 'proposal_executed',
+      data: { ...action, summary, url: URL1 },
+    });
+    expect(subject).toBe('A change on your Tendr account was carried out');
+    expect(text.split('\n')[0]).toBe(`This approved change was carried out: ${done}.`);
+    expect(text).not.toMatch(/after approval|do not approve|takes effect|usable/);
+  });
+});

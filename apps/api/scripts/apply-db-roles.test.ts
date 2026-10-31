@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { afterAll, describe, expect, it } from 'vitest';
-import { applyDbRoles } from './apply-db-roles.js';
+import { APPLY_ROLES_FAILED, applyDbRoles, runApplyDbRoles } from './apply-db-roles.js';
 
 const ownerUrl = process.env.DATABASE_URL as string;
 // A password with a quote and a backslash proves the literal is escaped, not interpolated.
@@ -57,5 +57,34 @@ describe('apply-db-roles', () => {
     const out: string[] = [];
     await applyDbRoles({ url: ownerUrl, appPassword: undefined, log: (m) => out.push(m) });
     expect(out.join('\n')).toMatch(/DATABASE_APP_PASSWORD not set/);
+  });
+
+  it('on failure prints a fixed line, never the error (which could echo ALTER ROLE ... PASSWORD)', async () => {
+    const out: string[] = [];
+    const code = await runApplyDbRoles({
+      url: ownerUrl,
+      appPassword: password,
+      log: (m) => out.push(m),
+      error: (m) => out.push(m),
+      apply: async () => {
+        throw new Error(`syntax error at or near "ALTER ROLE tendr_app PASSWORD '${password}'"`);
+      },
+    });
+    expect(code).toBe(1);
+    expect(out).toEqual([APPLY_ROLES_FAILED]);
+    expect(APPLY_ROLES_FAILED).toBe('applying database roles failed');
+    expect(out.join('\n')).not.toContain(password);
+  });
+
+  it('returns 0 when the roles are applied', async () => {
+    const out: string[] = [];
+    const code = await runApplyDbRoles({
+      url: ownerUrl,
+      appPassword: undefined,
+      log: (m) => out.push(m),
+      error: (m) => out.push(m),
+    });
+    expect(code).toBe(0);
+    expect(out.join('\n')).not.toContain(APPLY_ROLES_FAILED);
   });
 });

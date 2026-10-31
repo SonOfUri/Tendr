@@ -1,8 +1,9 @@
 /**
  * Operator script: stores a platform secret (envelope-encrypted with the KMS key-encryption key
- * through `putSecret`). Usage, the value read from stdin only (never argv or env):
+ * through `putSecret`). Usage, the value read from stdin only (never argv or env), run inside the
+ * api container (`railway ssh --service api`; the database is on Railway's private network):
  *
- *   railway run --service api npm run secrets:put --workspace=@tendr/api -- chainalysis < key.txt
+ *   read -rs KEY && printf '%s' "$KEY" | npm run secrets:put --workspace=@tendr/api -- chainalysis; unset KEY
  *
  * Allowed purposes are the ones the code looks a secret up by. In one transaction the new secret
  * is stored and every older row of that purpose is deleted, so exactly one row per purpose remains.

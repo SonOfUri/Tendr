@@ -18,6 +18,16 @@ const link = (label: string, url: string | undefined) =>
 /** The facts an action notice states: the decoded summary, or its kind. */
 const what = (d: Data) => one(d.summary) || one(d.kind) || 'a change to the account';
 
+/**
+ * A summary written for approval (jobs/account-notices.ts summarizeAction), restated for a change
+ * already carried out: the trailing delay note ("takes effect 24 h after approval", "usable 24 h
+ * after approval") is dropped, and an upgrade's "do not approve unless you expected this" too.
+ */
+const carriedOut = (summary: string) =>
+  summary
+    .replace(/ \([^()]*\bafter approval\)$/, '')
+    .replace(/ — do not approve unless you expected this\)$/, ')');
+
 const COPY: Record<MailTemplate, (d: Data) => Copy> = {
   verify_email: (d) => ({
     subject: 'Confirm your email for Tendr',
@@ -75,9 +85,9 @@ const COPY: Record<MailTemplate, (d: Data) => Copy> = {
     ],
   }),
   proposal_executed: (d) => ({
-    subject: 'A change to your Tendr account was made',
+    subject: 'A change on your Tendr account was carried out',
     lines: [
-      `This change to your Tendr account has taken effect: ${what(d)}.`,
+      `This approved change was carried out: ${carriedOut(what(d))}.`,
       ...link('Details', d.url),
     ],
   }),
