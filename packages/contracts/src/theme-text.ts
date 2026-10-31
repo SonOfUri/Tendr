@@ -47,7 +47,22 @@ export const ISO_4217_MINOR_UNITS: Readonly<Record<string, number>> = Object.fre
 /** Every ISO 4217 code (and the few non-ISO codes WooCommerce lists) a store may price in. */
 export const ISO_4217_CODES: readonly string[] = Object.freeze(Object.keys(ISO_4217_MINOR_UNITS));
 
-const ISO_CODE_SET: ReadonlySet<string> = new Set(ISO_4217_CODES.map((c) => c.toLowerCase()));
+const ISO_CODE_SET: ReadonlySet<string> = new Set(ISO_4217_CODES);
+
+/**
+ * Major currency codes refused in any case ("usd", "Ngn"). Every other code is refused only when
+ * written ALL-CAPS, so everyday words that happen to be codes ("Try", "all", "top", "cup") pass.
+ */
+// prettier-ignore
+const MAJOR_CURRENCY_CODES: ReadonlySet<string> = new Set([
+  'USD', 'EUR', 'GBP', 'NGN', 'KES', 'GHS', 'ZAR', 'CAD', 'AUD', 'JPY', 'CNY', 'INR', 'BRL',
+]);
+
+function isCurrencyCodeWord(w: string): boolean {
+  const upper = w.toUpperCase();
+  if (MAJOR_CURRENCY_CODES.has(upper)) return true;
+  return w === upper && ISO_CODE_SET.has(w);
+}
 
 /**
  * Button label rule: a label must not carry an amount, currency or placeholder other than
@@ -56,9 +71,9 @@ const ISO_CODE_SET: ReadonlySet<string> = new Set(ISO_4217_CODES.map((c) => c.to
 export function findButtonWordsProblem(s: string): string | null {
   if (/\p{Nd}/u.test(s)) return "Button text can't contain numbers";
   if (/\p{Sc}/u.test(s)) return "Button text can't contain currency symbols";
-  const words = s.toLowerCase().split(/[^\p{L}\p{M}]+/u);
-  if (words.some((w) => w.length > 0 && ISO_CODE_SET.has(w))) {
-    return "Button text can't contain currency codes";
+  const code = s.split(/[^\p{L}\p{M}]+/u).find((w) => w.length > 0 && isCurrencyCodeWord(w));
+  if (code !== undefined) {
+    return `Button text can't contain currency codes ("${code}")`;
   }
   const placeholders = s.match(/\{[^}]*\}/g) ?? [];
   if (placeholders.some((p) => p !== '{amount}') || /[{}]/.test(s.replace(/\{amount\}/g, ''))) {
@@ -93,9 +108,26 @@ export function stripFormatChars(s: string): string {
 }
 
 export function containsAddressLike(input: string): boolean {
-  const s = stripFormatChars(input);
+  return matchesAddressPatterns(stripFormatChars(input), null);
+}
+
+/** `](https://…` link targets in markdown; the target is never shown to the shopper. */
+const MARKDOWN_LINK_TARGET = /\]\(\s*https:\/\/[^)\s]*/gi;
+
+/**
+ * `containsAddressLike` for markdown. The base58 shape skips link targets (`](https://…)`), whose
+ * paths often form base58-looking runs; link text and every other shape are still checked.
+ */
+export function containsAddressLikeInMarkdown(md: string): boolean {
+  const s = stripFormatChars(md);
+  return matchesAddressPatterns(s, s.replace(MARKDOWN_LINK_TARGET, ']('));
+}
+
+/** `base58Text` replaces `s` for the base58 shape only (null: check `s`). */
+function matchesAddressPatterns(s: string, base58Text: string | null): boolean {
   return addressPatterns().some((re, i) => {
-    for (const m of s.matchAll(re)) {
+    const text = i === BASE58_INDEX && base58Text !== null ? base58Text : s;
+    for (const m of text.matchAll(re)) {
       if (i !== BASE58_INDEX || isBase58Address(m[0])) return true;
     }
     return false;

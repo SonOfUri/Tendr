@@ -160,6 +160,27 @@ describe('ThemeDocumentSchema', () => {
     expect(ThemeDocumentSchema.safeParse(ok).success).toBe(true);
   });
 
+  it('rich_text ignores base58-looking link targets but checks link text', () => {
+    const base = valid();
+    const b58 = '1BoatSLRHtKNngkdXEeobR76b53LETtpyT';
+    const doc = (markdown: string) => ({
+      ...base,
+      blocks: [{ id: 'r', type: 'rich_text', markdown }, ...base.blocks],
+    });
+    expect(ThemeDocumentSchema.safeParse(doc(`[shop](https://a.co/p/${b58})`)).success).toBe(true);
+    expect(ThemeDocumentSchema.safeParse(doc(`[${b58}](https://a.co)`)).success).toBe(false);
+  });
+
+  it('trust_badges has no Tendr "verified merchant" badge', () => {
+    const base = valid();
+    const doc = (id: string) => ({
+      ...base,
+      blocks: [{ id: 'tb', type: 'trust_badges', badges: [{ kind: 'tendr', id }] }, ...base.blocks],
+    });
+    expect(ThemeDocumentSchema.safeParse(doc('secure-checkout')).success).toBe(true);
+    expect(ThemeDocumentSchema.safeParse(doc('verified-merchant')).success).toBe(false);
+  });
+
   it('enforces css size', () => {
     const d = { ...valid(), custom_css: 'a'.repeat(50 * 1024 + 1) };
     expect(ThemeDocumentSchema.safeParse(d).success).toBe(false);

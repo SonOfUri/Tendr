@@ -12,7 +12,6 @@ const TENDR_BADGES: Record<
   'non-custodial': 'Non-custodial',
   'refund-promise': 'Refund promise',
   'secure-checkout': 'Secure checkout',
-  'verified-merchant': 'Verified merchant',
 };
 
 export function trustBadges(block: Of<'trust_badges'>, theme: ShopperTheme): ReactNode {

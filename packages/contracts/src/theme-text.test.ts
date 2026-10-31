@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   containsAddressLike,
+  containsAddressLikeInMarkdown,
   containsDistinctiveAddressLike,
   containsSendInstruction,
   contrastRatio,
@@ -24,6 +25,29 @@ describe('theme text rules', () => {
     }
   });
 
+  it('button words: codes are refused ALL-CAPS, and in any case for major currencies', () => {
+    for (const ok of [
+      'Try it now',
+      'Pay all',
+      'Top up',
+      'Cup of joy',
+      'Mad deal',
+      'Pay with pen',
+    ]) {
+      expect(findButtonWordsProblem(ok), ok).toBeNull();
+    }
+    for (const bad of ['Pay usd', 'Pay NGN', 'Give TRY', 'Pay $', 'Pay 5']) {
+      expect(findButtonWordsProblem(bad), bad).not.toBeNull();
+    }
+    expect(findButtonWordsProblem('Pay usd')).toBe(
+      'Button text can\'t contain currency codes ("usd")',
+    );
+    expect(findButtonWordsProblem('Give TRY')).toBe(
+      'Button text can\'t contain currency codes ("TRY")',
+    );
+    expect(findButtonWordsProblem('Pay Gbp now')).toContain('"Gbp"');
+  });
+
   it('exposes the ISO 4217 codes', () => {
     expect(ISO_4217_CODES).toContain('USD');
     expect(ISO_4217_CODES).toContain('NGN');
@@ -41,6 +65,16 @@ describe('theme text rules', () => {
     expect(containsAddressLike('Ships in 2 days from Lagos')).toBe(false);
     expect(containsAddressLike('Order #A12345')).toBe(false);
     expect(containsAddressLike('Internationalizationandmoreletters')).toBe(false);
+  });
+
+  it('containsAddressLikeInMarkdown skips base58 runs in link targets only', () => {
+    const b58 = '1BoatSLRHtKNngkdXEeobR76b53LETtpyT';
+    expect(containsAddressLike(`[shop](https://a.co/p/${b58})`)).toBe(true);
+    expect(containsAddressLikeInMarkdown(`[shop](https://a.co/p/${b58})`)).toBe(false);
+    expect(containsAddressLikeInMarkdown(`[${b58}](https://a.co)`)).toBe(true);
+    expect(containsAddressLikeInMarkdown(`Pay ${b58} [x](https://a.co)`)).toBe(true);
+    expect(containsAddressLikeInMarkdown(`[x](https://a.co/${EVM})`)).toBe(true);
+    expect(containsAddressLikeInMarkdown(`[x](https://a.co/p "${b58}")`)).toBe(true);
   });
 
   it('maskAddressLike replaces only the address', () => {

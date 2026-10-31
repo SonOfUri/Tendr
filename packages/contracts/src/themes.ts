@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   containsAddressLike,
+  containsAddressLikeInMarkdown,
   containsSendInstruction,
   findButtonWordsProblem,
   findCountdownLabelProblem,
@@ -210,7 +211,7 @@ const leafBlocks = [
         z.discriminatedUnion('kind', [
           z.strictObject({
             kind: z.literal('tendr'),
-            id: z.enum(['non-custodial', 'refund-promise', 'secure-checkout', 'verified-merchant']),
+            id: z.enum(['non-custodial', 'refund-promise', 'secure-checkout']),
           }),
           z.strictObject({
             kind: z.literal('asset'),
@@ -428,7 +429,11 @@ export const ThemeDocumentSchema = z
 
         for (const [field, value] of textFields(b)) {
           const fp = [...path, ...field.split('.').map((s) => (/^\d+$/.test(s) ? Number(s) : s))];
-          if (containsAddressLike(value) || containsSendInstruction(value)) {
+          const addressLike =
+            b.type === 'rich_text' && field === 'markdown'
+              ? containsAddressLikeInMarkdown(value)
+              : containsAddressLike(value);
+          if (addressLike || containsSendInstruction(value)) {
             issue(fp, TEXT_PROBLEM);
           }
           if (b.type === 'countdown' && field === 'label') {
