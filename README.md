@@ -191,8 +191,11 @@ is the account's only signer, so keep it private (it is created mode 0600 and gi
 cleanup.
 
 **Audit gate.** The contract must be independently audited before any live merchant holds funds.
-Do not set `MERCHANT_ACCOUNT_CODE_HASH_LIVE` (and do not publish a global contract on mainnet) until
-the audit is done: provisioning a live account is refused while it is unset.
+The mainnet build is published as a global contract and `MERCHANT_ACCOUNT_CODE_HASH_LIVE` is set
+ahead of the audit (deploy runbook, step 9), but the platform switch `LIVE_MODE_ENABLED` stays
+`false` until the audit covers that exact hash: while it is off, going live and provisioning a live
+account are refused (`403 LIVE_MODE_UNAVAILABLE`). Provisioning is also refused while
+`MERCHANT_ACCOUNT_CODE_HASH_LIVE` is unset.
 
 **Production checklist for merchant accounts**
 
@@ -253,7 +256,7 @@ curl -X POST http://localhost:4000/v1/checkout/sessions \
   -d '{"amount":"25.00","amount_currency":"USD","external_ref":"order-1042",
        "success_url":"https://shop.example/thanks","cancel_url":"https://shop.example/cart"}'
 # {"id":"ses_...","client_secret":"ses_..._secret_...",
-#  "url":"http://localhost:3000/pay/ses_...#cs=ses_..._secret_...",
+#  "url":"http://localhost:3000/ses_...#cs=ses_..._secret_...",
 #  "expires_at":"...","status":"PENDING_DEPOSIT"}
 ```
 
@@ -681,8 +684,11 @@ account is used and the sweep is off. The per-chain detail is in the
     `apps/docs/integrations/hooks.mdx`.
 12. Route `gas_ops` system events and `OPS ALERT` log lines to the on-call channel. The sweep and
     balance jobs are scheduled only with `NODE_ENV=production`.
-13. Sponsored live payments wait for the contract review and the checks above. Test mode already
-    simulates all of it.
+13. Sponsored live payments wait for the contract review and the checks above. Keep
+    `GASLESS_LIVE_ENABLED` at its default `false` until then: while it is false, live checkouts offer
+    no gasless option, live quotes have no sponsored path and every live relayer path answers
+    "gasless not available". Set it to `true` only after this list is done (and live mode itself is
+    open, `LIVE_MODE_ENABLED=true`). Test mode already simulates all of it.
 14. Run the Mintlify CLI broken-links check on the docs before publishing them
     (`cd apps/docs && npx --yes mintlify@4.2.83 broken-links`). It timed out in Docker during the
     build; only a scripted nav and link check was run.
@@ -987,7 +993,7 @@ USD amount matches `amount / rate` rounded up.
 
 `apps/woocommerce/` is the WordPress plugin **tendr: Pay with crypto** (PHP 8.0+, WordPress 6.4+,
 WooCommerce 8.5+, GPL-2.0-or-later, text domain `tendr`). Stores install it from
-`https://usetendr.tech/downloads/woocommerce`, connect in one click (Connect popup, passkey), and
+`https://pay.usetendr.tech/downloads/woocommerce`, connect in one click (Connect popup, passkey), and
 take crypto payments in the classic and Blocks checkouts. Refunds clicked in WooCommerce become
 signer-approved proposals. Everything PHP runs in Docker through `@wordpress/env`; nothing is
 installed on the host.
@@ -1021,7 +1027,7 @@ checks that a guest never sees the method in test mode. WordPress calls the API 
   WordPress.org build must drop `includes/class-tendr-updater.php`.
 
 **Updates.** The plugin reads `<TENDR_CHECKOUT_BASE>/v1/plugins/woocommerce/update.json` (default
-`https://usetendr.tech`, https only; an http local origin is accepted only outside `production`).
+`https://pay.usetendr.tech`, https only; an http local origin is accepted only outside `production`).
 It offers an update only when the feed's version is greater than the installed one and the
 package is a `.zip` under `/downloads/woocommerce/` on the feed's origin. Before WordPress installs
 it, the plugin downloads the package itself and checks its sha256 against the feed; on a mismatch
@@ -1074,10 +1080,15 @@ The committed manifest stays the `0.0.0` placeholder until the first release, so
 
 **Manual live checklist** (not automated; the e2e covers test mode only):
 
+- [ ] Live mode is open: `LIVE_MODE_ENABLED=true` on the api and worker (deploy runbook, "Turning
+      live on"). While it is `false`, "Switch to live mode" answers `403 LIVE_MODE_UNAVAILABLE` and
+      the plugin stays in test mode, and the live keys Connect issues cannot write.
+      `GASLESS_LIVE_ENABLED` stays `false` (live shoppers pay their own network fee) until the
+      gasless live checklist is done.
 - [ ] On a real https WordPress site with pretty permalinks, install the released zip from
-      `https://usetendr.tech/downloads/woocommerce` and check its sha256 against the page.
-- [ ] Connect through the popup on usetendr.tech; the settings page shows "Connected to …" and no
-      key appears anywhere in WP admin.
+      `https://pay.usetendr.tech/downloads/woocommerce` and check its sha256 against the page.
+- [ ] Connect through the popup on app.usetendr.tech; the settings page shows "Connected to …" and
+      no key appears anywhere in WP admin.
 - [ ] In tendr, finish going live (live account, signers plus recovery key ≥ 2, payout). "Switch to
       live mode" lists what is missing until then, and switches once the store is ready.
 - [ ] Pay one small live order in each checkout (Blocks and classic) and check the order note,
@@ -1105,10 +1116,19 @@ The committed manifest stays the `0.0.0` placeholder until the first release, so
 | `npm run jobs:failed --workspace=@tendr/api`             | List failed (dead-letter) jobs                      |
 | `npm run checkout:verify:mainnet --workspace=@tendr/api` | Manual mainnet checkout checks (spends up to 5 USD) |
 
-## Deployment
+## Deploying
 
-Railway (api, worker, Postgres, Redis) and GCP Cloud KMS are described in
-`infra/terraform/` and are **not applied** — see `infra/terraform/README.md`.
+One production environment: `pay.usetendr.tech` (checkout and payment links),
+`app.usetendr.tech` (dashboard and WooCommerce connect) and `api.usetendr.tech` on Railway, with
+GCP KMS for keys, GCS for theme assets, Resend for mail and DNS at Namecheap. Test mode works there
+from the first deploy; live mode stays off behind `LIVE_MODE_ENABLED` until the merchant-account
+audit, and live gasless behind `GASLESS_LIVE_ENABLED`.
+
+- Runbook (every outside step, in order, with who does it and how to check it):
+  [`docs/handover/2026-10-31-deploy-runbook.md`](docs/handover/2026-10-31-deploy-runbook.md).
+- Infrastructure (Terraform stacks, variables, outputs, manual steps):
+  [`infra/terraform/README.md`](infra/terraform/README.md). Nothing is applied until the runbook
+  says so.
 
 ## Product docs
 

@@ -3,7 +3,7 @@ title: Payment links
 description: Share a link or a QR code and get paid, with no website or code on your side.
 ---
 
-A payment link is a reusable page at `https://usetendr.tech/pay/<your-store>/<link>`. The payer opens it,
+A payment link is a reusable page at `https://pay.usetendr.tech/<your-store>/<link>`. The payer opens it,
 sees what they are paying for, and presses **Pay**. Tendr then opens the normal checkout, so everything
 else works as it does for a session your own site creates: quotes, gasless payments, refunds, webhooks
 and payouts to your account. Tendr never holds the money.
@@ -61,7 +61,7 @@ links use test checkout: no real money moves.
 
 ## QR codes and preview cards
 
-Each link has a QR code at its `qr_url`: `/pay/<store>/<link>/qr` (PNG, 1024 px). Add `format=svg` for
+Each link has a QR code at its `qr_url`: `/<store>/<link>/qr` (PNG, 1024 px). Add `format=svg` for
 SVG. It encodes the link's address, including `?mode=test` for a test link.
 
 Pasting the link into a chat or a social post shows a 1200 x 630 preview card with your store name, the

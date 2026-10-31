@@ -36,8 +36,8 @@ Each call acts on the mode of the key or dashboard session that makes it.
   "title": "Logo design deposit",
   "description": "50% up front.",
   "slug": "logo-design-deposit",
-  "url": "https://usetendr.tech/pay/acme/logo-design-deposit?mode=test",
-  "qr_url": "https://usetendr.tech/pay/acme/logo-design-deposit/qr?mode=test",
+  "url": "https://pay.usetendr.tech/acme/logo-design-deposit?mode=test",
+  "qr_url": "https://pay.usetendr.tech/acme/logo-design-deposit/qr?mode=test",
   "amount_type": "fixed",
   "amount": "250.00",
   "currency": "USD",
@@ -138,7 +138,7 @@ Payments already in progress keep the price they started with.
 
 ## Public endpoints
 
-The pay page at `/pay/<store>/<link>` uses two endpoints that need no key. They are documented so you
+The pay page at `https://pay.usetendr.tech/<store>/<link>` uses two endpoints that need no key. They are documented so you
 know what the payer's page does; they are not an integration surface. Browsers can call them only from
 Tendr's checkout origin (CORS), so a page on your own site cannot use them. To take a link's payment
 from your own page, create a session with your secret key (`POST /v1/checkout/sessions` with
@@ -185,7 +185,7 @@ characters, and ignored when the link has `note: "off"`. The answer is `201`:
 
 ```json
 {
-  "url": "https://usetendr.tech/pay/ses_...#cs=ses_..._secret_...",
+  "url": "https://pay.usetendr.tech/ses_...#cs=ses_..._secret_...",
   "expires_at": "2026-10-30T12:05:00.000Z"
 }
 ```
@@ -216,6 +216,7 @@ Past a rate limit the API answers `429 RATE_LIMITED`.
 | `LINK_RESERVED` | 409 | Every remaining use is held by an open session. Try again shortly. |
 | `LINK_NOT_SUPPORTED` | 409 | The store settles into its own contract and cannot have links. |
 | `LINK_BUSY` | 429 | The link has 200 open sessions with a quote. |
+| `LIVE_MODE_UNAVAILABLE` | 403 | Live payments are not open yet on this platform. A live link's page still reads, but paying it and creating or changing live links are refused. Test links work as usual. |
 | `RATE_LIMITED` | 429 | A per-IP limit above. |
 
 ## Creating a session for a link from your server

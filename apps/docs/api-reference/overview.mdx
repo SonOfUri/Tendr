@@ -24,3 +24,9 @@ Errors:
   }
 }
 ```
+
+Errors any endpoint can return:
+
+| Code                    | Status | When                                                                                                                                                                                                                |
+| ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LIVE_MODE_UNAVAILABLE` | 403    | Live payments are not open yet on this platform. Going live and every write in live mode (a live key, a live session or link, a live connection) are refused. Live reads and everything in test mode work as usual. |
