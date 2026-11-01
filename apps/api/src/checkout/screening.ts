@@ -59,7 +59,8 @@ async function chainalysisKey(): Promise<string | null> {
     orderBy: { createdAt: 'desc' },
     select: { id: true },
   });
-  return row ? getSecret(row.id) : null;
+  // Preserve stored-secret rotation; deployments may instead configure a Railway secret variable.
+  return row ? getSecret(row.id) : (env().CHAINALYSIS_API_KEY ?? null);
 }
 
 async function lookupLive(address: string): Promise<ScreeningOutcome> {

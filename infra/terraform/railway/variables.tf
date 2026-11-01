@@ -211,6 +211,20 @@ variable "resend_api_key" {
   description = "Resend API key (RESEND_API_KEY)."
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+variable "provider_credentials_in_railway" {
+  description = "Create shared provider-key fields for manual editing in Railway; Terraform preserves subsequent value edits."
+  type        = bool
+  default     = false
+}
+
+variable "chainalysis_api_key" {
+  description = "Optional Chainalysis key fallback when no encrypted secret is stored in the database."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 variable "asset_s3_bucket" {
@@ -235,12 +249,14 @@ variable "oneclick_api_key" {
   description = "1Click JWT (ONECLICK_API_KEY); production refuses to boot without it."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "fx_api_key" {
   description = "Open Exchange Rates app id (FX_API_KEY); production refuses to boot without it."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 # NEAR settings, empty until the accounts and the merchant-account code are published. Empty means

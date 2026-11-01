@@ -10,6 +10,7 @@ describe('log', () => {
       Authorization: 'Bearer tdr_test_abc',
       apiKey: 'tdr_test_abc',
       ENV_KEYVAULT_JSON: 'private-key-bundle',
+      CHAINALYSIS_API_KEY: 'screening-provider-key',
       nested: { privateKey: 'k', clientSecret: 's', walletSignature: 'w' },
       merchantId: 'mer_1',
     });
@@ -18,6 +19,7 @@ describe('log', () => {
       Authorization: '[REDACTED]',
       apiKey: '[REDACTED]',
       ENV_KEYVAULT_JSON: '[REDACTED]',
+      CHAINALYSIS_API_KEY: '[REDACTED]',
       nested: {
         privateKey: '[REDACTED]',
         clientSecret: '[REDACTED]',

@@ -13,6 +13,11 @@ const REDACT_KEYS = new Set(
     'walletSignature',
     'privateKey',
     'ENV_KEYVAULT_JSON',
+    'CHAINALYSIS_API_KEY',
+    'RESEND_API_KEY',
+    'ONECLICK_API_KEY',
+    'FX_API_KEY',
+    'X-API-Key',
   ].map((k) => k.toLowerCase()),
 );
 

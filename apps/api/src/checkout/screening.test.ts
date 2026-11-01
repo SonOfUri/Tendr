@@ -1,4 +1,5 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadEnv } from '../env.js';
 import { prisma } from '../lib/prisma.js';
 import { closeRedis, getRedis, whenReady } from '../lib/redis.js';
 import { putSecret } from '../secrets/secrets.js';
@@ -23,6 +24,8 @@ async function liveSetup() {
 }
 
 beforeEach(async () => {
+  vi.stubEnv('CHAINALYSIS_API_KEY', '');
+  loadEnv();
   await resetDb();
   await whenReady(getRedis());
   const keys = await getRedis().keys('screening:*');
@@ -30,12 +33,44 @@ beforeEach(async () => {
   setScreeningFetch(null);
   onScreeningAllowed(null);
 });
+afterEach(() => {
+  vi.unstubAllEnvs();
+  loadEnv();
+});
 afterAll(async () => {
   setScreeningFetch(null);
   await closeRedis();
 });
 
 describe('screenAddress (live)', () => {
+  it('uses the environment key when no stored secret exists and still blocks flagged addresses', async () => {
+    vi.stubEnv('CHAINALYSIS_API_KEY', 'environment-screening-key');
+    loadEnv();
+    const m = await createMerchant();
+    const session = await createRow('Session', m.id, true, {});
+    const fetchMock = vi.fn(async () => json({ identifications: [{ category: 'sanctions' }] }));
+    setScreeningFetch(fetchMock);
+    await expect(
+      screenAddress(
+        { merchantId: m.id, livemode: true },
+        { sessionId: session.id as string, address: ADDR, chain: 'eth' },
+      ),
+    ).resolves.toEqual({ decision: 'block' });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['X-API-Key']).toBe('environment-screening-key');
+  });
+
+  it('prefers an encrypted stored key over the environment fallback', async () => {
+    vi.stubEnv('CHAINALYSIS_API_KEY', 'environment-screening-key');
+    loadEnv();
+    const { ctx, sessionId } = await liveSetup();
+    const fetchMock = vi.fn(async () => json({ identifications: [] }));
+    setScreeningFetch(fetchMock);
+    await screenAddress(ctx, { sessionId, address: ADDR, chain: 'eth' });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['X-API-Key']).toBe('test-key');
+  });
+
   it('allows when identifications is empty, sends the key, and records a result', async () => {
     const { ctx, sessionId } = await liveSetup();
     const fetchMock = vi.fn(async () => json({ identifications: [] }));

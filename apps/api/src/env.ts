@@ -399,6 +399,8 @@ const EnvSchema = z
           return v as Record<string, string>;
         }),
     ),
+    /** Optional operator-managed fallback when no encrypted Chainalysis secret is stored. */
+    CHAINALYSIS_API_KEY: z.preprocess(blankAsUnset, optionalString),
     SCREENING_TEST_BLOCKLIST: z.preprocess(
       blankAsUnset,
       z.string().default('0x000000000000000000000000000000000000dead'),

@@ -203,8 +203,22 @@ Variables:
   `NEXT_PUBLIC_GAS_FEE_RECIPIENTS`. `NEXT_PUBLIC_*` and `TENDR_CHECKOUT_BASE_URL` are inlined at
   build time, which is why they are service variables (present during the build).
 
-The Chainalysis screening key is not an env var: it is a stored secret (`putSecret`, purpose
-`chainalysis`), put after the first deploy (see the runbook).
+The Chainalysis screening key can be an encrypted stored secret (`putSecret`, purpose
+`chainalysis`) or `CHAINALYSIS_API_KEY`. A stored secret takes precedence; missing or failing
+screening still holds the payment pending.
+
+### Enter provider credentials directly in Railway
+
+Set `provider_credentials_in_railway=true` to create shared variables for `RESEND_API_KEY`,
+`ONECLICK_API_KEY`, `FX_API_KEY`, `CHAINALYSIS_API_KEY` and optional
+`NEXT_PUBLIC_REOWN_PROJECT_ID`. Initial values default to empty. Fill them in Railway's production
+environment and deploy the variable changes. API and worker reference the same four backend
+keys; only the web service references Reown. The API and worker will refuse to start while the
+required Resend, 1Click and FX credentials are empty.
+
+Terraform ignores subsequent value edits to these shared variables, so it preserves manually
+entered keys on future applies. Keep this option enabled; switching it off removes these managed
+shared-variable resources. It is not necessary to copy the provider keys into a local file.
 
 ### Manual steps the provider cannot do
 

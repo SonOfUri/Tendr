@@ -193,6 +193,33 @@ resource "railway_shared_variable" "env_keyvault_json" {
   value          = var.env_keyvault_json
 }
 
+locals {
+  provider_credentials = {
+    RESEND_API_KEY               = var.resend_api_key
+    ONECLICK_API_KEY             = var.oneclick_api_key
+    FX_API_KEY                   = var.fx_api_key
+    CHAINALYSIS_API_KEY          = var.chainalysis_api_key
+    NEXT_PUBLIC_REOWN_PROJECT_ID = var.next_public_reown_project_id
+  }
+}
+
+# These fields belong to the operator after creation. API/worker retain references to them,
+# so a later Terraform apply cannot replace manually entered credentials with blank defaults.
+resource "railway_shared_variable" "manual_provider_key" {
+  for_each = var.provider_credentials_in_railway ? toset([
+    "RESEND_API_KEY", "ONECLICK_API_KEY", "FX_API_KEY", "CHAINALYSIS_API_KEY", "NEXT_PUBLIC_REOWN_PROJECT_ID"
+  ]) : toset([])
+
+  environment_id = local.environment_id
+  project_id     = railway_project.tendr.id
+  name           = each.key
+  value          = local.provider_credentials[each.key]
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
 # The web server sends it as `x-tendr-internal` on payment-link reads; the API (and the worker,
 # which validates the same env) requires the same value in production (>= 32 characters).
 resource "random_password" "web_internal_token" {
@@ -293,7 +320,7 @@ locals {
       # Mail (Resend).
       { name = "MAIL_DRIVER", value = "resend" },
       { name = "MAIL_FROM", value = var.mail_from },
-      { name = "RESEND_API_KEY", value = var.resend_api_key },
+      { name = "RESEND_API_KEY", value = var.provider_credentials_in_railway ? "$${{shared.RESEND_API_KEY}}" : var.resend_api_key },
       # Theme assets: GCS or another S3-compatible bucket (including Railway private buckets).
       { name = "ASSET_STORE_DRIVER", value = "s3" },
       { name = "ASSET_S3_ENDPOINT", value = var.asset_s3_endpoint },
@@ -304,15 +331,16 @@ locals {
       { name = "ASSET_S3_ACCESS_KEY_ID", value = var.asset_s3_access_key_id },
       { name = "ASSET_S3_SECRET_ACCESS_KEY", value = var.asset_s3_secret_access_key },
       # 1Click and FX.
-      { name = "ONECLICK_API_KEY", value = var.oneclick_api_key },
+      { name = "ONECLICK_API_KEY", value = var.provider_credentials_in_railway ? "$${{shared.ONECLICK_API_KEY}}" : var.oneclick_api_key },
       { name = "FX_PROVIDER", value = "openexchangerates" },
-      { name = "FX_API_KEY", value = var.fx_api_key },
+      { name = "FX_API_KEY", value = var.provider_credentials_in_railway ? "$${{shared.FX_API_KEY}}" : var.fx_api_key },
+      { name = "CHAINALYSIS_API_KEY", value = var.provider_credentials_in_railway ? "$${{shared.CHAINALYSIS_API_KEY}}" : var.chainalysis_api_key },
     ],
     [for name, value in local.near_optional : { name = name, value = value } if value != ""],
   )
 
   web_optional = {
-    NEXT_PUBLIC_REOWN_PROJECT_ID       = var.next_public_reown_project_id
+    NEXT_PUBLIC_REOWN_PROJECT_ID       = var.provider_credentials_in_railway ? "$${{shared.NEXT_PUBLIC_REOWN_PROJECT_ID}}" : var.next_public_reown_project_id
     NEXT_PUBLIC_EVM_FORWARDER_ADDRESS  = var.next_public_evm_forwarder_address
     NEXT_PUBLIC_TRON_FORWARDER_ADDRESS = var.next_public_tron_forwarder_address
     NEXT_PUBLIC_GAS_FEE_RECIPIENTS     = var.next_public_gas_fee_recipients
@@ -337,6 +365,7 @@ resource "railway_variable_collection" "api" {
     railway_shared_variable.gcp_credentials_json,
     railway_shared_variable.env_keyvault_json,
     railway_shared_variable.web_internal_token,
+    railway_shared_variable.manual_provider_key,
   ]
 }
 
@@ -355,6 +384,7 @@ resource "railway_variable_collection" "worker" {
     railway_shared_variable.gcp_credentials_json,
     railway_shared_variable.env_keyvault_json,
     railway_shared_variable.web_internal_token,
+    railway_shared_variable.manual_provider_key,
   ]
 }
 
@@ -376,7 +406,7 @@ resource "railway_variable_collection" "web" {
     [for name, value in local.web_optional : { name = name, value = value } if value != ""],
   )
 
-  depends_on = [railway_shared_variable.config, railway_shared_variable.web_internal_token]
+  depends_on = [railway_shared_variable.config, railway_shared_variable.web_internal_token, railway_shared_variable.manual_provider_key]
 }
 
 # ---------------------------------------------------------------------------------------------
