@@ -63,6 +63,32 @@ const isPlainText = (s: string): boolean => !containsAddressLike(s) && !contains
 
 const AMOUNT_STR = z.string().regex(/^\d+(?:\.\d+)?$/, 'must be a decimal string like "25.10"');
 
+/** Fungible Intents token ids supported by the merchant account's balance/withdrawal paths. */
+export const SettlementAssetIdSchema = z
+  .string()
+  .min(8)
+  .max(128)
+  .regex(/^nep141:[a-z0-9._-]+$/);
+
+export interface LinkSettlementToken {
+  asset: string;
+  symbol: string;
+  /** The asset's source chain; the balance remains in the merchant's Intents account. */
+  chain: string;
+  decimals: number;
+}
+
+export interface LinkSettlementOptions {
+  livemode: boolean;
+  tokens: LinkSettlementToken[];
+  store_default: {
+    asset: string;
+    symbol: string | null;
+    chain: string | null;
+    payout_mode: 'intents' | 'wallet';
+  } | null;
+}
+
 const CreateFields = z.strictObject({
   title: z.string().trim().min(1).max(LINK_TITLE_MAX).refine(isPlainText, NO_PAYMENT_TEXT),
   description: z
@@ -91,6 +117,8 @@ const CreateFields = z.strictObject({
   gas_payer: GasPayerSchema.optional(),
   gas_max_usd: AMOUNT_STR.optional(),
   theme_id: z.string().min(1).nullable().optional(),
+  /** Null/omitted: inherit the store default. An override always credits its Tendr account. */
+  settlement_asset: SettlementAssetIdSchema.nullable().optional(),
 });
 
 type Amounts = {

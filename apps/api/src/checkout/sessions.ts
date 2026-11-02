@@ -1,8 +1,9 @@
 // Checkout sessions, store side: create (secret key), read, and cancel.
 //
 // A session pins everything the checkout needs at creation: the settlement asset/chain and the
-// recipient come from the merchant's settlement config and merchant account (callers cannot set
-// them), and who pays fees and gas is resolved once (session override → payment link → merchant
+// recipient come from the merchant's settlement config and merchant account. A payment link may
+// override the asset credited to that same account; it cannot supply a payout address. Who pays
+// fees and gas is resolved once (session override → payment link → merchant
 // default) and stored. The client secret (`ses_<ULID>_secret_<32 hex>`, the format the gateway's
 // `session_client` principal parses) is returned once and stored only as its sha256.
 import { randomBytes } from 'node:crypto';
@@ -229,7 +230,10 @@ const linkReserved = () =>
 const linkBusy = () =>
   new AppError('LINK_BUSY', 'This link is busy right now, try again in a few minutes.', 429);
 
-type LockedLink = Pick<PaymentLink, 'id' | 'feePayer' | 'gasSponsor' | 'gasMaxUsd'>;
+type LockedLink = Pick<
+  PaymentLink,
+  'id' | 'feePayer' | 'gasSponsor' | 'gasMaxUsd' | 'settlementAssetId'
+>;
 
 /**
  * Inside the session-insert transaction: row-locks the link (`FOR UPDATE`, so concurrent
@@ -276,7 +280,10 @@ async function lockLinkForSession(
 export type ReadinessGap = 'account_missing' | 'account_pending' | 'payout_missing';
 
 type Account = NonNullable<Awaited<ReturnType<ScopedDb['merchantAccount']['findFirst']>>>;
-type Settlement = NonNullable<Awaited<ReturnType<ScopedDb['settlementConfig']['findFirst']>>>;
+type Settlement = Pick<
+  NonNullable<Awaited<ReturnType<ScopedDb['settlementConfig']['findFirst']>>>,
+  'destAssetId' | 'destChain' | 'payoutMode' | 'payoutAddress' | 'nearAccount'
+>;
 
 /** A store's readiness to take payments in one mode: what a new session needs, or what is missing. */
 export type Readiness =
@@ -291,13 +298,14 @@ const notReady = (gap: ReadinessGap, message: string): Readiness => ({
 
 /**
  * Whether the store can take payments in `livemode` (default: the context's mode): an active
- * merchant account, a settlement config, and a payout destination (the account itself in intents
+ * merchant account, a settlement config (or a link's asset override), and a payout destination (the account itself in intents
  * mode, the saved address in wallet mode). The one place these checks live: `createSession`
  * refuses with ACCOUNT_NOT_READY on a gap, and `GET /v1/connect/status` reports it.
  */
 export async function readinessFor(
   ctx: CheckoutCtx,
   livemode: boolean = ctx.livemode,
+  settlementAsset?: string | null,
 ): Promise<Readiness> {
   const db =
     livemode === ctx.livemode ? ctx.db : scopedDb({ merchantId: ctx.merchantId, livemode });
@@ -308,6 +316,21 @@ export async function readinessFor(
   const noAccount = 'The store has no active account in this mode yet';
   if (!account) return notReady('account_missing', noAccount);
   if (account.status !== 'active') return notReady('account_pending', noAccount);
+  // A per-link asset override supplies its own payout choice. It can only credit this store's
+  // Tendr account; the asset's source chain does not change the on-NEAR Intents recipient.
+  if (settlementAsset)
+    return {
+      ready: true,
+      account,
+      recipient: account.nearAccountId,
+      settlement: {
+        destAssetId: settlementAsset,
+        destChain: 'near',
+        payoutMode: 'intents',
+        payoutAddress: null,
+        nearAccount: account.nearAccountId,
+      },
+    };
   if (!settlement) {
     return notReady('payout_missing', 'The store has no settlement settings in this mode yet');
   }
@@ -372,7 +395,7 @@ async function isExternalRefConflict(
  * CONFLICT (409) when `external_ref` belongs to an open or paid session.
  *
  * A session naming a payment link (`payment_link_id`, or `opts.fromLink` from the link's public
- * page) takes the link's fee and gas settings and must pass `lockLinkForSession` (LINK_UNAVAILABLE,
+ * page) takes the link's settlement asset, fee and gas settings and must pass `lockLinkForSession` (LINK_UNAVAILABLE,
  * LINK_RESERVED, LINK_BUSY). `fromLink` sessions have no `external_ref`, store the payer's note,
  * return to the link page, and start with `LINK_UNQUOTED_TTL_MS` instead of the caller's expiry.
  */
@@ -387,8 +410,15 @@ export async function createSession(
   const { fromLink } = opts;
   const linkId = fromLink?.linkId ?? input.payment_link_id;
   const { db } = ctx;
+  const linkSnapshot = linkId
+    ? await db.paymentLink.findFirst({ where: { id: linkId }, select: { settlementAssetId: true } })
+    : null;
+  if (linkId && !linkSnapshot) throw notFound('Payment link not found');
+  const linkAsset = linkSnapshot?.settlementAssetId ?? null;
+  // Validate against this mode's current catalog before taking a database lock.
+  if (linkAsset) await tokenInfo(ctx.livemode, linkAsset);
   const [readiness, merchant] = await Promise.all([
-    readinessFor(ctx),
+    readinessFor(ctx, ctx.livemode, linkAsset),
     db.merchant.findFirstOrThrow({
       select: { defaultFeePayer: true, defaultGasPayer: true, kind: true },
     }),
@@ -441,14 +471,6 @@ export async function createSession(
     throw notFound('No theme with that id');
   }
 
-  // A link of another merchant or mode is not found (looked at again, under lock, below).
-  if (
-    linkId &&
-    !(await db.paymentLink.findFirst({ where: { id: linkId }, select: { id: true } }))
-  ) {
-    throw notFound('Payment link not found');
-  }
-
   const now = new Date();
   const plan = await db.feePlan.findFirst({
     where: { effectiveFrom: { lte: now } },
@@ -470,6 +492,9 @@ export async function createSession(
     await tenantTransaction(ctx, async (tx, t) => {
       // Every session naming a link: lock it and check it can take this payment (spec §2.5).
       const link = linkId ? await lockLinkForSession(tx, t, linkId, now, !!fromLink) : null;
+      if ((link?.settlementAssetId ?? null) !== linkAsset) {
+        throw conflict('The link’s settlement token changed. Please try again.');
+      }
       const linkGas: GasPayer | null =
         link && link.gasSponsor !== 'default' ? gasPayerFromDb(link.gasSponsor) : null;
       const payers = resolvePayers({

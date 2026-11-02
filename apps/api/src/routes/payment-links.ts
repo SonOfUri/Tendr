@@ -18,6 +18,7 @@ import {
   type LinkCtx,
 } from '../payment-links/links.js';
 import { denied } from './merchant-settings.js';
+import { linkSettlementOptions } from '../payment-links/settlement.js';
 
 const principals = ['dashboard_user' as const, 'secret_key' as const];
 const read = { principals, scope: 'payment_links:read' as const };
@@ -47,6 +48,10 @@ function ctxOf(req: FastifyRequest, permission: 'account:read' | 'money:request'
 }
 
 export const paymentLinkRoutes: FastifyPluginAsync = async (app) => {
+  app.get('/v1/payment_links/settlement-options', { config: { auth: read } }, async (req) =>
+    linkSettlementOptions(ctxOf(req, 'account:read')),
+  );
+
   app.post('/v1/payment_links', { config: { auth: write } }, async (req, reply) => {
     const ctx = ctxOf(req, 'money:request');
     const input = PaymentLinkCreateSchema.parse(req.body);

@@ -68,7 +68,7 @@ const publicAvailability = (a: PaymentLinkAvailability): PaymentLinkAvailability
   a === 'archived' ? 'inactive' : a;
 
 async function availabilityOf(r: Resolved, now: Date): Promise<PaymentLinkAvailability> {
-  const readiness = await readinessFor(r.ctx);
+  const readiness = await readinessFor(r.ctx, r.ctx.livemode, r.link.settlementAssetId);
   return linkAvailability(r.link, { now, merchantReady: readiness.ready });
 }
 
