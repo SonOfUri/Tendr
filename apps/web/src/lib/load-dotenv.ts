@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export function loadRootEnv() {
+  if (process.env.TENDR_SKIP_DOTENV === '1') return;
   const candidates = [resolve(process.cwd(), '../../.env'), resolve(process.cwd(), '.env')];
   for (const path of candidates) {
     if (!existsSync(path)) continue;

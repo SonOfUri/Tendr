@@ -63,7 +63,7 @@ const ASSET_ORIGIN = 'http://localhost:9100/tendr-assets';
 export default defineConfig({
   testDir: './e2e',
   // The WooCommerce spec needs WordPress in Docker (wp-env): its own config and CI job.
-  testIgnore: ['**/woocommerce.spec.ts'],
+  testIgnore: ['**/woocommerce.spec.ts', '**/api-console.spec.ts'],
   timeout: 300_000,
   expect: { timeout: 20_000 },
   // One flow shares one database and server; run the specs one at a time.

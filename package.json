@@ -12,6 +12,8 @@
     "node": ">=22.0.0"
   },
   "scripts": {
+    "dev:console": "node scripts/dev-api-console.mjs",
+    "console:seed": "node scripts/dev-api-console.mjs --seed",
     "dev": "turbo run dev dev:worker --filter=@tendr/web --filter=@tendr/api",
     "dev:web": "turbo run dev --filter=@tendr/web",
     "dev:api": "turbo run dev dev:worker --filter=@tendr/api",

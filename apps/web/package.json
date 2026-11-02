@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "api-console:catalog": "node scripts/api-console-catalog.mjs",
+    "api-console:check": "node scripts/api-console-catalog.mjs --check",
+    "test:api-console": "playwright test --config=playwright.api-console.config.ts",
     "predev": "node scripts/copy-fonts.mjs",
     "dev": "next dev --port 3000",
     "build:embed": "node scripts/build-embed.mjs",

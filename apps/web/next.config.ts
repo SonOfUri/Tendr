@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { NextConfig } from 'next';
 
 function loadRootEnv() {
+  if (process.env.TENDR_SKIP_DOTENV === '1') return;
   const path = resolve(__dirname, '../../.env');
   if (!existsSync(path)) return;
   for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
