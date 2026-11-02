@@ -1,6 +1,12 @@
 // Test-only DB helpers. Never import from application code.
 import { createHash, randomBytes } from 'node:crypto';
-import { Prisma, type ApiKey, type Merchant, type User, type WebauthnCredential } from '@prisma/client';
+import {
+  Prisma,
+  type ApiKey,
+  type Merchant,
+  type User,
+  type WebauthnCredential,
+} from '@prisma/client';
 import { ALL_SCOPES, TENDR_DEFAULT_THEME, type Scope } from '@tendr/contracts';
 import { ulid } from 'ulid';
 import { PER_MODE_MODELS, READ_ONLY_PER_MODE_MODELS, SHARED_MODELS } from '../db/models.js';
@@ -461,6 +467,48 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         ...o,
       },
     }),
+  NativeWallet: async (merchantId, livemode, o) => {
+    const account =
+      (await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } })) ??
+      (await builders.MerchantAccount(merchantId, livemode, { kind: 'native_intents' }));
+    return prisma.nativeWallet.create({
+      data: {
+        id: newId('nwal'),
+        merchantId,
+        livemode,
+        accountId: account.id,
+        ownerUserId: (await createUser()).id,
+        credentialId: unique('wallet-cred'),
+        publicKey: unique('wallet-pub'),
+        cosePublicKey: 'AA==',
+        transports: [],
+        ...o,
+      },
+    });
+  },
+  NativePayout: async (merchantId, livemode, o) => {
+    const account =
+      (await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } })) ??
+      (await builders.MerchantAccount(merchantId, livemode, { kind: 'native_intents' }));
+    return prisma.nativePayout.create({
+      data: {
+        id: newId('npay'),
+        merchantId,
+        livemode,
+        accountId: account.id,
+        asset: 'nep141:usdc.test',
+        amount: '100',
+        destinationAsset: 'nep141:usdc.test',
+        destinationChain: 'near',
+        destination: 'owner.near',
+        depositAddress: unique('deposit'),
+        quote: {},
+        payload: '{}',
+        expiresAt: new Date(Date.now() + 300000),
+        ...o,
+      },
+    });
+  },
   MerchantAccount: (merchantId, livemode, o) =>
     prisma.merchantAccount.create({
       data: {

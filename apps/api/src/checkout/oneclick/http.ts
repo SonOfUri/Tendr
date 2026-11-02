@@ -1,5 +1,6 @@
 // The live 1Click client (v0 API). Auth: the JWT goes in `X-API-Key` (the older
 // `Authorization: Bearer` form is legacy). Every wire → type mapping lives in this file.
+import type { NativeSignedIntent } from '../../accounts/native-signing.js';
 import {
   ONECLICK_STATUSES,
   OneClickError,
@@ -49,6 +50,34 @@ export class HttpOneClick implements OneClickProvider {
 
   async quote(req: QuoteRequest): Promise<QuoteResponse> {
     return toQuoteResponse(asObject(await this.request('POST', '/v0/quote', req), '/v0/quote'));
+  }
+
+  async generateIntent(signerId: string, depositAddress: string): Promise<string> {
+    const body = asObject(
+      await this.request('POST', '/v0/generate-intent', {
+        type: 'swap_transfer',
+        standard: 'webauthn',
+        signerId,
+        depositAddress,
+      }),
+      '/v0/generate-intent',
+    );
+    const intent = asObject(body.intent, '/v0/generate-intent');
+    if (intent.standard !== 'webauthn' || typeof intent.payload !== 'string') {
+      throw badResponse('/v0/generate-intent', 'expected a WebAuthn payload');
+    }
+    return intent.payload;
+  }
+
+  async submitIntent(signedData: NativeSignedIntent): Promise<string> {
+    const body = asObject(
+      await this.request('POST', '/v0/submit-intent', {
+        type: 'swap_transfer',
+        signedData,
+      }),
+      '/v0/submit-intent',
+    );
+    return reqStr(body, 'intentHash', '/v0/submit-intent');
   }
 
   async status(depositAddress: string): Promise<StatusResponse> {
@@ -187,12 +216,12 @@ function toQuoteResponse(body: Json): QuoteResponse {
   const q = asObject(body.quote, where);
   return {
     quote: {
-      ...optional(q, ['depositAddress'] as const),
+      ...optional(q, ['depositAddress', 'depositMemo'] as const),
       amountIn: reqStr(q, 'amountIn', where),
       amountInUsd: reqStr(q, 'amountInUsd', where),
       amountOut: reqStr(q, 'amountOut', where),
       amountOutUsd: reqStr(q, 'amountOutUsd', where),
-      ...optional(q, ['minAmountIn', 'deadline', 'timeWhenInactive'] as const),
+      ...optional(q, ['minAmountIn', 'minAmountOut', 'deadline', 'timeWhenInactive'] as const),
     },
     correlationId: str(body.correlationId) ?? '',
   };

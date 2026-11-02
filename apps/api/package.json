@@ -23,7 +23,8 @@
     "e2e:serve": "tsx scripts/e2e-server.ts",
     "onchain:publish:testnet": "tsx scripts/onchain-publish-testnet.ts",
     "onchain:verify:mainnet": "tsx scripts/verify-merchant-account-mainnet.ts",
-    "checkout:verify:mainnet": "tsx scripts/verify-checkout-mainnet.ts"
+    "checkout:verify:mainnet": "tsx scripts/verify-checkout-mainnet.ts",
+    "onchain:verify:native": "tsx scripts/verify-native-intents-mainnet.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1161.0",

@@ -90,6 +90,16 @@ export async function changeRole(
       throw forbidden('Only an owner can change an owner or make someone an owner');
     }
     if (target.role === role) return;
+    if (
+      role !== 'owner' &&
+      (await tx.nativeWallet.findFirst({
+        where: { merchantId: ctx.merchantId, ownerUserId: target.userId },
+      }))
+    ) {
+      throw conflict(
+        'The native wallet owner cannot be demoted; wallet ownership must be migrated first',
+      );
+    }
     if (target.role === 'owner') {
       const owners = await tx.merchantUser.count({
         where: { merchantId: ctx.merchantId, role: 'owner' },

@@ -939,10 +939,12 @@ describe('account proposals', () => {
     });
   });
 
-  it('settlement_change_is_a_proposal_not_a_patch', async () => {
-    // No route writes settlement directly (the one settlement route only reads it) …
+  it('contract settlement changes still require a proposal', async () => {
+    // The contract account endpoint remains read-only; native wallets have a separate guarded route.
     const routes = app.printRoutes({ commonPrefix: false });
-    const settlementRoutes = routes.split('\n').filter((l) => /settlement/i.test(l));
+    const settlementRoutes = routes
+      .split('\n')
+      .filter((l) => /\/settlement \(/.test(l) && !l.includes('/native/'));
     expect(settlementRoutes).toEqual([expect.stringContaining('/settlement (GET, HEAD)')]);
     // … no route module writes the settlement_configs mirror …
     const dir = fileURLToPath(new URL('.', import.meta.url));

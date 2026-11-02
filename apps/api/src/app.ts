@@ -10,6 +10,7 @@ import { closeClient, closeRedis, createRedis, getRedis, whenReady } from './lib
 import { AppError, prismaErrorFor } from './lib/errors.js';
 import { log } from './lib/logger.js';
 import { PAYMASTER_URL_PREFIX } from './relayer/evm/pimlico.js';
+import { nativeAccountRoutes } from './routes/native-accounts.js';
 import { accountRoutes } from './routes/accounts.js';
 import { authRoutes } from './routes/auth.js';
 import {
@@ -248,6 +249,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(teamRoutes);
   await app.register(proposalRoutes);
   await app.register(accountRoutes);
+  await app.register(nativeAccountRoutes);
   await app.register(recoveryRoutes);
   await app.register(checkoutSessionRoutes);
   await app.register(checkoutClientRoutes, {

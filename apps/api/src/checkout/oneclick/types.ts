@@ -44,7 +44,7 @@ export interface QuoteRequest {
   slippageTolerance: number;
   /** 1Click asset id, e.g. `nep141:eth.omft.near`. */
   originAsset: string;
-  depositType: 'ORIGIN_CHAIN';
+  depositType: 'ORIGIN_CHAIN' | 'INTENTS';
   destinationAsset: string;
   /** Base units, decimal string: the input for EXACT_INPUT, the output for EXACT_OUTPUT. */
   amount: string;
@@ -66,6 +66,8 @@ export interface Quote {
   amountOut: string;
   amountOutUsd: string;
   minAmountIn?: string;
+  minAmountOut?: string;
+  depositMemo?: string;
   /** ISO-8601. */
   deadline?: string;
   /** ISO-8601. */

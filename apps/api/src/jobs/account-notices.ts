@@ -91,7 +91,7 @@ export async function scheduleRecoverySoon(
  */
 export async function enqueueReconciles(now = Date.now()): Promise<number> {
   const accounts = await prisma.merchantAccount.findMany({
-    where: { status: 'active' },
+    where: { status: 'active', kind: 'contract' },
     select: { id: true, merchantId: true, livemode: true },
   });
   const tick = Math.floor(now / ACCOUNT_JOB_EVERY_MS);

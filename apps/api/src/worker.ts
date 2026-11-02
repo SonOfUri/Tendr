@@ -14,6 +14,7 @@ import {
   RECONCILE_JOB,
   setAccountJobs,
 } from './jobs/account-notices.js';
+import { pollNativePayouts } from './accounts/native-payouts.js';
 import { retryPendingScreenings } from './checkout/screening.js';
 import { sweepReturns } from './checkout/refunds.js';
 import { expireSessions, pollDeposit, scanDueDeposits } from './checkout/watcher.js';
@@ -79,6 +80,7 @@ import { closeClient, createRedis, whenReady } from './lib/redis.js';
 const HEALTH_CHECK_TIMEOUT_MS = 1000;
 /** Re-screens SCREENING_PENDING payments (backoff is per payment); runs every minute. */
 export const RETRY_SCREENINGS_JOB = 'retry-pending-screenings';
+export const NATIVE_PAYOUTS_JOB = 'poll-native-payouts';
 /**
  * Deletes expired Connect credentials and revokes connections never redeemed, and ends expired
  * notification-email links (deleting their tokens); every minute.
@@ -255,6 +257,10 @@ async function processEventJob(job: Job<EventJobData>): Promise<void> {
 }
 
 async function processMaintenanceJob(job: Job): Promise<void> {
+  if (job.name === NATIVE_PAYOUTS_JOB) {
+    await pollNativePayouts();
+    return;
+  }
   if (job.name === RETRY_SCREENINGS_JOB) {
     const n = await retryPendingScreenings();
     if (n > 0) log('info', 'retried pending screenings', { count: n });
@@ -439,6 +445,12 @@ export async function startWorker(
     PURGE_IDEMPOTENCY_JOB,
     { pattern: '0 * * * *' },
     { name: PURGE_IDEMPOTENCY_JOB },
+  );
+
+  await maintenanceQueue.upsertJobScheduler(
+    NATIVE_PAYOUTS_JOB,
+    { every: 60_000 },
+    { name: NATIVE_PAYOUTS_JOB },
   );
 
   await maintenanceQueue.upsertJobScheduler(

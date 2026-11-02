@@ -1,5 +1,12 @@
 # Deploy runbook: production on Railway, test now, live behind a switch
 
+**2026-11-02 deployment update:** The hackathon deployment uses the approved environment key
+vault and native passkey-controlled Intents wallets for new live stores. Follow
+[the native wallet operations notes](2026-11-02-native-intents-wallets.md#operations-and-verification).
+The custom-contract publication, funded parent/merchant accounts, and GCP billing steps below
+are not prerequisites for this native wallet path. Existing contract accounts still need them.
+Live opening still requires working payment providers and screening.
+
 Spec: `docs/superpowers/specs/2026-10-31-deploy-design.md` (§6 live mode, §7 this runbook).
 Infrastructure detail: `infra/terraform/README.md`. This runbook says what to do and in what
 order; it links to that file for what each resource is instead of repeating it.

@@ -81,6 +81,7 @@ const EnvSchema = z
      * the contract simulator (`NEAR_FAKE_SIMULATE=1`).
      */
     NEAR_FAKE_TIMELOCK_SECONDS: z.coerce.number().int().min(1).max(86_400).optional(),
+    LIVE_ACCOUNT_DRIVER: z.enum(['contract', 'native_intents']).default('contract'),
     NEAR_RPC_URL_LIVE: z.string().url().default('https://rpc.mainnet.near.org'),
     NEAR_RPC_URL_TEST: z.string().url().default('https://rpc.testnet.near.org'),
     NEAR_PARENT_ACCOUNT_LIVE: z.string().min(1).default('tendr.near'),

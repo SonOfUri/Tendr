@@ -1,5 +1,11 @@
 # Tendr dashboard frontend handover
 
+**Live wallet update:** New live stores now use native passkey-controlled Intents accounts.
+Follow [the native wallet API handover](2026-11-02-native-intents-wallets.md) for onboarding,
+withdrawal/refund signing and capability checks. The existing contract proposal/recovery UI
+below applies to contract accounts; it does not apply to native accounts. No UI implementation
+is included in this backend update.
+
 Updated 2 November 2026. For the frontend developer building the merchant dashboard in `apps/web`.
 
 The dashboard already has account onboarding, payments, approvals, withdrawals, team management, and security flows connected to the API. Build on those flows, improve their presentation, and add the missing payment-link and checkout-theme management screens. Preserve passkey signing, merchant isolation, and the distinction between test and live money throughout the work.
