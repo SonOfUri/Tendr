@@ -1,0 +1,61 @@
+.header {
+  align-items: center;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 1rem;
+}
+
+.fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.fields input,
+.fields select,
+.fields textarea {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.fields textarea {
+  resize: vertical;
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--tendr-radius);
+  border: 1px solid var(--tendr-border);
+  background: var(--tendr-surface);
+  color: var(--tendr-white);
+  font: inherit;
+}
+
+.fields summary {
+  cursor: pointer;
+}
+
+.fields details > div {
+  margin-top: 0.9rem;
+}
+
+.links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.link {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.link h3 {
+  margin: 0;
+}
+
+.link a {
+  align-self: center;
+}

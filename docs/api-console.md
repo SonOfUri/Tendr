@@ -36,6 +36,8 @@ For dashboard APIs, use your browser session:
 
 You can also use the existing signup/dashboard pages and return to the console. WebAuthn uses RP ID `localhost`; keep the browser on `localhost`, not `127.0.0.1`.
 
+For a form-based payment-link workflow, open **Payment links** in the dashboard at `http://localhost:3300/dashboard/payment-links`. Create fixed or customer-chosen amounts, copy the checkout URL, open its QR code, edit or pause a link, and archive or restore it. Link options include a custom URL name on creation, expiry, and a payment limit. Links and form drafts are scoped to the selected store and test/live mode; viewer accounts can browse and share only. A saved link shows **Store setup needed** until the account and payout configuration are ready.
+
 For API-key endpoints, run this in another local terminal:
 
 ```bash
@@ -91,4 +93,4 @@ npm run test --workspace=@tendr/web -- src/lib/api-console/request.test.ts src/m
 npm run test:api-console --workspace=@tendr/web
 ```
 
-Browser tests use the isolated console stack and create their own test account. They cover the catalog, real API responses, authentication isolation, email/passkey signup, store-scoped writes, multipart upload, preview, and the live-mode guard. They keep trace/video/screenshots off because responses can contain temporary credentials. The console uses the signing-page CSP, denies framing, and returns `Cache-Control: no-store`.
+Browser tests use the isolated console stack and create their own test account. They cover the catalog, real API responses, authentication isolation, email/passkey signup, store-scoped writes, multipart upload, preview, and the live-mode guard. The dashboard payment-link flow also checks create retries after a lost response, editing, archive/restore, public checkout/QR URLs, store/mode isolation, and mobile width. They keep trace/video/screenshots off because responses can contain temporary credentials. The console uses the signing-page CSP, denies framing, and returns `Cache-Control: no-store`.

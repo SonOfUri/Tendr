@@ -227,6 +227,7 @@ function DashboardHeader() {
 const NAV: { href: string; label: string }[] = [
   { href: '/dashboard', label: 'Account' },
   { href: '/dashboard/payments', label: 'Payments' },
+  { href: '/dashboard/payment-links', label: 'Payment links' },
   { href: '/dashboard/review', label: 'Review' },
   { href: '/dashboard/approvals', label: 'Approvals' },
   { href: '/dashboard/withdraw', label: 'Withdraw' },
