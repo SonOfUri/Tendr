@@ -23,6 +23,7 @@ import type { ScopedDb } from '../db/scoped.js';
 import { paymentLinkUrl } from '../checkout/urls.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
+import { settlementAssetData } from './settlement.js';
 
 export type LinkCtx = { merchantId: string; livemode: boolean; db: ScopedDb };
 
@@ -55,6 +56,9 @@ export interface PaymentLinkView {
   gas_max_usd: string | null;
   /** The theme the link's page uses; null = the store's default. */
   theme_id: string | null;
+  settlement_asset: string | null;
+  settlement_symbol: string | null;
+  settlement_chain: string | null;
   status: 'active' | 'inactive';
   archived: boolean;
   availability: PaymentLinkAvailability;
@@ -224,6 +228,9 @@ function toView(
     gas_payer: link.gasSponsor === 'default' ? null : gasPayerFromDb(link.gasSponsor),
     gas_max_usd: link.gasMaxUsd === null ? null : link.gasMaxUsd.toFixed(),
     theme_id: link.themeId,
+    settlement_asset: link.settlementAssetId,
+    settlement_symbol: link.settlementAssetSymbol,
+    settlement_chain: link.settlementAssetChain,
     status: link.status === 'active' ? 'active' : 'inactive',
     archived: link.archivedAt !== null,
     availability: linkAvailability(link, { now, merchantReady }),
@@ -240,16 +247,25 @@ function toView(
 }
 
 async function viewsOf(ctx: LinkCtx, links: PaymentLink[]): Promise<PaymentLinkView[]> {
-  const [merchant, readiness, totals] = await Promise.all([
+  const [merchant, readiness, account, totals] = await Promise.all([
     ctx.db.merchant.findFirstOrThrow({ select: { slug: true } }),
     readinessFor(ctx),
+    ctx.db.merchantAccount.findFirst({ orderBy: { createdAt: 'desc' }, select: { status: true } }),
     totalsFor(
       ctx.db,
       links.map((l) => l.id),
     ),
   ]);
   const now = new Date();
-  return links.map((l) => toView(l, merchant.slug, totals.get(l.id)!, readiness.ready, now));
+  return links.map((l) =>
+    toView(
+      l,
+      merchant.slug,
+      totals.get(l.id)!,
+      l.settlementAssetId ? account?.status === 'active' : readiness.ready,
+      now,
+    ),
+  );
 }
 
 async function viewOf(ctx: LinkCtx, link: PaymentLink): Promise<PaymentLinkView> {
@@ -361,8 +377,10 @@ export async function createLink(ctx: LinkCtx, input: PaymentLinkCreate): Promis
     throw invalid('expires_at', 'expires_at must be in the future');
   if (!open) await assertAboveFloor(input.amount!, input.currency, now, { livemode: ctx.livemode });
   await assertThemeExists(ctx.db, input.theme_id);
+  const settlement = await settlementAssetData(ctx.livemode, input.settlement_asset);
 
   const data = {
+    ...settlement,
     title: input.title,
     description: input.description ?? null,
     amount: open ? null : input.amount!,
@@ -441,6 +459,10 @@ export async function updateLink(
   // it here too so no caller can slip it through.
   if ('slug' in input) throw invalid('slug', 'slug cannot be changed');
   const link = await load(ctx, id);
+  const settlement =
+    input.settlement_asset === link.settlementAssetId
+      ? {}
+      : await settlementAssetData(ctx.livemode, input.settlement_asset);
 
   const wasOpen = link.openAmount;
   const open = input.amount_type ? input.amount_type === 'open' : wasOpen;
@@ -498,6 +520,7 @@ export async function updateLink(
   const updated = await ctx.db.paymentLink.update({
     where: { id },
     data: {
+      ...settlement,
       title: input.title,
       description: input.description === null ? null : input.description,
       amount,

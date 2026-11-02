@@ -6,6 +6,12 @@ The dashboard already has account onboarding, payments, approvals, withdrawals, 
 
 **Test branch update:** `test/api-console` now includes a basic `/dashboard/payment-links` screen and navigation: create fixed/open amounts, edit/pause, expiry/use limits, share URL/QR, archive/restore, and store/mode isolation. Its form is in `apps/web/src/app/dashboard/payment-links/PaymentLinkForm.tsx`; payload validation and response types are in `apps/web/src/lib/dashboard-payment-links.ts`. Reuse this work when building the full dashboard. Checkout overrides, totals, and link-filtered payment history remain follow-up work. The deployment baseline described below has not changed.
 
+The test branch also supports a per-link settlement asset: choose a source chain and token from
+the mode's provider catalog, or inherit the store default. Funds stay in the merchant's Tendr
+Intents account. The implementation and migration are described in the
+[payment-link handover](2026-10-30-payment-links.md); preserve its session pinning and recipient
+rules when redesigning this selector. Fee/gas/theme overrides remain separate follow-up work.
+
 ## Starting point and deployment
 
 Use **`origin/deploy`**, baseline commit **`37617ac`**, for the implementation. `main` does not yet include all deployment changes, including host routing and the live-mode availability checklist. Create a feature branch from `deploy` and submit the dashboard work for review against that branch. Railway builds from `deploy`, so a push there can deploy immediately.

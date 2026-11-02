@@ -11,6 +11,7 @@ See [payment links](/payment-links/overview) for what a link is and how it behav
 | --- | --- |
 | `POST /v1/payment_links` | Create a link. Returns `201`. |
 | `GET /v1/payment_links` | List links, newest first. |
+| `GET /v1/payment_links/settlement-options` | List supported settlement assets and the store default for this mode. |
 | `GET /v1/payment_links/:id` | Read one link. |
 | `PATCH /v1/payment_links/:id` | Change a link. |
 | `DELETE /v1/payment_links/:id` | Archive a link. Returns the link. |
@@ -42,6 +43,9 @@ Each call acts on the mode of the key or dashboard session that makes it.
   "amount": "250.00",
   "currency": "USD",
   "min_amount": null,
+  "settlement_asset": null,
+  "settlement_symbol": null,
+  "settlement_chain": null,
   "note": "optional",
   "fee_payer": null,
   "gas_payer": null,
@@ -69,6 +73,8 @@ Each call acts on the mode of the key or dashboard session that makes it.
 | `amount` | Fixed price, in the link's currency. Null for open links. |
 | `currency` | `USD` or an ISO 4217 code. |
 | `min_amount` | Open links only: a floor above the $1.00 minimum. |
+| `settlement_asset` | Exact Intents asset id credited to the store's Tendr account, or null to inherit the store default. |
+| `settlement_symbol`, `settlement_chain` | Display metadata for the selected asset. The chain identifies the asset version, not an external payout destination. |
 | `fee_payer`, `gas_payer` | `merchant`, `shopper`, or null for the store's default. |
 | `status` | `active` or `inactive` (switched off). |
 | `availability` | `available`, `inactive`, `archived`, `expired`, `used_up` or `merchant_not_ready`, computed on read. |
@@ -86,6 +92,7 @@ Each call acts on the mode of the key or dashboard session that makes it.
 | `currency` | yes | `USD` or an ISO 4217 code. |
 | `amount` | fixed only | Decimal string like `"25.10"`. Not allowed for open links. |
 | `min_amount` | no | Open only. |
+| `settlement_asset` | no | Exact asset id from `GET /v1/payment_links/settlement-options`; null or omitted inherits the store default. An explicit token settles into the Tendr account. |
 | `description` | no | Plain text, up to 500 characters. |
 | `slug` | no | 3 to 60 characters: lower-case letters, digits and inner hyphens. Reserved words (such as `qr`, `new`, `edit`, `test`) are refused. |
 | `note` | no | `optional` (default) or `off`. |
@@ -109,6 +116,17 @@ curl -X POST "$TENDR_API_URL/v1/payment_links" \
   }'
 ```
 
+## Settlement choices
+
+`GET /v1/payment_links/settlement-options` returns `{ livemode, tokens, store_default }`.
+Each token includes its exact `asset` id, `symbol`, source `chain`, and `decimals`. Tokens with the
+same symbol on different chains are separate assets. Use the exact id as `settlement_asset`.
+
+An override credits the selected asset to the store's Tendr Intents account. It requires an active
+account in that mode, but no store-wide payout default. The source chain identifies the asset
+version; it does not choose an external wallet destination. Catalog failures return
+`PROVIDER_UNAVAILABLE`; unsupported assets return `UNSUPPORTED_ASSET`.
+
 ## List
 
 `GET /v1/payment_links?status=active&include_archived=false&limit=20&starting_after=plink_...`
@@ -122,14 +140,15 @@ the next page.
 `PATCH /v1/payment_links/:id` with any subset of the create fields, plus `archived` (boolean).
 
 - `null` clears `expires_at`, `max_uses`, `description`, `min_amount`, `fee_payer`, `gas_payer` and
-  `gas_max_usd`. An omitted key is unchanged.
+  `gas_max_usd` and `settlement_asset`. An omitted key is unchanged.
 - `slug` cannot be changed: the request is a `400`.
 - Switching `amount_type` clears the fields that no longer apply.
 - Changing `currency` on a fixed link needs the new `amount` in the same request (else `400`, field
   `amount`). On an open link it clears `min_amount` unless you send a new one.
 - A change that touches the fixed amount or currency is re-checked against the $1.00 minimum.
 
-Payments already in progress keep the price they started with.
+Payments already in progress keep the price and settlement asset they started with. A concurrent
+settlement edit during session creation returns `CONFLICT` (409); retry to use the latest choice.
 
 ## Archive
 

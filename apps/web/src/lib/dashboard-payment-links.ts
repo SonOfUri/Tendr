@@ -24,6 +24,9 @@ export interface DashboardPaymentLink {
   expires_at: string | null;
   max_uses: number | null;
   use_count: number;
+  settlement_asset: string | null;
+  settlement_symbol: string | null;
+  settlement_chain: string | null;
 }
 
 export interface PaymentLinkList {
@@ -52,6 +55,7 @@ export interface LinkFields {
   status: 'active' | 'inactive';
   expires: string;
   maxUses: string;
+  settlementAsset: string;
 }
 
 function localDateTime(iso: string | null): string {
@@ -73,6 +77,7 @@ export function linkFields(link?: DashboardPaymentLink): LinkFields {
     status: link?.status ?? 'active',
     expires: localDateTime(link?.expires_at ?? null),
     maxUses: link?.max_uses?.toString() ?? '',
+    settlementAsset: link?.settlement_asset ?? '',
   };
 }
 
@@ -100,6 +105,7 @@ export function linkBody(fields: LinkFields, existing?: DashboardPaymentLink) {
       ? {}
       : { expires_at: expires?.toISOString() ?? (existing ? null : undefined) }),
     max_uses: max ?? (existing ? null : undefined),
+    settlement_asset: fields.settlementAsset || null,
   };
   const parsed = (existing ? PaymentLinkUpdateSchema : PaymentLinkCreateSchema).safeParse(body);
   if (!parsed.success) {

@@ -37,7 +37,7 @@ test.beforeEach(async ({ context, page }) => {
 test('catalog, real health, auth failures, token isolation, and clearing', async ({ page }) => {
   await expect(
     page.getByRole('navigation', { name: 'API endpoints' }).getByRole('button'),
-  ).toHaveCount(119);
+  ).toHaveCount(120);
   await send(page, 'GET', '/v1/health', 200);
   await choose(page, 'GET', '/v1/me');
   await send(page, 'GET', '/v1/me', 401);
@@ -197,6 +197,14 @@ test('dashboard creates, shares, edits and archives payment links with safe retr
   await page.getByRole('button', { name: 'Create link', exact: true }).click();
   await expect(page.getByText(/The amount must be at least USD 1.00/)).toBeVisible();
   await page.getByLabel('Amount', { exact: true }).fill('25.10');
+  await page
+    .getByRole('combobox', { name: 'Settlement token', exact: true })
+    .selectOption('custom');
+  await page.getByRole('combobox', { name: 'Asset chain', exact: true }).selectOption('base');
+  const baseUsdc = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near';
+  await page
+    .getByRole('combobox', { name: 'Token to receive', exact: true })
+    .selectOption(baseUsdc);
 
   // Lose a successful POST response, then retry: the UI must reuse its key, not create twice.
   let firstKey: string | undefined;
@@ -220,6 +228,7 @@ test('dashboard creates, shares, edits and archives payment links with safe retr
   await page.getByRole('button', { name: 'Create link', exact: true }).click();
   const created = await retry;
   expect(created.status()).toBe(201);
+  expect((await created.json()).settlement_asset).toBe(baseUsdc);
   expect((await created.json()).id).toBe(saved!.id);
   const headers = await created.request().allHeaders();
   expect(headers['idempotency-key']).toBe(firstKey);
@@ -231,6 +240,7 @@ test('dashboard creates, shares, edits and archives payment links with safe retr
   expect(new URL(saved!.url).searchParams.get('mode')).toBe('test');
   const card = page.getByRole('article', { name: 'Coffee plan', exact: true });
   await expect(card).toHaveCount(1);
+  await expect(card).toContainText('USDC · Base into your Tendr account');
   await expect(card.getByRole('link', { name: 'Open checkout', exact: true })).toHaveAttribute(
     'href',
     saved!.url,
@@ -244,19 +254,44 @@ test('dashboard creates, shares, edits and archives payment links with safe retr
   await card.getByRole('link', { name: 'Open checkout', exact: true }).click();
   const checkout = await popup;
   await expect(checkout.getByRole('heading', { name: 'Coffee plan', exact: true })).toBeVisible();
+  const shopperRead = checkout.waitForResponse(
+    (r) => r.url() === `${API}/v1/checkout/client/session` && r.status() === 200,
+  );
+  await checkout.locator('form').getByRole('button', { name: /Pay/ }).click();
+  expect((await (await shopperRead).json()).settlement_asset).toBe(baseUsdc);
   await checkout.close();
   const qr = await page.request.get(saved!.qr_url);
   expect(qr.status()).toBe(200);
   expect(qr.headers()['content-type']).toContain('image/png');
 
   await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Asset chain', exact: true })).toHaveValue(
+    'base',
+  );
+  await expect(page.getByRole('combobox', { name: 'Token to receive', exact: true })).toHaveValue(
+    baseUsdc,
+  );
+  await page.getByRole('combobox', { name: 'Asset chain', exact: true }).selectOption('btc');
+  await expect(page.getByRole('combobox', { name: 'Token to receive', exact: true })).toHaveValue(
+    '',
+  );
+  await page
+    .getByRole('combobox', { name: 'Token to receive', exact: true })
+    .selectOption('nep141:btc.omft.near');
   await page.getByRole('combobox', { name: 'Amount type', exact: true }).selectOption('open');
   await page.getByLabel('Minimum amount (optional)', { exact: true }).fill('2.50');
   await page.getByRole('combobox', { name: 'Status', exact: true }).selectOption('inactive');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(card).toContainText('Customer chooses amount');
   await expect(card).toContainText('Minimum 2.50 USD');
+  await expect(card).toContainText('BTC · Bitcoin into your Tendr account');
   await expect(card).toContainText('Paused');
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  await page
+    .getByRole('combobox', { name: 'Settlement token', exact: true })
+    .selectOption('default');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(card).toContainText('Settlement: Store default');
   await card.getByRole('button', { name: 'Archive', exact: true }).click();
   await expect(card).toHaveCount(0);
   await page.getByLabel('Show archived links', { exact: true }).check();
@@ -293,6 +328,13 @@ test('dashboard creates, shares, edits and archives payment links with safe retr
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'Create payment link', exact: true }).click();
+  await page
+    .getByRole('combobox', { name: 'Settlement token', exact: true })
+    .selectOption('custom');
+  await page.getByRole('combobox', { name: 'Asset chain', exact: true }).selectOption('base');
+  await page
+    .getByRole('combobox', { name: 'Token to receive', exact: true })
+    .selectOption(baseUsdc);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

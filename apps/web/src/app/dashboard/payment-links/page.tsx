@@ -6,6 +6,7 @@ import { can } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { api, errorMessage, type StoreContext } from '@/lib/api';
+import { chainLabel } from '@/lib/assets';
 import {
   AVAILABILITY,
   type DashboardPaymentLink,
@@ -226,6 +227,12 @@ function PaymentLinks({ context, canWrite }: { context: StoreContext; canWrite: 
                     Expires {new Date(link.expires_at).toLocaleString()}
                   </p>
                 )}
+                <p className="muted small">
+                  Settlement:{' '}
+                  {link.settlement_asset
+                    ? `${link.settlement_symbol ?? link.settlement_asset}${link.settlement_chain ? ` · ${chainLabel(link.settlement_chain)}` : ''} into your Tendr account`
+                    : 'Store default'}
+                </p>
                 <a
                   className="address small"
                   href={link.url}
@@ -236,8 +243,15 @@ function PaymentLinks({ context, canWrite }: { context: StoreContext; canWrite: 
                 </a>
                 {link.availability === 'merchant_not_ready' && (
                   <p className="muted small">
-                    This link is saved. Finish your{' '}
-                    <Link href="/dashboard/settings/payout">payout setup</Link> and check your{' '}
+                    This link is saved.{' '}
+                    {link.settlement_asset ? (
+                      'Check your '
+                    ) : (
+                      <>
+                        Finish your <Link href="/dashboard/settings/payout">payout setup</Link> and
+                        check your{' '}
+                      </>
+                    )}
                     <Link href="/dashboard">account status</Link> before accepting payments.
                   </p>
                 )}

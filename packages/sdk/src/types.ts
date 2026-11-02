@@ -5,6 +5,10 @@ export type ThemeAssetKind = ThemeAssetObject['kind'];
 
 /** A merchant payment link as `/v1/payment_links` returns it. */
 export interface PaymentLinkObject {
+  /** Null inherits the store default; an override credits this asset to the Tendr account. */
+  settlement_asset: string | null;
+  settlement_symbol: string | null;
+  settlement_chain: string | null;
   id: string;
   object: 'payment_link';
   livemode: boolean;

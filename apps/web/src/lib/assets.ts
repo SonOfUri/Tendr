@@ -80,5 +80,13 @@ export const CHAINS: { id: string; label: string }[] = [
 ];
 
 export function chainLabel(chain: string): string {
-  return CHAINS.find((c) => c.id === chain)?.label ?? chain;
+  const aliases: Record<string, string> = {
+    arb: 'arbitrum',
+    pol: 'polygon',
+    op: 'optimism',
+    avax: 'avalanche',
+    solana: 'sol',
+    bitcoin: 'btc',
+  };
+  return CHAINS.find((c) => c.id === (aliases[chain] ?? chain))?.label ?? chain;
 }

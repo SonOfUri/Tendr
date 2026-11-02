@@ -38,6 +38,14 @@ You can also use the existing signup/dashboard pages and return to the console. 
 
 For a form-based payment-link workflow, open **Payment links** in the dashboard at `http://localhost:3300/dashboard/payment-links`. Create fixed or customer-chosen amounts, copy the checkout URL, open its QR code, edit or pause a link, and archive or restore it. Link options include a custom URL name on creation, expiry, and a payment limit. Links and form drafts are scoped to the selected store and test/live mode; viewer accounts can browse and share only. A saved link shows **Store setup needed** until the account and payout configuration are ready.
 
+Under **Settlement token**, keep **Use store default** or select **Choose a token for this link**,
+then choose its **Asset chain** and **Token to receive**. A chain selection identifies the token
+version credited to the same Tendr account; it does not pay an external wallet. An explicit token
+needs an active account but does not require a store default. Existing checkout sessions retain
+their original asset when you edit a link. The catalog comes from
+`GET /v1/payment_links/settlement-options`: simulated assets in local test mode, provider assets
+in live mode. Choosing a live token does not enable live payments or provision a mainnet account.
+
 For API-key endpoints, run this in another local terminal:
 
 ```bash

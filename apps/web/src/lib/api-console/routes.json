@@ -574,12 +574,22 @@
     "principals": ["public"]
   },
   {
+    "id": "GET /v1/payment_links/settlement-options",
+    "method": "GET",
+    "path": "/v1/payment_links/settlement-options",
+    "group": "payment links",
+    "source": "apps/api/src/routes/payment-links.ts",
+    "line": 51,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "payment_links:read"
+  },
+  {
     "id": "POST /v1/payment_links",
     "method": "POST",
     "path": "/v1/payment_links",
     "group": "payment links",
     "source": "apps/api/src/routes/payment-links.ts",
-    "line": 50,
+    "line": 55,
     "principals": ["dashboard_user", "secret_key"],
     "scope": "payment_links:write"
   },
@@ -589,7 +599,7 @@
     "path": "/v1/payment_links",
     "group": "payment links",
     "source": "apps/api/src/routes/payment-links.ts",
-    "line": 56,
+    "line": 61,
     "principals": ["dashboard_user", "secret_key"],
     "scope": "payment_links:read"
   },
@@ -599,7 +609,7 @@
     "path": "/v1/payment_links/:id",
     "group": "payment links",
     "source": "apps/api/src/routes/payment-links.ts",
-    "line": 61,
+    "line": 66,
     "principals": ["dashboard_user", "secret_key"],
     "scope": "payment_links:read"
   },
@@ -609,7 +619,7 @@
     "path": "/v1/payment_links/:id",
     "group": "payment links",
     "source": "apps/api/src/routes/payment-links.ts",
-    "line": 67,
+    "line": 72,
     "principals": ["dashboard_user", "secret_key"],
     "scope": "payment_links:write"
   },
@@ -619,7 +629,7 @@
     "path": "/v1/payment_links/:id",
     "group": "payment links",
     "source": "apps/api/src/routes/payment-links.ts",
-    "line": 77,
+    "line": 82,
     "principals": ["dashboard_user", "secret_key"],
     "scope": "payment_links:write"
   },

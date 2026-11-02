@@ -13,6 +13,10 @@ endpoints, and the dashboard team is free to shape the product differently.
 
 `POST|GET /v1/payment_links`, `GET|PATCH|DELETE /v1/payment_links/:id`.
 
+`GET /v1/payment_links/settlement-options` returns the current mode's provider token catalog and
+the store default. Each token has its exact `asset` id, `symbol`, source `chain`, and `decimals`.
+The endpoint uses the same read permission as the link list.
+
 - **Principals.** A secret key (scopes `payment_links:read` / `payment_links:write`) or a dashboard
   user (`account:read` to read, `money:request` to write; no step-up). Everything goes through the
   scoped client, so a merchant never sees another merchant's or the other mode's links. A link's
@@ -20,7 +24,7 @@ endpoints, and the dashboard team is free to shape the product differently.
 - **Bodies are strict** (`packages/contracts/src/payment-links.ts`). Unknown keys are a 400. `slug` is
   settable on create only; on update it is a 400.
 - **PATCH nulls.** `null` clears `expires_at`, `max_uses`, `description`, `min_amount`, `fee_payer`,
-  `gas_payer`, `gas_max_usd`. An omitted key is unchanged. `archived: true|false` archives or restores.
+  `gas_payer`, `gas_max_usd`, `settlement_asset`. An omitted key is unchanged. `archived: true|false` archives or restores.
   `DELETE` is the same as `archived: true` and returns the link.
 - **Currency change.** A fixed link's `currency` change needs `amount` in the same PATCH (400
   `VALIDATION_ERROR`, field `amount`); an open link's `min_amount` is cleared unless supplied. The $1.00
@@ -30,6 +34,18 @@ endpoints, and the dashboard team is free to shape the product differently.
 - **Amounts.** `USD` or an ISO 4217 code in the FX table. Minimum $1.00 USD equivalent on the amount
   before fees (`LINK_MIN_USD`); a merchant `min_amount` can only raise it. Fixed amounts are checked
   on create/edit and again on Pay.
+- **Settlement override (2 November).** `settlement_asset` is an optional exact fungible Intents
+  asset id from the mode's catalog, not a ticker or address. Null inherits the store default;
+  PATCH omission preserves the override. `settlement_symbol` and `settlement_chain` in merchant
+  responses are display metadata captured when selected. The source chain identifies the asset
+  version (for example, USDC from Base); the funds remain in the same merchant Tendr account.
+  An override always creates sessions with `recipientType=INTENTS`, `destChain=near`, and that
+  mode's merchant account as recipient. It needs an active account but no store-wide payout
+  default. No external payout address is accepted in a payment-link body.
+  Each session pins the chosen asset; editing a link or the store default does not change an
+  existing session. A concurrent asset edit during session creation returns a retryable 409.
+  New overrides and sessions validate against the current mode's provider catalog and never
+  fall back silently to another asset. Live-mode and account-readiness gates still apply.
 - **Availability** is computed on every read, never stored: `archived`, `inactive`, `expired`,
   `used_up`, `merchant_not_ready`, `available`, checked in that order.
 - **Totals** (`total_paid`, `total_refunded` in the link currency, `*_usd` in USD) are computed per
@@ -85,10 +101,10 @@ requests under `/v1/payment_links/public/` (the read the web server makes). Ther
 for the web server's own address and keys the read limit on the payer's IP. Every other route,
 including "Pay" (the payer's browser calls it directly), ignores both headers and keys on `req.ip`.
 
-| Limit | Value |
-| --- | --- |
+| Limit       | Value                                                                         |
+| ----------- | ----------------------------------------------------------------------------- |
 | Public read | 120 per minute per payer IP, plus a 20 000 per minute ceiling over all payers |
-| Pay | 10 per minute per payer IP, and 3 per payer IP per link per 5 minutes |
+| Pay         | 10 per minute per payer IP, and 3 per payer IP per link per 5 minutes         |
 
 Without a valid token the header is ignored and the caller's own address is limited.
 
@@ -119,11 +135,11 @@ existing `/pay/<session id>` URLs, which keep working unchanged, as does `/refun
 
 ### Deploy settings
 
-| Variable | Where | Meaning |
-| --- | --- | --- |
+| Variable             | Where       | Meaning                                                                                                                                                                                                                                                                   |
+| -------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `WEB_INTERNAL_TOKEN` | API and web | Shared secret, at least 32 characters. Required in production in both apps: each refuses to start without it (the web server checks at boot, `src/instrumentation.ts`). Must be identical in both apps. Without it every payer shares the web server's rate limit bucket. |
-| `TENDR_ASSET_ORIGIN` | web | Origin Tendr hosts merchant logos from. Preview cards load logos only from here; unset means no logo is ever fetched. |
-| `CHECKOUT_BASE_URL` | API and web | Canonical base of every link: `https://usetendr.tech` in production. The API builds `url`/`qr_url` with it and the web app builds QR targets and meta tags. They must agree. |
+| `TENDR_ASSET_ORIGIN` | web         | Origin Tendr hosts merchant logos from. Preview cards load logos only from here; unset means no logo is ever fetched.                                                                                                                                                     |
+| `CHECKOUT_BASE_URL`  | API and web | Canonical base of every link: `https://usetendr.tech` in production. The API builds `url`/`qr_url` with it and the web app builds QR targets and meta tags. They must agree.                                                                                              |
 
 All three are in `turbo.json`. Never store them in Postgres.
 

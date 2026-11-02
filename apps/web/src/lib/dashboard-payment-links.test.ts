@@ -20,9 +20,25 @@ const existing: DashboardPaymentLink = {
   expires_at: '2020-01-01T12:00:21.123Z',
   max_uses: 10,
   use_count: 0,
+  settlement_asset: null,
+  settlement_symbol: null,
+  settlement_chain: null,
 };
 
 describe('dashboard payment-link payloads', () => {
+  it('saves an exact asset id and clears it when switching back to the store default', () => {
+    const fields = {
+      ...linkFields(),
+      title: 'Coffee',
+      amount: '5.00',
+      settlementAsset: 'nep141:base.omft.near',
+    };
+    expect(linkBody(fields)).toMatchObject({ settlement_asset: 'nep141:base.omft.near' });
+    expect(linkBody({ ...fields, settlementAsset: '' }, existing)).toMatchObject({
+      settlement_asset: null,
+    });
+    expect(() => linkBody({ ...fields, settlementAsset: 'USDC' })).toThrow('settlement_asset');
+  });
   it('preserves decimal precision and lets the API generate the URL name', () => {
     const body = linkBody({
       ...linkFields(),

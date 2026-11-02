@@ -107,11 +107,18 @@ describe('payment link routes', () => {
       await createApiKey(merchant.id, { livemode: false, scopes: ['payment_links:read'] })
     ).raw;
     expect((await call('GET', '/v1/payment_links', ro)).statusCode).toBe(200);
+    const options = await call('GET', '/v1/payment_links/settlement-options', ro);
+    expect(options.statusCode).toBe(200);
+    expect(options.json()).toMatchObject({ livemode: false });
+    expect(options.json().tokens.some((t: { chain: string }) => t.chain === 'base')).toBe(true);
     expect((await call('POST', '/v1/payment_links', ro, input)).statusCode).toBe(403);
     const noScope = (
       await createApiKey(merchant.id, { livemode: false, scopes: ['sessions:read'] })
     ).raw;
     expect((await call('GET', '/v1/payment_links', noScope)).statusCode).toBe(403);
+    expect((await call('GET', '/v1/payment_links/settlement-options', noScope)).statusCode).toBe(
+      403,
+    );
   });
 
   it('viewer cannot create, finance can', async () => {

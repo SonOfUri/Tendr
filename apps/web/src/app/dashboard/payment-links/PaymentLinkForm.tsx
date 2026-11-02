@@ -11,6 +11,7 @@ import {
   type LinkFields,
 } from '@/lib/dashboard-payment-links';
 import styles from './links.module.css';
+import { SettlementSelector } from './SettlementSelector';
 
 export function PaymentLinkForm({
   context,
@@ -24,6 +25,7 @@ export function PaymentLinkForm({
   onCancel(): void;
 }) {
   const [fields, setFields] = useState(() => linkFields(existing));
+  const [customSettlement, setCustomSettlement] = useState(Boolean(existing?.settlement_asset));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sending = useRef(false);
@@ -42,6 +44,8 @@ export function PaymentLinkForm({
     setBusy(true);
     setError(null);
     try {
+      if (customSettlement && !fields.settlementAsset)
+        throw new Error('Choose a chain and token to receive.');
       const json = linkBody(fields, existing);
       const serialized = JSON.stringify(json);
       if (attempt.current?.body !== serialized) {
@@ -149,6 +153,17 @@ export function PaymentLinkForm({
             Use a supported three-letter currency code, such as USD, NGN or EUR. Payments must be
             worth at least USD 1.00; open amounts also follow this minimum.
           </p>
+          <SettlementSelector
+            context={context}
+            custom={customSettlement}
+            value={fields.settlementAsset}
+            existing={existing}
+            onMode={(custom) => {
+              setCustomSettlement(custom);
+              if (!custom) set('settlementAsset', '');
+            }}
+            onChange={(asset) => set('settlementAsset', asset)}
+          />
           <div className={styles.columns}>
             <label className="field">
               <span>Customer note</span>
