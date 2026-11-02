@@ -113,8 +113,33 @@ export async function screenAddress(
   input: { sessionId: string; address: string; chain: string },
 ): Promise<{ decision: ScreeningOutcome }> {
   const { sessionId, address, chain } = input;
+  const decision = await addressDecision(ctx.livemode, address, chain);
+  if (decision === 'unavailable') return { decision };
+  await prisma.screeningResult.create({
+    data: {
+      id: newId('scr'),
+      merchantId: ctx.merchantId,
+      livemode: ctx.livemode,
+      sessionId,
+      address,
+      chain,
+      provider: 'chainalysis',
+      // The sanctions API is a list match, not a score.
+      riskScore: decision === 'block' ? 100 : 0,
+      decision,
+    },
+  });
+  return { decision };
+}
+
+/** Shared fail-closed address check; callers record the result in their own audit context. */
+export async function addressDecision(
+  livemode: boolean,
+  address: string,
+  chain: string,
+): Promise<ScreeningOutcome> {
   let decision: ScreeningOutcome;
-  if (!ctx.livemode) {
+  if (!livemode) {
     decision = lookupTest(address);
   } else {
     const key = cacheKey(chain, address);
@@ -138,22 +163,25 @@ export async function screenAddress(
       }
     }
   }
-  if (decision === 'unavailable') return { decision };
-  await prisma.screeningResult.create({
-    data: {
-      id: newId('scr'),
-      merchantId: ctx.merchantId,
-      livemode: ctx.livemode,
-      sessionId,
-      address,
-      chain,
-      provider: 'chainalysis',
-      // The sanctions API is a list match, not a score.
-      riskScore: decision === 'block' ? 100 : 0,
-      decision,
-    },
-  });
-  return { decision };
+  return decision;
+}
+
+/** Wallet payouts have no shopper session; audit them against the merchant account. */
+export async function screenPayoutAddress(
+  ctx: ScopeContext,
+  address: string,
+  chain: string,
+): Promise<ScreeningOutcome> {
+  const decision = await addressDecision(ctx.livemode, address, chain);
+  await tenantTransaction(ctx, (tx) =>
+    recordEvent(tx, ctx, {
+      aggregateType: 'merchant_account',
+      aggregateId: ctx.merchantId,
+      type: 'merchant_account.payout_screened',
+      payload: { address, chain, decision },
+    }),
+  );
+  return decision;
 }
 
 // ─── retry job ───────────────────────────────────────────────────────────────

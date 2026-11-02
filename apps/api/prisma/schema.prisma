@@ -305,7 +305,27 @@ enum IdempotencyStatus {
   @@map("idempotency_status")
 }
 
+enum MerchantAccountKind {
+  contract
+  native_intents
+
+  @@map("merchant_account_kind")
+}
+
+enum NativePayoutStatus {
+  awaiting_signature
+  submitting
+  submitted
+  completed
+  refunded
+  failed
+  expired
+
+  @@map("native_payout_status")
+}
+
 enum WebauthnChallengePurpose {
+  native_wallet_registration
   registration
   authentication
   /// A recovery-kit sign-in (lost all passkeys): the store's recovery key signs it.
@@ -390,6 +410,7 @@ model User {
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
   memberships       MerchantUser[]
+  nativeWallets     NativeWallet[]
   credentials       WebauthnCredential[]
   dashboardSessions DashboardSession[]
   challenges        WebauthnChallenge[]
@@ -471,6 +492,8 @@ model EmailToken {
 /// valid 5 minutes. Only `sha256(challenge)` is stored. Proposal approvals never use these: their
 /// challenge is the 32-byte payload hash, while these carry a fixed tag and are longer.
 model WebauthnChallenge {
+  merchantId    String?                  @map("merchant_id")
+  livemode      Boolean?
   id            String                   @id
   purpose       WebauthnChallengePurpose
   challengeHash String                   @unique @map("challenge_hash")
@@ -480,7 +503,8 @@ model WebauthnChallenge {
   consumedAt    DateTime?                @map("consumed_at")
   createdAt     DateTime                 @default(now()) @map("created_at")
 
-  user User? @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  merchant Merchant? @relation(fields: [merchantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user     User?     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([expiresAt])
   @@map("webauthn_challenges")
@@ -489,32 +513,33 @@ model WebauthnChallenge {
 // ─── Merchant domain ────────────────────────────────────────────────────────
 
 model Merchant {
-  id                              String             @id
+  walletChallenges                WebauthnChallenge[]
+  id                              String              @id
   name                            String
-  slug                            String             @unique
-  kind                            MerchantKind       @default(merchant)
-  aupAcceptedAt                   DateTime?          @map("aup_accepted_at")
-  status                          MerchantStatus     @default(active)
+  slug                            String              @unique
+  kind                            MerchantKind        @default(merchant)
+  aupAcceptedAt                   DateTime?           @map("aup_accepted_at")
+  status                          MerchantStatus      @default(active)
   /// Origins allowed to frame the checkout (CSP `frame-ancestors`); shared by both modes.
-  checkoutDomains                 String[]           @default([]) @map("checkout_domains")
-  defaultFeePayer                 FeePayer           @default(merchant) @map("default_fee_payer")
-  defaultGasPayer                 ResolvedGasSponsor @default(buyer) @map("default_gas_payer")
+  checkoutDomains                 String[]            @default([]) @map("checkout_domains")
+  defaultFeePayer                 FeePayer            @default(merchant) @map("default_fee_payer")
+  defaultGasPayer                 ResolvedGasSponsor  @default(buyer) @map("default_gas_payer")
   /// The verified address for the store's payment and refund notices; null → the owners' emails.
-  notificationEmail               String?            @map("notification_email")
+  notificationEmail               String?             @map("notification_email")
   /// An address waiting for its verify link (only ever mailed that link). Set together with the
   /// token hash, its expiry and the request (who asked, in which mode): all four or none.
-  notificationEmailPending        String?            @map("notification_email_pending")
+  notificationEmailPending        String?             @map("notification_email_pending")
   /// sha256 (hex) of the single-use verify token; a new request replaces it.
-  notificationEmailTokenHash      String?            @unique @map("notification_email_token_hash")
-  notificationEmailTokenExpiresAt DateTime?          @map("notification_email_token_expires_at")
+  notificationEmailTokenHash      String?             @unique @map("notification_email_token_hash")
+  notificationEmailTokenExpiresAt DateTime?           @map("notification_email_token_expires_at")
   /// `{ by: 'user', userId } | { by: 'connection', connectionId }` plus `livemode`.
-  notificationEmailRequest        Json?              @map("notification_email_request")
+  notificationEmailRequest        Json?               @map("notification_email_request")
   /// The raw verify token, KeyVault-encrypted (`secrets`), until the link mail is sent; then null.
-  notificationEmailLinkSecretRef  String?            @map("notification_email_link_secret_ref")
+  notificationEmailLinkSecretRef  String?             @map("notification_email_link_secret_ref")
   /// The "You got paid" email; refund notices are always sent.
-  paymentEmailsEnabled            Boolean            @default(true) @map("payment_emails_enabled")
-  createdAt                       DateTime           @default(now()) @map("created_at")
-  updatedAt                       DateTime           @updatedAt @map("updated_at")
+  paymentEmailsEnabled            Boolean             @default(true) @map("payment_emails_enabled")
+  createdAt                       DateTime            @default(now()) @map("created_at")
+  updatedAt                       DateTime            @updatedAt @map("updated_at")
 
   users                       MerchantUser[]
   apiKeys                     ApiKey[]
@@ -532,6 +557,8 @@ model Merchant {
   webhookDeliveries           WebhookDelivery[]
   hookCalls                   HookCall[]
   gasSponsorships             GasSponsorship[]
+  nativeWallets               NativeWallet[]
+  nativePayouts               NativePayout[]
   screeningResults            ScreeningResult[]
   events                      Event[]
   feePlans                    FeePlan[]
@@ -648,6 +675,9 @@ model AccountKey {
 /// The merchant's NEAR account for one mode. Postgres mirrors the contract; the contract is
 /// authoritative. Replaces the idea of `merchants.near_account_id`.
 model MerchantAccount {
+  kind               MerchantAccountKind   @default(contract)
+  nativeWallet       NativeWallet?
+  nativePayouts      NativePayout[]
   id                 String                @id
   merchantId         String                @map("merchant_id")
   livemode           Boolean
@@ -713,11 +743,12 @@ model AccountProposal {
   createdAt       DateTime       @default(now()) @map("created_at")
   updatedAt       DateTime       @updatedAt @map("updated_at")
 
-  merchant  Merchant          @relation(fields: [merchantId], references: [id])
-  account   MerchantAccount   @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
-  createdBy User?             @relation(fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  approvals AccountApproval[]
-  refunds   Refund[]
+  merchant     Merchant          @relation(fields: [merchantId], references: [id])
+  account      MerchantAccount   @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  createdBy    User?             @relation(fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  nativePayout NativePayout?
+  approvals    AccountApproval[]
+  refunds      Refund[]
 
   @@unique([accountId, onchainId])
   @@unique([id, merchantId, livemode])
@@ -1934,4 +1965,63 @@ model GasOpsAlert {
   lastNotifiedAt DateTime @map("last_notified_at")
 
   @@map("gas_ops_alerts")
+}
+
+/// A dedicated per-store P256 wallet credential. Never accepted for dashboard login.
+model NativeWallet {
+  id                  String          @id
+  merchantId          String          @map("merchant_id")
+  livemode            Boolean
+  accountId           String          @unique @map("account_id")
+  ownerUserId         String          @map("owner_user_id")
+  credentialId        String          @unique @map("credential_id")
+  publicKey           String          @unique @map("public_key")
+  cosePublicKey       String          @map("cose_public_key")
+  signCount           BigInt          @default(0) @map("sign_count")
+  transports          String[]
+  activationPayload   String?         @map("activation_payload")
+  activationExpiresAt DateTime?       @map("activation_expires_at")
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+  merchant            Merchant        @relation(fields: [merchantId], references: [id])
+  owner               User            @relation(fields: [ownerUserId], references: [id], onDelete: Restrict)
+  account             MerchantAccount @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([merchantId, livemode])
+  @@unique([accountId, merchantId, livemode])
+  @@map("native_wallets")
+}
+
+/// Immutable 1Click quote + unsigned payload. Retrying a submission reuses the same nonce.
+model NativePayout {
+  id               String             @id
+  merchantId       String             @map("merchant_id")
+  livemode         Boolean
+  accountId        String             @map("account_id")
+  proposalId       String?            @unique @map("proposal_id")
+  asset            String
+  amount           String
+  destinationAsset String             @map("destination_asset")
+  destinationChain String             @map("destination_chain")
+  destination      String
+  depositAddress   String             @unique @map("deposit_address")
+  quote            Json
+  payload          String
+  status           NativePayoutStatus @default(awaiting_signature)
+  signature        Json?
+  intentHash       String?            @map("intent_hash")
+  providerStatus   Json?              @map("provider_status")
+  expiresAt        DateTime           @map("expires_at")
+  claimedAt        DateTime?          @map("claimed_at")
+  submittedAt      DateTime?          @map("submitted_at")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+  merchant         Merchant           @relation(fields: [merchantId], references: [id])
+  account          MerchantAccount    @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+  proposal         AccountProposal?   @relation(fields: [proposalId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([proposalId, merchantId, livemode])
+  @@index([status, updatedAt])
+  @@index([merchantId, livemode])
+  @@map("native_payouts")
 }

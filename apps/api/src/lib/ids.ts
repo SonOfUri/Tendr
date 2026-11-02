@@ -36,6 +36,8 @@ export type IdPrefix =
   | 'etok'
   | 'wch' // webauthn ceremony challenge
   | 'inv'
+  | 'nwal'
+  | 'npay'
   | 'macc'
   | 'prop'
   | 'appr'

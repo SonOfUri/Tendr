@@ -21,6 +21,8 @@ export const PER_MODE_MODELS = [
   'SettlementClaim',
   'AccountKey',
   'MerchantAccount',
+  'NativeWallet',
+  'NativePayout',
   'AccountProposal',
   'AccountApproval',
   'RecoveryRequest',

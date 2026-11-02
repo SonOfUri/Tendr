@@ -102,6 +102,8 @@ export async function accountByRef(ref: {
         where: { livemode: ref.livemode, merchant: { slug: ref.merchant } },
       });
   if (!account || account.status !== 'active') throw notFound('Account not found');
+  if (account.kind === 'native_intents')
+    throw conflict('Timed recovery is unavailable for native Intents wallets');
   return account;
 }
 
@@ -246,6 +248,8 @@ async function activeAccount(ctx: ScopeContext) {
     where: { merchantId: ctx.merchantId, livemode: ctx.livemode },
   });
   if (!account || account.status !== 'active') throw conflict('The account is not ready yet');
+  if (account.kind === 'native_intents')
+    throw conflict('Timed recovery is unavailable for native Intents wallets');
   return account;
 }
 

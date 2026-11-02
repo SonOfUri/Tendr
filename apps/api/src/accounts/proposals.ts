@@ -37,6 +37,7 @@ import { activeCredentials, recordSignCount, signerKeyToCose } from '../auth/web
 import type { ScopeContext } from '../db/scoped.js';
 import { tenantTransaction } from '../db/tenant-transaction.js';
 import { env } from '../env.js';
+import { recordEvent } from '../events/record.js';
 import { AppError, conflict, forbidden, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
@@ -169,12 +170,17 @@ async function loadProposal(ctx: ScopeContext, id: string): Promise<ProposalWith
 }
 
 /** The store's account contract in this mode; 409 until it is provisioned and active. */
-async function activeAccount(ctx: ScopeContext) {
+async function activeAccount(ctx: ScopeContext, systemRefund = false) {
   const account = await prisma.merchantAccount.findFirst({
     where: { merchantId: ctx.merchantId, livemode: ctx.livemode },
   });
   if (!account || account.status !== 'active') {
     throw conflict('The account is not ready yet');
+  }
+  if (account.kind === 'native_intents' && !systemRefund) {
+    throw conflict(
+      'Use native wallet payouts; contract proposals are not supported by this account',
+    );
   }
   return account;
 }
@@ -267,7 +273,7 @@ export async function createSystemDraftInTx(
   const kind = kindOf(action);
   if (kind !== input.kind) throw invalid(`kind ${input.kind} does not match the action (${kind})`);
   if (!SYSTEM_KINDS.has(kind)) throw invalid(`the system cannot draft a ${kind} proposal`);
-  const account = await activeAccount(ctx);
+  const account = await activeAccount(ctx, true);
   await validateLocally(ctx, action);
   const salt = randomBytes(32);
   const created = await tx.accountProposal.create({
@@ -1307,7 +1313,45 @@ export async function cancelProposal(
   id: string,
   response?: unknown,
 ): Promise<ProposalView> {
+  const modeAccount = await activeAccount(actor, true);
   const p = await loadProposal(actor, id);
+  if (modeAccount.kind === 'native_intents') {
+    const wallet = await prisma.nativeWallet.findFirst({
+      where: { merchantId: actor.merchantId, livemode: actor.livemode, ownerUserId: actor.userId },
+    });
+    const member = await prisma.merchantUser.findFirst({
+      where: { merchantId: actor.merchantId, userId: actor.userId, role: 'owner' },
+    });
+    if (!wallet || !member) throw forbidden('Only the wallet owner can cancel this refund');
+    await tenantTransaction(actor, async (tx) => {
+      const cancelled = await tx.accountProposal.updateMany({
+        where: {
+          id: p.id,
+          merchantId: actor.merchantId,
+          livemode: actor.livemode,
+          status: 'draft',
+        },
+        data: { status: 'cancelled' },
+      });
+      if (cancelled.count !== 1) throw conflict('An authorized payout cannot be cancelled');
+      await tx.nativePayout.updateMany({
+        where: {
+          proposalId: p.id,
+          merchantId: actor.merchantId,
+          livemode: actor.livemode,
+          status: 'awaiting_signature',
+        },
+        data: { status: 'failed', providerStatus: { localReason: 'cancelled_before_signing' } },
+      });
+      await recordEvent(tx, actor, {
+        aggregateType: 'account_proposal',
+        aggregateId: p.id,
+        type: 'account.proposal.cancelled',
+        payload: { proposalId: p.id, kind: 'refund' },
+      });
+    });
+    return getProposal(actor, p.id);
+  }
   if (p.status === 'draft') {
     if (!actor.isSigner && p.createdByUserId !== actor.userId) {
       throw forbidden('Only the requester or a signer can cancel a draft');

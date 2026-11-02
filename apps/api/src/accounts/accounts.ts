@@ -348,6 +348,7 @@ export async function provisionMerchantAccount(
   livemode: boolean,
 ): Promise<MerchantAccount> {
   const row = await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } });
+  if (row?.kind === 'native_intents') return row;
   if (!row) throw notFound('No account to provision');
   if (row.status === 'active') return row;
   // The live-mode switch: no mainnet account is created while it is off. The row is left as it is
@@ -632,6 +633,8 @@ export async function retryProvisioning(ctx: ScopeContext): Promise<MerchantAcco
       where: { merchantId: ctx.merchantId, livemode: ctx.livemode },
     });
     if (!account) throw notFound('No account in this mode');
+    if (account.kind === 'native_intents')
+      throw conflict('Use native wallet activation; this account needs no provisioning');
     const updated = await tx.merchantAccount.updateMany({
       where: {
         id: account.id,
@@ -661,7 +664,7 @@ export async function retryProvisioning(ctx: ScopeContext): Promise<MerchantAcco
 // ─── go-live ─────────────────────────────────────────────────────────────────
 
 /** `live_mode_unavailable`: the platform's live-mode switch is off (always listed first). */
-export type GoLiveMissing = 'live_mode_unavailable' | 'second_key' | 'threshold';
+export type GoLiveMissing = 'live_mode_unavailable' | 'second_key' | 'threshold' | 'wallet_passkey';
 
 function goLiveRule(
   signerCount: number,
@@ -685,6 +688,16 @@ export async function goLiveCheck(
   threshold = 1,
   db: Db = prisma,
 ): Promise<{ ok: boolean; missing: GoLiveMissing[] }> {
+  const live = await db.merchantAccount.findFirst({ where: { merchantId, livemode: true } });
+  if (
+    live?.kind === 'native_intents' ||
+    (!live && env().LIVE_ACCOUNT_DRIVER === 'native_intents')
+  ) {
+    const missing: GoLiveMissing[] = [];
+    if (threshold !== 1) missing.push('threshold');
+    if (live?.status !== 'active') missing.push('wallet_passkey');
+    return { ok: missing.length === 0, missing };
+  }
   const [signers, recovery] = await Promise.all([
     signerSet(db, merchantId),
     activeRecoveryKey(db, merchantId),
@@ -708,6 +721,12 @@ export async function goLiveStatus(merchantId: string, threshold = 1): Promise<G
     ? check.missing
     : ['live_mode_unavailable', ...check.missing];
   return {
+    ...(live?.kind === 'native_intents' || (!live && env().LIVE_ACCOUNT_DRIVER === 'native_intents')
+      ? {
+          accountKind: 'native_intents' as const,
+          registrationPath: '/v1/account/native/passkey/options',
+        }
+      : {}),
     checklist: {
       ok: missing.length === 0,
       missing,
@@ -728,6 +747,8 @@ export async function signerPasskeyCount(merchantId: string): Promise<number> {
 }
 
 export interface GoLiveStatus {
+  accountKind?: 'native_intents';
+  registrationPath?: string;
   checklist: {
     ok: boolean;
     missing: GoLiveMissing[];
@@ -784,6 +805,11 @@ export async function goLiveOutcome(
     prisma.merchantAccount.findFirst({ where: { merchantId: actor.merchantId, livemode: true } });
   const found = await existing();
   if (found) return { account: found, created: false };
+  if (env().LIVE_ACCOUNT_DRIVER === 'native_intents') {
+    throw conflict(
+      'Register and activate a dedicated store wallet passkey via /v1/account/native/passkey/options',
+    );
+  }
   try {
     const account = await tenantTransaction(ctx, async (tx) => {
       await lockMerchant(tx, ctx.merchantId);
@@ -865,6 +891,12 @@ export async function registerRecoveryKey(
   const live = await prisma.merchantAccount.findFirst({
     where: { merchantId: actor.merchantId, livemode: true },
   });
+  if (
+    live?.kind === 'native_intents' ||
+    (!live && env().LIVE_ACCOUNT_DRIVER === 'native_intents')
+  ) {
+    throw conflict('Timed recovery keys are not supported by native Intents wallets');
+  }
   if (live?.status === 'active') {
     const proposal = await createDraft(
       {
@@ -940,7 +972,8 @@ export async function mirrorTestSigners(
     prisma.merchantAccount.findFirst({ where: { merchantId, livemode: true } }),
     prisma.merchantAccount.findFirst({ where: { merchantId, livemode: false } }),
   ]);
-  if (live?.status !== 'active' || test?.status !== 'active') return { synced: false };
+  if (live?.kind === 'native_intents' || live?.status !== 'active' || test?.status !== 'active')
+    return { synced: false };
   // Only ever the TEST client signs as an admin; the live client is only read.
   const testClient = nearClient(false);
   const [liveConfig, testConfig] = await Promise.all([
@@ -977,6 +1010,14 @@ export async function mirrorTestSigners(
 export function accountJson(a: MerchantAccount) {
   return {
     id: a.id,
+    kind: a.kind,
+    capabilities: {
+      multisig: a.kind === 'contract',
+      timedRecovery: a.kind === 'contract',
+      contractLimits: a.kind === 'contract',
+      autoSweep: a.kind === 'contract',
+      nativePasskeyPayouts: a.kind === 'native_intents',
+    },
     livemode: a.livemode,
     nearAccountId: a.nearAccountId,
     status: a.status,
@@ -1020,12 +1061,36 @@ export async function accountView(ctx: ScopeContext) {
     entry.keys += 1;
     bySigner.set(k.userId, entry);
   }
+  const native =
+    account?.kind === 'native_intents'
+      ? await prisma.nativeWallet.findFirst({
+          where: { accountId: account.id, merchantId: ctx.merchantId, livemode: ctx.livemode },
+          select: {
+            ownerUserId: true,
+            credentialId: true,
+            publicKey: true,
+            owner: { select: { email: true } },
+          },
+        })
+      : null;
+  if (native)
+    bySigner.set(native.ownerUserId, {
+      userId: native.ownerUserId,
+      email: native.owner.email,
+      keys: 1,
+    });
   return {
     livemode: ctx.livemode,
     account: account ? accountJson(account) : null,
     signers: [...bySigner.values()],
-    /** The mode's Tendr release code hash (base58): what an upgrade proposal is compared to. */
-    releaseCodeHash: codeHashFor(ctx.livemode),
+    releaseCodeHash: account?.kind === 'native_intents' ? null : codeHashFor(ctx.livemode),
+    nativeWallet: native
+      ? {
+          ownerUserId: native.ownerUserId,
+          credentialId: native.credentialId,
+          publicKey: native.publicKey,
+        }
+      : null,
   };
 }
 
@@ -1070,7 +1135,7 @@ export async function getBalances(merchantId: string, livemode: boolean): Promis
   }
 
   const assets = new Set<string>();
-  const [configs, proposals] = await Promise.all([
+  const [configs, proposals, sessionAssets, payouts] = await Promise.all([
     prisma.settlementConfig.findMany({
       where: { merchantId, livemode },
       select: { destAssetId: true },
@@ -1081,7 +1146,21 @@ export async function getBalances(merchantId: string, livemode: boolean): Promis
       orderBy: { createdAt: 'desc' },
       take: 500,
     }),
+    prisma.session.findMany({
+      where: { merchantId, livemode },
+      select: { destAsset: true },
+      distinct: ['destAsset'],
+      take: 100,
+    }),
+    prisma.nativePayout.findMany({
+      where: { merchantId, livemode },
+      select: { asset: true },
+      distinct: ['asset'],
+      take: 100,
+    }),
   ]);
+  for (const s of sessionAssets) assets.add(s.destAsset);
+  for (const p of payouts) assets.add(p.asset);
   for (const c of configs) assets.add(c.destAssetId);
   for (const p of proposals) assetsIn(p.action, assets);
   const tokenIds = [...assets].sort().slice(0, MAX_BALANCE_ASSETS);

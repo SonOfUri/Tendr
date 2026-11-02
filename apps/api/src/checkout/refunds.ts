@@ -1611,9 +1611,18 @@ export type ChainEnd =
 async function chainSaysEnded(ctx: ScopeContext, prop: AccountProposal): Promise<ChainEnd> {
   const account = await prisma.merchantAccount.findFirst({
     where: { id: prop.accountId, ...tenantOf(ctx) },
-    select: { nearAccountId: true },
+    select: { nearAccountId: true, kind: true },
   });
   if (!account?.nearAccountId) return { verdict: 'unknown' };
+  if (account.kind === 'native_intents') {
+    const payout = await prisma.nativePayout.findFirst({
+      where: { proposalId: prop.id, ...tenantOf(ctx) },
+    });
+    if (payout && ['submitting', 'submitted'].includes(payout.status)) return { verdict: 'live' };
+    if (payout?.signature && payout.status === 'failed' && payout.expiresAt > new Date())
+      return { verdict: 'unknown' };
+    return { verdict: 'ended', status: prop.status };
+  }
   let v: ContractProposalView | null;
   try {
     v = await nearClient(ctx.livemode).view<ContractProposalView | null>(

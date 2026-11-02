@@ -1099,7 +1099,7 @@ const OPEN_ON_CHAIN: ProposalStatus[] = ['pending', 'timelocked', 'executing'];
  */
 export async function reconcileAccount(merchantId: string, livemode: boolean): Promise<boolean> {
   const account = await prisma.merchantAccount.findFirst({
-    where: { merchantId, livemode, status: 'active' },
+    where: { merchantId, livemode, status: 'active', kind: 'contract' },
   });
   if (!account) return false;
   const ctx = ctxOf(account);
@@ -1324,7 +1324,11 @@ async function reconcileProposal(
  */
 export async function executeReadyTimelocks(now = new Date()): Promise<number> {
   const due = await prisma.accountProposal.findMany({
-    where: { status: 'timelocked', readyAt: { lte: now }, account: { status: 'active' } },
+    where: {
+      status: 'timelocked',
+      readyAt: { lte: now },
+      account: { status: 'active', kind: 'contract' },
+    },
     include: { account: true },
     orderBy: { readyAt: 'asc' },
     take: EXECUTE_BATCH,
@@ -1375,7 +1379,11 @@ export async function executeReadyTimelocks(now = new Date()): Promise<number> {
  */
 export async function settleExpiredProposals(): Promise<number> {
   const due = await prisma.accountProposal.findMany({
-    where: { status: 'expired', expirySettledAt: null, account: { status: 'active' } },
+    where: {
+      status: 'expired',
+      expirySettledAt: null,
+      account: { status: 'active', kind: 'contract' },
+    },
     include: { account: true },
     orderBy: { updatedAt: 'asc' },
     take: EXECUTE_BATCH,
@@ -1418,7 +1426,11 @@ export async function settleExpiredProposals(): Promise<number> {
 /** Calls `execute_recovery` on every pending recovery past `executes_at` and applies it. */
 export async function executeReadyRecovery(now = new Date()): Promise<number> {
   const due = await prisma.recoveryRequest.findMany({
-    where: { status: 'pending', executesAt: { lte: now }, account: { status: 'active' } },
+    where: {
+      status: 'pending',
+      executesAt: { lte: now },
+      account: { status: 'active', kind: 'contract' },
+    },
     include: { account: true },
     orderBy: { executesAt: 'asc' },
     take: EXECUTE_BATCH,
