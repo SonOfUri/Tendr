@@ -46,7 +46,7 @@ const groups = Array.from(new Set(endpoints.map((e) => e.group))).sort();
 const object = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 
-export default function ApiConsole() {
+export default function ApiConsole({ localMail = false }: { localMail?: boolean }) {
   const [endpoint, setEndpoint] = useState<Endpoint>(initial);
   const [search, setSearch] = useState('');
   const [group, setGroup] = useState('');
@@ -365,6 +365,7 @@ export default function ApiConsole() {
             Step up
           </button>
           <Link href="/signup">New account</Link>
+          {localMail && <Link href="/settings/local-mail">Local inbox</Link>}
           <button
             disabled={busy}
             onClick={() =>

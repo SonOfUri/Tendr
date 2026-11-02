@@ -141,3 +141,23 @@ test('mobile viewport stays within the screen and endpoint selection sends nothi
     true,
   );
 });
+
+test('signup explains local delivery and opens the verification email in the inbox', async ({
+  page,
+}) => {
+  const email = `console-inbox-${Date.now()}@example.com`;
+  await page.goto('/signup');
+  await page.getByLabel('Email', { exact: true }).fill(email);
+  await page.getByRole('button', { name: 'Send me a link' }).click();
+  await expect(
+    page.getByText('Nothing was sent to your email address.', { exact: false }),
+  ).toBeVisible();
+  await page.getByRole('link', { name: 'Open local inbox', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Local inbox', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Filter by email')).toHaveValue(email);
+  await page.getByRole('link', { name: 'Verify email and continue', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm my email', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Create your passkey', exact: true }),
+  ).toBeVisible();
+});

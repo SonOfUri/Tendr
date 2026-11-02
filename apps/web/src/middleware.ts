@@ -79,10 +79,15 @@ const LINK_ASSET =
  * demo, legal pages, route handlers) is passed through untouched, as before.
  */
 const POLICY_PATH =
-  /^\/(?:dashboard(?:\/.*)?|signup|login|verify|invite(?:\/.*)?|recover(?:\/.*)?|pay(?:\/.*)?|preview\/theme(?:\/.*)?|connect|settings\/notification-email\/verify|settings\/api-console)$/;
+  /^\/(?:dashboard(?:\/.*)?|signup|login|verify|invite(?:\/.*)?|recover(?:\/.*)?|pay(?:\/.*)?|preview\/theme(?:\/.*)?|connect|settings\/notification-email\/verify|settings\/api-console|settings\/local-mail)$/;
 
-/** Pages whose responses carry one-time parameters (connect state, a verify token): never cached. */
-const NO_STORE_PATHS = ['/connect', '/settings/notification-email/verify', '/settings/api-console'];
+/** One-time auth parameters and private local testing tools must never be cached. */
+const NO_STORE_PATHS = [
+  '/connect',
+  '/settings/notification-email/verify',
+  '/settings/api-console',
+  '/settings/local-mail',
+];
 
 export async function middleware(request: NextRequest) {
   const bytes = new Uint8Array(16);

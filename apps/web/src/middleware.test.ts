@@ -103,12 +103,15 @@ describe('middleware /connect', () => {
 });
 
 describe('API console isolation', () => {
-  it('uses the signing-page CSP and is never cacheable', async () => {
-    const res = await middleware(new NextRequest('http://localhost:3000/settings/api-console'));
-    expect(ancestors(res)).toBe("'none'");
-    expect(res.headers.get('cache-control')).toBe('no-store');
-    expect(res.headers.get('content-security-policy')).toContain("script-src 'self' 'nonce-");
-  });
+  it.each(['/settings/api-console', '/settings/local-mail'])(
+    'uses the signing-page CSP and never caches %s',
+    async (path) => {
+      const res = await middleware(new NextRequest(`http://localhost:3000${path}`));
+      expect(ancestors(res)).toBe("'none'");
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(res.headers.get('content-security-policy')).toContain("script-src 'self' 'nonce-");
+    },
+  );
 });
 
 describe('middleware payment link pages', () => {

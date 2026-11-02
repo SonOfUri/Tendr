@@ -22,14 +22,14 @@ The launcher reads the connection credentials from the root `.env`, requires loc
 
 Match `DATABASE_URL` to the port exposed by your local PostgreSQL container: the current compose file uses 15432; an older running container may use 5433. `API_CONSOLE_WEB_PORT` and `API_CONSOLE_API_PORT` override 3300 and 4300 if needed. Stop the launcher with Ctrl+C.
 
-Email goes to local log files, FX and payments are simulated, live money is disabled, and uploaded assets are kept in memory and served through the local API. The launcher removes inherited provider credentials and prevents the app from reloading them from `.env`. PostgreSQL records survive a restart; simulated NEAR contract state and uploaded files do not. Create a fresh store after restarting when testing account/proposal flows.
+Email appears in the **Local inbox** at `http://localhost:3300/settings/local-mail` instead of being sent to your email address. Signup links directly to the inbox filtered to your address. FX and payments are simulated, live money is disabled, and uploaded assets are kept in memory and served through the local API. The launcher removes inherited provider credentials and prevents the app from reloading them from `.env`. PostgreSQL records survive a restart; simulated NEAR contract state and uploaded files do not. Create a fresh store after restarting when testing account/proposal flows.
 
 ## Authenticate
 
 For dashboard APIs, use your browser session:
 
-1. Select `POST /v1/auth/email/start`, enter a development email, and send it. Find the verification URL in the matching `apps/api/.mail/*.json` file; no email is sent externally.
-2. Put that URL's token into `POST /v1/auth/email/verify` and send it. These public authentication endpoints default to **Browser session** so the browser accepts their session cookies.
+1. Select `POST /v1/auth/email/start`, enter a development email, and send it. Open **Local inbox** from the console and find your message; no email is sent externally. The existing signup page also provides an **Open local inbox** link.
+2. Click **Verify email and continue**, then confirm your email. For testing the raw API, the message details also contain the verification URL: put its token into `POST /v1/auth/email/verify` and send it. These public authentication endpoints default to **Browser session** so the browser accepts their session cookies.
 3. Press **Register passkey**, then create a store with `POST /v1/merchants`.
 4. Press **Load session** to load your stores and CSRF token. Store-scoped endpoints automatically enable the merchant/mode controls. Test is the default.
 5. When an API returns `STEP_UP_REQUIRED`, press **Step up**, then resend the request. Login after a reload with **Sign in with passkey** or **Load session** if the cookie is still valid.
@@ -71,6 +71,8 @@ Responses show HTTP status, elapsed time, browser-readable headers, and formatte
 ## A separate test deployment
 
 The console is available by default only in development. For a dedicated test web deployment, set **`API_CONSOLE_ENABLED=true`**. Unset it in production, or set it to `false` to disable it explicitly; the page then returns 404. Keep `NODE_ENV=production` for deployed services.
+
+The local inbox is stricter: it requires development mode, explicit console enablement, `MAIL_DRIVER=log`, and localhost web/API origins. It returns 404 in production even when the console is enabled. Mail responses are never cached and cross-origin reads are refused. The underlying development messages remain in `apps/api/.mail/`.
 
 Set the web build's `NEXT_PUBLIC_API_BASE_URL` to that environment's API. For one console origin to exercise both dashboard and shopper endpoints, configure that test environment's `WEB_URL`, `CHECKOUT_BASE_URL`, `CORS_ORIGINS`, and WebAuthn origins to the same web origin. Configure the matching RP ID on the API and web. Do not widen production CORS or change the live dashboard's RP ID to accommodate a testing page.
 
