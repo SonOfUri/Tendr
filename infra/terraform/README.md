@@ -205,7 +205,12 @@ Variables:
 
 The Chainalysis screening key can be an encrypted stored secret (`putSecret`, purpose
 `chainalysis`) or `CHAINALYSIS_API_KEY`. A stored secret takes precedence; missing or failing
-screening still holds the payment pending.
+screening still holds the payment pending when `screening_mode="chainalysis"` (the default).
+The hackathon deployment explicitly sets `screening_mode="disabled"` (`SCREENING_MODE` on both
+API and worker). No screening key or provider request is needed in that mode. Skips are recorded
+as events, never as Chainalysis approvals or zero-risk results. Test-mode fixtures remain active.
+To restore screening, configure a supported provider/key and set the mode on both services;
+skips never populate the allow cache. Previously completed payments are not retroactively screened.
 
 ### Enter provider credentials directly in Railway
 

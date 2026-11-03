@@ -573,7 +573,10 @@ async function main() {
   loadDotenvFile(resolve(process.cwd(), '.env'));
   loadEnv();
   const worker = await startWorker();
-  log('info', 'Tendr worker started', { healthPort: worker.healthPort });
+  log('info', 'Tendr worker started', {
+    healthPort: worker.healthPort,
+    screeningMode: env().SCREENING_MODE,
+  });
 
   let shuttingDown = false;
   const shutdown = async (signal: string) => {

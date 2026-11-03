@@ -13,6 +13,8 @@ process.env.FX_PROVIDER = 'fixed';
 process.env.FX_FIXED_RATES = '{"NGN":"1602.04","EUR":"0.92","JPY":"151.5","KWD":"0.307"}';
 // Theme assets: tests store uploads in memory, never in a developer's MinIO bucket.
 process.env.ASSET_STORE_DRIVER = 'memory';
+// Tests opt into the deployment's screening exception explicitly, never through a local .env.
+process.env.SCREENING_MODE = 'chainalysis';
 loadDotenvFile(resolve(fileURLToPath(new URL('.', import.meta.url)), '../../../../.env'));
 if (process.env.TEST_DATABASE_URL) {
   process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;

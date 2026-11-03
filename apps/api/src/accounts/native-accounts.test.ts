@@ -27,6 +27,7 @@ import {
 } from './native-signing.js';
 import { pollNativePayouts, setNativePayoutDeps } from './native-payouts.js';
 import { onRefundProposalExecuted } from '../checkout/refunds.js';
+import { screenPayoutAddress } from '../checkout/screening.js';
 
 const USDC = 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1';
 const BASE = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near';
@@ -51,7 +52,7 @@ describe('native passkey wallet API', () => {
   const generate = vi.fn(async (signer: string, deposit: string) =>
     transfer(signer, deposit, lastQuote.originAsset, lastQuote.amount),
   );
-  const screen = vi.fn(async () => 'allow' as 'allow' | 'block' | 'unavailable');
+  const screen = vi.fn(screenPayoutAddress);
   const headers = () => dashHeaders(login, { merchantId, livemode: true });
   const post = (url: string, payload: unknown = {}, customHeaders = headers()) =>
     app.inject({ method: 'POST', url, payload: payload as object, headers: customHeaders });
@@ -117,6 +118,7 @@ describe('native passkey wallet API', () => {
   afterEach(async () => {
     await app.close();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     setNativePayoutDeps(null);
     resetNearClients();
     resetTokenCache();
@@ -363,6 +365,40 @@ describe('native passkey wallet API', () => {
     expect(submit).toHaveBeenCalledTimes(2);
     expect(submit.mock.calls[0]).toEqual(submit.mock.calls[1]);
     expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it('quotes and submits signed payouts with explicitly skipped screening, then enforces screening when restored', async () => {
+    vi.stubEnv('SCREENING_MODE', 'disabled');
+    vi.stubEnv('CHAINALYSIS_API_KEY', '');
+    loadEnv();
+    screen.mockImplementation(screenPayoutAddress);
+    await activate();
+    const p = await quote();
+    const challenge = await post(`${base}/payouts/${p.id}/challenge`);
+    const response = auth.get(challenge.json().options);
+    vi.stubEnv('SCREENING_MODE', 'chainalysis');
+    loadEnv();
+    expect((await post(`${base}/payouts/${p.id}/submit`, { response })).statusCode).toBe(503);
+    expect(submit).not.toHaveBeenCalled();
+    vi.stubEnv('SCREENING_MODE', 'disabled');
+    loadEnv();
+    const sent = await post(`${base}/payouts/${p.id}/submit`, { response });
+    expect(sent.statusCode, sent.body).toBe(202);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(
+      await prisma.event.count({
+        where: { merchantId, type: 'merchant_account.payout_screening_skipped' },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.event.count({
+        where: {
+          merchantId,
+          type: 'merchant_account.payout_screened',
+          payload: { path: ['decision'], equals: 'allow' },
+        },
+      }),
+    ).toBe(0);
   });
 
   it('fails closed on screening, malicious provider payloads, insufficient balance and expiry', async () => {

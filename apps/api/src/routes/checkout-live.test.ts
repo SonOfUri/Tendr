@@ -3,6 +3,10 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
+import { loadEnv } from '../env.js';
+import { fakeNearClient, resetNearClients } from '../near/client.js';
+import { eventLog } from '../near/events.js';
+import { pollDeposit, setWatcherDeps } from '../checkout/watcher.js';
 import {
   HttpOneClick,
   resetOneClickProviders,
@@ -68,13 +72,24 @@ describe.each(['contract', 'native_intents'] as const)(
     afterEach(async () => {
       await app.close();
       vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      setWatcherDeps(null);
+      resetNearClients();
       resetTokenCache();
       resetOneClickProviders();
       setLiveMode(undefined);
     });
     afterAll(() => prisma.$disconnect());
 
-    it.each([undefined, BASE_USDC])('quotes %s into the same live account', async (override) => {
+    it.each([
+      { override: undefined, disabled: false },
+      { override: BASE_USDC, disabled: false },
+      { override: undefined, disabled: true },
+      { override: BASE_USDC, disabled: true },
+    ])('quotes $override, screening disabled=$disabled', async ({ override, disabled }) => {
+      vi.stubEnv('SCREENING_MODE', disabled ? 'disabled' : 'chainalysis');
+      loadEnv();
+      const refundAddress = '0x2222222222222222222222222222222222222222';
       const destination = override ?? NEAR_USDC;
       const quote = vi.spyOn(HttpOneClick.prototype, 'quote').mockImplementation(async (req) => ({
         correlationId: 'live-route-fixture',
@@ -139,7 +154,7 @@ describe.each(['contract', 'native_intents'] as const)(
         method: 'POST',
         url: '/v1/checkout/client/quote',
         headers: client,
-        payload: { origin_asset: ETH_USDC },
+        payload: { origin_asset: ETH_USDC, ...(disabled ? { refund_address: refundAddress } : {}) },
       });
       expect(result.statusCode, result.body).toBe(201);
       expect(simulated).not.toHaveBeenCalled();
@@ -150,8 +165,8 @@ describe.each(['contract', 'native_intents'] as const)(
           destinationAsset: destination,
           recipient: ACCOUNT,
           recipientType: 'INTENTS',
-          refundTo: ACCOUNT,
-          refundType: 'INTENTS',
+          refundTo: disabled ? refundAddress : ACCOUNT,
+          refundType: disabled ? 'ORIGIN_CHAIN' : 'INTENTS',
         });
       }
       expect(quote.mock.calls.some(([request]) => !request.dry)).toBe(true);
@@ -164,15 +179,81 @@ describe.each(['contract', 'native_intents'] as const)(
           destChain: 'near',
           recipient: ACCOUNT,
         });
+      if (disabled) {
+        const q = await prisma.quote.findUniqueOrThrow({ where: { id: result.json().id } });
+        vi.spyOn(HttpOneClick.prototype, 'status').mockResolvedValue({
+          status: 'SUCCESS',
+          swapDetails: {
+            originChainTxHashes: [{ hash: 'origin' }],
+            destinationChainTxHashes: [{ hash: 'settlement' }],
+            amountIn: q.amountIn.toFixed(0),
+            depositedAmount: q.amountIn.toFixed(0),
+            amountOut: q.amountOut.toFixed(0),
+            refundedAmount: '0',
+          },
+        });
+        const near = fakeNearClient(true);
+        setWatcherDeps({ near: () => near, resolveSenders: async () => [] });
+        // Provider SUCCESS alone is still insufficient, even without screening.
+        near.scriptTxStatus('settlement', {
+          hash: 'settlement',
+          signerId: 'solver',
+          receiverId: 'intents.near',
+          receipts: [],
+        });
+        await pollDeposit(q.depositAddress, { livemode: true });
+        expect(await prisma.payment.findFirst({ where: { quoteId: q.id } })).toMatchObject({
+          status: 'PROCESSING',
+        });
+        near.scriptTxStatus('settlement', {
+          hash: 'settlement',
+          signerId: 'solver',
+          receiverId: 'intents.near',
+          receipts: [
+            {
+              receiptId: 'receipt',
+              executorId: 'intents.near',
+              ok: true,
+              logs: [
+                eventLog('nep245', '1.0.0', 'mt_mint', [
+                  {
+                    owner_id: ACCOUNT,
+                    token_ids: [destination],
+                    amounts: [q.amountOut.toFixed(0)],
+                  },
+                ]),
+              ],
+            },
+          ],
+        });
+        await pollDeposit(q.depositAddress, { livemode: true });
+        const payment = await prisma.payment.findFirstOrThrow({ where: { quoteId: q.id } });
+        expect(payment).toMatchObject({
+          status: 'SETTLED',
+          verifiedBy: 'receipt',
+          senderAddress: null,
+        });
+        expect(await prisma.screeningResult.count()).toBe(0);
+        expect(
+          await prisma.event.count({
+            where: { aggregateId: payment.id, type: 'payment.screening_skipped' },
+          }),
+        ).toBe(1);
+        expect(
+          await prisma.event.count({
+            where: { aggregateId: q.sessionId, type: 'session.screening_skipped' },
+          }),
+        ).toBe(1);
+      }
       setLiveMode(false);
-      const disabled = await app.inject({
+      const closed = await app.inject({
         method: 'POST',
         url: '/v1/checkout/client/quote',
         headers: client,
         payload: { origin_asset: ETH_USDC },
       });
-      expect(disabled.statusCode, disabled.body).toBe(403);
-      expect(disabled.json().error.code).toBe('LIVE_MODE_UNAVAILABLE');
+      expect(closed.statusCode, closed.body).toBe(403);
+      expect(closed.json().error.code).toBe('LIVE_MODE_UNAVAILABLE');
     });
   },
 );

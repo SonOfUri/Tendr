@@ -44,7 +44,13 @@ import { keptSmallNetOfFee } from './return-fee.js';
 import { onPaymentCollected, onQuotePaymentDetected } from '../relayer/submissions.js';
 import { recordRevenue } from './revenue.js';
 import { liveSenderResolvers } from './senders/index.js';
-import { onScreeningAllowed, screenAddress, type ScreeningOutcome } from './screening.js';
+import {
+  onScreeningAllowed,
+  screenAddress,
+  screeningDisabled,
+  skipPaymentScreening,
+  type ScreeningOutcome,
+} from './screening.js';
 import { sessionRefs } from './session-refs.js';
 import { expireInTx } from './sessions.js';
 import { tokenInfo } from './tokens.js';
@@ -186,6 +192,7 @@ export function paymentSenders(p: Pick<Payment, 'senderAddress' | 'senderAddress
 export function combineDecisions(ds: ScreeningOutcome[]): ScreeningOutcome {
   if (ds.includes('block')) return 'block';
   if (ds.length === 0 || ds.includes('unavailable')) return 'unavailable';
+  if (ds.includes('skipped')) return 'skipped';
   return 'allow';
 }
 
@@ -595,10 +602,11 @@ async function syncSenders(paymentId: string, q: QuoteRow, status: StatusRespons
         originTxHashes: pending,
       });
   if (found.length === 0) {
-    log('warn', 'watcher: deposit sender unknown; settlement waits for screening', {
+    log('warn', 'watcher: deposit sender unknown', {
       paymentId,
       chain,
       pending,
+      screeningRequired: !screeningDisabled(ctx.livemode),
     });
     return;
   }
@@ -1211,6 +1219,7 @@ async function senderDecision(
   status: StatusResponse,
 ): Promise<ScreeningOutcome> {
   const { ctx } = l;
+  if (screeningDisabled(ctx.livemode)) return skipPaymentScreening(ctx, payment.id);
   const hashes = status.swapDetails.originChainTxHashes.map((h) => h.hash);
   if (hashes.some((h) => !payment.senderOriginHashes.includes(h))) return 'unavailable';
   const senders = paymentSenders(payment);

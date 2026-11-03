@@ -79,7 +79,7 @@ POST /v1/account/native/payouts
 }
 ```
 
-The API validates tokens, address format, balance and sanctions screening, then obtains a
+The API validates tokens, address format, balance and the configured screening policy, then obtains a
 1Click `EXACT_INPUT` quote with `depositType: INTENTS`, `refundType: INTENTS` (back to this
 store), and `recipientType: DESTINATION_CHAIN`. It permits only a generated intent containing
 one transfer of the exact input amount and asset to that quote's deposit account. Arbitrary
@@ -113,7 +113,7 @@ deadline or nonce consumption; no cancellation endpoint is offered for authorize
 ## Refund approvals
 
 Existing merchant/shopper refund logic still creates `refund` proposal drafts after its review
-and screening checks. For a native account, create a payout using only:
+and configured screening-policy checks. For a native account, create a payout using only:
 
 ```json
 POST /v1/account/native/payouts
@@ -151,8 +151,20 @@ and fee sweeps off unless separately configured and verified.
 
 Native merchant wallets do not require `MERCHANT_ACCOUNT_CODE_HASH_LIVE`, a funded `tendr.near`
 parent, a funding key installed in Meteor, GCP KMS, or a funded Tendr NEAR relayer. Other
-subsystems still retain their existing key vault configuration. 1Click credentials and working
-screening are still required. Missing screening fails closed; it is not silently disabled.
+subsystems still retain their existing key vault configuration. 1Click credentials are required.
+
+**2026-11-03 hackathon update:** Chainalysis is omitted at the operator's request. Set
+`SCREENING_MODE=disabled` on both API and worker. Live checkout, refunds and native payouts
+proceed without sanctions screening. Address checks and payment verification still run.
+The audit trail records `session.screening_skipped`, `payment.screening_skipped`, and
+`merchant_account.payout_screening_skipped`; these are not approvals, risk scores or screening
+results. Previously held payments remain held. Test-mode screening fixtures stay active.
+
+The default remains `SCREENING_MODE=chainalysis`, which fails closed on missing keys or provider
+failure. Restoring that mode requires supported API access on both services. Disabled mode never
+caches approvals, so subsequent checks use the provider after re-enabling; completed payments
+are not retroactively screened. No UI changes are required for the setting; the separate native
+wallet registration/activation integration above is still required to onboard a live store.
 
 Read-only mainnet verification (creates an ephemeral key, signs empty intents, never broadcasts):
 
