@@ -1,9 +1,11 @@
 // Sanctions screening of payer / refund addresses (Chainalysis public sanctions API).
 //
-// Fail closed: a lookup that cannot complete (timeout, HTTP error, no API key in live mode) is
+// With SCREENING_MODE=chainalysis (the default), a lookup that cannot complete is fail closed:
 // `unavailable`, never `allow`. `unavailable` is not persisted (the `screening_decision` enum is
 // allow|block and a failed lookup is not a decision); it is logged, and the payment waits in
 // SCREENING_PENDING for `retryPendingScreenings`.
+// SCREENING_MODE=disabled explicitly skips live checks, recording skip events instead of
+// provider decisions. The disabled policy neither reads nor writes the provider cache.
 //
 // Test mode (`ctx.livemode === false`) uses the SCREENING_TEST_BLOCKLIST fixture list and never
 // makes an HTTP call. Results are cached in Redis per (chain, address), without the merchant, so
@@ -20,7 +22,39 @@ import { getRedis } from '../lib/redis.js';
 import { getSecret } from '../secrets/secrets.js';
 import { holdPaymentInTx } from './hold.js';
 
-export type ScreeningOutcome = 'allow' | 'block' | 'unavailable';
+export type ScreeningOutcome = 'allow' | 'block' | 'unavailable' | 'skipped';
+
+/** An operator setting for live mode only; test fixtures keep exercising screening. */
+export function screeningDisabled(livemode: boolean): boolean {
+  return livemode && env().SCREENING_MODE === 'disabled';
+}
+
+/** One durable disclosure per payment, including deposits whose sender cannot be resolved. */
+export async function skipPaymentScreening(
+  ctx: ScopeContext,
+  paymentId: string,
+): Promise<'skipped'> {
+  await tenantTransaction(ctx, async (tx) => {
+    await tx.$queryRaw`SELECT id FROM payments WHERE id = ${paymentId} AND merchant_id = ${ctx.merchantId} AND livemode = ${ctx.livemode} FOR UPDATE`;
+    const existing = await tx.event.findFirst({
+      where: {
+        merchantId: ctx.merchantId,
+        livemode: ctx.livemode,
+        aggregateId: paymentId,
+        type: 'payment.screening_skipped',
+      },
+      select: { id: true },
+    });
+    if (!existing)
+      await recordEvent(tx, ctx, {
+        aggregateType: 'payment',
+        aggregateId: paymentId,
+        type: 'payment.screening_skipped',
+        payload: { decision: 'skipped', reason: 'operator_disabled', screening_mode: 'disabled' },
+      });
+  });
+  return 'skipped';
+}
 
 export const CHAINALYSIS_PURPOSE = 'chainalysis';
 export const CHAINALYSIS_URL = 'https://public.chainalysis.com/api/v1/address/';
@@ -106,7 +140,7 @@ function lookupTest(address: string): ScreeningOutcome {
 
 /**
  * Screens one address for the session and records the `allow` / `block` decision in
- * `screening_results`. `unavailable` (fail closed) is returned without a row.
+ * `screening_results`. `unavailable` (fail closed) has no row; `skipped` has an audit event only.
  */
 export async function screenAddress(
   ctx: ScopeContext,
@@ -115,6 +149,23 @@ export async function screenAddress(
   const { sessionId, address, chain } = input;
   const decision = await addressDecision(ctx.livemode, address, chain);
   if (decision === 'unavailable') return { decision };
+  if (decision === 'skipped') {
+    await tenantTransaction(ctx, (tx) =>
+      recordEvent(tx, ctx, {
+        aggregateType: 'session',
+        aggregateId: sessionId,
+        type: 'session.screening_skipped',
+        payload: {
+          address,
+          chain,
+          decision,
+          reason: 'operator_disabled',
+          screening_mode: 'disabled',
+        },
+      }),
+    );
+    return { decision };
+  }
   await prisma.screeningResult.create({
     data: {
       id: newId('scr'),
@@ -123,7 +174,7 @@ export async function screenAddress(
       sessionId,
       address,
       chain,
-      provider: 'chainalysis',
+      provider: ctx.livemode ? 'chainalysis' : 'test_fixture',
       // The sanctions API is a list match, not a score.
       riskScore: decision === 'block' ? 100 : 0,
       decision,
@@ -132,12 +183,14 @@ export async function screenAddress(
   return { decision };
 }
 
-/** Shared fail-closed address check; callers record the result in their own audit context. */
+/** Shared policy check; callers record the decision or skip in their own audit context. */
 export async function addressDecision(
   livemode: boolean,
   address: string,
   chain: string,
 ): Promise<ScreeningOutcome> {
+  // Do not read credentials, call the provider, or cache a fabricated approval.
+  if (screeningDisabled(livemode)) return 'skipped';
   let decision: ScreeningOutcome;
   if (!livemode) {
     decision = lookupTest(address);
@@ -177,8 +230,18 @@ export async function screenPayoutAddress(
     recordEvent(tx, ctx, {
       aggregateType: 'merchant_account',
       aggregateId: ctx.merchantId,
-      type: 'merchant_account.payout_screened',
-      payload: { address, chain, decision },
+      type:
+        decision === 'skipped'
+          ? 'merchant_account.payout_screening_skipped'
+          : 'merchant_account.payout_screened',
+      payload: {
+        address,
+        chain,
+        decision,
+        ...(decision === 'skipped'
+          ? { reason: 'operator_disabled', screening_mode: 'disabled' }
+          : {}),
+      },
     }),
   );
   return decision;
@@ -249,7 +312,9 @@ export async function retryPendingScreenings(now = new Date()): Promise<number> 
       // unavailable keeps waiting, all allow settles.
       const senders =
         p.senderAddresses.length > 0 ? p.senderAddresses : p.senderAddress ? [p.senderAddress] : [];
-      if (senders.length > 0 && p.senderChain) {
+      if (screeningDisabled(ctx.livemode)) {
+        decision = await skipPaymentScreening(ctx, p.id);
+      } else if (senders.length > 0 && p.senderChain) {
         const ds: ScreeningOutcome[] = [];
         for (const address of senders) {
           ds.push(
@@ -267,7 +332,7 @@ export async function retryPendingScreenings(now = new Date()): Promise<number> 
       }
       if (decision === 'block') {
         await holdPayment(ctx, p.id);
-      } else if (decision === 'allow') {
+      } else if (decision === 'allow' || decision === 'skipped') {
         let settled = false;
         if (allowedHook) {
           try {

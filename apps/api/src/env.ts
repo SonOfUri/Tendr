@@ -400,6 +400,11 @@ const EnvSchema = z
           return v as Record<string, string>;
         }),
     ),
+    /** Explicit live screening policy. Disabled records skips, never provider approvals. */
+    SCREENING_MODE: z.preprocess(
+      blankAsUnset,
+      z.enum(['chainalysis', 'disabled']).default('chainalysis'),
+    ),
     /** Optional operator-managed fallback when no encrypted Chainalysis secret is stored. */
     CHAINALYSIS_API_KEY: z.preprocess(blankAsUnset, optionalString),
     SCREENING_TEST_BLOCKLIST: z.preprocess(

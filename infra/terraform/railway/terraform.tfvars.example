@@ -29,6 +29,7 @@ resend_api_key   = "<Resend API key>"
 oneclick_api_key = "<1Click JWT>"
 fx_api_key       = "<Open Exchange Rates app id>"
 # chainalysis_api_key = "<optional fallback; stored secret takes precedence>"
+# screening_mode = "disabled" # explicit hackathon setting; skips live screening, recorded in events
 
 # Optional: null generates the tendr_app password.
 # database_app_password = "<at least 24 alphanumeric characters>"

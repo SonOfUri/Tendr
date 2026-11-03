@@ -5,6 +5,15 @@ import { createHash } from 'node:crypto';
 import { KEY_NAMES } from './keyvault/keys.js';
 
 const base = { DATABASE_URL: 'postgresql://x/y', REDIS_URL: 'redis://localhost:6380' };
+
+describe('live screening policy', () => {
+  it('defaults to Chainalysis and requires an explicit valid disabled setting', () => {
+    expect(loadEnv(base).SCREENING_MODE).toBe('chainalysis');
+    expect(loadEnv({ ...base, SCREENING_MODE: '' }).SCREENING_MODE).toBe('chainalysis');
+    expect(loadEnv({ ...base, SCREENING_MODE: 'disabled' }).SCREENING_MODE).toBe('disabled');
+    expect(() => loadEnv({ ...base, SCREENING_MODE: 'false' })).toThrow(/SCREENING_MODE/);
+  });
+});
 const gcp = {
   GCP_PROJECT_ID: 'p1',
   GCP_KMS_LOCATION: 'global',

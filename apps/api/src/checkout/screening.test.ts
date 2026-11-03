@@ -9,6 +9,7 @@ import {
   retryDelayMs,
   retryPendingScreenings,
   screenAddress,
+  screenPayoutAddress,
   setScreeningFetch,
 } from './screening.js';
 
@@ -189,6 +190,67 @@ describe('screenAddress (test mode)', () => {
   });
 });
 
+describe('explicitly disabled live screening', () => {
+  beforeEach(() => {
+    vi.stubEnv('SCREENING_MODE', 'disabled');
+    loadEnv();
+  });
+
+  it('audits skips without provider calls, screening results or cached approvals; re-enabling fails closed', async () => {
+    const m = await createMerchant();
+    const s = await createRow('Session', m.id, true, {});
+    const ctx = { merchantId: m.id, livemode: true };
+    const input = { sessionId: s.id as string, address: ADDR, chain: 'eth' };
+    const fetchMock = vi.fn();
+    setScreeningFetch(fetchMock);
+    expect(await screenAddress(ctx, input)).toEqual({ decision: 'skipped' });
+    expect(await screenPayoutAddress(ctx, ADDR, 'eth')).toBe('skipped');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await prisma.screeningResult.count()).toBe(0);
+    expect(await getRedis().keys('screening:*')).toEqual([]);
+    const events = await prisma.event.findMany({
+      where: { merchantId: m.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(events.map((e) => e.type)).toEqual([
+      'session.screening_skipped',
+      'merchant_account.payout_screening_skipped',
+    ]);
+    for (const event of events) {
+      expect(event.livemode).toBe(true);
+      expect(event.payload).toMatchObject({
+        decision: 'skipped',
+        reason: 'operator_disabled',
+        address: ADDR,
+      });
+    }
+    vi.stubEnv('SCREENING_MODE', 'chainalysis');
+    loadEnv();
+    expect(await screenAddress(ctx, input)).toEqual({ decision: 'unavailable' });
+    expect(await screenPayoutAddress(ctx, ADDR, 'eth')).toBe('unavailable');
+  });
+
+  it('keeps the test blocklist active', async () => {
+    const m = await createMerchant();
+    const s = await createRow('Session', m.id, false, {});
+    expect(
+      await screenAddress(
+        { merchantId: m.id, livemode: false },
+        {
+          sessionId: s.id as string,
+          address: '0x000000000000000000000000000000000000dead',
+          chain: 'eth',
+        },
+      ),
+    ).toEqual({ decision: 'block' });
+    expect(await prisma.screeningResult.findFirst()).toMatchObject({
+      provider: 'test_fixture',
+      decision: 'block',
+      livemode: false,
+    });
+  });
+});
+
 describe('retryDelayMs', () => {
   it('is 1, 5, 15, 30 min, then hourly', () => {
     expect([0, 1, 2, 3, 4, 9].map((n) => retryDelayMs(n) / 60_000)).toEqual([1, 5, 15, 30, 60, 60]);
@@ -216,6 +278,30 @@ describe('retryPendingScreenings', () => {
   const reload = (id: string) => prisma.payment.findUniqueOrThrow({ where: { id } });
   const events = (id: string) =>
     prisma.event.findMany({ where: { aggregateId: id }, orderBy: { createdAt: 'asc' } });
+
+  it('retries an unresolved live sender under the disabled policy, audits once and leaves held payments alone', async () => {
+    vi.stubEnv('SCREENING_MODE', 'disabled');
+    loadEnv();
+    const p = await pending(true, ADDR, 2 * 60_000);
+    await prisma.payment.update({
+      where: { id: p.id },
+      data: { senderAddress: null, senderChain: null },
+    });
+    const held = await pending(true, ADDR, 2 * 60_000);
+    await prisma.payment.update({
+      where: { id: held.id },
+      data: { status: 'HELD', heldReason: 'sanctions' },
+    });
+    const hook = vi.fn(async () => {});
+    onScreeningAllowed(hook);
+    const now = new Date();
+    expect(await retryPendingScreenings(now)).toBe(1);
+    expect(hook).toHaveBeenCalledWith(p.id, { merchantId: p.merchantId, livemode: true });
+    await retryPendingScreenings(new Date(now.getTime() + 5 * 60_000));
+    expect((await events(p.id)).map((e) => e.type)).toEqual(['payment.screening_skipped']);
+    expect((await reload(held.id)).status).toBe('HELD');
+    expect(await prisma.screeningResult.count()).toBe(0);
+  });
 
   it('backs off while unavailable, then hands an allow to the hook', async () => {
     await putSecret('k', 'chainalysis');

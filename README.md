@@ -711,8 +711,9 @@ account is used and the sweep is off. The per-chain detail is in the
 
 ### Sanctions holds
 
-In live mode, Chainalysis screens every sender, connected wallet and typed refund address. The API
-key is the secret with purpose `chainalysis`. A hit holds the payment:
+With `SCREENING_MODE=chainalysis` (the default), Chainalysis screens live senders, connected
+wallets, refund addresses and native payout destinations. The key is the secret with purpose
+`chainalysis` or the `CHAINALYSIS_API_KEY` environment fallback. A hit holds the payment:
 
 - the order stays unpaid;
 - `payment.held` is sent instead of `payment.succeeded`;
@@ -729,6 +730,13 @@ account is in the store's control.
   the legal-clearance acknowledgement, `I have legal clearance to refund this payment`.
 - If screening is unavailable, the payment waits in `SCREENING_PENDING` and screening is retried
   for up to 6 hours. After that it becomes a review item, not a hold.
+
+The hackathon deployment explicitly uses `SCREENING_MODE=disabled` on both API and worker.
+Live payments, refunds and payouts then proceed without Chainalysis or a screening key, with
+`*.screening_skipped` / `merchant_account.payout_screening_skipped` audit events instead of
+provider approvals. Receipt verification, address validation, passkey authorization and existing
+holds still apply. Test-mode screening fixtures are unchanged. Re-enable with a working provider
+and `SCREENING_MODE=chainalysis` on both services; completed payments are not retroactively checked.
 
 ### Tendr's fee account
 

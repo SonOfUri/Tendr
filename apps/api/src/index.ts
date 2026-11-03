@@ -24,11 +24,10 @@ async function main() {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
   await app.listen({ port, host });
-  log('info', 'Tendr API listening', { host, port });
+  log('info', 'Tendr API listening', { host, port, screeningMode: env().SCREENING_MODE });
 }
 
 main().catch((err) => {
-   
   console.error(err);
   process.exit(1);
 });

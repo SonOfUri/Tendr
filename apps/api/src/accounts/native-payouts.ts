@@ -101,7 +101,7 @@ export async function listNativePayouts(ctx: ScopeContext) {
 
 async function screen(ctx: ScopeContext, address: string, chain: string) {
   const decision = await deps.screen(ctx, address, chain);
-  if (decision !== 'allow')
+  if (decision !== 'allow' && decision !== 'skipped')
     throw new AppError(
       decision === 'block' ? 'VALIDATION_ERROR' : 'PROVIDER_UNAVAILABLE',
       decision === 'block'

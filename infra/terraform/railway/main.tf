@@ -335,6 +335,7 @@ locals {
       { name = "FX_PROVIDER", value = "openexchangerates" },
       { name = "FX_API_KEY", value = var.provider_credentials_in_railway ? "$${{shared.FX_API_KEY}}" : var.fx_api_key },
       { name = "CHAINALYSIS_API_KEY", value = var.provider_credentials_in_railway ? "$${{shared.CHAINALYSIS_API_KEY}}" : var.chainalysis_api_key },
+      { name = "SCREENING_MODE", value = var.screening_mode },
     ],
     [for name, value in local.near_optional : { name = name, value = value } if value != ""],
   )

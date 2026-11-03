@@ -227,6 +227,16 @@ variable "chainalysis_api_key" {
   default     = ""
 }
 
+variable "screening_mode" {
+  description = "Live screening policy: chainalysis fails closed; disabled records checks as skipped. Set consistently on API and worker."
+  type        = string
+  default     = "chainalysis"
+  validation {
+    condition     = contains(["chainalysis", "disabled"], var.screening_mode)
+    error_message = "screening_mode must be chainalysis or disabled."
+  }
+}
+
 variable "asset_s3_bucket" {
   description = "Asset bucket (ASSET_S3_BUCKET); `assets_bucket` output of ../gcp."
   type        = string
