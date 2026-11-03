@@ -6,10 +6,33 @@
 import Link from 'next/link';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { PayoutChooser } from '@/components/dashboard/PayoutChooser';
+import { NativeWalletPanel } from '@/components/dashboard/NativeWallet';
+import { useLoad } from '@/components/dashboard/common';
+import { api, type AccountView } from '@/lib/api';
+import { Alert, Spinner } from '@tendr/ui';
 
 export default function PayoutPage() {
-  const { store, context } = useDashboard();
+  const { store, context, me } = useDashboard();
+  const data = useLoad(
+    () => api<AccountView>('/v1/account'),
+    context ? `${context.merchantId}:${context.livemode}` : null,
+  );
   if (!store || !context) return null;
+  if (!data.data)
+    return data.error ? (
+      <Alert tone="danger">{data.error}</Alert>
+    ) : (
+      <Spinner label="Loading wallet" />
+    );
+  if (data.data.account?.kind === 'native_intents')
+    return (
+      <NativeWalletPanel
+        key={store.id}
+        merchantId={store.id}
+        userId={me.user.id}
+        isOwner={store.role === 'owner'}
+      />
+    );
   return (
     <div className="stack">
       <div>

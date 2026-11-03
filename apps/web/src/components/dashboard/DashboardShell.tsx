@@ -17,6 +17,8 @@ import {
   type RecoveryRequest,
   type StoreContext,
   type StoreSummary,
+  type AccountView,
+  type GoLiveStatus,
 } from '@/lib/api';
 import { linkedStore, withoutStoreLink } from '@/lib/store-link';
 import { registerPasskey } from '@/lib/webauthn';
@@ -144,11 +146,71 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         ) : notFoundAt === pathname ? (
           <LinkNotFound />
         ) : (
-          children
+          <AccountCapabilityGate>{children}</AccountCapabilityGate>
         )}
       </section>
     </DashboardContext.Provider>
   );
+}
+
+/** Contract controls do not apply to native wallets, including when following an old URL. */
+function AccountCapabilityGate({ children }: { children: React.ReactNode }) {
+  const { context } = useDashboard();
+  const pathname = usePathname();
+  const guarded = [
+    '/dashboard/security',
+    '/dashboard/addresses',
+    '/dashboard/recovery',
+    '/dashboard/onboarding/second-key',
+  ].includes(pathname);
+  const [check, setCheck] = useState<{ key: string; native: boolean; error?: string } | null>(null);
+  const mode =
+    pathname === '/dashboard/recovery' || pathname === '/dashboard/onboarding/second-key'
+      ? true
+      : context?.livemode;
+  const key = context ? `${context.merchantId}:${mode}` : '';
+  useEffect(() => {
+    if (!guarded || !context) return;
+    const controller = new AbortController();
+    void api<AccountView>('/v1/account', {
+      store: { merchantId: context.merchantId, livemode: Boolean(mode) },
+      signal: controller.signal,
+    })
+      .then(async (a) => {
+        const configured =
+          !a.account && mode
+            ? await api<GoLiveStatus>('/v1/account/go-live', {
+                store: { merchantId: context.merchantId, livemode: true },
+                signal: controller.signal,
+              })
+            : null;
+        if (!controller.signal.aborted)
+          setCheck({
+            key,
+            native:
+              a.account?.kind === 'native_intents' || configured?.accountKind === 'native_intents',
+          });
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) setCheck({ key, native: false, error: errorMessage(err) });
+      });
+    return () => controller.abort();
+  }, [key, mode, context, guarded]);
+  if (!guarded || !context) return children;
+  if (check?.key !== key) return <Spinner label="Loading account capabilities" />;
+  if (check.error) return <Alert tone="danger">{check.error}</Alert>;
+  if (check.native)
+    return (
+      <section className="card stack">
+        <h1>Single-owner wallet</h1>
+        <p>
+          This wallet uses its owner’s dedicated passkey. Shared signing, saved-address restrictions
+          and wallet recovery are not available.
+        </p>
+        <Link href="/dashboard/wallet">Manage live wallet</Link>
+      </section>
+    );
+  return children;
 }
 
 function DashboardHeader() {
@@ -226,6 +288,7 @@ function DashboardHeader() {
 
 const NAV: { href: string; label: string }[] = [
   { href: '/dashboard', label: 'Account' },
+  { href: '/dashboard/wallet', label: 'Live wallet' },
   { href: '/dashboard/payments', label: 'Payments' },
   { href: '/dashboard/payment-links', label: 'Payment links' },
   { href: '/dashboard/review', label: 'Review' },
@@ -239,6 +302,7 @@ const NAV: { href: string; label: string }[] = [
   { href: '/dashboard/team', label: 'Team' },
   { href: '/dashboard/security', label: 'Security' },
   { href: '/dashboard/recovery', label: 'Recovery' },
+  { href: '/settings/api-console', label: 'API console' },
 ];
 
 function DashboardNav() {

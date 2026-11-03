@@ -556,6 +556,114 @@
     "principals": ["user_session", "dashboard_user"]
   },
   {
+    "id": "POST /v1/account/native/passkey/options",
+    "method": "POST",
+    "path": "/v1/account/native/passkey/options",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 33,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/passkey/verify",
+    "method": "POST",
+    "path": "/v1/account/native/passkey/verify",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 36,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/activate/options",
+    "method": "POST",
+    "path": "/v1/account/native/activate/options",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 43,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/activate",
+    "method": "POST",
+    "path": "/v1/account/native/activate",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 46,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "PUT /v1/account/native/settlement",
+    "method": "PUT",
+    "path": "/v1/account/native/settlement",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 55,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/account/native/payouts",
+    "method": "GET",
+    "path": "/v1/account/native/payouts",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 63,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/account/native/payouts",
+    "method": "POST",
+    "path": "/v1/account/native/payouts",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 66,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/account/native/payouts/:id",
+    "method": "GET",
+    "path": "/v1/account/native/payouts/:id",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 71,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/account/native/payouts/:id/challenge",
+    "method": "POST",
+    "path": "/v1/account/native/payouts/:id/challenge",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 76,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/payouts/:id/submit",
+    "method": "POST",
+    "path": "/v1/account/native/payouts/:id/submit",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 81,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
     "id": "GET /v1/payment_links/public/:merchant/:link",
     "method": "GET",
     "path": "/v1/payment_links/public/:merchant/:link",

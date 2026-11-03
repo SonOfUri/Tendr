@@ -5,7 +5,7 @@ import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { countdown, describeAction } from '@/lib/actions';
-import { api, type Proposal, type SavedAddress, type Team } from '@/lib/api';
+import { api, type AccountView, type Proposal, type SavedAddress, type Team } from '@/lib/api';
 import { cancelProposal } from '@/lib/proposals';
 
 interface Inbox {
@@ -18,9 +18,12 @@ export default function ApprovalsPage() {
   const { store, context } = useDashboard();
   const key = context ? `${context.merchantId}:${context.livemode}` : null;
   const inbox = useLoad<Inbox>(async () => {
+    const account = await api<AccountView>('/v1/account');
     const [p, s, team] = await Promise.all([
       api<{ proposals: Proposal[] }>('/v1/account/proposals'),
-      api<{ savedAddresses: SavedAddress[] }>('/v1/account/saved-addresses'),
+      account.account?.kind === 'native_intents'
+        ? Promise.resolve({ savedAddresses: [] as SavedAddress[] })
+        : api<{ savedAddresses: SavedAddress[] }>('/v1/account/saved-addresses'),
       api<Team>('/v1/team'),
     ]);
     return { proposals: p.proposals, savedAddresses: s.savedAddresses, team };

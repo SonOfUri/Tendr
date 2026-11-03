@@ -9,8 +9,10 @@ import { DestinationBox, Status, useAction, useLoad, useTick } from '@/component
 import { countdown, describeAction } from '@/lib/actions';
 import { api, type AccountView, type Proposal, type SavedAddress, type Team } from '@/lib/api';
 import { approveProposal, approvedAtEpoch, cancelProposal, STATUS_WORDS } from '@/lib/proposals';
+import { NativeWalletPanel } from '@/components/dashboard/NativeWallet';
 
 interface Detail {
+  native: boolean;
   /** The account's current signer epoch (approvals from an older epoch no longer count). */
   signerEpoch: string | null;
   threshold: number | undefined;
@@ -25,13 +27,16 @@ export default function ProposalPage() {
   const { store, context, me } = useDashboard();
   const key = context && id ? `${context.merchantId}:${context.livemode}:${id}` : null;
   const detail = useLoad<Detail>(async () => {
-    const [proposal, s, team, account] = await Promise.all([
+    const account = await api<AccountView>('/v1/account');
+    const [proposal, s, team] = await Promise.all([
       api<Proposal>(`/v1/account/proposals/${encodeURIComponent(id)}`),
-      api<{ savedAddresses: SavedAddress[] }>('/v1/account/saved-addresses'),
+      account.account?.kind === 'native_intents'
+        ? Promise.resolve({ savedAddresses: [] as SavedAddress[] })
+        : api<{ savedAddresses: SavedAddress[] }>('/v1/account/saved-addresses'),
       api<Team>('/v1/team'),
-      api<AccountView>('/v1/account'),
     ]);
     return {
+      native: account.account?.kind === 'native_intents',
       proposal,
       savedAddresses: s.savedAddresses,
       team,
@@ -69,6 +74,18 @@ export default function ProposalPage() {
     threshold,
     releaseCodeHash,
   } = detail.data;
+  if (detail.data.native)
+    return p.kind === 'refund' ? (
+      <NativeWalletPanel
+        key={`${store.id}:${p.id}`}
+        merchantId={store.id}
+        userId={me.user.id}
+        isOwner={store.role === 'owner'}
+        proposalId={p.id}
+      />
+    ) : (
+      <Alert tone="info">This action is unavailable for a single-owner native wallet.</Alert>
+    );
   const summary = describeAction(p.action, {
     savedAddresses,
     members: team.members,

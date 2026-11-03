@@ -13,6 +13,7 @@ import { loadDotenvFile } from '../src/lib/load-dotenv.js';
 import { log } from '../src/lib/logger.js';
 import { prisma } from '../src/lib/prisma.js';
 import { startWorker } from '../src/worker.js';
+import { restoreLocalConsoleState } from './local-console-state.js';
 
 async function main() {
   loadDotenvFile(resolve(process.cwd(), '../../.env'));
@@ -21,6 +22,10 @@ async function main() {
   const e = env();
   if (e.NODE_ENV === 'production' || e.NEAR_CLIENT_DRIVER !== 'fake') {
     throw new Error('e2e-server runs only with NEAR_CLIENT_DRIVER=fake outside production');
+  }
+  if (process.env.API_CONSOLE_STATE_PATH) {
+    const restored = await restoreLocalConsoleState(process.env.API_CONSOLE_STATE_PATH);
+    console.log('Local simulator ready', restored);
   }
   const app = await buildApp();
   const worker = await startWorker({ healthPort: 0, dispatchIntervalMs: 250 });

@@ -29,6 +29,7 @@ import {
   type ConsoleRequest,
 } from '@/lib/api-console/request';
 import styles from './console.module.css';
+import { nativePasskeyStep } from '@/lib/api-console/native-passkey';
 
 interface Result {
   status: number;
@@ -231,7 +232,17 @@ export default function ApiConsole({ localMail = false }: { localMail?: boolean 
     let response: unknown;
     let target: string;
     let extra: Record<string, unknown> = {};
-    if (previous.path.startsWith('/v1/auth/passkeys/') && previous.path.endsWith('/options')) {
+    const native = nativePasskeyStep(previous.path, result.data);
+    if (native) {
+      response =
+        native.kind === 'register'
+          ? await startRegistration({ optionsJSON: native.options })
+          : await startAuthentication({ optionsJSON: native.options });
+      target = native.target;
+    } else if (
+      previous.path.startsWith('/v1/auth/passkeys/') &&
+      previous.path.endsWith('/options')
+    ) {
       if (previous.path.includes('/register/')) {
         response = await startRegistration({
           optionsJSON: result.data as PublicKeyCredentialCreationOptionsJSON,
@@ -300,9 +311,10 @@ export default function ApiConsole({ localMail = false }: { localMail?: boolean 
     result &&
     result.status >= 200 &&
     result.status < 300 &&
-    ((result.request.path.startsWith('/v1/auth/passkeys/') &&
-      result.request.path.endsWith('/options') &&
-      typeof responseData.challenge === 'string') ||
+    (nativePasskeyStep(result.request.path, result.data) ||
+      (result.request.path.startsWith('/v1/auth/passkeys/') &&
+        result.request.path.endsWith('/options') &&
+        typeof responseData.challenge === 'string') ||
       (result.request.path.endsWith('/challenge') &&
         typeof responseData.challengeB64u === 'string' &&
         Array.isArray(responseData.allowCredentials))),

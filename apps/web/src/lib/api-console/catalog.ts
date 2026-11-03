@@ -31,6 +31,16 @@ export function needsStore(endpoint: Endpoint): boolean {
 }
 
 const examples: Record<string, unknown> = {
+  'POST /v1/account/native/passkey/verify': { response: {} },
+  'POST /v1/account/native/activate': { response: {} },
+  'PUT /v1/account/native/settlement': { asset: 'copy-an-asset-from-settlement-options' },
+  'POST /v1/account/native/payouts': {
+    asset: 'copy-an-asset-from-balances',
+    amount: '1000000',
+    destinationAsset: 'copy-a-destination-asset-from-settlement-options',
+    destination: 'paste-the-destination-address',
+  },
+  'POST /v1/account/native/payouts/:id/submit': { response: {} },
   'POST /v1/auth/email/start': { email: 'tester@example.com' },
   'POST /v1/auth/email/verify': { token: 'paste-token-from-verification-email' },
   'POST /v1/merchants': { name: 'API test store' },
@@ -106,6 +116,8 @@ export function exampleBody(endpoint: Endpoint): string {
 }
 
 export function endpointNote(endpoint: Endpoint): string {
+  if (endpoint.path.startsWith('/v1/account/native/'))
+    return 'Live wallet APIs use a dedicated wallet passkey and the designated owner session with step-up. Register, then activate; payout quotes must be reviewed before signing. For refunds, create a payout with { "proposalId": "prop_..." }. Local simulated mode keeps live writes disabled.';
   if (endpoint.path.startsWith('/v1/connect/') || endpoint.path === '/v1/connection/brand')
     return 'Connect status/disconnect/replace and connection brand need a connected-site key. Authorize/token use the real PKCE flow; inspect the route contract for required fields.';
   if (endpoint.group === 'recovery')

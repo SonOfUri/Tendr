@@ -6,6 +6,7 @@ import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { GoLiveChecklist } from '@/components/dashboard/GoLiveChecklist';
 import { api, errorMessage, type AccountView, type Balances, type GoLiveStatus } from '@/lib/api';
 import { withStepUp } from '@/lib/webauthn';
+import { NativeWalletSetup } from '@/components/dashboard/NativeWallet';
 
 interface Home {
   test: AccountView;
@@ -22,7 +23,7 @@ const STATUS_WORDS: Record<string, string> = {
 };
 
 export default function AccountHomePage() {
-  const { store, context } = useDashboard();
+  const { store, context, me } = useDashboard();
   const [home, setHome] = useState<Home | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -121,7 +122,9 @@ export default function AccountHomePage() {
           balances={home.liveBalances}
           note={live ? 'Real money.' : 'Created when you go live.'}
           onRetry={
-            isOwner && home.live.account?.status === 'failed'
+            isOwner &&
+            home.live.account?.kind !== 'native_intents' &&
+            home.live.account?.status === 'failed'
               ? () =>
                   act(() => api('/v1/account/retry', { method: 'POST', json: {}, livemode: true }))
               : undefined
@@ -130,34 +133,47 @@ export default function AccountHomePage() {
         />
       </div>
 
-      <section className="card">
-        <h2>Go live</h2>
-        {live ? (
-          <p>
-            Your live account <code>{live.nearAccountId}</code> is{' '}
-            <strong>{(STATUS_WORDS[live.status] ?? live.status).toLowerCase()}</strong>.
-          </p>
-        ) : (
-          <>
-            <GoLiveChecklist checklist={checklist} />
-            {isOwner ? (
-              <Button
-                disabled={!checklist.ok || busy}
-                onClick={() =>
-                  act(() =>
-                    api('/v1/account/go-live', { method: 'POST', json: {}, livemode: false }),
-                  )
-                }
-              >
-                {busy ? 'Working…' : 'Go live'}
-              </Button>
-            ) : (
-              <p className="muted small">Only the store owner can go live.</p>
-            )}
-            {!checklist.ok && <p className="muted small">Finish the checklist to go live.</p>}
-          </>
-        )}
-      </section>
+      {home.goLive.accountKind === 'native_intents' ||
+      home.live.account?.kind === 'native_intents' ? (
+        <NativeWalletSetup
+          key={store.id}
+          view={home.live}
+          status={home.goLive}
+          store={{ merchantId: store.id, livemode: true }}
+          userId={me.user.id}
+          isOwner={isOwner}
+          onDone={load}
+        />
+      ) : (
+        <section className="card">
+          <h2>Go live</h2>
+          {live ? (
+            <p>
+              Your live account <code>{live.nearAccountId}</code> is{' '}
+              <strong>{(STATUS_WORDS[live.status] ?? live.status).toLowerCase()}</strong>.
+            </p>
+          ) : (
+            <>
+              <GoLiveChecklist checklist={checklist} />
+              {isOwner ? (
+                <Button
+                  disabled={!checklist.ok || busy}
+                  onClick={() =>
+                    act(() =>
+                      api('/v1/account/go-live', { method: 'POST', json: {}, livemode: false }),
+                    )
+                  }
+                >
+                  {busy ? 'Working…' : 'Go live'}
+                </Button>
+              ) : (
+                <p className="muted small">Only the store owner can go live.</p>
+              )}
+              {!checklist.ok && <p className="muted small">Finish the checklist to go live.</p>}
+            </>
+          )}
+        </section>
+      )}
     </div>
   );
 }

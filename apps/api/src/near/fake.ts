@@ -59,6 +59,45 @@ export function setSimulatedTxSource(source: SimulatedTxSource | null): void {
 }
 
 export class FakeNearClient implements NearClient {
+  private stateChanged: (() => void) | null = null;
+
+  /** Local console checkpointing; scripted test responses and call history are not persisted. */
+  onStateChange(listener: (() => void) | null): void {
+    this.stateChanged = listener;
+  }
+
+  snapshot() {
+    return structuredClone({
+      version: 1 as const,
+      scope: this.scope,
+      accounts: this.accounts,
+      signers: this.signerState,
+      storage: this.storage,
+      balances: this.intentBalances,
+      contracts: this.contracts?.snapshot() ?? null,
+    });
+  }
+
+  restore(snapshot: ReturnType<FakeNearClient['snapshot']>): void {
+    if (
+      snapshot.version !== 1 ||
+      JSON.stringify(snapshot.scope) !== JSON.stringify(this.scope) ||
+      !(snapshot.accounts instanceof Map) ||
+      !snapshot.contracts ||
+      !this.contracts
+    )
+      throw new Error('Incompatible local simulator checkpoint');
+    const copy = structuredClone(snapshot);
+    this.accounts.clear();
+    this.signerState.clear();
+    this.storage.clear();
+    this.intentBalances.clear();
+    for (const [k, v] of copy.accounts) this.accounts.set(k, v);
+    for (const [k, v] of copy.signers) this.signerState.set(k, v);
+    for (const [k, v] of copy.storage) this.storage.set(k, v);
+    for (const [k, v] of copy.balances) this.intentBalances.set(k, v);
+    this.contracts.restore(copy.contracts!);
+  }
   readonly calls: FakeCall[] = [];
   readonly accounts = new Map<string, { init: InitConfigJson; balanceYocto: bigint }>();
   /** The signer set of each provisioned account, as `get_config` reports it. */
@@ -208,6 +247,7 @@ export class FakeNearClient implements NearClient {
         threshold: a.threshold,
         epoch: state.epoch + 1n,
       });
+      this.stateChanged?.();
     }
     return result;
   }
@@ -271,6 +311,7 @@ export class FakeNearClient implements NearClient {
         };
       }
     }
+    this.stateChanged?.();
     const downstream = this.downstreamFailures.get(method)?.shift();
     if (downstream !== undefined) {
       return {
@@ -349,6 +390,7 @@ export class FakeNearClient implements NearClient {
       epoch: 0n,
     });
     this.contracts?.init(p.accountId, p.init);
+    this.stateChanged?.();
     return {
       txHash: fakeHash(),
       logs: [],
@@ -384,6 +426,7 @@ export class FakeNearClient implements NearClient {
       };
     }
     a.balanceYocto += p.amountYocto;
+    this.stateChanged?.();
     return {
       txHash: fakeHash(),
       logs: [],

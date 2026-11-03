@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import routes from '../src/lib/api-console/routes.json';
 
 const API = `http://localhost:${process.env.API_CONSOLE_API_PORT ?? 4300}`;
 const MAIL = resolve(__dirname, '../../api/.mail');
@@ -37,7 +38,8 @@ test.beforeEach(async ({ context, page }) => {
 test('catalog, real health, auth failures, token isolation, and clearing', async ({ page }) => {
   await expect(
     page.getByRole('navigation', { name: 'API endpoints' }).getByRole('button'),
-  ).toHaveCount(120);
+  ).toHaveCount(routes.length);
+  expect(routes.some((r) => r.path === '/v1/account/native/payouts/:id/submit')).toBe(true);
   await send(page, 'GET', '/v1/health', 200);
   await choose(page, 'GET', '/v1/me');
   await send(page, 'GET', '/v1/me', 401);

@@ -144,6 +144,22 @@ control. Moving later to a contract wallet requires a separately authorized bala
 
 ## Operations and verification
 
+**Test dashboard update (2026-11-03):** `test/api-console` now implements the dedicated wallet
+registration/activation flow and `/dashboard/wallet` for balances, settlement changes, payout
+quotes, explicit passkey signing and payout history. Native refund approval links use the same
+flow with the proposal ID. Contract-only security/recovery/address pages show the native wallet's
+capability limits. The API console includes native routes and prepares WebAuthn follow-up requests
+for manual review/submission. This frontend work is on the test branch; deploying the live frontend
+is a separate release.
+
+Run `npm run dev:console` for `http://localhost:3300/settings/api-console` and `/dashboard`.
+That launcher uses the isolated `tendr_api_console` database, Redis DB 8 and simulated payments,
+with live writes disabled. Simulated account state is checkpointed to the ignored
+`.keyvault/api-console-state.bin` after mutations and restored before workers start. Keep that
+file with the console database when backing it up. Existing basic simulated accounts and verified
+deposit balances are recovered once from the database; missing checkpoints for advanced contract
+state stop startup rather than silently erasing it. The local inbox remains `/settings/local-mail`.
+
 Set `LIVE_ACCOUNT_DRIVER=native_intents` on both API and worker. Apply both native-wallet
 migrations, regenerate Prisma, and deploy the worker with the API. `LIVE_MODE_ENABLED` remains
 the platform switch; it must be open for onboarding and live writes. Keep gasless sponsorship

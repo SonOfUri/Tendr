@@ -54,7 +54,7 @@ interface AssetState {
   } | null;
 }
 
-interface AccountState {
+export interface AccountState {
   signers: Signer[];
   threshold: number;
   epoch: bigint;
@@ -92,6 +92,15 @@ const u128 = (v: string | null | undefined) => (v === null || v === undefined ? 
 
 export class FakeMerchantContracts {
   private readonly accounts = new Map<string, AccountState>();
+
+  snapshot(): Map<string, AccountState> {
+    return structuredClone(this.accounts);
+  }
+
+  restore(snapshot: Map<string, AccountState>): void {
+    this.accounts.clear();
+    for (const [id, state] of structuredClone(snapshot)) this.accounts.set(id, state);
+  }
 
   constructor(
     private readonly now: () => bigint = () => BigInt(Date.now()) * NS_PER_MS,

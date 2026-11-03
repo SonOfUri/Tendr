@@ -7,21 +7,29 @@ import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { DestinationBox, useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { usableIn } from '@/lib/actions';
-import { api, type Balances, type SavedAddress } from '@/lib/api';
+import { api, type AccountView, type Balances, type SavedAddress } from '@/lib/api';
+import { NativeWalletPanel } from '@/components/dashboard/NativeWallet';
 import { registeredAssetIds } from '@/lib/asset-registry';
 import { assetInfo, chainLabel, formatAmount, parseUnits, poaTokenContract } from '@/lib/assets';
 import { draftProposal } from '@/lib/proposals';
 
 export default function WithdrawPage() {
-  const { store, context } = useDashboard();
+  const { store, context, me } = useDashboard();
   const router = useRouter();
   const key = context ? `${context.merchantId}:${context.livemode}` : null;
   const data = useLoad(async () => {
+    const account = await api<AccountView>('/v1/account');
     const [s, b] = await Promise.all([
-      api<{ savedAddresses: SavedAddress[] }>('/v1/account/saved-addresses'),
+      account.account?.kind === 'native_intents'
+        ? Promise.resolve({ savedAddresses: [] as SavedAddress[] })
+        : api<{ savedAddresses: SavedAddress[] }>('/v1/account/saved-addresses'),
       api<Balances>('/v1/account/balances'),
     ]);
-    return { saved: s.savedAddresses.filter((a) => a.status !== 'revoked'), balances: b.balances };
+    return {
+      account,
+      saved: s.savedAddresses.filter((a) => a.status !== 'revoked'),
+      balances: b.balances,
+    };
   }, key);
   const now = useTick();
   const [savedId, setSavedId] = useState('');
@@ -38,6 +46,15 @@ export default function WithdrawPage() {
     return data.error ? <Alert tone="danger">{data.error}</Alert> : <Spinner label="Loading" />;
   }
   const { saved, balances } = data.data;
+  if (data.data.account.account?.kind === 'native_intents')
+    return (
+      <NativeWalletPanel
+        key={store.id}
+        merchantId={store.id}
+        userId={me.user.id}
+        isOwner={store.role === 'owner'}
+      />
+    );
   const target = saved.find((a) => a.id === savedId) ?? null;
   const livemode = context.livemode;
   const info = asset ? assetInfo(asset, livemode) : null;
