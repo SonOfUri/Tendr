@@ -46,7 +46,7 @@ const noServerModuleInClient = {
 
 const eslintConfig = [
   // Build output (`next dev` writes webpack runtime files here) and Playwright artifacts.
-  { ignores: ['.next/**', 'test-results/**', 'playwright-report/**'] },
+  { ignores: ['.next/**', '.next-live-console/**', 'test-results/**', 'playwright-report/**'] },
   ...compat.extends('next/core-web-vitals'),
   {
     files: ['src/**/*.{ts,tsx}'],

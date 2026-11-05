@@ -4,6 +4,7 @@ import { HideOnCheckout } from '@/components/HideOnCheckout';
 import { SiteFooter } from '@/components/SiteFooter';
 import { SiteHeader } from '@/components/SiteHeader';
 import { ServiceWorkerRegister } from '@/components/ServiceWorkerRegister';
+import { LocalLiveBanner } from '@/components/LocalLiveBanner';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -36,6 +37,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main>
           <HideOnCheckout>
             <SiteHeader />
+            {process.env.NODE_ENV === 'development' &&
+              process.env.LOCAL_LIVE_CONSOLE === 'true' && <LocalLiveBanner />}
           </HideOnCheckout>
           {children}
           <HideOnCheckout>

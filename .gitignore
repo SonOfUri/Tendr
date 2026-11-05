@@ -2,6 +2,7 @@ node_modules
 .turbo
 dist
 .next
+.next-live-console
 .vercel
 coverage
 playwright-report

@@ -1,6 +1,6 @@
 # Tendr API test console
 
-Branch: `test/api-console`, based on the deployed code. The console is at `/settings/api-console` and includes all 119 explicitly registered API routes, with a searchable list, editable path/query parameters and JSON, browser-session or bearer authentication, multipart uploads, optional HMAC signing, and a response inspector.
+Branch: `test/api-console`, based on the deployed code. The console is at `/settings/api-console` and includes all 130 explicitly registered API routes, with a searchable list, editable path/query parameters and JSON, browser-session or bearer authentication, multipart uploads, optional HMAC signing, and a response inspector.
 
 Selecting an endpoint does not send it. Press **Send request** to execute one operation. This is a manual API workbench; it does not automatically run every endpoint or bypass permissions, signer approvals, provider credentials, or wallet signatures.
 
@@ -22,7 +22,62 @@ The launcher reads the connection credentials from the root `.env`, requires loc
 
 Match `DATABASE_URL` to the port exposed by your local PostgreSQL container: the current compose file uses 15432; an older running container may use 5433. `API_CONSOLE_WEB_PORT` and `API_CONSOLE_API_PORT` override 3300 and 4300 if needed. Stop the launcher with Ctrl+C.
 
-Email appears in the **Local inbox** at `http://localhost:3300/settings/local-mail` instead of being sent to your email address. Signup links directly to the inbox filtered to your address. FX and payments are simulated, live money is disabled, and uploaded assets are kept in memory and served through the local API. The launcher removes inherited provider credentials and prevents the app from reloading them from `.env`. PostgreSQL records survive a restart; simulated NEAR contract state and uploaded files do not. Create a fresh store after restarting when testing account/proposal flows.
+Email appears in the **Local inbox** at `http://localhost:3300/settings/local-mail` instead of being sent to your email address. Signup links directly to the inbox filtered to your address. FX and payments are simulated, live money is disabled, and uploaded assets are kept in memory and served through the local API. The launcher removes inherited provider credentials and prevents the app from reloading them from `.env`. PostgreSQL records and simulated wallet state survive a restart; keep `.keyvault/api-console-state.bin` with database backups. Uploaded files remain in memory.
+
+## Live API locally
+
+To run this branch's frontend against the deployed API, use:
+
+```bash
+npm run dev:console:live
+```
+
+This starts only the local frontend, bound to `127.0.0.1:3343`, and opens a dedicated Chrome
+window at **https://app.usetendr.tech/dashboard**. In that window, the app hostname resolves
+to the local server; requests to **https://api.usetendr.tech** still go to Railway. The page
+shows **Local dashboard · Live API**. Other browser profiles continue using the hosted frontend.
+The production RP ID, origins, CORS policy and DNS remain unchanged.
+
+Use your deployed Tendr account, or sign up in that window. Simulator accounts and `localhost`
+passkeys are separate. Signup emails come from the deployed mail provider. Copy email verification
+links into the dedicated window's address bar so signup finishes in the same browser profile.
+Once signed in, choose your store, select **Live**, and open **Live wallet**. Live operations use
+real funds and require the designated owner's wallet passkey. The launcher does not send payments.
+Hosted shopper checkout links still open on `pay.usetendr.tech`; shopper-only API routes retain
+their checkout-origin CORS restriction and should be exercised through that checkout.
+
+The dedicated browser's cookies and local HTTPS key are kept under the ignored
+`.keyvault/live-console/`. Chrome maps only the app hostname and accepts only that local
+certificate's public-key fingerprint, using Chromium's
+[host resolver and certificate pin options](https://chromium.googlesource.com/chromium/src/+/main/services/network/public/cpp/network_switches.cc).
+There is no system-wide certificate installation or hosts-file edit. Close this Chrome window
+when finished. Stop the server with Ctrl+C. To reopen the window while the server is running:
+
+```bash
+npm run dev:console:live -- --open
+```
+
+Configuration is read from the Git-ignored, private `.keyvault/live-console.json`, already set
+up in this workspace from Railway. On another machine, create it with mode `0600` using the
+deployed web settings:
+
+```json
+{
+  "WEB_URL": "https://app.usetendr.tech",
+  "NEXT_PUBLIC_API_BASE_URL": "https://api.usetendr.tech",
+  "CHECKOUT_BASE_URL": "https://pay.usetendr.tech",
+  "NEXT_PUBLIC_WEBAUTHN_RP_ID": "usetendr.tech",
+  "WEB_INTERNAL_TOKEN": "<copy the deployed server-only value privately>"
+}
+```
+
+Optional web values are `NEXT_PUBLIC_REOWN_PROJECT_ID`, the EVM/Tron forwarder addresses,
+`NEXT_PUBLIC_GAS_FEE_RECIPIENTS`, and `TENDR_ASSET_ORIGIN`. No Railway token or database/provider
+credentials are passed to the frontend. The launcher skips root `.env`, uses a separate
+`.next-live-console` build cache, and does not run migrations or workers. Node 22+, OpenSSL and
+Chrome are required. `LIVE_CONSOLE_CHROME` overrides Chrome's executable, `LIVE_CONSOLE_PORT`
+overrides 3343, and `--no-browser` starts only the server. Close the dedicated Chrome profile
+before changing its host/port/certificate settings.
 
 ## Authenticate
 

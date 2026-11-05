@@ -26,6 +26,12 @@ function loadRootEnv() {
 loadRootEnv();
 
 const nextConfig: NextConfig = {
+  ...(process.env.LOCAL_LIVE_CONSOLE === 'true' && process.env.NODE_ENV === 'development'
+    ? {
+        distDir: '.next-live-console',
+        allowedDevOrigins: [new URL(process.env.WEB_URL!).hostname],
+      }
+    : {}),
   transpilePackages: ['@tendr/ui', '@tendr/contracts', '@tendr/sdk'],
   // The strict CSP for the dashboard and sign-in pages needs a per-request nonce, so it is set in
   // src/middleware.ts (see src/lib/csp.ts). Framing is refused here for every dashboard route.
@@ -34,6 +40,9 @@ const nextConfig: NextConfig = {
   // URLs (`/<session>`, `/<merchant>/<link>`) don't match `/pay/:path*`: the middleware sets the
   // same shopper headers on them after its rewrite.
   headers: async () => [
+    ...(process.env.LOCAL_LIVE_CONSOLE === 'true' && process.env.NODE_ENV === 'development'
+      ? [{ source: '/:path*', headers: [{ key: 'X-Tendr-Local-Live-Console', value: '1' }] }]
+      : []),
     ...[
       '/dashboard',
       '/dashboard/:path*',

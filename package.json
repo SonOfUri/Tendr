@@ -13,6 +13,7 @@
   },
   "scripts": {
     "dev:console": "node scripts/dev-api-console.mjs",
+    "dev:console:live": "node scripts/dev-live-console.mjs",
     "console:seed": "node scripts/dev-api-console.mjs --seed",
     "dev": "turbo run dev dev:worker --filter=@tendr/web --filter=@tendr/api",
     "dev:web": "turbo run dev --filter=@tendr/web",
