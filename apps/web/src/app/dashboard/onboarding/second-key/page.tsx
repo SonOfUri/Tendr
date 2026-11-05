@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Alert, Button } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { RecoveryKitCreator } from '@/components/dashboard/RecoveryKitCreator';
+import { PageHeader, Panel, Select, TextLink } from '@/components/dashboard/ui';
 import { QrImage } from '@/components/QrImage';
 import { api, errorMessage, type GoLiveStatus, type Role } from '@/lib/api';
 import { registerPasskey, stepUp, withStepUp } from '@/lib/webauthn';
@@ -31,38 +32,55 @@ export default function SecondKeyPage() {
   const ready = status && !status.checklist.missing.includes('second_key');
 
   return (
-    <div className="stack">
-      <div>
-        <h1>Add a second key</h1>
-        <p className="lead muted">
-          Before {store.name} can take real money, there must be a second way into the account, so
-          losing one phone never locks you out. Two things count as a second key:
-        </p>
-        <ul className="muted">
-          <li>
-            <strong>A recovery kit</strong> — counts as soon as you confirm it below.
+    <>
+      <PageHeader
+        title="Add a second key"
+        description={
+          <>
+            Before {store.name} can take real money, there must be a second way into the account, so
+            losing one phone never locks you out.
+          </>
+        }
+      />
+
+      <Panel title="What counts">
+        <ul className="dash-checklist">
+          <li data-done="false">
+            <span className="dash-checklist-mark" aria-hidden>
+              1
+            </span>
+            <div className="dash-checklist-copy">
+              <strong>A recovery kit</strong>
+              <span className="dash-muted dash-small">Counts as soon as you confirm it below.</span>
+            </div>
           </li>
-          <li>
-            <strong>A second signer</strong> — invite someone; once they have joined and created a
-            passkey, choose <em>Make signer</em> for them on the{' '}
-            <Link href="/dashboard/team">Team</Link> page. That is a proposal you approve, and it
-            counts once it has executed. An invite on its own does not count.
+          <li data-done="false">
+            <span className="dash-checklist-mark" aria-hidden>
+              2
+            </span>
+            <div className="dash-checklist-copy">
+              <strong>A second signer</strong>
+              <span className="dash-muted dash-small">
+                Invite someone; once they have joined and created a passkey, choose Make signer on
+                the <TextLink href="/dashboard/team">Team</TextLink> page. An invite alone does not
+                count.
+              </span>
+            </div>
           </li>
         </ul>
-        <p className="muted small">
+        <p className="dash-muted dash-small" style={{ marginTop: '0.85rem' }}>
           Adding another device of yours is a good idea too, but it is still you, so it does not
           count on its own.
         </p>
-        {ready && (
+        {ready ? (
           <Alert tone="success">
             You have a second key. <Link href="/dashboard">Go to your account</Link> to go live.
           </Alert>
-        )}
-        {notice && <Alert tone="success">{notice}</Alert>}
-      </div>
+        ) : null}
+        {notice ? <Alert tone="success">{notice}</Alert> : null}
+      </Panel>
 
-      <section className="card" id="recovery-kit">
-        <h2>Create a recovery kit</h2>
+      <Panel title="Create a recovery kit" id="recovery-kit">
         {isOwner ? (
           <RecoveryKitCreator
             storeName={store.name}
@@ -79,20 +97,18 @@ export default function SecondKeyPage() {
             }}
           />
         ) : (
-          <p className="muted">Only the store owner can create the recovery kit.</p>
+          <p className="dash-muted">Only the business owner can create the recovery kit.</p>
         )}
-      </section>
+      </Panel>
 
-      <section className="card" id="invite-signer">
-        <h2>Invite another person</h2>
+      <Panel title="Invite another person" id="invite-signer">
         <InviteSigner />
-      </section>
+      </Panel>
 
-      <section className="card" id="add-device">
-        <h2>Add another device</h2>
+      <Panel title="Add another device" id="add-device">
         <AddDevice />
-      </section>
-    </div>
+      </Panel>
+    </>
   );
 }
 
@@ -122,15 +138,22 @@ function InviteSigner() {
     }
   }
 
-  if (!canInvite) return <p className="muted">Ask the store owner to invite people.</p>;
+  if (!canInvite) {
+    return <p className="dash-muted">Ask the business owner to invite people.</p>;
+  }
+
+  const roleOptions = [
+    { value: 'admin', label: 'Admin' },
+    { value: 'finance', label: 'Finance' },
+    ...(store?.role === 'owner' ? [{ value: 'owner', label: 'Owner' }] : []),
+  ];
 
   return (
-    <form onSubmit={submit} className="form">
-      <p className="muted">
+    <form onSubmit={submit} className="stack">
+      <p className="dash-muted">
         A co-owner or colleague with their own passkey. We email them an invite. Joining makes them
-        a team member, not yet a signer: once they have created their passkey, choose{' '}
-        <em>Make signer</em> for them on the Team page and approve that proposal. They count as your
-        second key only after it executes.
+        a team member, not yet a signer: once they have created their passkey, choose Make signer
+        on the Team page and approve that proposal.
       </p>
       <div className="row">
         <label className="field grow">
@@ -145,18 +168,22 @@ function InviteSigner() {
         </label>
         <label className="field">
           <span>Role</span>
-          <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-            <option value="admin">Admin</option>
-            <option value="finance">Finance</option>
-            {store?.role === 'owner' && <option value="owner">Owner</option>}
-          </select>
+          <Select
+            ariaLabel="Role"
+            className="tendr-select--field"
+            value={role}
+            onChange={(v) => setRole(v as Role)}
+            options={roleOptions}
+          />
         </label>
       </div>
-      {sent && <Alert tone="success">Invite sent to {sent}. It works for 7 days.</Alert>}
-      {error && <Alert tone="danger">{error}</Alert>}
-      <Button type="submit" disabled={busy || !email}>
-        {busy ? 'Sending…' : 'Send invite'}
-      </Button>
+      {sent ? <Alert tone="success">Invite sent to {sent}. It works for 7 days.</Alert> : null}
+      {error ? <Alert tone="danger">{error}</Alert> : null}
+      <div className="actions">
+        <Button type="submit" disabled={busy || !email}>
+          {busy ? 'Sending…' : 'Send invite'}
+        </Button>
+      </div>
     </form>
   );
 }
@@ -177,8 +204,6 @@ function AddDevice() {
     );
   }, []);
 
-  // Two clicks: each passkey prompt needs its own tap (browsers refuse a second prompt that was
-  // not started by the person).
   async function run(fn: () => Promise<void>) {
     setBusy(true);
     setError(null);
@@ -192,26 +217,28 @@ function AddDevice() {
   }
 
   return (
-    <div className="form">
-      <p className="muted">
+    <div className="stack">
+      <p className="dash-muted">
         A passkey on a second phone, laptop or security key, so losing one device doesn’t lock you
         out. It is still you, though: to go live you also need another person or a recovery kit.
       </p>
-      {phase === 'idle' && (
-        <Button
-          variant="secondary"
-          disabled={busy}
-          onClick={() =>
-            run(async () => {
-              await stepUp();
-              setPhase('confirmed');
-            })
-          }
-        >
-          {busy ? 'Waiting for your passkey…' : 'Add a passkey from this browser'}
-        </Button>
-      )}
-      {phase === 'confirmed' && (
+      {phase === 'idle' ? (
+        <div className="actions">
+          <Button
+            variant="secondary"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await stepUp();
+                setPhase('confirmed');
+              })
+            }
+          >
+            {busy ? 'Waiting for your passkey…' : 'Add a passkey from this browser'}
+          </Button>
+        </div>
+      ) : null}
+      {phase === 'confirmed' ? (
         <>
           <label className="field">
             <span>Name this device (optional)</span>
@@ -222,31 +249,33 @@ function AddDevice() {
               placeholder="Work laptop"
             />
           </label>
-          <Button
-            disabled={busy}
-            onClick={() =>
-              run(async () => {
-                await registerPasskey({ deviceLabel: label.trim() || undefined });
-                setPhase('done');
-                await refresh();
-              })
-            }
-          >
-            {busy ? 'Waiting for the new device…' : 'Create the new passkey'}
-          </Button>
+          <div className="actions">
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  await registerPasskey({ deviceLabel: label.trim() || undefined });
+                  setPhase('done');
+                  await refresh();
+                })
+              }
+            >
+              {busy ? 'Waiting for the new device…' : 'Create the new passkey'}
+            </Button>
+          </div>
         </>
-      )}
-      {phase === 'done' && <Alert tone="success">Your new passkey is ready.</Alert>}
-      {error && <Alert tone="danger">{error}</Alert>}
-      {addUrl && (
-        <div className="qr-row">
+      ) : null}
+      {phase === 'done' ? <Alert tone="success">Your new passkey is ready.</Alert> : null}
+      {error ? <Alert tone="danger">{error}</Alert> : null}
+      {addUrl ? (
+        <div className="dash-qr-row">
           <QrImage value={addUrl} label="Link to sign in and add a device" size={140} />
-          <p className="muted small">
+          <p className="dash-muted dash-small">
             Or scan this with your other device, sign in there, and add a passkey on it from this
             page.
           </p>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

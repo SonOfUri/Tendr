@@ -162,7 +162,8 @@ test.describe.serial('merchant accounts', () => {
     const since = Date.now() - 1000;
     await owner.goto('/dashboard/team');
     await owner.getByLabel('Email', { exact: true }).fill(FINANCE);
-    await owner.locator('select[name="invite-role"]').selectOption('finance');
+    await owner.getByRole('button', { name: 'Role', exact: true }).click();
+    await owner.getByRole('option', { name: /^Finance/ }).click();
     await owner.getByRole('button', { name: 'Send invite' }).click();
     await expect(owner.getByText(`Invite sent to ${FINANCE}`)).toBeVisible();
     const inviteUrl = await mailLink(FINANCE, 'invite', since);

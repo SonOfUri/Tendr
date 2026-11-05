@@ -1,11 +1,20 @@
 /* Tendr service worker — caches static shell only.
  * Never cache checkout responses, auth, wallet data, API secrets, or private merchant info.
  */
-const SHELL_CACHE = 'tendr-shell-v1';
-const SHELL_ASSETS = ['/', '/manifest.webmanifest', '/offline.html'];
+const SHELL_CACHE = 'tendr-shell-v3';
+const SHELL_ASSETS = ['/', '/manifest.webmanifest', '/offline.html', '/tendr-logo.png', '/favicon.png'];
+/** Optional — skipped if missing so install still succeeds. */
+const SHELL_OPTIONAL = ['/fonts/rethink-sans.woff2'];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL_ASSETS)));
+  event.waitUntil(
+    caches.open(SHELL_CACHE).then(async (cache) => {
+      await cache.addAll(SHELL_ASSETS);
+      await Promise.all(
+        SHELL_OPTIONAL.map((url) => cache.add(url).catch(() => undefined)),
+      );
+    }),
+  );
   self.skipWaiting();
 });
 
@@ -39,7 +48,11 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (SHELL_ASSETS.includes(url.pathname) || url.pathname.startsWith('/icons/')) {
+  if (
+    SHELL_ASSETS.includes(url.pathname) ||
+    SHELL_OPTIONAL.includes(url.pathname) ||
+    url.pathname.startsWith('/icons/')
+  ) {
     event.respondWith(
       caches.match(request).then((cached) => cached || fetch(request)),
     );

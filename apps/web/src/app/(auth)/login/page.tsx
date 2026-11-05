@@ -3,7 +3,10 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
-import { Alert, Button } from '@tendr/ui';
+import { Alert } from '@tendr/ui';
+import { AuthCta } from '@/components/login/AuthCta';
+import { AuthStage } from '@/components/login/AuthStage';
+import { toast } from '@/components/toast';
 import { errorMessage } from '@/lib/api';
 import { safeNext } from '@/lib/navigation';
 import { loginWithPasskey } from '@/lib/webauthn';
@@ -21,29 +24,35 @@ function Login() {
       await loginWithPasskey();
       router.replace(next);
     } catch (err) {
-      setError(errorMessage(err));
+      const message = errorMessage(err);
+      setError(message);
+      toast.error(message);
       setBusy(false);
     }
   }
 
   return (
-    <div className="card">
+    <AuthStage>
+      <p className="login-panel-eyebrow">Merchant access</p>
       <h1>Sign in to Tendr</h1>
-      <p className="muted">
-        Use your passkey: Face ID, Touch ID, Windows Hello or your device PIN. If your passkey is on
-        your phone, your browser can show a code to scan with it.
+      <p className="login-panel-lead">
+        Use your passkey — Face ID, Touch ID, Windows Hello, or your device PIN. If it lives on your
+        phone, your browser can show a code to scan.
       </p>
+
       {error && <Alert tone="danger">{error}</Alert>}
-      <Button onClick={signIn} disabled={busy}>
+
+      <AuthCta onClick={() => void signIn()} disabled={busy}>
         {busy ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
-      </Button>
-      <p className="muted small">
+      </AuthCta>
+
+      <p className="login-panel-foot">
         New to Tendr? <Link href="/signup">Create an account</Link>
       </p>
-      <p className="muted small">
+      <p className="login-panel-foot login-panel-foot--muted">
         Lost every passkey? <Link href="/recover">Use your recovery kit</Link>
       </p>
-    </div>
+    </AuthStage>
   );
 }
 

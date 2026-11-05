@@ -26,7 +26,11 @@ describe('HideOnCheckout', () => {
     expect(shown(path)).toBe(false);
   });
 
-  it.each(['/dashboard', '/login', '/privacy'])('shows it on %s', (path) => {
+  it.each(['/dashboard'])('hides the site chrome on %s (owns its own chrome)', (path) => {
+    expect(shown(path)).toBe(false);
+  });
+
+  it.each(['/privacy', '/signup', '/login'])('shows it on %s', (path) => {
     expect(shown(path)).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import type { ConnectedSite } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
+import { EmptyState, ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
 import { api } from '@/lib/api';
 import { withStepUp } from '@/lib/webauthn';
 
@@ -24,15 +25,38 @@ export default function ConnectedSitesPage() {
   const [removed, setRemoved] = useState<string | null>(null);
   const { busy, error, setError, run } = useAction();
 
+  const header = (
+    <PageHeader
+      title="Connected sites"
+      description={
+        <>
+          Sites connected with the tendr plugin. Each site has its own keys and webhook endpoints
+          and gets only its own payment updates. They share this business’s account, money and
+          settings.
+        </>
+      }
+    />
+  );
+
   if (!store || !context) return null;
   if (!canManage) {
-    return <Alert tone="info">Only owners and admins manage connected sites.</Alert>;
+    return (
+      <div className="stack">
+        {header}
+        <Alert tone="info">Only owners and admins manage connected sites.</Alert>
+      </div>
+    );
   }
   if (!sites.data) {
-    return sites.error ? (
-      <Alert tone="danger">{sites.error}</Alert>
-    ) : (
-      <Spinner label="Loading connected sites" />
+    return (
+      <div className="stack">
+        {header}
+        {sites.error ? (
+          <ErrorState message={sites.error} onRetry={() => void sites.reload()} />
+        ) : (
+          <Spinner label="Loading connected sites" />
+        )}
+      </div>
     );
   }
 
@@ -53,21 +77,19 @@ export default function ConnectedSitesPage() {
 
   return (
     <div className="stack">
-      <div>
-        <h1>Connected sites</h1>
-        <p className="muted">
-          Sites connected with the tendr plugin. Each site has its own keys and webhook endpoints
-          and gets only its own payment updates. They share this store’s account, money and
-          settings.
-        </p>
-      </div>
+      {header}
       {removed && <Alert tone="success">{removed} is no longer connected.</Alert>}
-      <section className="card">
+      <Panel title="Connected">
         {active.length === 0 ? (
-          <p className="muted">
-            No sites are connected. In your site’s admin, open WooCommerce → Settings → Payments →
-            tendr and choose <em>Connect to tendr</em>.
-          </p>
+          <EmptyState
+            title="No sites are connected"
+            description={
+              <>
+                In your site’s admin, open WooCommerce → Settings → Payments → tendr and choose{' '}
+                <em>Connect to tendr</em>.
+              </>
+            }
+          />
         ) : (
           <ul className="list">
             {active.map((c) => (
@@ -114,10 +136,9 @@ export default function ConnectedSitesPage() {
             ))}
           </ul>
         )}
-      </section>
+      </Panel>
       {revoked.length > 0 && (
-        <section className="card">
-          <h2>Removed</h2>
+        <Panel title="Removed">
           <ul className="list">
             {revoked.map((c) => (
               <li key={c.id}>
@@ -125,7 +146,7 @@ export default function ConnectedSitesPage() {
               </li>
             ))}
           </ul>
-        </section>
+        </Panel>
       )}
     </div>
   );
@@ -134,9 +155,9 @@ export default function ConnectedSitesPage() {
 function SiteRow({ site }: { site: ConnectedSite }) {
   return (
     <span className="grow">
-      <strong className="address">{site.site_url}</strong>
+      <strong className="dash-mono">{site.site_url}</strong>
       <br />
-      <span className="muted small">
+      <span className="dash-muted dash-small">
         {PLATFORMS[site.platform] ?? site.platform} · connected by {site.connected_by.email} on{' '}
         {new Date(site.created_at).toLocaleDateString()} · last used{' '}
         {site.last_used_at ? new Date(site.last_used_at).toLocaleString() : 'never'}

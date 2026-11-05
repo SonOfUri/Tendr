@@ -59,3 +59,5 @@ export async function fetchPublicLink(
   if (!res.ok) throw new Error(`payment link lookup failed (${res.status})`);
   return (await res.json()) as PublicPaymentLinkView;
 }
+
+export type { PaymentLinkList, PaymentLinkView } from './payment-link-types';

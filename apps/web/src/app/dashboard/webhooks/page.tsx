@@ -5,6 +5,7 @@ import { WebhookEventTypeValues } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad } from '@/components/dashboard/common';
+import { EmptyState, PageHeader, Panel } from '@/components/dashboard/ui';
 import { api } from '@/lib/api';
 import type { WebhookDelivery, WebhookEndpoint } from '@/lib/payments';
 import { withStepUp } from '@/lib/webauthn';
@@ -22,20 +23,21 @@ export default function WebhooksPage() {
 
   return (
     <div className="stack">
-      <div>
-        <h1>Webhooks</h1>
-        <p className="muted">
-          Signed events sent to your server in {context.livemode ? 'live' : 'test'} mode. Each
-          request carries a <code>Tendr-Signature</code> header; failed sends are retried for 3
-          days, and you can resend any delivery.
-        </p>
-      </div>
+      <PageHeader
+        title="Webhooks"
+        description={
+          <>
+            Signed events sent to your server in {context.livemode ? 'live' : 'test'} mode. Each
+            request carries a <code>Tendr-Signature</code> header; failed sends are retried for 3
+            days, and you can resend any delivery.
+          </>
+        }
+      />
       {!canManage ? (
         <Alert tone="info">Only owners and admins manage webhook endpoints.</Alert>
       ) : (
         <>
-          <section className="card">
-            <h2>Add an endpoint</h2>
+          <Panel title="Add an endpoint">
             <CreateForm
               livemode={context.livemode}
               onCreated={(url, s) => {
@@ -43,11 +45,11 @@ export default function WebhooksPage() {
                 void endpoints.reload();
               }}
             />
-          </section>
+          </Panel>
           {secret && (
             <Alert tone="warning">
               Signing secret for {secret.url} — copy it now, it is not shown again:{' '}
-              <code className="address" data-testid="webhook-secret">
+              <code className="dash-mono" data-testid="webhook-secret">
                 {secret.secret}
               </code>
             </Alert>
@@ -56,7 +58,10 @@ export default function WebhooksPage() {
           {!endpoints.data ? (
             !endpoints.error && <Spinner label="Loading endpoints" />
           ) : endpoints.data.endpoints.length === 0 ? (
-            <p className="muted">No endpoints yet.</p>
+            <EmptyState
+              title="No endpoints yet"
+              description="Add a URL to receive signed webhook events from Tendr."
+            />
           ) : (
             endpoints.data.endpoints.map((e) => (
               <EndpointCard
@@ -115,9 +120,9 @@ function CreateForm({
         />
       </label>
       <fieldset className="field">
-        <legend className="small">Events (none selected: all)</legend>
+        <legend className="dash-small">Events (none selected: all)</legend>
         {WebhookEventTypeValues.map((t) => (
-          <label key={t} className="small inline-field">
+          <label key={t} className="dash-small inline-field">
             <input
               type="checkbox"
               checked={events.includes(t)}
@@ -181,9 +186,8 @@ function EndpointCard({
   }
 
   return (
-    <section className="card" data-testid={`endpoint-${endpoint.id}`}>
-      <h2 className="address">{endpoint.url}</h2>
-      <p className="muted small">
+    <Panel title={<span className="dash-mono">{endpoint.url}</span>}>
+      <p className="dash-muted dash-small">
         {endpoint.events.length === 0 ? 'All events' : endpoint.events.join(', ')} · added{' '}
         {new Date(endpoint.created_at).toLocaleDateString()}
       </p>
@@ -197,7 +201,7 @@ function EndpointCard({
         <Button variant="secondary" onClick={() => setOpen((o) => !o)}>
           {open ? 'Hide deliveries' : 'Delivery log'}
         </Button>
-        <button type="button" className="link-button small" onClick={() => void remove()}>
+        <button type="button" className="link-button dash-small" onClick={() => void remove()}>
           Delete
         </button>
       </div>
@@ -210,15 +214,16 @@ function EndpointCard({
             <Spinner label="Loading deliveries" />
           )
         ) : deliveries.data.deliveries.length === 0 ? (
-          <p className="muted">No deliveries yet.</p>
+          <p className="dash-muted">No deliveries yet.</p>
         ) : (
           <ul className="list">
             {deliveries.data.deliveries.map((d) => (
               <li key={d.id}>
                 <span className="grow">
-                  {d.event_type} <span className="muted small address">{d.event_id}</span>
+                  {d.event_type}{' '}
+                  <span className="dash-muted dash-small dash-mono">{d.event_id}</span>
                   <br />
-                  <span className="muted small">
+                  <span className="dash-muted dash-small">
                     {new Date(d.created_at).toLocaleString()} · {d.attempts} attempt
                     {d.attempts === 1 ? '' : 's'}
                     {d.status_code !== null ? ` · HTTP ${d.status_code}` : ''}
@@ -240,6 +245,6 @@ function EndpointCard({
             ))}
           </ul>
         ))}
-    </section>
+    </Panel>
   );
 }

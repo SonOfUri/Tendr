@@ -240,10 +240,10 @@ export function ConnectFlow() {
       )}
       {phase.k === 'recovery' && (
         <>
-          <p className="step-label">New store · recovery kit</p>
+          <p className="step-label">New business · recovery kit</p>
           <h1>Save your recovery kit</h1>
           <dl className="facts">
-            <dt>Store</dt>
+            <dt>Business</dt>
             <dd>{phase.store.name}</dd>
             <dt>Test account</dt>
             <dd>
@@ -252,7 +252,7 @@ export function ConnectFlow() {
           </dl>
           <p className="muted">
             The kit is your second way into {phase.store.name}, so a lost phone never locks you out.
-            Your store needs it before it can take real money.
+            Your business needs it before it can take real money.
           </p>
           <RecoveryKitCreator
             storeName={phase.store.name}
@@ -264,7 +264,7 @@ export function ConnectFlow() {
       )}
       {phase.k === 'payout' && (
         <>
-          <p className="step-label">{phase.isNew ? 'New store · payout' : 'Payout'}</p>
+          <p className="step-label">{phase.isNew ? 'New business · payout' : 'Payout'}</p>
           <h1>Where your payments go</h1>
           <p>
             Payments settle into {phase.store.name}’s own tendr account, in the token you choose.
@@ -357,7 +357,7 @@ function SignIn({
         <h2>New to tendr?</h2>
         <p className="muted small">
           Enter your email. We’ll send a link to confirm it, then you’ll create a passkey and your
-          store. By creating an account you agree to the{' '}
+          business. By creating an account you agree to the{' '}
           <Link href="/terms" target="_blank" rel="noopener noreferrer">
             Terms
           </Link>
@@ -425,18 +425,18 @@ function StorePicker({
   if (stores.length === 0) {
     return (
       <>
-        <h1>Create a store</h1>
+        <h1>Create a business</h1>
         <p className="muted">
-          You are not an owner or admin of any store, so you can’t connect a site to one. Create a
-          store for this site, or ask an owner to make you an admin.
+          You are not an owner or admin of any business, so you can’t connect a site to one. Create
+          a business for this site, or ask an owner to make you an admin.
         </p>
-        <Button onClick={onNew}>Create a store</Button>
+        <Button onClick={onNew}>Create a business</Button>
       </>
     );
   }
   return (
     <>
-      <h1>Choose a store</h1>
+      <h1>Choose a business</h1>
       <form
         className="form"
         onSubmit={(e) => {
@@ -470,7 +470,7 @@ function StorePicker({
         </Button>
       </form>
       <Button variant="secondary" onClick={onNew}>
-        Create a new store
+        Create a new business
       </Button>
     </>
   );
@@ -512,21 +512,21 @@ function NewStore({
 
   return (
     <>
-      <p className="step-label">{first ? 'Your store' : 'New store'}</p>
-      <h1>Name your store</h1>
+      <p className="step-label">{first ? 'Your business' : 'New business'}</p>
+      <h1>Name your business</h1>
       <form onSubmit={submit} className="form">
         <label className="field">
-          <span>Store name</span>
+          <span>Business name</span>
           <input
             required
             maxLength={100}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Acme Coffee"
+            placeholder="Acme"
           />
         </label>
         <dl className="facts">
-          <dt>Store address</dt>
+          <dt>Business address</dt>
           <dd>
             <code>{slug}</code>
           </dd>
@@ -536,13 +536,13 @@ function NewStore({
           </dd>
         </dl>
         <p className="muted small">
-          Your account is where your store’s money is kept. Only you and the people you choose can
-          move it — not tendr.
+          Your Tendr account is where this business’s money is kept. Only you and the people you
+          choose can move it — not Tendr.
         </p>
         {error && <Alert tone="danger">{error}</Alert>}
         <div className="button-row">
           <Button type="submit" disabled={busy || !name.trim()}>
-            {busy ? 'Creating…' : 'Create store'}
+            {busy ? 'Creating…' : 'Create business'}
           </Button>
           {onBack && (
             <Button type="button" variant="ghost" onClick={onBack}>
@@ -603,7 +603,7 @@ function Approve({
       <h1>{approvalQuestion(siteLabel(params), store.name)}</h1>
       <p>{APPROVAL_DETAIL}</p>
       <dl className="facts">
-        <dt>Store</dt>
+        <dt>Business</dt>
         <dd>{store.name}</dd>
         <dt>Goes back to</dt>
         <dd className="address">{new URL(params.return_url).origin}</dd>

@@ -45,35 +45,33 @@ export function VerifyNotificationEmail() {
   }, []);
 
   if (state.k === 'working') {
-    return (
-      <div className="card">
-        <Spinner label="Confirming your email" />
-      </div>
-    );
+    return <Spinner label="Confirming your email" />;
   }
   if (state.k === 'done') {
     return (
-      <div className="card">
+      <>
+        <p className="login-panel-eyebrow">Notifications</p>
         <h1>Email confirmed</h1>
         <Alert tone="success">
           Payment and refund notices for <strong>{state.store}</strong> now go to{' '}
           <strong>{state.email}</strong>.
         </Alert>
-        <p className="muted small">
+        <p className="login-panel-foot">
           You can change this any time in <Link href={SETTINGS}>Checkout settings</Link>.
         </p>
-      </div>
+      </>
     );
   }
   const copy = verifyCopy(state.k);
   return (
-    <div className="card">
+    <>
+      <p className="login-panel-eyebrow">Notifications</p>
       <h1>{copy.heading}</h1>
       <Alert tone="danger">{state.k === 'invalid' ? copy.message : state.message}</Alert>
-      <p className="muted">
+      <p className="login-panel-lead">
         Ask for a new link from <Link href={SETTINGS}>Checkout settings</Link> (or from your site’s
         tendr plugin settings).
       </p>
-    </div>
+    </>
   );
 }

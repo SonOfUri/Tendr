@@ -186,7 +186,7 @@ describe('held review card: one destination form per open return (C41)', () => {
     const open = refund({ id: 'ref_m', reason: 'merchant', review_reason: 'sanctions' });
     expect(
       heldReturnForms({ status: 'SETTLED', kept_small_reasons: [], refunds: [...closed, open] }),
-    ).toEqual([{ refundId: 'ref_m', label: 'Store refund' }]);
+    ).toEqual([{ refundId: 'ref_m', label: 'Merchant refund' }]);
     expect(closed.map(refundStateWords)).toEqual(['Cancelled', 'Cancelled', 'Expired', 'Failed']);
     expect(closed.every((r) => isClosedMerchantRefund(r))).toBe(true);
     expect(isClosedMerchantRefund(open)).toBe(false);

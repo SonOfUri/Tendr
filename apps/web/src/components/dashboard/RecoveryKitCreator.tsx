@@ -97,7 +97,7 @@ export function RecoveryKitCreator({
         <div className="print-kit">
           <h3>Tendr recovery kit</h3>
           <p className="small">
-            Store: <strong>{storeName}</strong> · Store address: <code>{storeSlug}</code>
+            Business: <strong>{storeName}</strong> · Address: <code>{storeSlug}</code>
           </p>
           <p className="kit-code" aria-label="Recovery code">
             {groups.map((g, i) => (

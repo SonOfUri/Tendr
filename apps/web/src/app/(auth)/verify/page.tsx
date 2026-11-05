@@ -3,7 +3,10 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
-import { Alert, Button } from '@tendr/ui';
+import { Info } from 'lucide-react';
+import { Alert } from '@tendr/ui';
+import { AuthCta } from '@/components/login/AuthCta';
+import { AuthStage } from '@/components/login/AuthStage';
 import { api, errorMessage } from '@/lib/api';
 import { loadConnectParams, takeConnectWaiting } from '@/lib/connect';
 import { takePendingInvite } from '@/lib/navigation';
@@ -39,7 +42,7 @@ function Verify() {
       return;
     }
     setStep('done');
-    // A new person lands on store naming (the dashboard sends anyone with no store there), or
+    // A new person lands on business naming (the dashboard sends anyone with no business there), or
     // back on the invite they came from.
     router.replace(takePendingInvite() ?? '/dashboard');
   }
@@ -80,69 +83,82 @@ function Verify() {
 
   if (!token) {
     return (
-      <div className="card">
+      <>
+        <p className="login-panel-eyebrow">Sign up</p>
         <h1>This link is incomplete</h1>
-        <p className="muted">
+        <p className="login-panel-lead">
           Open the link from your email again, or <Link href="/signup">ask for a new one</Link>.
         </p>
-      </div>
+      </>
     );
   }
 
   if (step === 'connect-elsewhere') {
     return (
-      <div className="card">
+      <>
+        <p className="login-panel-eyebrow">Signed in</p>
         <h1>You’re signed in</h1>
-        <p>
+        <p className="login-panel-lead">
           Go back to the tendr window you opened from your site to finish connecting it. You can
           close this tab.
         </p>
-      </div>
+      </>
     );
   }
 
   if (step === 'passkey' || step === 'done') {
     return (
-      <div className="card">
-        <p className="step-label">Step 2 of 3</p>
+      <>
+        <p className="login-panel-eyebrow">Step 2 of 3</p>
         <h1>Create your passkey</h1>
-        <p>
-          {email ? <strong>{email}</strong> : 'Your email'} is confirmed. Now make a passkey: it is
-          how you sign in and approve money leaving your store. Your device asks for Face ID, Touch
-          ID, Windows Hello or its PIN — there is no password to remember.
-        </p>
-        <p className="muted small">
-          The passkey stays on your device (or in your iCloud / Google account). Tendr never sees
-          it.
+        <div className="login-panel-copy">
+          <p>
+            {email ? <strong>{email}</strong> : 'Your email'} is confirmed.
+          </p>
+          <p>Now make a passkey. It is how you sign in and approve money leaving your business.</p>
+          <p>
+            Your device asks for Face ID, Touch ID, Windows Hello or its PIN. There is no password
+            to remember.
+          </p>
+        </div>
+        <p className="login-panel-note">
+          <Info aria-hidden="true" />
+          <span>
+            The passkey stays on your device (or in your iCloud / Google account). Tendr never sees
+            it.
+          </span>
         </p>
         {error && <Alert tone="danger">{error}</Alert>}
-        <Button onClick={createPasskey} disabled={busy || step === 'done'}>
+        <AuthCta onClick={createPasskey} disabled={busy || step === 'done'}>
           {busy ? 'Waiting for your device…' : 'Create my passkey'}
-        </Button>
-      </div>
+        </AuthCta>
+      </>
     );
   }
 
   return (
-    <div className="card">
+    <>
+      <p className="login-panel-eyebrow">Sign up</p>
       <h1>Confirm your email</h1>
-      <p className="muted">One click and you’re in. Then you’ll create your passkey.</p>
+      <p className="login-panel-lead">One click and you’re in. Then you’ll create your passkey.</p>
       {error && (
         <Alert tone="danger">
           {error} <Link href="/signup">Ask for a new link</Link>.
         </Alert>
       )}
-      <Button onClick={confirm} disabled={busy}>
+      <AuthCta onClick={confirm} disabled={busy}>
         {busy ? 'Confirming…' : 'Confirm my email'}
-      </Button>
-    </div>
+      </AuthCta>
+    </>
   );
 }
 
 export default function VerifyPage() {
   return (
-    <Suspense>
-      <Verify />
-    </Suspense>
+    <AuthStage>
+      <Suspense>
+        <Verify />
+      </Suspense>
+    </AuthStage>
   );
 }

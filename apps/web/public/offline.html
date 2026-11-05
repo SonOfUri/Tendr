@@ -3,31 +3,185 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#080d1b" />
     <title>Tendr — Offline</title>
     <style>
+      @font-face {
+        font-family: 'Rethink Sans';
+        src: url('/fonts/rethink-sans.woff2') format('woff2');
+        font-weight: 100 800;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      :root {
+        --navy: #080d1b;
+        --indigo: #4035f5;
+        --cyan: #16c7f7;
+        --lavender: #c9c6ff;
+        --muted: #8b93a7;
+        --surface: #0f1629;
+        --border: rgba(201, 198, 255, 0.18);
+        --white: #ffffff;
+        --font: 'Rethink Sans', 'Segoe UI', system-ui, sans-serif;
+        --radius: 16px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
         margin: 0;
-        font-family: system-ui, sans-serif;
-        background: #080d1b;
-        color: #fff;
-        display: grid;
         min-height: 100vh;
+        display: grid;
         place-items: center;
-        padding: 2rem;
+        padding: 1.5rem;
+        color: var(--white);
+        font-family: var(--font);
+        background:
+          radial-gradient(1200px 600px at 80% -10%, rgba(64, 53, 245, 0.35), transparent 60%),
+          radial-gradient(900px 500px at -10% 20%, rgba(22, 199, 247, 0.18), transparent 55%),
+          linear-gradient(180deg, #080d1b 0%, #0b1224 45%, #080d1b 100%);
+        background-attachment: fixed;
       }
+
+      .shell {
+        width: min(28rem, 100%);
+        display: grid;
+        gap: 1.25rem;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.7rem;
+        color: var(--white);
+        text-decoration: none;
+      }
+
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 2.4rem;
+        height: 2.4rem;
+        border-radius: 11px;
+        border: 1px solid var(--border);
+        background:
+          radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.16), transparent 55%),
+          var(--surface);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      }
+
+      .brand-mark svg {
+        display: block;
+      }
+
+      .brand-name {
+        font-weight: 750;
+        font-size: 1.1rem;
+        letter-spacing: -0.02em;
+      }
+
+      .card {
+        display: grid;
+        gap: 0.85rem;
+        padding: 1.5rem 1.45rem;
+        border-radius: calc(var(--radius) + 2px);
+        border: 1px solid var(--border);
+        background: rgba(15, 22, 41, 0.9);
+        box-shadow:
+          0 24px 50px rgba(0, 0, 0, 0.35),
+          inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      }
+
+      .eyebrow {
+        margin: 0;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--lavender);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.55rem, 4vw, 1.9rem);
+        font-weight: 750;
+        letter-spacing: -0.03em;
+        line-height: 1.15;
+      }
+
       p {
-        color: #8b93a7;
-        max-width: 28rem;
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+        font-size: 0.98rem;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+        margin-top: 0.35rem;
+      }
+
+      button {
+        appearance: none;
+        border: none;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 650;
+        font-size: 0.92rem;
+        border-radius: 12px;
+        padding: 0.7rem 1.05rem;
+        color: var(--white);
+        background: var(--indigo);
+        box-shadow: 0 10px 24px rgba(64, 53, 245, 0.35);
+        transition:
+          transform 0.15s ease,
+          filter 0.15s ease;
+      }
+
+      button:hover {
+        filter: brightness(1.08);
+      }
+
+      button:active {
+        transform: translateY(1px);
+      }
+
+      button:focus-visible {
+        outline: 2px solid var(--cyan);
+        outline-offset: 2px;
+      }
+
+      .hint {
+        font-size: 0.85rem;
       }
     </style>
   </head>
   <body>
-    <div>
-      <h1>You’re offline</h1>
-      <p>
-        Tendr can show the public shell offline, but payment actions are disabled. No payment can
-        succeed while offline.
-      </p>
-    </div>
+    <main class="shell">
+      <a class="brand" href="/" aria-label="Tendr home">
+        <span class="brand-mark" aria-hidden="true">
+          <img src="/tendr-logo.png" alt="" width="22" height="22" />
+        </span>
+        <span class="brand-name">Tendr</span>
+      </a>
+
+      <section class="card">
+        <p class="eyebrow">Connection</p>
+        <h1>You’re offline</h1>
+        <p>
+          Tendr can show the public shell without a network, but payment actions are disabled. No
+          payment can succeed while offline.
+        </p>
+        <div class="actions">
+          <button type="button" onclick="location.reload()">Try again</button>
+        </div>
+        <p class="hint">Reconnect, then retry — checkout and wallet actions need a live connection.</p>
+      </section>
+    </main>
   </body>
 </html>

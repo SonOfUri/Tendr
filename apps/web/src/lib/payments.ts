@@ -32,6 +32,10 @@ export interface PaymentSummary {
   status: PaymentStatus;
   session_id: string;
   external_ref: string | null;
+  /** The payment link the session was opened from (the API's session refs); null when none. */
+  payment_link_id?: string | null;
+  /** The payer's note from the link's page; plain text. */
+  payer_note?: string | null;
   order: { amount: string; currency: string };
   source: { asset: string; chain: string | null };
   received: { asset: string; amount: string };
@@ -319,7 +323,7 @@ export function explorerTxUrl(
 export function returnLabel(reason: string): string {
   if (reason === 'sanctions') return 'Order amount';
   if (reason === 'overpaid') return 'Extra paid';
-  if (reason === 'merchant') return 'Store refund';
+  if (reason === 'merchant') return 'Merchant refund';
   return reason.charAt(0).toUpperCase() + reason.slice(1);
 }
 

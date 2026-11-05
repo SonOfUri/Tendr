@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad, useTick } from '@/components/dashboard/common';
+import { PageHeader, Panel, Select } from '@/components/dashboard/ui';
 import { countdown } from '@/lib/actions';
 import {
   api,
@@ -49,16 +50,17 @@ export default function RecoveryPage() {
 
   return (
     <div className="stack">
-      <div>
-        <h1>Recovery</h1>
-        <p className="muted">
-          If your team loses its passkeys, the recovery kit can replace the live account’s signers.
-          Every signer is emailed and has 3 days to stop it.
-        </p>
-      </div>
+      <PageHeader
+        title="Recovery"
+        description={
+          <>
+            If your team loses its passkeys, the recovery kit can replace the live account’s
+            signers. Every signer is emailed and has 3 days to stop it.
+          </>
+        }
+      />
 
-      <section className="card">
-        <h2>Status</h2>
+      <Panel title="Status">
         {status.error && <Alert tone="danger">{status.error}</Alert>}
         {!status.data ? (
           <Spinner label="Loading" />
@@ -75,35 +77,33 @@ export default function RecoveryPage() {
                 {cancel.busy ? 'Waiting for your passkey…' : 'Cancel the recovery with passkey'}
               </Button>
             ) : (
-              <p className="muted small">Any signer can cancel it.</p>
+              <p className="dash-muted dash-small">Any signer can cancel it.</p>
             )}
             {cancel.error && <Alert tone="danger">{cancel.error}</Alert>}
           </>
         ) : (
-          <p className="muted">
+          <p className="dash-muted">
             No recovery is pending.
             {recovery && ` The last one was ${recovery.status}.`}
           </p>
         )}
-      </section>
+      </Panel>
 
       {!pending && (store.role === 'owner' || store.role === 'admin') && (
-        <section className="card">
-          <h2>Start a recovery</h2>
+        <Panel title="Start a recovery">
           <StartRecovery onStarted={() => void status.reload()} />
-        </section>
+        </Panel>
       )}
       {!pending && store.role !== 'owner' && store.role !== 'admin' && (
-        <section className="card" data-testid="recovery-start-restricted">
-          <h2>Start a recovery</h2>
-          <p className="muted">
+        <Panel title="Start a recovery">
+          <p className="dash-muted" data-testid="recovery-start-restricted">
             Holding the recovery kit is not enough on its own here: starting a recovery chooses the
             new signers from the team, which only an owner or admin can see. Give the kit to the
-            store owner or an admin, or ask them to make you an admin first. If nobody on the team
-            can sign in any more, the kit holder can use{' '}
+            business owner or an admin, or ask them to make you an admin first. If nobody on the
+            team can sign in any more, the kit holder can use{' '}
             <Link href="/recover">Lost your passkeys?</Link> to get back in.
           </p>
-        </section>
+        </Panel>
       )}
     </div>
   );
@@ -199,7 +199,7 @@ function StartRecovery({ onStarted }: { onStarted: () => void }) {
 
   return (
     <form className="form" onSubmit={start}>
-      <p className="muted">
+      <p className="dash-muted">
         Use this only when the current signers can no longer approve (lost every passkey). The
         people you choose become the account’s only signers after 3 days.
       </p>
@@ -217,14 +217,14 @@ function StartRecovery({ onStarted }: { onStarted: () => void }) {
           placeholder="Type or paste the code from your kit (ABCD-EFGH-…)"
         />
       </label>
-      <p className="muted small">
+      <p className="dash-muted dash-small">
         The kit stays in this browser: it signs the request here and is cleared right after.
       </p>
 
       <fieldset className="field">
         <legend>New signers</legend>
         {people.data.length === 0 ? (
-          <p className="muted small">
+          <p className="dash-muted dash-small">
             Nobody on the team has a passkey yet. New signers need one: invite them first.
           </p>
         ) : (
@@ -240,7 +240,7 @@ function StartRecovery({ onStarted }: { onStarted: () => void }) {
                 }
               />{' '}
               {c.email}{' '}
-              <span className="muted small">
+              <span className="dash-muted dash-small">
                 ({c.keys.length} passkey{c.keys.length === 1 ? '' : 's'})
               </span>
             </label>
@@ -250,13 +250,15 @@ function StartRecovery({ onStarted }: { onStarted: () => void }) {
 
       <label className="field">
         <span>Approvals needed afterwards</span>
-        <select value={threshold} onChange={(e) => setThreshold(Number(e.target.value))}>
-          {Array.from({ length: Math.max(selected.length, 1) }, (_, i) => i + 1).map((i) => (
-            <option key={i} value={i}>
-              {i} of {Math.max(selected.length, 1)}
-            </option>
-          ))}
-        </select>
+        <Select
+          ariaLabel="Approvals needed afterwards"
+          className="tendr-select--field"
+          value={String(threshold)}
+          onChange={(v) => setThreshold(Number(v))}
+          options={Array.from({ length: Math.max(selected.length, 1) }, (_, i) => i + 1).map(
+            (i) => ({ value: String(i), label: `${i} of ${Math.max(selected.length, 1)}` }),
+          )}
+        />
       </label>
 
       {error && <Alert tone="danger">{error}</Alert>}

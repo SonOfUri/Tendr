@@ -6,6 +6,7 @@ import { HOLD_NOTICE, LEGAL_ACK_PHRASE } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad } from '@/components/dashboard/common';
+import { EmptyState, ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
 import { CHAINS, chainLabel, formatAmount } from '@/lib/assets';
 import { api } from '@/lib/api';
 import {
@@ -30,11 +31,27 @@ export default function ReviewPage() {
   const key = context ? `${context.merchantId}:${context.livemode}` : null;
   const queue = useLoad(() => api<ReviewQueue>('/v1/review'), key);
   if (!store || !context) return null;
+  const header = (
+    <PageHeader
+      title="Review"
+      description={
+        <>
+          Payments and returns that need a decision from your team in{' '}
+          {context.livemode ? 'live' : 'test'} mode.
+        </>
+      }
+    />
+  );
   if (!queue.data) {
-    return queue.error ? (
-      <Alert tone="danger">{queue.error}</Alert>
-    ) : (
-      <Spinner label="Loading the review queue" />
+    return (
+      <>
+        {header}
+        {queue.error ? (
+          <ErrorState message={queue.error} onRetry={() => void queue.reload()} />
+        ) : (
+          <Spinner label="Loading the review queue" />
+        )}
+      </>
     );
   }
   const q = queue.data;
@@ -44,18 +61,19 @@ export default function ReviewPage() {
 
   return (
     <div className="stack">
-      <div>
-        <h1>Review</h1>
-        <p className="muted">
-          Payments and returns that need a decision from your team in{' '}
-          {context.livemode ? 'live' : 'test'} mode.
-        </p>
-      </div>
-      {empty && <p className="muted">Nothing needs review.</p>}
+      {header}
+      {empty && (
+        <EmptyState
+          title="Nothing needs review"
+          description="Held payments, returns, and screening issues show up here when your team needs to act."
+        />
+      )}
 
       {q.held.length > 0 && (
         <section className="stack" aria-labelledby="held">
-          <h2 id="held">Held payments</h2>
+          <h2 id="held" className="dash-panel-title">
+            Held payments
+          </h2>
           {q.held.map((item) => (
             <HeldCard
               key={item.payment_id}
@@ -69,9 +87,8 @@ export default function ReviewPage() {
       )}
 
       {q.screening_unresolved.length > 0 && (
-        <section className="card" aria-labelledby="screening">
-          <h2 id="screening">Screening couldn&apos;t complete</h2>
-          <p className="muted small">
+        <Panel title="Screening couldn't complete">
+          <p className="dash-muted dash-small">
             We could not check these senders against sanctions lists for 6 hours, so these payments
             are not marked paid. This is not a hold; we keep retrying. Contact support if it stays
             here.
@@ -83,30 +100,28 @@ export default function ReviewPage() {
                   <Link href={`/dashboard/payments/${item.payment_id}`}>
                     {formatAmount(item.source_asset, item.amount_received, context.livemode)}
                   </Link>
-                  <span className="muted small address"> from {item.sender_address ?? '—'}</span>
+                  <span className="dash-muted dash-small dash-mono"> from {item.sender_address ?? '—'}</span>
                 </span>
                 <Status status={item.status} />
               </li>
             ))}
           </ul>
-        </section>
+        </Panel>
       )}
 
       {q.returns.length > 0 && (
-        <section className="card" aria-labelledby="returns">
-          <h2 id="returns">Return to sender</h2>
+        <Panel title="Return to sender">
           <ul className="list">
             {q.returns.map((r) => (
               <ReturnRow key={r.id} r={r} livemode={context.livemode} onChanged={reload} />
             ))}
           </ul>
-        </section>
+        </Panel>
       )}
 
       {q.needs_address.length > 0 && (
-        <section className="card" aria-labelledby="needs-address">
-          <h2 id="needs-address">Waiting for an address</h2>
-          <p className="muted small">
+        <Panel title="Waiting for an address">
+          <p className="dash-muted dash-small">
             These came from an exchange, so they cannot go back to the sending address. The shopper
             was asked where to send them; you can also give an address they sent you.
           </p>
@@ -115,7 +130,7 @@ export default function ReviewPage() {
               <ReturnRow key={r.id} r={r} livemode={context.livemode} onChanged={reload} />
             ))}
           </ul>
-        </section>
+        </Panel>
       )}
     </div>
   );
@@ -125,11 +140,11 @@ function RefundLine({ r, livemode }: { r: Refund; livemode: boolean }) {
   return (
     <>
       {formatAmount(r.asset, r.amount, livemode)} · {r.reason} ·{' '}
-      <span className="muted small">{refundStateWords(r)}</span>
+      <span className="dash-muted dash-small">{refundStateWords(r)}</span>
       {r.proposal_id && (
         <>
           {' '}
-          <Link href={`/dashboard/approvals/${r.proposal_id}`} className="small">
+          <Link href={`/dashboard/approvals/${r.proposal_id}`} className="dash-small">
             View the proposal
           </Link>
         </>
@@ -190,7 +205,7 @@ function HeldCard({
   }
 
   return (
-    <div className="card" data-testid={`held-${item.payment_id}`}>
+    <Panel>
       <Alert tone="danger">{HOLD_NOTICE}</Alert>
       <p>
         <Link href={`/dashboard/payments/${item.payment_id}`}>
@@ -198,7 +213,7 @@ function HeldCard({
         </Link>{' '}
         <Status status={item.status} />
         <br />
-        <span className="muted small address">
+        <span className="dash-muted dash-small dash-mono">
           Sender: {item.sender_addresses.join(', ') || item.sender_address || '—'}
           {item.sender_chain ? ` (${chainLabel(item.sender_chain)})` : ''}
         </span>
@@ -219,7 +234,7 @@ function HeldCard({
       {!item.legal_ack_at ? (
         isOwner ? (
           <form onSubmit={acknowledge} className="form">
-            <p className="small">
+            <p className="dash-small">
               To return these funds (never to the sanctioned sender), an owner must confirm legal
               clearance. Type exactly: <strong>{LEGAL_ACK_PHRASE}</strong>
             </p>
@@ -238,18 +253,18 @@ function HeldCard({
             </Button>
           </form>
         ) : (
-          <p className="muted small">
+          <p className="dash-muted dash-small">
             An owner must confirm legal clearance before these funds can be returned.
           </p>
         )
       ) : (
         <>
-          <p className="muted small">
+          <p className="dash-muted dash-small">
             Legal clearance confirmed {new Date(item.legal_ack_at).toLocaleString()}.
           </p>
           {forms.map((f) => (
             <div key={f.refundId ?? 'order'} className="stack">
-              <h3 className="small">{f.label}</h3>
+              <h3 className="dash-small">{f.label}</h3>
               <DestinationForm
                 paymentId={item.payment_id}
                 {...(f.refundId ? { refundId: f.refundId } : {})}
@@ -261,7 +276,7 @@ function HeldCard({
           ))}
         </>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -297,7 +312,7 @@ function ReturnRow({
         <Link href={`/dashboard/payments/${r.payment_id}`}>{r.external_ref ?? r.payment_id}</Link> ·{' '}
         <RefundLine r={r} livemode={livemode} />
         <br />
-        <span className="muted small address">
+        <span className="dash-muted dash-small dash-mono">
           {r.destination
             ? `To ${chainLabel(r.destination_chain ?? '')}: ${r.destination}`
             : 'No destination yet'}
@@ -319,7 +334,7 @@ function ReturnRow({
       )}
       <CancelStoreRefund r={r} onChanged={onChanged} />
       {!r.proposal_id && !give && (
-        <button type="button" className="link-button small" onClick={() => setGive(true)}>
+        <button type="button" className="link-button dash-small" onClick={() => setGive(true)}>
           Send to another address
         </button>
       )}
@@ -360,7 +375,7 @@ function DestinationForm({
   return (
     <form onSubmit={submit} className="form">
       {required && (
-        <p className="muted small">
+        <p className="dash-muted dash-small">
           Give the address the funds should go to. It is checked against sanctions lists, and your
           signers approve the refund before anything moves. The return fee is deducted; under $1 is
           not returned.

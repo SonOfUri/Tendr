@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { DestinationBox, useAction, useLoad, useTick } from '@/components/dashboard/common';
+import { ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
 import { usableIn } from '@/lib/actions';
 import { api, type Balances, type SavedAddress } from '@/lib/api';
 import { registeredAssetIds } from '@/lib/asset-registry';
@@ -31,11 +32,36 @@ export default function WithdrawPage() {
   const { busy, error, setError, run } = useAction();
 
   if (!store || !context) return null;
+  const header = (
+    <PageHeader
+      title="Withdraw"
+      description={
+        <>
+          Ask to send money from the {context.livemode ? 'live' : 'test'} account to one of your
+          saved addresses. Signers approve it with their passkeys before anything moves.
+        </>
+      }
+    />
+  );
   if (store.role === 'viewer') {
-    return <Alert tone="info">Viewers can’t ask for withdrawals. Ask a store admin.</Alert>;
+    return (
+      <>
+        {header}
+        <Alert tone="info">Viewers can’t ask for withdrawals. Ask a business admin.</Alert>
+      </>
+    );
   }
   if (!data.data) {
-    return data.error ? <Alert tone="danger">{data.error}</Alert> : <Spinner label="Loading" />;
+    return (
+      <>
+        {header}
+        {data.error ? (
+          <ErrorState message={data.error} onRetry={() => void data.reload()} />
+        ) : (
+          <Spinner label="Loading" />
+        )}
+      </>
+    );
   }
   const { saved, balances } = data.data;
   const target = saved.find((a) => a.id === savedId) ?? null;
@@ -74,13 +100,7 @@ export default function WithdrawPage() {
 
   return (
     <div className="stack">
-      <div>
-        <h1>Withdraw</h1>
-        <p className="muted">
-          Ask to send money from the {context.livemode ? 'live' : 'test'} account to one of your
-          saved addresses. Signers approve it with their passkeys before anything moves.
-        </p>
-      </div>
+      {header}
 
       {saved.length === 0 ? (
         <Alert tone="info">
@@ -88,7 +108,8 @@ export default function WithdrawPage() {
           it can receive money 24 hours after it is approved.
         </Alert>
       ) : (
-        <form className="card form" onSubmit={submit}>
+        <Panel title="Withdraw to a saved address">
+          <form className="form" onSubmit={submit}>
           <label className="field">
             <span>To</span>
             <select
@@ -139,7 +160,7 @@ export default function WithdrawPage() {
             </datalist>
           </label>
           {info && (
-            <p className="muted small">
+            <p className="dash-muted dash-small">
               {info.known
                 ? `${info.symbol} · ${info.decimals} decimals`
                 : 'Not a registered asset: enter the amount in raw smallest units.'}
@@ -183,7 +204,7 @@ export default function WithdrawPage() {
               />{' '}
               A different token — different-token withdrawals coming soon
             </label>
-            <p className="muted small">
+            <p className="dash-muted dash-small">
               When they arrive, different-token withdrawals go through a swap and wait 24 hours
               after approval.
             </p>
@@ -193,7 +214,8 @@ export default function WithdrawPage() {
           <Button type="submit" disabled={busy}>
             {busy ? 'Asking…' : 'Ask to withdraw'}
           </Button>
-        </form>
+          </form>
+        </Panel>
       )}
     </div>
   );

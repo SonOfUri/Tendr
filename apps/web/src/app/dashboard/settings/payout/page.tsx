@@ -6,29 +6,30 @@
 import Link from 'next/link';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { PayoutChooser } from '@/components/dashboard/PayoutChooser';
+import { PageHeader, Panel } from '@/components/dashboard/ui';
 
 export default function PayoutPage() {
   const { store, context } = useDashboard();
   if (!store || !context) return null;
   return (
     <div className="stack">
-      <div>
-        <h1>Payout</h1>
-        <p className="lead muted">
-          Payments to {store.name} settle into its tendr account in your settlement stablecoin.
-          Moving money out, or changing where payments settle, is a proposal your signers approve.
-        </p>
-      </div>
-      <section className="card">
-        <h2>Where payments settle</h2>
+      <PageHeader
+        title="Payout"
+        description={
+          <>
+            Payments to {store.name} settle into its tendr account in your settlement stablecoin.
+            Moving money out, or changing where payments settle, is a proposal your signers approve.
+          </>
+        }
+      />
+      <Panel title="Where payments settle">
         <PayoutChooser
           key={`${context.merchantId}:${context.livemode}`}
           store={context}
           storeName={store.name}
         />
-      </section>
-      <section className="card">
-        <h2>Set up where money goes</h2>
+      </Panel>
+      <Panel title="Set up where money goes">
         <ul className="list">
           <li>
             <span className="grow">
@@ -70,7 +71,7 @@ export default function PayoutPage() {
             <Link href="/dashboard/approvals">Approvals</Link>
           </li>
         </ul>
-      </section>
+      </Panel>
     </div>
   );
 }

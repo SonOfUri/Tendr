@@ -27,6 +27,10 @@ const FONTS = {
     '@fontsource-variable/instrument-sans',
     'instrument-sans-latin-wght-normal.woff2',
   ],
+  'rethink-sans': [
+    '@fontsource-variable/rethink-sans',
+    'rethink-sans-latin-wght-normal.woff2',
+  ],
   'bricolage-grotesque': [
     '@fontsource-variable/bricolage-grotesque',
     'bricolage-grotesque-latin-wght-normal.woff2',

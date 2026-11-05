@@ -7,28 +7,50 @@ import { errorMessage } from '@/lib/api';
 import { STATUS_WORDS } from '@/lib/proposals';
 import { useDashboard } from './DashboardShell';
 
-/** Loads with `fn` whenever `key` changes; `reload` runs it again. */
+/** Loads with `fn` whenever `key` changes; `reload` runs it again.
+ * Ignores stale responses when `key` changes mid-flight (no AbortController on `api()` yet). */
 export function useLoad<T>(fn: () => Promise<T>, key: string | null) {
+  const { uiPreview } = useDashboard();
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   // `fn` is recreated each render; `key` names what it depends on.
   const fnRef = useRef(fn);
+  const keyRef = useRef(key);
+  const genRef = useRef(0);
   useEffect(() => {
     fnRef.current = fn;
   });
+  useEffect(() => {
+    keyRef.current = key;
+  }, [key]);
+
   const reload = useCallback(async () => {
+    const requestKey = keyRef.current;
+    const gen = ++genRef.current;
+    if (uiPreview) {
+      if (gen !== genRef.current || keyRef.current !== requestKey) return;
+      setData(null);
+      setError('API offline — start Postgres/Redis and the Tendr API to load this screen.');
+      return;
+    }
     try {
-      setData(await fnRef.current());
+      const next = await fnRef.current();
+      if (gen !== genRef.current || keyRef.current !== requestKey) return;
+      setData(next);
       setError(null);
     } catch (err) {
+      if (gen !== genRef.current || keyRef.current !== requestKey) return;
       setError(errorMessage(err));
     }
-  }, []);
+  }, [uiPreview]);
+
   useEffect(() => {
     if (key === null) return;
     setData(null);
+    setError(null);
     void reload();
   }, [key, reload]);
+
   return { data, error, reload, setData };
 }
 

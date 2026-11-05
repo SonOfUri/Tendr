@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { TendrLogo } from '@/components/TendrLogo';
+import { ThemeMenu } from '@/components/ThemeToggle';
 
 export function SiteFooter() {
   return (
@@ -8,7 +9,8 @@ export function SiteFooter() {
         <TendrLogo size={22} />
         Tendr — One checkout. Every way to pay.
       </p>
-      <p>
+      <ThemeMenu />
+      <p className="site-footer-links">
         <Link href="/privacy">Privacy</Link>
         {' · '}
         <Link href="/terms">Terms</Link>

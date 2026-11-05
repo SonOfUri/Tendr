@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
+import { PageHeader, Panel, Select } from '@/components/dashboard/ui';
 import { api, type MemberKeys, type Role, type Team, type TeamMember } from '@/lib/api';
 import { draftProposal } from '@/lib/proposals';
 import { withStepUp } from '@/lib/webauthn';
@@ -25,23 +26,23 @@ export default function TeamPage() {
 
   return (
     <div className="stack">
-      <div>
-        <h1>Team</h1>
-        <p className="muted">
-          People who can use {store.name}. Roles decide what someone can ask for; moving money or
-          changing security also needs signers to approve it with their passkeys.
-        </p>
-      </div>
+      <PageHeader
+        title="Team"
+        description={
+          <>
+            People who can use {store.name}. Roles decide what someone can ask for; moving money or
+            changing security also needs signers to approve it with their passkeys.
+          </>
+        }
+      />
 
       {canManage && (
-        <section className="card">
-          <h2>Invite someone</h2>
+        <Panel title="Invite someone">
           <InviteForm onSent={() => void team.reload()} />
-        </section>
+        </Panel>
       )}
 
-      <section className="card">
-        <h2>Members</h2>
+      <Panel title="Members">
         {team.error && <Alert tone="danger">{team.error}</Alert>}
         {!team.data ? (
           <Spinner label="Loading the team" />
@@ -60,27 +61,26 @@ export default function TeamPage() {
             ))}
           </ul>
         )}
-        <p className="muted small">
+        <p className="dash-muted dash-small">
           A signer approves money going out and security changes. Making someone a signer is a
           proposal on the {context.livemode ? 'live' : 'test'} account: it takes effect 24 hours
           after the current signers approve it, and any signer can cancel it in that time.
         </p>
-      </section>
+      </Panel>
 
       {team.data && team.data.invites.length > 0 && (
-        <section className="card">
-          <h2>Invites waiting</h2>
+        <Panel title="Invites waiting">
           <ul className="list">
             {team.data.invites.map((i) => (
               <li key={i.id}>
                 <span className="grow">{i.email}</span>
-                <span className="muted small">
+                <span className="dash-muted dash-small">
                   {ROLE_WORDS[i.role]} · expires {new Date(i.expiresAt).toLocaleDateString()}
                 </span>
               </li>
             ))}
           </ul>
-        </section>
+        </Panel>
       )}
     </div>
   );
@@ -121,12 +121,18 @@ function InviteForm({ onSent }: { onSent: () => void }) {
         </label>
         <label className="field">
           <span>Role</span>
-          <select name="invite-role" value={role} onChange={(e) => setRole(e.target.value as Role)}>
-            <option value="viewer">Viewer — sees the account</option>
-            <option value="finance">Finance — asks for withdrawals and refunds</option>
-            <option value="admin">Admin — team and money settings</option>
-            {store?.role === 'owner' && <option value="owner">Owner — security</option>}
-          </select>
+          <Select
+            ariaLabel="Role"
+            className="tendr-select--field"
+            value={role}
+            onChange={(v) => setRole(v as Role)}
+            options={[
+              { value: 'viewer', label: 'Viewer — sees the account' },
+              { value: 'finance', label: 'Finance — asks for withdrawals and refunds' },
+              { value: 'admin', label: 'Admin — team and money settings' },
+              ...(store?.role === 'owner' ? [{ value: 'owner', label: 'Owner — security' }] : []),
+            ]}
+          />
         </label>
       </div>
       {sent && <Alert tone="success">Invite sent to {sent}. It works for 7 days.</Alert>}
@@ -181,7 +187,7 @@ function MemberRow({
     <li data-testid={`member-${member.email}`}>
       <span className="grow">
         <strong>{member.email}</strong>
-        {self && <span className="muted small"> (you)</span>}
+        {self && <span className="dash-muted dash-small"> (you)</span>}
         {member.isSigner && (
           <span className="status" data-status="active" style={{ marginLeft: '0.5rem' }}>
             signer
@@ -189,22 +195,17 @@ function MemberRow({
         )}
       </span>
       {canEditRole ? (
-        <label className="inline-field">
-          <span className="sr-only">Role of {member.email}</span>
-          <select
-            value={member.role}
-            disabled={busy}
-            onChange={(e) => void changeRole(e.target.value as Role)}
-          >
-            {(['viewer', 'finance', 'admin', ...(isOwner ? ['owner'] : [])] as Role[]).map((r) => (
-              <option key={r} value={r}>
-                {ROLE_WORDS[r]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Select
+          ariaLabel={`Role of ${member.email}`}
+          value={member.role}
+          disabled={busy}
+          onChange={(v) => void changeRole(v as Role)}
+          options={(['viewer', 'finance', 'admin', ...(isOwner ? ['owner'] : [])] as Role[]).map(
+            (r) => ({ value: r, label: ROLE_WORDS[r] }),
+          )}
+        />
       ) : (
-        <span className="muted small">{ROLE_WORDS[member.role]}</span>
+        <span className="dash-muted dash-small">{ROLE_WORDS[member.role]}</span>
       )}
       {isOwner && !member.isSigner && member.role !== 'viewer' && (
         <Button variant="secondary" disabled={busy} onClick={() => void makeSigner()}>

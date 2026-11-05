@@ -3,11 +3,13 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Spinner } from '@tendr/ui';
+import { AuthCta } from '@/components/login/AuthCta';
+import { AuthStage } from '@/components/login/AuthStage';
 import { api, errorMessage, isSignedOut, setStoreContext, type Me } from '@/lib/api';
 import { rememberPendingInvite } from '@/lib/navigation';
 
-export default function InvitePage() {
+function InvitePage() {
   const router = useRouter();
   const { token } = useParams<{ token: string }>();
   const path = `/invite/${encodeURIComponent(token)}`;
@@ -42,46 +44,53 @@ export default function InvitePage() {
   }
 
   if (me === undefined && !error) {
-    return (
-      <div className="card">
-        <Spinner label="Loading your invite" />
-      </div>
-    );
+    return <Spinner label="Loading your invite" />;
   }
 
   if (me === null) {
     return (
-      <div className="card">
-        <h1>You’re invited to a store on Tendr</h1>
-        <p className="muted">
+      <>
+        <p className="login-panel-eyebrow">Invite</p>
+        <h1>You’re invited to a business on Tendr</h1>
+        <p className="login-panel-lead">
           Sign in to accept. New to Tendr? Sign up with the email this invite was sent to; we’ll
           bring you back here once your passkey is set up.
         </p>
-        <div className="cta-row">
-          <Link href={`/login?next=${encodeURIComponent(path)}`}>
-            <Button>Sign in</Button>
-          </Link>
+        <Link href={`/login?next=${encodeURIComponent(path)}`}>
+          <AuthCta>Sign in</AuthCta>
+        </Link>
+        <p className="login-panel-foot">
+          New to Tendr?{' '}
           <Link href="/signup" onClick={() => rememberPendingInvite(path)}>
-            <Button variant="secondary">Sign up</Button>
+            Sign up
           </Link>
-        </div>
-      </div>
+        </p>
+      </>
     );
   }
 
   return (
-    <div className="card">
-      <h1>Join the store</h1>
+    <>
+      <p className="login-panel-eyebrow">Invite</p>
+      <h1>Join the business</h1>
       {me && (
-        <p className="muted">
+        <p className="login-panel-lead">
           You’re signed in as <strong>{me.user.email}</strong>. The invite must have been sent to
           this email.
         </p>
       )}
       {error && <Alert tone="danger">{error}</Alert>}
-      <Button onClick={accept} disabled={busy || !me}>
+      <AuthCta onClick={accept} disabled={busy || !me}>
         {busy ? 'Joining…' : 'Accept invite'}
-      </Button>
-    </div>
+      </AuthCta>
+    </>
+  );
+}
+
+export default function InviteRoute() {
+  return (
+    <AuthStage>
+      <InvitePage />
+    </AuthStage>
   );
 }

@@ -7,7 +7,8 @@ export function SiteHeader() {
       <Link href="/" className="brand">
         <TendrLogo size={28} className="brand-logo" />
         Tendr
-      </Link>      <nav className="nav" aria-label="Primary">
+      </Link>
+      <nav className="nav" aria-label="Primary">
         <Link href="/demo">Demo</Link>
         <Link href="/dashboard">Dashboard</Link>
         <a href="http://localhost:3001" rel="noreferrer">

@@ -31,6 +31,11 @@ export class ApiError extends Error {
 export interface ApiInit extends Omit<RequestInit, 'body'> {
   /** A JSON body (sets `Content-Type: application/json`). */
   json?: unknown;
+  /**
+   * A multipart body. The browser sets `Content-Type` (with the boundary), so it is never set
+   * here. Exclusive with `json`.
+   */
+  formData?: FormData;
   /** `false` for person routes (no store headers); an explicit store; default: the tab's store. */
   store?: false | StoreContext;
   /** Overrides the mode of the tab's store for this call. */
@@ -101,11 +106,16 @@ export function onSignedOut(handler: SignedOutHandler): () => void {
 }
 
 export async function api<T = unknown>(path: string, init: ApiInit = {}): Promise<T> {
-  const { json, store, livemode, headers: extra, ...rest } = init;
+  const { json, formData, store, livemode, headers: extra, ...rest } = init;
+  if (json !== undefined && formData !== undefined) {
+    throw new Error('api(): pass either `json` or `formData`, not both.');
+  }
   const method = (rest.method ?? 'GET').toUpperCase();
   const headers = new Headers(extra);
   headers.set('Accept', 'application/json');
   if (json !== undefined) headers.set('Content-Type', 'application/json');
+  // A multipart body must not carry a Content-Type of ours: the browser adds the boundary.
+  else if (formData !== undefined) headers.delete('Content-Type');
 
   if (!SAFE_METHODS.has(method)) {
     const csrf = currentCsrf();
@@ -125,7 +135,7 @@ export async function api<T = unknown>(path: string, init: ApiInit = {}): Promis
       method,
       headers,
       credentials: 'include',
-      body: json === undefined ? undefined : JSON.stringify(json),
+      body: formData !== undefined ? formData : json === undefined ? undefined : JSON.stringify(json),
     });
   } catch {
     throw new ApiError(0, 'NETWORK_ERROR', 'We could not reach Tendr. Check your connection.');

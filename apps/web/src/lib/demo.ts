@@ -51,7 +51,7 @@ const LOGO_STORE = '/demo/adidas-store-logo.webp';
 const LOGO_FINTECH = '/demo/pulse-finance-icon.webp';
 const LOGO_GAMING = '/demo/pixel-forge-logo.webp';
 const LOGO_PREDICTION = '/demo/omni-markets-logo.webp';
-const LOGO_TENDR = '/demo/tendr-logo.webp';
+const LOGO_TENDR = '/tendr-logo.png';
 
 export const DEMOS: DemoDefinition[] = [
   {

@@ -35,7 +35,10 @@ const PAY_SERVED = [
   'offline.html',
   'sw.js',
   'tendr-logo.png',
+  'logo-white.png',
+  'favicon.png',
   'favicon.ico',
+  'apple-icon.png',
   'robots.txt',
 ] as const;
 

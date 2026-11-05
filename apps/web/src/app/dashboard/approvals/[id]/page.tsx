@@ -6,6 +6,7 @@ import { useEffect } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { DestinationBox, Status, useAction, useLoad, useTick } from '@/components/dashboard/common';
+import { ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
 import { countdown, describeAction } from '@/lib/actions';
 import { api, type AccountView, type Proposal, type SavedAddress, type Team } from '@/lib/api';
 import { approveProposal, approvedAtEpoch, cancelProposal, STATUS_WORDS } from '@/lib/proposals';
@@ -55,7 +56,7 @@ export default function ProposalPage() {
   if (!store) return null;
   if (!detail.data) {
     return detail.error ? (
-      <Alert tone="danger">{detail.error}</Alert>
+      <ErrorState message={detail.error} onRetry={() => void detail.reload()} />
     ) : (
       <Spinner label="Loading the proposal" />
     );
@@ -99,17 +100,19 @@ export default function ProposalPage() {
   }
 
   return (
-    <div className="stack">
-      <p className="small">
+    <>
+      <p className="dash-small">
         <Link href="/dashboard/approvals">← Approvals</Link>
       </p>
-      <div className="card-head">
-        <h1>{summary.title}</h1>
-        <Status status={p.status} />
-      </div>
-      <p className="muted" data-testid="proposal-status-words">
-        {STATUS_WORDS[p.status] ?? p.status} · {context?.livemode ? 'Live' : 'Test'} account
-      </p>
+      <PageHeader
+        title={summary.title}
+        actions={<Status status={p.status} />}
+        description={
+          <span data-testid="proposal-status-words">
+            {STATUS_WORDS[p.status] ?? p.status} · {context?.livemode ? 'Live' : 'Test'} account
+          </span>
+        }
+      />
 
       {summary.destination && <DestinationBox destination={summary.destination} />}
       {summary.warnings.map((w) => (
@@ -118,38 +121,43 @@ export default function ProposalPage() {
         </Alert>
       ))}
 
-      <section className="card">
-        <dl className="facts">
+      <Panel title="Details">
+        <dl className="dash-facts">
           {summary.rows.map((r) => (
-            <div key={r.label} style={{ display: 'contents' }}>
+            <div key={r.label}>
               <dt>{r.label}</dt>
               <dd>{r.value}</dd>
             </div>
           ))}
-          <dt>Asked by</dt>
-          <dd>{creator?.email ?? p.createdByUserId ?? 'Unknown (created on chain)'}</dd>
-          <dt>Created</dt>
-          <dd>{new Date(p.createdAt).toLocaleString()}</dd>
+          <div>
+            <dt>Asked by</dt>
+            <dd>{creator?.email ?? p.createdByUserId ?? 'Unknown (created on chain)'}</dd>
+          </div>
+          <div>
+            <dt>Created</dt>
+            <dd>{new Date(p.createdAt).toLocaleString()}</dd>
+          </div>
           {p.readyAt && (
-            <>
+            <div>
               <dt>Runs</dt>
               <dd>
                 {new Date(p.readyAt).toLocaleString()}
                 {p.status === 'timelocked' && ` (in ${countdown(p.readyAt, now)})`}
               </dd>
-            </>
+            </div>
           )}
-          <dt>Proposal id</dt>
-          <dd>
-            <code>{p.onchainId}</code>
-          </dd>
+          <div>
+            <dt>Proposal id</dt>
+            <dd>
+              <code className="dash-mono">{p.onchainId}</code>
+            </dd>
+          </div>
         </dl>
-      </section>
+      </Panel>
 
-      <section className="card">
-        <h2>Approvals</h2>
+      <Panel title="Approvals">
         {p.approvals.length === 0 ? (
-          <p className="muted">No signer has approved yet.</p>
+          <p className="dash-muted">No signer has approved yet.</p>
         ) : (
           <ul className="list">
             {p.approvals.map((a) => (
@@ -157,7 +165,9 @@ export default function ProposalPage() {
                 <span className="grow">
                   {team.members.find((m) => m.userId === a.userId)?.email ?? a.userId}
                 </span>
-                <span className="muted small">{new Date(a.approvedAt).toLocaleString()}</span>
+                <span className="dash-muted dash-small">
+                  {new Date(a.approvedAt).toLocaleString()}
+                </span>
               </li>
             ))}
           </ul>
@@ -175,11 +185,13 @@ export default function ProposalPage() {
             </Button>
           )}
         </div>
-        {!store.isSigner && open && <p className="muted small">Only signers can approve this.</p>}
-        {approvedByMe && open && (
-          <p className="muted small">You approved this. It needs the other signers now.</p>
+        {!store.isSigner && open && (
+          <p className="dash-muted dash-small">Only signers can approve this.</p>
         )}
-      </section>
-    </div>
+        {approvedByMe && open && (
+          <p className="dash-muted dash-small">You approved this. It needs the other signers now.</p>
+        )}
+      </Panel>
+    </>
   );
 }

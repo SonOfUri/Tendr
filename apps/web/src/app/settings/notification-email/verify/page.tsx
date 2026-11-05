@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { AuthStage } from '@/components/login/AuthStage';
 import { VerifyNotificationEmail } from './VerifyNotificationEmail';
 
 // The link in the "confirm your notification email" message. Rendered per request so the CSP
@@ -13,8 +14,8 @@ export const metadata: Metadata = {
 
 export default function VerifyNotificationEmailPage() {
   return (
-    <div className="auth-shell">
+    <AuthStage>
       <VerifyNotificationEmail />
-    </div>
+    </AuthStage>
   );
 }

@@ -63,7 +63,7 @@ export function PredictionMarket({ demo, busy, onDeposit }: Props) {
             src={KANE_SRC}
             alt="Harry Kane"
             width={360}
-            height={414}
+            height={360}
             decoding="async"
             fetchPriority="high"
           />
@@ -81,7 +81,7 @@ export function PredictionMarket({ demo, busy, onDeposit }: Props) {
             src={MBAPPE_SRC}
             alt="Kylian Mbappé"
             width={360}
-            height={414}
+            height={360}
             decoding="async"
             fetchPriority="high"
           />

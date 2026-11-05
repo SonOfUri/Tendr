@@ -2,7 +2,10 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { Alert, Button } from '@tendr/ui';
+import { Alert } from '@tendr/ui';
+import { AuthCta } from '@/components/login/AuthCta';
+import { AuthStage } from '@/components/login/AuthStage';
+import { toast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/api';
 
 export default function SignupPage() {
@@ -18,24 +21,28 @@ export default function SignupPage() {
     try {
       await api('/v1/auth/email/start', { method: 'POST', json: { email }, store: false });
       setSent(true);
+      toast.success('Check your inbox for the confirmation link.');
     } catch (err) {
-      setError(errorMessage(err));
+      const message = errorMessage(err);
+      setError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="card">
-      <p className="step-label">Step 1 of 3</p>
+    <AuthStage>
+      <p className="login-panel-eyebrow">Step 1 of 3</p>
       <h1>Create your Tendr account</h1>
+
       {sent ? (
         <>
           <Alert tone="success">
             Check your inbox. If <strong>{email}</strong> can sign up, we sent it a link. The link
             works for 15 minutes.
           </Alert>
-          <p className="muted">
+          <p className="login-panel-lead">
             Didn’t get it? Check spam, or{' '}
             <button type="button" className="link-button" onClick={() => setSent(false)}>
               try again
@@ -44,10 +51,10 @@ export default function SignupPage() {
           </p>
         </>
       ) : (
-        <form onSubmit={submit} className="form">
-          <p className="muted">
-            Enter your email. We’ll send a link to confirm it, then you’ll set up a passkey — the
-            Face ID, Touch ID, Windows Hello or PIN you already use to unlock this device.
+        <form onSubmit={submit} className="login-panel-form">
+          <p className="login-panel-lead">
+            Enter your email. We’ll send a link to confirm it, then you’ll set up a passkey — Face
+            ID, Touch ID, Windows Hello, or the PIN you already use.
           </p>
           <label className="field">
             <span>Email</span>
@@ -58,17 +65,19 @@ export default function SignupPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               maxLength={254}
+              placeholder="you@company.com"
             />
           </label>
           {error && <Alert tone="danger">{error}</Alert>}
-          <Button type="submit" disabled={busy || !email}>
+          <AuthCta type="submit" disabled={busy || !email}>
             {busy ? 'Sending…' : 'Send me a link'}
-          </Button>
+          </AuthCta>
         </form>
       )}
-      <p className="muted small">
+
+      <p className="login-panel-foot">
         Already have an account? <Link href="/login">Sign in</Link>
       </p>
-    </div>
+    </AuthStage>
   );
 }

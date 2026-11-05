@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad, useTick } from '@/components/dashboard/common';
+import { EmptyState, PageHeader, Panel } from '@/components/dashboard/ui';
 import { usableIn } from '@/lib/actions';
 import { api, type Proposal, type SavedAddress } from '@/lib/api';
 import { CHAINS, chainLabel } from '@/lib/assets';
@@ -40,42 +41,45 @@ export default function SavedAddressesPage() {
 
   return (
     <div className="stack">
-      <div>
-        <h1>Saved addresses</h1>
-        <p className="muted">
-          Money only leaves to an address saved here. Adding one is a proposal the signers approve,
-          and a new address can receive money <strong>24 hours</strong> after it is approved, so a
-          stolen login can’t send funds somewhere new straight away.
-        </p>
-      </div>
+      <PageHeader
+        title="Saved addresses"
+        description={
+          <>
+            Money only leaves to an address saved here. Adding one is a proposal the signers approve,
+            and a new address can receive money <strong>24 hours</strong> after it is approved, so a
+            stolen login can’t send funds somewhere new straight away.
+          </>
+        }
+      />
 
       {canRequest && (
-        <section className="card">
-          <h2>Add an address</h2>
+        <Panel title="Add an address">
           <AddAddress />
-        </section>
+        </Panel>
       )}
 
-      <section className="card">
-        <h2>Addresses</h2>
+      <Panel title="Addresses">
         {data.error && <Alert tone="danger">{data.error}</Alert>}
         {remove.error && <Alert tone="danger">{remove.error}</Alert>}
         {!data.data ? (
           <Spinner label="Loading saved addresses" />
         ) : data.data.saved.length === 0 ? (
-          <p className="muted">No saved addresses yet.</p>
+          <EmptyState
+            title="No saved addresses yet"
+            description="Money only leaves to an address saved here. Add one and wait for signers to approve it."
+          />
         ) : (
           <ul className="list">
             {data.data.saved.map((a) => (
               <li key={a.id} data-testid={`saved-${a.address}`}>
                 <span className="grow">
                   <strong>{chainLabel(a.chain)}</strong>{' '}
-                  <span className="muted small">({a.chain})</span>
+                  <span className="dash-muted dash-small">({a.chain})</span>
                   <br />
-                  <span className="address">{a.address}</span>
+                  <span className="dash-mono">{a.address}</span>
                 </span>
                 {a.status === 'pending' && (
-                  <span className="small">{usableIn(a.activeFrom, now)}</span>
+                  <span className="dash-small">{usableIn(a.activeFrom, now)}</span>
                 )}
                 <Status status={a.status} />
                 {canRequest && a.status !== 'revoked' && (
@@ -91,11 +95,10 @@ export default function SavedAddressesPage() {
             ))}
           </ul>
         )}
-      </section>
+      </Panel>
 
       {data.data && data.data.open.length > 0 && (
-        <section className="card">
-          <h2>Waiting for approval</h2>
+        <Panel title="Waiting for approval">
           <ul className="list">
             {data.data.open.map((p) => {
               const v = p.action[p.kind] as { chain?: string; address?: string; id?: string };
@@ -105,7 +108,7 @@ export default function SavedAddressesPage() {
                     <Link href={`/dashboard/approvals/${p.id}`}>
                       {p.kind === 'add_saved_address' ? 'Add' : 'Remove'}
                     </Link>{' '}
-                    <span className="address small">
+                    <span className="dash-mono dash-small">
                       {v.chain ? `${v.chain}: ${v.address}` : v.id}
                     </span>
                   </span>
@@ -114,7 +117,7 @@ export default function SavedAddressesPage() {
               );
             })}
           </ul>
-        </section>
+        </Panel>
       )}
     </div>
   );

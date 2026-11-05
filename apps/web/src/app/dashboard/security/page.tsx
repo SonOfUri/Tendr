@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLivemode, useLoad } from '@/components/dashboard/common';
+import { ErrorState, PageHeader, Panel, Select } from '@/components/dashboard/ui';
 import { RecoveryKitCreator } from '@/components/dashboard/RecoveryKitCreator';
 import {
   api,
@@ -39,9 +40,33 @@ export default function SecurityPage() {
   }, key);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const header = (
+    <PageHeader
+      title="Security"
+      description={
+        <>
+          Settings of the {context?.livemode ? 'live' : 'test'} account. Each change is a proposal
+          the signers approve. Raising a limit or the refund cap, adding a signer or a passkey,
+          replacing the recovery kit, lowering the approval rule and changing origins take effect 24
+          hours after approval, and any signer can cancel in that time. Removing a signer or a key
+          and raising the approval rule apply at once.
+        </>
+      }
+    />
+  );
+
   if (!store || !context) return null;
   if (!data.data) {
-    return data.error ? <Alert tone="danger">{data.error}</Alert> : <Spinner label="Loading" />;
+    return (
+      <div className="stack">
+        {header}
+        {data.error ? (
+          <ErrorState message={data.error} onRetry={() => void data.reload()} />
+        ) : (
+          <Spinner label="Loading" />
+        )}
+      </div>
+    );
   }
   const { account, limits, saved, goLive } = data.data;
   const isOwner = store.role === 'owner';
@@ -50,20 +75,10 @@ export default function SecurityPage() {
 
   return (
     <div className="stack">
-      <div>
-        <h1>Security</h1>
-        <p className="muted">
-          Settings of the {context.livemode ? 'live' : 'test'} account. Each change is a proposal
-          the signers approve. Raising a limit or the refund cap, adding a signer or a passkey,
-          replacing the recovery kit, lowering the approval rule and changing origins take effect 24
-          hours after approval, and any signer can cancel in that time. Removing a signer or a key
-          and raising the approval rule apply at once.
-        </p>
-        {notice && <Alert tone="success">{notice}</Alert>}
-      </div>
+      {header}
+      {notice && <Alert tone="success">{notice}</Alert>}
 
-      <section className="card">
-        <h2>Approval rule</h2>
+      <Panel title="Approval rule">
         {account.account ? (
           <ThresholdForm
             current={account.account.threshold}
@@ -72,35 +87,32 @@ export default function SecurityPage() {
             onDraft={go}
           />
         ) : (
-          <p className="muted">This account is not set up yet.</p>
+          <p className="dash-muted">This account is not set up yet.</p>
         )}
-      </section>
+      </Panel>
 
-      <section className="card">
-        <h2>Withdrawal limits</h2>
+      <Panel title="Withdrawal limits">
         <LimitsList limits={limits} />
         {canSettings ? (
           <LimitsForm onDraft={go} />
         ) : (
-          <p className="muted small">Admins and owners can change limits.</p>
+          <p className="dash-muted dash-small">Admins and owners can change limits.</p>
         )}
-      </section>
+      </Panel>
 
-      <section className="card">
-        <h2>Refund cap</h2>
-        <p className="muted small">
+      <Panel title="Refund cap">
+        <p className="dash-muted dash-small">
           Refunds up to this amount per day go out as soon as they are approved; larger ones wait 24
           hours.
         </p>
         {canSettings && <RefundCapForm onDraft={go} />}
-      </section>
+      </Panel>
 
-      <section className="card">
-        <h2>Auto-sweep</h2>
-        <p className="muted small">
+      <Panel title="Auto-sweep">
+        <p className="dash-muted dash-small">
           Moves everything above a threshold to a saved address automatically.
         </p>
-        <p className="muted small" data-testid="sweep-limits-note">
+        <p className="dash-muted dash-small" data-testid="sweep-limits-note">
           Sweeps are not counted against the per-withdrawal or per-day limits: they can only go to
           the saved address pinned in the sweep rule, which itself waited 24 hours before it could
           receive money.
@@ -115,17 +127,16 @@ export default function SecurityPage() {
           </ul>
         )}
         {canSettings && <SweepForm saved={saved} onDraft={go} />}
-      </section>
+      </Panel>
 
-      <section className="card" id="recovery-kit">
-        <h2>Recovery kit</h2>
+      <Panel title="Recovery kit" id="recovery-kit">
         <p>
           Status:{' '}
           <strong data-testid="recovery-kit-status">
             {goLive.checklist.recoveryKeySet ? 'On' : 'Not set up'}
           </strong>
         </p>
-        <p className="muted small">
+        <p className="dash-muted dash-small">
           The kit can start a recovery of the live account (signers get 3 days to stop it). Lost
           your passkeys? <Link href="/dashboard/recovery">Recovery</Link>.
         </p>
@@ -142,9 +153,9 @@ export default function SecurityPage() {
             }}
           />
         ) : (
-          <p className="muted">Only the owner can replace the recovery kit.</p>
+          <p className="dash-muted">Only the owner can replace the recovery kit.</p>
         )}
-      </section>
+      </Panel>
     </div>
   );
 }
@@ -178,20 +189,23 @@ function ThresholdForm({
         <div className="row">
           <label className="field">
             <span>Approvals needed</span>
-            <select value={n} onChange={(e) => setN(Number(e.target.value))}>
-              {Array.from({ length: Math.max(signers, 1) }, (_, i) => i + 1).map((i) => (
-                <option key={i} value={i}>
-                  {i} of {signers}
-                </option>
-              ))}
-            </select>
+            <Select
+              ariaLabel="Approvals needed"
+              className="tendr-select--field"
+              value={String(n)}
+              onChange={(v) => setN(Number(v))}
+              options={Array.from({ length: Math.max(signers, 1) }, (_, i) => i + 1).map((i) => ({
+                value: String(i),
+                label: `${i} of ${signers}`,
+              }))}
+            />
           </label>
           <Button type="submit" disabled={busy || n === current}>
             Ask to change
           </Button>
         </div>
       ) : (
-        <p className="muted small">Only the owner can change the approval rule.</p>
+        <p className="dash-muted dash-small">Only the owner can change the approval rule.</p>
       )}
       {error && <Alert tone="danger">{error}</Alert>}
     </form>
@@ -201,33 +215,36 @@ function ThresholdForm({
 function LimitsList({ limits }: { limits: AssetLimit[] }) {
   const livemode = useLivemode();
   const set = limits.filter((l) => l.perTx !== null || l.perDay !== null || l.refundCap !== null);
-  if (set.length === 0) return <p className="muted">No limits set: any approved amount can go.</p>;
+  if (set.length === 0)
+    return <p className="dash-muted">No limits set: any approved amount can go.</p>;
   const show = (asset: string, v: string | null) =>
     v === null ? 'No limit' : formatAmount(asset, v, livemode);
   return (
-    <table className="balances">
-      <thead>
-        <tr>
-          <th>Asset</th>
-          <th>Per withdrawal</th>
-          <th>Per day</th>
-          <th>Refund cap / day</th>
-        </tr>
-      </thead>
-      <tbody>
-        {set.map((l) => (
-          <tr key={l.asset}>
-            <td>
-              {assetInfo(l.asset, livemode).known && <>{assetInfo(l.asset, livemode).symbol} </>}
-              <code className="address">{l.asset}</code>
-            </td>
-            <td>{show(l.asset, l.perTx)}</td>
-            <td>{show(l.asset, l.perDay)}</td>
-            <td>{l.refundCap === null ? '0' : formatAmount(l.asset, l.refundCap, livemode)}</td>
+    <div className="dash-table-wrap">
+      <table className="dash-table">
+        <thead>
+          <tr>
+            <th>Asset</th>
+            <th>Per withdrawal</th>
+            <th>Per day</th>
+            <th>Refund cap / day</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {set.map((l) => (
+            <tr key={l.asset}>
+              <td>
+                {assetInfo(l.asset, livemode).known && <>{assetInfo(l.asset, livemode).symbol} </>}
+                <code className="dash-mono">{l.asset}</code>
+              </td>
+              <td>{show(l.asset, l.perTx)}</td>
+              <td>{show(l.asset, l.perDay)}</td>
+              <td>{l.refundCap === null ? '0' : formatAmount(l.asset, l.refundCap, livemode)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -262,7 +279,7 @@ function AssetField({ value, onChange }: { value: string; onChange: (v: string) 
         />
       </label>
       {info && (
-        <p className="muted small">
+        <p className="dash-muted dash-small">
           {info.known
             ? `Amounts below are in ${info.symbol}.`
             : 'Not a registered asset: enter amounts in raw smallest units.'}
@@ -365,11 +382,11 @@ function SweepRow({
   return (
     <li>
       <span className="grow">
-        <code className="address">{limit.asset}</code>: above{' '}
+        <code className="dash-mono">{limit.asset}</code>: above{' '}
         {s.triggerAbove ? formatAmount(limit.asset, s.triggerAbove, livemode) : '?'}, keep{' '}
         {s.keep ? formatAmount(limit.asset, s.keep, livemode) : '?'} →{' '}
         <strong>{s.chain ? chainLabel(s.chain) : '?'}</strong>{' '}
-        <span className="address small">{s.address}</span>
+        <span className="dash-mono dash-small">{s.address}</span>
       </span>
       {enabled && (
         <Button
@@ -398,7 +415,7 @@ function SweepForm({ saved, onDraft }: { saved: SavedAddress[]; onDraft: (id: st
   const { busy, error, run } = useAction();
   if (usable.length === 0) {
     return (
-      <p className="muted small">
+      <p className="dash-muted dash-small">
         Add a <Link href="/dashboard/addresses">saved address</Link> first.
       </p>
     );
@@ -445,18 +462,22 @@ function SweepForm({ saved, onDraft }: { saved: SavedAddress[]; onDraft: (id: st
       </div>
       <label className="field">
         <span>Send to</span>
-        <select required value={savedId} onChange={(e) => setSavedId(e.target.value)}>
-          <option value="">Choose a saved address</option>
-          {usable.map((a) => (
-            <option key={a.id} value={a.id}>
-              {chainLabel(a.chain)} · {a.address}
-            </option>
-          ))}
-        </select>
+        <Select
+          ariaLabel="Send to"
+          className="tendr-select--field"
+          value={savedId}
+          onChange={setSavedId}
+          placeholder="Choose a saved address"
+          options={usable.map((a) => ({
+            value: a.id,
+            label: `${chainLabel(a.chain)} · ${a.address}`,
+          }))}
+        />
       </label>
       {target && (
-        <p className="muted small">
-          Destination: {chainLabel(target.chain)} <span className="address">{target.address}</span>
+        <p className="dash-muted dash-small">
+          Destination: {chainLabel(target.chain)}{' '}
+          <span className="dash-mono">{target.address}</span>
         </p>
       )}
       {error && <Alert tone="danger">{error}</Alert>}

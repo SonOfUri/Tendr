@@ -104,6 +104,17 @@ describe('api', () => {
     expect(headersOf(again[0]!).get('Tendr-CSRF')).toBe('from-body-456');
   });
 
+  it('sends formData as the body without setting Content-Type', async () => {
+    const calls = stubFetch(200, { ok: true });
+    const fd = new FormData();
+    fd.append('file', new Blob(['x']), 'logo.png');
+    await api('/v1/theme-assets', { method: 'POST', formData: fd });
+    expect(calls).toHaveLength(1);
+    const h = headersOf(calls[0]!);
+    expect(h.get('Content-Type')).toBeNull();
+    expect(calls[0]!.init.body).toBe(fd);
+  });
+
   it('only a missing or expired session (UNAUTHENTICATED) signs out and forgets the token', async () => {
     const handler = vi.fn();
     const off = onSignedOut(handler);
