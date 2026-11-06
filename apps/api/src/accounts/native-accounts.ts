@@ -75,16 +75,6 @@ export async function nativeRegistrationOptions(actor: NativeActor) {
       expiresAt: new Date(Date.now() + CHALLENGE_TTL_MS),
     },
   });
-  const [loginKeys, walletKeys] = await Promise.all([
-    prisma.webauthnCredential.findMany({
-      where: { userId: actor.userId },
-      select: { credentialId: true },
-    }),
-    prisma.nativeWallet.findMany({
-      where: { ownerUserId: actor.userId },
-      select: { credentialId: true },
-    }),
-  ]);
   return generateRegistrationOptions({
     rpID: env().WEBAUTHN_RP_ID,
     rpName: env().WEBAUTHN_RP_NAME,
@@ -95,7 +85,11 @@ export async function nativeRegistrationOptions(actor: NativeActor) {
     attestationType: 'none',
     supportedAlgorithmIDs: [-7],
     authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
-    excludeCredentials: [...loginKeys, ...walletKeys].map((c) => ({ id: c.credentialId })),
+    // A new store has a distinct user handle and no wallet credential to exclude. Excluding
+    // login keys or other stores' keys rejects their entire authenticator, preventing that
+    // device/password manager from creating a NEW key here. Verification below and the DB
+    // uniqueness constraints still forbid reusing those credential IDs or public keys.
+    excludeCredentials: [],
   });
 }
 

@@ -221,6 +221,43 @@ describe('native passkey wallet API', () => {
     expect(await prisma.merchantAccount.count({ where: { merchantId: previous } })).toBe(1);
   });
 
+  it('allows a login authenticator to create distinct wallets for multiple stores', async () => {
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: login.userId } });
+    const loginOptions = await registrationOptions(user);
+    const loginAuthenticator = new SoftAuthenticator();
+    await verifyRegistration(user, loginAuthenticator.create(loginOptions), null);
+    login = await loginAs(user.id);
+    const handles = new Set([loginOptions.user.id]);
+    const accountIds = new Set<string>();
+    for (let i = 0; i < 2; i++) {
+      if (i > 0) {
+        merchantId = (await createMerchant()).id;
+        await createRow('MerchantUser', merchantId, false, { userId: user.id, role: 'owner' });
+      }
+      const options = await post(`${base}/passkey/options`);
+      expect(options.statusCode).toBe(200);
+      // A real authenticator aborts creation if it holds ANY excluded credential, regardless
+      // of user handle. Login and other-store keys must not block this new wallet ceremony.
+      expect(options.json().excludeCredentials).toEqual([]);
+      expect(handles.has(options.json().user.id)).toBe(false);
+      handles.add(options.json().user.id);
+      const walletKey = new SoftAuthenticator();
+      const registered = await post(`${base}/passkey/verify`, {
+        response: walletKey.create(options.json()),
+      });
+      expect(registered.statusCode, registered.body).toBe(200);
+      accountIds.add(registered.json().accountId);
+      expect((await post(`${base}/passkey/options`)).statusCode).toBe(409);
+      expect(
+        (await post(`${base}/activate`, { response: walletKey.get(registered.json().options) }))
+          .statusCode,
+      ).toBe(200);
+    }
+    expect(accountIds.size).toBe(2);
+    expect(await prisma.webauthnCredential.count({ where: { userId: user.id } })).toBe(1);
+    expect(await prisma.nativeWallet.count({ where: { ownerUserId: user.id } })).toBe(2);
+  });
+
   it('refuses login passkeys, wrong origins, missing UV and stale activation challenges', async () => {
     const user = await prisma.user.findUniqueOrThrow({ where: { id: login.userId } });
     await verifyRegistration(user, auth.create(await registrationOptions(user)), null);
