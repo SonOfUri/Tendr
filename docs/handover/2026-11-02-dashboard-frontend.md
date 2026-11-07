@@ -145,6 +145,11 @@ submission must not be displayed as completed payment/withdrawal execution.
 Dashboard requests authenticate with cookies, not a merchant secret key. The API-key screen is
 the intentional one-time secret display; do not reuse that key to authenticate dashboard features.
 
+Connecting WooCommerce to an existing store goes directly from store selection to passkey approval.
+Test-account provisioning and test payout setup do not gate that connection. The plugin starts in
+Test mode and checks `/v1/connect/status` with the selected mode's connection key before enabling
+Live. A failed test account does not invalidate an active live wallet or its settlement settings.
+
 ## Account type and native-wallet flow
 
 Read `GET /v1/account` for the selected mode and `GET /v1/account/go-live` for live onboarding.

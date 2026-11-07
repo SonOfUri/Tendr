@@ -446,6 +446,42 @@ describe('connect routes', () => {
     });
   });
 
+  it('connects a ready native live wallet independently of failed test provisioning', async () => {
+    await createRow('MerchantAccount', merchant.id, false, { status: 'failed' });
+    const live = await createRow('MerchantAccount', merchant.id, true, {
+      kind: 'native_intents',
+      status: 'active',
+      nearAccountId: `0x${'ab'.repeat(32)}`,
+    });
+    await createRow('SettlementConfig', merchant.id, true, {
+      payoutMode: 'intents',
+      payoutAddress: null,
+      isDefault: true,
+    });
+
+    // Authorization and PKCE redemption do not require a working test account.
+    const creds = await connect();
+    expect(creds.store.live_account).toBe(live.nearAccountId);
+    expect((await status(creds.live.secret_key)).json()).toMatchObject({
+      mode: 'live',
+      ready: true,
+      blocking: [],
+    });
+    expect((await status(creds.test.secret_key)).json()).toMatchObject({
+      mode: 'test',
+      ready: false,
+      blocking: [{ code: 'test_account_pending' }],
+    });
+
+    // Connecting still cannot override the platform's live switch.
+    setLiveMode(undefined);
+    expect((await status(creds.live.secret_key)).json()).toMatchObject({
+      mode: 'live',
+      ready: false,
+      blocking: [{ code: 'live_mode_unavailable' }],
+    });
+  });
+
   it('status refuses a secret key with no connection (403) and a publishable key', async () => {
     const plain = await createApiKey(merchant.id, { livemode: true });
     const res = await status(plain.raw);
