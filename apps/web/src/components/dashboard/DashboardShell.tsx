@@ -152,6 +152,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: '/dashboard/team', label: 'Team', icon: Users },
       { href: '/dashboard/webhooks', label: 'Webhooks', icon: Webhook },
+      { href: '/dashboard/api-keys', label: 'API keys', icon: KeyRound },
       { href: '/dashboard/security', label: 'Security', icon: Shield },
       { href: '/dashboard/recovery', label: 'Recovery', icon: KeyRound },
     ],

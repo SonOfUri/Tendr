@@ -13,7 +13,19 @@ Every merchant has separate keys for **test** and **live** mode. The key prefix 
 
 Send the key as `Authorization: Bearer <key>`. Keys carry scopes (for example `sessions:write`); a request outside the key's scopes gets `403 FORBIDDEN`. Publishable keys reach only the endpoints meant for the browser.
 
-Keys are stored as SHA-256 hashes; the raw key is shown once when it is issued (today by `npm run db:seed`). Never put secret keys in `NEXT_PUBLIC_*` variables or browser bundles.
+Create secret keys in **Dashboard → API keys**. Select the store and test/live mode, give the key a name, and choose its permissions. Owners and admins can manage keys; creating or revoking a key requires a recent passkey confirmation. Copy the new secret immediately: it is shown once and disappears when you dismiss it, leave the page, or change store/mode.
+
+Keys are stored as SHA-256 hashes. The list shows only the prefix, permissions, creation date, last use and revocation status. Revoking a key stops subsequent API authentication. Connected-site keys are managed through **Connected sites**, where disconnecting also disables the site's webhooks.
+
+Never put secret keys in `NEXT_PUBLIC_*` variables or browser bundles. The hosted checkout and `tendr.js` use a checkout session's client secret; they do not need your server's API key.
+
+The management endpoints use dashboard cookies, store/mode headers and CSRF protection:
+
+- `GET /v1/api_keys` returns `{ api_keys: [...] }` for the selected store and mode.
+- `POST /v1/api_keys` accepts `{ name, scopes }` and returns `{ api_key, secret }` once.
+- `DELETE /v1/api_keys/:id` revokes a manually issued key and returns `{ api_key }`. Repeating a revocation is safe.
+
+Creation does not accept `Idempotency-Key`: raw secrets must never enter the response replay cache. If the creation response is lost, refresh the list, revoke the newly created key and create a replacement. Creating a live key does not bypass the platform's live-mode or wallet-readiness checks.
 
 ## Request signing (optional)
 
