@@ -93,6 +93,38 @@
     "stepUp": true
   },
   {
+    "id": "GET /v1/api_keys",
+    "method": "GET",
+    "path": "/v1/api_keys",
+    "group": "api keys",
+    "source": "apps/api/src/routes/api-keys.ts",
+    "line": 17,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage"
+  },
+  {
+    "id": "POST /v1/api_keys",
+    "method": "POST",
+    "path": "/v1/api_keys",
+    "group": "api keys",
+    "source": "apps/api/src/routes/api-keys.ts",
+    "line": 22,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage",
+    "stepUp": true
+  },
+  {
+    "id": "DELETE /v1/api_keys/:id",
+    "method": "DELETE",
+    "path": "/v1/api_keys/:id",
+    "group": "api keys",
+    "source": "apps/api/src/routes/api-keys.ts",
+    "line": 32,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage",
+    "stepUp": true
+  },
+  {
     "id": "POST /v1/auth/email/start",
     "method": "POST",
     "path": "/v1/auth/email/start",

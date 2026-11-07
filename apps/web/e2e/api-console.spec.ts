@@ -129,6 +129,67 @@ test('email bootstrap, real passkey registration, scoped writes, uploads and pre
   await expect(page.getByTestId('console-response')).toContainText('LIVE_MODE_UNAVAILABLE');
 });
 
+test('dashboard creates a usable API key, forgets its secret and revokes access', async ({
+  page,
+  context,
+}) => {
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('WebAuthn.enable');
+  await cdp.send('WebAuthn.addVirtualAuthenticator', {
+    options: {
+      protocol: 'ctap2',
+      transport: 'internal',
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      automaticPresenceSimulation: true,
+    },
+  });
+  await page.goto('/signup');
+  await page.getByLabel('Email', { exact: true }).fill(`console-keys-${Date.now()}@example.com`);
+  await page.getByRole('button', { name: 'Send me a link' }).click();
+  await page.getByRole('link', { name: 'Open local inbox', exact: true }).click();
+  await page.getByRole('link', { name: 'Verify email and continue', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm my email', exact: true }).click();
+  await page.getByRole('button', { name: 'Create my passkey', exact: true }).click();
+  await page.getByLabel('Store name', { exact: true }).fill(`Key Store ${Date.now()}`);
+  await page.getByRole('button', { name: 'Create store', exact: true }).click();
+  await expect(page.getByRole('heading', { name: /is set up$/ })).toBeVisible();
+  await page.getByRole('link', { name: 'API keys', exact: true }).click();
+  await page.getByLabel('Key name', { exact: true }).fill('Checkout backend');
+  await page.getByRole('button', { name: 'Create test key', exact: true }).click();
+  const field = page.getByLabel('Secret API key', { exact: true });
+  await expect(field).toBeVisible();
+  const secret = await field.inputValue();
+  const ping = () =>
+    page.request.get(`${API}/v1/ping`, { headers: { Authorization: `Bearer ${secret}` } });
+  expect((await ping()).status()).toBe(200);
+  expect(
+    await page.evaluate(
+      (value) => !JSON.stringify({ ...localStorage, ...sessionStorage }).includes(value),
+      secret,
+    ),
+  ).toBe(true);
+  await page.getByRole('button', { name: 'Live', exact: true }).click();
+  await expect(field).toHaveCount(0);
+  await expect(page.getByText('No API keys in live mode yet.')).toBeVisible();
+  await page.getByRole('button', { name: 'Test', exact: true }).click();
+  await expect(page.getByText('Checkout backend', { exact: true })).toBeVisible();
+  await expect(field).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText('Checkout backend', { exact: true })).toBeVisible();
+  await expect(field).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.getByRole('button', { name: 'Revoke Checkout backend', exact: true }).click();
+  expect((await ping()).status()).toBe(200);
+  await page.getByRole('button', { name: 'Confirm revoke', exact: true }).click();
+  await expect(page.getByText(/secret · Revoked/)).toBeVisible();
+  expect((await ping()).status()).toBe(401);
+});
+
 test('mobile viewport stays within the screen and endpoint selection sends nothing', async ({
   page,
 }) => {

@@ -1,6 +1,6 @@
 # Tendr API test console
 
-Branch: `test/api-console`, based on the deployed code. The console is at `/settings/api-console` and includes all 130 explicitly registered API routes, with a searchable list, editable path/query parameters and JSON, browser-session or bearer authentication, multipart uploads, optional HMAC signing, and a response inspector.
+Branch: `test/api-console`, based on the deployed code. The console is at `/settings/api-console` and includes all 133 explicitly registered API routes, with a searchable list, editable path/query parameters and JSON, browser-session or bearer authentication, multipart uploads, optional HMAC signing, and a response inspector.
 
 Selecting an endpoint does not send it. Press **Send request** to execute one operation. This is a manual API workbench; it does not automatically run every endpoint or bypass permissions, signer approvals, provider credentials, or wallet signatures.
 
@@ -101,7 +101,18 @@ their original asset when you edit a link. The catalog comes from
 `GET /v1/payment_links/settlement-options`: simulated assets in local test mode, provider assets
 in live mode. Choosing a live token does not enable live payments or provision a mainnet account.
 
-For API-key endpoints, run this in another local terminal:
+For API-key endpoints, open **API keys** in the dashboard at `/dashboard/api-keys`. Choose your
+store and Test/Live mode, name the key and select its permissions, then create it with your login
+passkey. Copy the secret when it appears; it is shown once. Use it in the console's **Bearer token**
+field or in your server's environment. The key belongs to the selected store and mode. Owners and
+admins can also view key prefixes, permissions and last use, and revoke keys here. Connected-site
+credentials remain under **Connected sites**. Local simulator live writes remain disabled.
+
+If a creation response is lost, refresh the key list and revoke that new key before creating a
+replacement. Key creation does not accept `Idempotency-Key`, to keep raw secrets out of the retry
+cache. Changing store/mode or leaving the page clears the one-time secret.
+
+Alternatively, to create a separate Demo Merchant for local API testing, run:
 
 ```bash
 npm run console:seed

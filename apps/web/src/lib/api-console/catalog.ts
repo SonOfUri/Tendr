@@ -31,6 +31,10 @@ export function needsStore(endpoint: Endpoint): boolean {
 }
 
 const examples: Record<string, unknown> = {
+  'POST /v1/api_keys': {
+    name: 'My backend',
+    scopes: ['sessions:read', 'sessions:write', 'payments:read', 'events:read'],
+  },
   'POST /v1/account/native/passkey/verify': { response: {} },
   'POST /v1/account/native/activate': { response: {} },
   'PUT /v1/account/native/settlement': { asset: 'copy-an-asset-from-settlement-options' },
