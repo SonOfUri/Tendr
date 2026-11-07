@@ -32,6 +32,17 @@ Tendr is being built in full, as the diagrams describe. The work is split into o
 
 What the foundation does for the AI layer: reserves an `agent` principal type in the gateway (implemented in project 6); stores the LLM provider credentials in `KeyVault`; and makes AI services read-only by construction — they get data-access helpers with no write or state-transition methods, so "can't move funds" is enforced in code, not in prompts.
 
+**Implementation update — 7 November 2026:** the AI APIs on `test/api-console` add a
+session-scoped payment assistant and route previews. The assistant uses a configurable model to
+select verified facts; it cannot generate transfer instructions or mutate payments. Route previews
+rank dry 1Click quotes, exclude wallet gas, and require a fresh executable checkout quote after
+selection. Merchant insights calculate cohort conversion and currency-separated totals, with a
+model-selected explanation. Theme generation produces validated, unpublished presentation drafts
+for explicit merchant review. See the dashboard handover's **AI APIs** section for setup.
+AI risk scoring, registered-agent spending controls and MCP remain planned.
+The `agent` principal is still reserved, not produced by an implemented gateway.
+Paid-plan entitlements are not implemented in this slice. Model calls default off.
+
 The foundation is everything the later projects stand on: the complete database, the shared state definitions, the API Gateway, the event log, the job queue, secrets/keys, test mode plumbing, and deployment on Railway. It ships no checkout behaviour of its own.
 
 ## Intent

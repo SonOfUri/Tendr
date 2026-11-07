@@ -16,6 +16,7 @@ const REDACT_KEYS = new Set(
     'CHAINALYSIS_API_KEY',
     'RESEND_API_KEY',
     'ONECLICK_API_KEY',
+    'AI_API_KEY',
     'FX_API_KEY',
     'X-API-Key',
   ].map((k) => k.toLowerCase()),

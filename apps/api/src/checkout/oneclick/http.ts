@@ -216,6 +216,11 @@ function toQuoteResponse(body: Json): QuoteResponse {
   const q = asObject(body.quote, where);
   return {
     quote: {
+      ...(typeof q.timeEstimate === 'number' &&
+      Number.isFinite(q.timeEstimate) &&
+      q.timeEstimate >= 0
+        ? { timeEstimate: q.timeEstimate }
+        : {}),
       ...optional(q, ['depositAddress', 'depositMemo'] as const),
       amountIn: reqStr(q, 'amountIn', where),
       amountInUsd: reqStr(q, 'amountInUsd', where),

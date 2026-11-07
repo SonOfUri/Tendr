@@ -120,6 +120,13 @@ const EnvSchema = z
     ONECLICK_BASE_URL: z.string().url().default('https://1click.chaindefuser.com'),
     /** 1Click JWT, sent as `X-API-Key`. Required in production. */
     ONECLICK_API_KEY: optionalString,
+    // Checkout assistance, merchant insights and theme proposals. Model calls default off.
+    AI_PROVIDER: z.enum(['disabled', 'openai-compatible']).default('disabled'),
+    AI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
+    AI_MODEL: optionalString,
+    AI_API_KEY: optionalString,
+    AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30_000).default(10_000),
+    AI_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(1).max(100_000).default(200),
     /** Tendr's fee account per mode: the 1Click `appFees` recipient. */
     FEE_ACCOUNT_LIVE: nearAccountId.default('fees.tendr.near'),
     FEE_ACCOUNT_TEST: nearAccountId.default('fees.tendr.testnet'),
@@ -470,6 +477,28 @@ const EnvSchema = z
     ),
   })
   .superRefine((e, ctx) => {
+    const aiUrl = URL.canParse(e.AI_BASE_URL) ? new URL(e.AI_BASE_URL) : null;
+    if (
+      aiUrl &&
+      (aiUrl.protocol !== 'https:' ||
+        aiUrl.username ||
+        aiUrl.password ||
+        aiUrl.search ||
+        aiUrl.hash)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['AI_BASE_URL'],
+        message: 'must be HTTPS without credentials, query or fragment',
+      });
+    }
+    if (e.AI_PROVIDER !== 'disabled' && !e.AI_MODEL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['AI_MODEL'],
+        message: 'required when the AI provider is enabled',
+      });
+    }
     if (e.MERCHANT_ACCOUNT_INITIAL_BALANCE_YOCTO > e.FUNDING_PER_ACCOUNT_YOCTO) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

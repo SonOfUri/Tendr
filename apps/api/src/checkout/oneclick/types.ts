@@ -58,6 +58,8 @@ export interface QuoteRequest {
 }
 
 export interface Quote {
+  /** Provider estimate in seconds. Absent means unknown, never a guessed chain-specific ETA. */
+  timeEstimate?: number;
   /** Absent on dry quotes. */
   depositAddress?: string;
   /** Base units, decimal strings. */

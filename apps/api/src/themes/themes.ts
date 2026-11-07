@@ -161,16 +161,36 @@ export async function createTheme(ctx: ThemeCtx, input: ThemeCreate): Promise<Th
   } else {
     source = (await load(ctx, input.from.theme_id)).draft;
   }
-  const { document, css } = await checked(ctx, source);
-  const row = await ctx.db.checkoutTheme.create({
-    data: {
-      id: newId('thm'),
-      merchantId: ctx.merchantId,
-      name: input.name,
-      status: 'draft',
-      draft: json(document),
-      draftCss: css?.css ?? null,
-    },
+  return createThemeFromDocument(ctx, { name: input.name, document: source });
+}
+
+/** A new validated draft only. Serializes the theme cap across regular and AI creation. */
+export async function createThemeFromDocument(
+  ctx: ThemeCtx,
+  input: { name: string; document: unknown },
+): Promise<ThemeObject> {
+  const { document, css } = await checked(ctx, input.document);
+  const row = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${ctx.merchantId} FOR UPDATE`;
+    if (
+      (await tx.checkoutTheme.count({ where: { merchantId: ctx.merchantId } })) >=
+      THEME_MAX_PER_MERCHANT
+    )
+      throw new AppError(
+        'THEME_LIMIT',
+        `A store can have at most ${THEME_MAX_PER_MERCHANT} themes; delete one first`,
+        409,
+      );
+    return tx.checkoutTheme.create({
+      data: {
+        id: newId('thm'),
+        merchantId: ctx.merchantId,
+        name: input.name,
+        status: 'draft',
+        draft: json(document),
+        draftCss: css?.css ?? null,
+      },
+    });
   });
   return toThemeObject(row, 0);
 }

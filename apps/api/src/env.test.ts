@@ -6,6 +6,29 @@ import { KEY_NAMES } from './keyvault/keys.js';
 
 const base = { DATABASE_URL: 'postgresql://x/y', REDIS_URL: 'redis://localhost:6380' };
 
+describe('AI provider configuration', () => {
+  it('defaults off and requires an explicit model before enabling', () => {
+    expect(loadEnv(base).AI_PROVIDER).toBe('disabled');
+    expect(() => loadEnv({ ...base, AI_PROVIDER: 'openai-compatible' })).toThrow(/AI_MODEL/);
+    expect(
+      loadEnv({ ...base, AI_PROVIDER: 'openai-compatible', AI_MODEL: 'configured-model' }).AI_MODEL,
+    ).toBe('configured-model');
+  });
+  it('requires a clean HTTPS endpoint and bounded request limits', () => {
+    for (const AI_BASE_URL of [
+      'not-a-url',
+      'http://example.com/v1',
+      'https://user:pass@example.com/v1',
+      'https://example.com/v1?key=secret',
+    ]) {
+      expect(() => loadEnv({ ...base, AI_BASE_URL })).toThrow(/AI_BASE_URL/);
+    }
+    expect(() => loadEnv({ ...base, AI_DAILY_REQUEST_LIMIT: '0' })).toThrow(
+      /AI_DAILY_REQUEST_LIMIT/,
+    );
+  });
+});
+
 describe('live screening policy', () => {
   it('defaults to Chainalysis and requires an explicit valid disabled setting', () => {
     expect(loadEnv(base).SCREENING_MODE).toBe('chainalysis');

@@ -63,6 +63,18 @@ const quoteBody = {
 };
 
 describe('HttpOneClick', () => {
+  it('preserves a valid provider ETA and omits invalid estimates', async () => {
+    for (const timeEstimate of [12, 0, -1, '12', null]) {
+      const { fetch } = fakeFetch(() => ({
+        status: 200,
+        body: { ...quoteBody, quote: { ...quoteBody.quote, timeEstimate } },
+      }));
+      const result = await new HttpOneClick({ baseUrl: 'https://1click.test', fetch }).quote(req);
+      expect(result.quote.timeEstimate).toBe(
+        typeof timeEstimate === 'number' && timeEstimate >= 0 ? timeEstimate : undefined,
+      );
+    }
+  });
   it('posts the quote body verbatim to /v0/quote with the X-API-Key header', async () => {
     const { fetch, calls } = fakeFetch(() => ({ status: 201, body: quoteBody }));
     const client = new HttpOneClick({ baseUrl: 'https://1click.test/', apiKey: 'jwt-1', fetch });

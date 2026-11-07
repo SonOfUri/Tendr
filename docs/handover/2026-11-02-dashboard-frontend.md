@@ -6,6 +6,9 @@ This is the current entry point for frontend work. It supersedes the deployment 
 
 ## Start here
 
+The **AI APIs** section at the end describes new work on `test/api-console`; it is not a
+claim that these endpoints are already deployed or integrated into the redesigned frontend.
+
 The live backend supports native passkey wallets, payment links, incoming payments, withdrawals,
 settlement selection and API-key management. **The merchant reports successfully receiving a live
 payment through a payment link and withdrawing funds on 7 November.** Preserve those working
@@ -543,3 +546,182 @@ Further references: [native wallets](2026-11-02-native-intents-wallets.md),
 [deployment runbook](2026-10-31-deploy-runbook.md),
 [Railway project](https://railway.com/project/a2f21ff5-5b3e-49f1-beb7-8990234aeca8).
 Historical runbook readiness notes must be rechecked against the current status above.
+
+## AI APIs
+
+Added on `test/api-console` on 7 November 2026. This covers checkout assistance, quote previews,
+merchant insights and theme drafts, not the complete AI roadmap or production activation.
+The two checkout routes use the current checkout's
+`Authorization: Bearer <client_secret>` and return `Cache-Control: no-store`. Dashboard cookies,
+merchant API keys and client-supplied session/account IDs cannot substitute for that credential.
+Types and request schemas are exported from `@tendr/contracts` (`src/ai.ts`). The API console's
+**checkout ai** group contains both routes and sample bodies. No new dashboard UI is required to
+exercise them. The demo ghost still uses its original static ranking until the FE integrates these APIs.
+
+### Payment assistant
+
+`POST /v1/checkout/client/ai/assistant`
+
+```json
+{ "question": "Has my payment completed? What happens next?" }
+```
+
+The question is required, trimmed, at most 1,000 characters; no conversation history is accepted.
+The result contains `answer` (plain text), `facts: [{ id, text }]`, `generated_at`,
+`source: "model_selected_facts"`, and `read_only: true`. Render the answer as text, never HTML.
+The model chooses relevant facts about this session's status, refunds, underpayment, fee policy,
+networks and privacy. Server-written facts form the final answer; arbitrary generated financial
+claims or transfer instructions are not displayed. Status/refunds are re-read after model latency.
+Test-mode answers identify themselves. This answer never authorizes fulfillment; keep the existing
+verified settlement/webhook flow.
+
+The model receives no database access, signing tools, credentials, merchant/account/session IDs,
+emails, transaction hashes, refund destinations, order metadata, branding or product descriptions
+from Tendr's records. Common identifiers in the free-text question are redacted, but this is not a
+general PII detector: tell shoppers not to enter personal information, keys or seed phrases. The
+configured model provider processes the redacted question and supplied facts under its own data
+policy. Tendr does not persist chat transcripts or provider responses; `store: false` is sent.
+
+Server configuration:
+
+```dotenv
+AI_PROVIDER=openai-compatible
+AI_BASE_URL=https://api.openai.com/v1
+AI_MODEL=<your chosen compatible model id>
+AI_TIMEOUT_MS=10000
+AI_DAILY_REQUEST_LIMIT=200
+```
+
+Set `AI_API_KEY` as a server-only Railway secret, or store the credential encrypted under KeyVault
+purpose `ai-provider` using the existing `secrets:put` operator command. A stored key takes
+precedence over the environment. Never put it in browser configuration or `NEXT_PUBLIC_*`.
+The default is `AI_PROVIDER=disabled`; no provider/model or billing account is provisioned by this
+change. Compatible providers must support Chat Completions, JSON mode, `max_completion_tokens`
+and `store: false`; verify the selected model with a synthetic checkout before enabling publicly.
+See [the API's JSON-mode requirements](https://developers.openai.com/api/docs/guides/structured-outputs).
+
+The assistant permits six requests per session/minute. All model features share 30 calls per
+merchant/minute and the configured platform maximum per UTC day across live/test. Each assistant
+or insight-summary request permits one model call and up to 300 completion tokens; a theme draft
+permits one call with up to 2,000 completion tokens. Failures consume the reservation too. This is a request cap, not a
+dollar budget; configure the provider's own spend controls. Redis failure blocks model calls.
+`503 PROVIDER_NOT_CONFIGURED` means disabled/missing configuration; `503 PROVIDER_UNAVAILABLE`
+means provider/usage-control failure or invalid output; `429 RATE_LIMITED` means a limit was hit.
+Keep payment controls working when assistance is unavailable. Do not auto-retry in a loop.
+
+### Route recommendations
+
+`POST /v1/checkout/client/ai/recommendations`
+
+```json
+{
+  "assets": [
+    { "asset_id": "nep141:usdc.test", "balance": "50000000" },
+    { "asset_id": "nep141:eth.test" }
+  ]
+}
+```
+
+Use the current mode's `/v1/checkout/client/tokens` catalog, not these test fixture IDs for live
+requests. Supply one to four distinct assets. Optional `balance` is a wallet-reported integer in
+base units; the API does not independently verify it. Insufficient balances are excluded. Missing
+balances remain eligible with `balance_sufficient: null`; a sufficient token balance does not
+guarantee enough native gas.
+
+`routes` contains asset, symbol, chain, input base units, input USD, output base units, provider ETA
+in seconds (or null), and the balance check. `recommended`, `cheapest`, and `fastest` are asset IDs
+or null. Cheapest/recommended minimize provider-quoted input USD among successful eligible
+candidates; ties prefer known shorter ETA. Fastest compares only candidates with a provider ETA.
+There are no hard-coded fee/speed claims or model-generated prices. `unavailable` lists unsupported,
+insufficient-balance and quote-unavailable candidates; partial success is normal.
+
+These estimates **exclude the shopper's origin-chain gas** and do not promise the lowest total
+cost. Merchant gas sponsorship/deductions and the actual wallet/refund route are resolved when
+the executable quote is created. The response explicitly sets
+`ranking_basis: "quoted_input_usd_excluding_wallet_gas"`, `wallet_gas_included: false`, and
+`requires_fresh_quote: true`. Show these limits next to the comparison.
+
+Previews expire after at most 30 seconds or checkout expiry. `source` distinguishes `live_quotes`
+from `simulated_quotes`; test data never masquerades as live. Every provider request is `dry:true`:
+no deposit address is allocated, no active quote is replaced, and no payment/refund is created.
+Only after the shopper selects a route should the existing `/quote` endpoint run with the actual
+wallet/refund options. Only that response supplies instructions for sending money.
+Expired, settled or in-flight checkouts reject previews with 409. Limits are three previews per
+session/minute, 30 per merchant/minute and 120 across the platform/minute; each compares at most
+four assets with two dry provider calls each. Preview ranking needs no LLM credential.
+
+### Merchant insights
+
+`GET /v1/ai/insights?days=30` returns calculated metrics without an LLM credential.
+`POST /v1/ai/insights` accepts `{ "days": 30, "question": "Where are checkout drop-offs?" }`
+and adds a model-selected explanation. Days must be an integer from 1 to 90; omitted means 30.
+The question is optional (a summary is the default) and limited to 1,000 characters.
+
+Both routes require a dashboard session with `account:read` and the store/mode headers. POST also
+requires CSRF. API keys and checkout session secrets cannot access merchant analytics. Results are
+scoped to the selected merchant and mode, with `Cache-Control: no-store`.
+
+The report compares sessions **created** in the last N days with those created in the preceding N
+days. Each cohort reports sessions created, quoted, with a recorded deposit, settled, expired without
+a deposit, and with a refund record. Multiple quotes/deposits/refunds on one session count once.
+Payment/refund states are current, so an older cohort has had longer to mature: do not present the
+comparison as a controlled experiment. These are session counts, not unique visitors or page views.
+
+Conversion is settled sessions / created sessions, returned as a two-decimal percentage string.
+An empty cohort returns null conversion, and either empty cohort makes the comparison null.
+Automatic refunds of deposits that never settled do not count as conversion. Settled orders that
+were subsequently refunded retain their settlement history; refund records are reported separately.
+`settled_order_totals` contains exact decimal strings grouped by currency. These are order totals,
+not net received amounts or balances; fees/refunds are not subtracted and currencies are never summed.
+Expired-without-deposit counts show a stage, not a proven cause of abandonment.
+
+GET returns `MerchantInsights` from `@tendr/contracts`: `window`, `current`, `previous`,
+`conversion_change_percentage_points`, `facts`, `generated_at`, `source` and `livemode`.
+POST returns `{ report, answer, facts, source: "model_selected_facts", read_only: true }`.
+Render the answer as plain text. Only calculated facts reach the model; raw shopper, wallet,
+merchant identity and order records do not. The selected facts refer to the attached report, which
+is not recomputed during the model call. Six summaries per dashboard member/minute are allowed,
+within the shared model budget above. GET uses normal dashboard rate limits.
+
+### AI theme drafts
+
+`POST /v1/ai/themes` requires a dashboard session with `settings:manage`, CSRF and an
+`Idempotency-Key`. Reuse the same key for a retry of the same generation request.
+
+```json
+{
+  "name": "Midnight draft",
+  "prompt": "A dark checkout with violet accents, rounded corners and clear typography."
+}
+```
+
+The name is required and at most 80 characters; the design prompt is required and at most 2,000.
+The model proposes palettes, curated fonts, corners, celebration, layout and optional CSS. Its
+layout vocabulary is header, order summary, payment, divider and spacer; it must keep exactly one
+header, order summary and payment block. Existing success-page blocks are retained. This version
+does not generate logos/images, HTML, external links, testimonials or merchant copy. The store's
+actual display name is inserted by the server and is never sent to or replaced by the model.
+
+All proposals pass the existing document, contrast and CSS validators before saving. CSS stays
+scoped to merchant content and cannot cover payment controls; generated URLs/imports are rejected.
+Invalid generation creates no theme. Creation also rechecks the 20-theme limit under a merchant
+row lock, shared with normal theme creation, so concurrent generation cannot bypass it.
+
+A successful response is 201 with `{ theme, source: "model_generated_draft", requires_publish: true }`.
+`theme` is the existing `ThemeObject`, unpublished and not default. Existing drafts and published
+themes are untouched. Open the ordinary editor/preview on this new theme, then use the existing
+explicit publish/default actions and their permissions/step-up checks after merchant review.
+Generation never publishes. Test/live share the same theme library, as before.
+
+Three generations per dashboard member/minute are allowed, within the shared model budget.
+Provider errors return 503; rejected presentation returns `THEME_INVALID` (400); a full library
+returns `THEME_LIMIT` (409). Preserve valid existing themes when generation fails. The model
+receives only the redacted design brief and the curated font IDs; prompts are not stored as chat
+history. The new endpoint and example are in the console's **merchant ai** group.
+
+### Remaining AI work
+
+AI risk/brand-impersonation detection, registered-agent budgets/allowlists/approval thresholds
+and MCP are still planned. Paid-plan entitlements and
+production model-quality evaluation are also outstanding. This slice introduces no automated
+payment authority and makes no changes to the existing screening policy.
