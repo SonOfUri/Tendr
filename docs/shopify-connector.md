@@ -34,6 +34,27 @@ to the store admin, then open the storefront. To share access, view or set a sep
 password under **Online Store → Preferences → Password protection**. Shopify requires password
 protection on dev stores; see [development-store access](https://shopify.dev/docs/storefronts/themes/tools/development-stores).
 
+## Registered app and current payment-access blocker
+
+The **Tendr Payments** app was registered on 7 November 2026 in the same Shopify organization
+as the development store. Its linked CLI project is saved locally at
+`.keyvault/shopify-registration/tendr-payments`; the generated `shopify.app.toml` contains the
+registered app's client ID. That local registration project is separate from the connector
+implementation in `apps/shopify` and is ignored by Git.
+
+The current organization's extension picker returns no result for **Offsite**. A CLI generation
+attempt also lists no payments-provider extension among the supported types. The payment
+extension has therefore not been generated, deployed or installed, and **Pay with Tendr** is
+not an available checkout option. The shopper checkout currently shows Shopify's **Test
+Payment Gateway**.
+
+Shopify's [approval process](https://shopify.dev/docs/apps/build/payments/payments-extension-review)
+requires Payments Partner access before building a payments extension. Use an already-approved
+organization if one exists, or submit the [Payments Platform Application](https://www.shopify.com/paymentsplatformapplication).
+Registering an ordinary app and creating a dev store do not grant that capability. Once access
+is granted, link the registered app to the connector, generate the Offsite extension, configure
+its authenticated endpoints, and complete the dev-store installation/testing steps below.
+
 ## Run locally
 
 From the repository root, with Docker running:
