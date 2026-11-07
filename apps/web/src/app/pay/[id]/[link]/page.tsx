@@ -4,7 +4,8 @@ import { headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { cache } from 'react';
 import { serverEnv } from '@/lib/env';
-import { linkDescription, modeQuery } from '@/lib/link-preview';
+import { linkDescription, linkPriceText, linkTheme, modeQuery } from '@/lib/link-preview';
+import { themeDisplayName } from '@/lib/checkout/brand';
 import { fetchPublicLink, payerIpFrom } from '@/lib/payment-links';
 import { LinkPay } from './LinkPay';
 
@@ -33,13 +34,19 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
   if (!view) return missing;
 
   const description = linkDescription(view, test);
+  const merchantName = themeDisplayName(linkTheme(view));
+  const price = linkPriceText(view);
+  const titleCore = price
+    ? `Pay ${price} · ${view.title} · ${merchantName}`
+    : `Pay ${merchantName} · ${view.title}`;
+  const title = test ? `Test · ${titleCore}` : titleCore;
   const base = `${serverEnv().linkBaseUrl}/${merchant}/${link}`;
   const image = { url: `${base}/opengraph-image${modeQuery(test)}`, width: 1200, height: 630 };
   return {
-    title: view.title,
+    title,
     description,
-    openGraph: { type: 'website', title: view.title, description, images: [image] },
-    twitter: { card: 'summary_large_image', title: view.title, description, images: [image.url] },
+    openGraph: { type: 'website', title, description, images: [image] },
+    twitter: { card: 'summary_large_image', title, description, images: [image.url] },
   };
 }
 

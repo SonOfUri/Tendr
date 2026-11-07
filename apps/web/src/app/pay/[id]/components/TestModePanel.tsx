@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { CheckoutClient, SimulateScenario } from '@/lib/checkout/api';
+import { toast } from '@/components/toast';
 
 const PAY: { scenario: SimulateScenario; label: string }[] = [
   { scenario: 'exact', label: 'Pay the exact amount' },
@@ -25,16 +26,14 @@ export function TestModePanel({
   onDone: () => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   async function run(scenario: SimulateScenario) {
     setBusy(true);
-    setError(null);
     try {
       await client.simulate(scenario);
       onDone();
     } catch {
-      setError("Couldn't simulate that. Try again.");
+      toast.error("Couldn't simulate that. Try again.");
     } finally {
       setBusy(false);
     }
@@ -58,11 +57,6 @@ export function TestModePanel({
           </button>
         ))}
       </div>
-      {error ? (
-        <p className="pay-error small" role="alert">
-          {error}
-        </p>
-      ) : null}
     </div>
   );
 }

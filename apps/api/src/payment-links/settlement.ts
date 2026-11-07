@@ -18,7 +18,15 @@ export async function settlementAssetData(livemode: boolean, asset: string | nul
       field: 'settlement_asset',
     });
   }
-  const token = await tokenInfo(livemode, asset);
+  // Prefer the mode's catalog; fall back to live 1Click so test-mode links can settle into the
+  // same Intents assets the dashboard picker shows (saved addresses / withdrawals already do).
+  let token;
+  try {
+    token = await tokenInfo(livemode, asset);
+  } catch (err) {
+    if (livemode || !(err instanceof AppError) || err.code !== 'UNSUPPORTED_ASSET') throw err;
+    token = await tokenInfo(true, asset);
+  }
   return {
     settlementAssetId: token.assetId,
     settlementAssetSymbol: token.symbol,
@@ -37,6 +45,13 @@ export async function linkSettlementOptions(ctx: {
   const current = config ? catalog.get(config.destAssetId) : undefined;
   return {
     livemode: ctx.livemode,
+    chains: [
+      ...new Set(
+        [...catalog.values()]
+          .map((t) => t.blockchain)
+          .filter((chain) => /^[a-z0-9]{1,16}$/.test(chain)),
+      ),
+    ].sort((a, b) => a.localeCompare(b)),
     tokens: [...catalog.values()]
       .filter((t) => SettlementAssetIdSchema.safeParse(t.assetId).success)
       .map((t) => ({

@@ -3,6 +3,7 @@
 import { useEffect, useId, useState } from 'react';
 import { isValidAddress } from '@/lib/checkout/address';
 import { networkName } from '@/lib/checkout/format';
+import { toast } from '@/components/toast';
 
 /**
  * The optional "Your address on <network>, in case we need to send money back" field for a manual
@@ -27,27 +28,30 @@ export function RefundAddressField({
   const id = useId();
   const network = networkName(blockchain);
   const [value, setValue] = useState(saved ?? '');
-  const [invalid, setInvalid] = useState<string | null>(null);
+  const [invalid, setInvalid] = useState(false);
   useEffect(() => setValue(saved ?? ''), [saved]);
+  useEffect(() => {
+    if (error) toast.error(error);
+  }, [error]);
 
   const trimmed = value.trim();
   const changed = trimmed !== (saved ?? '');
 
   function save() {
     if (!trimmed) {
-      setInvalid(null);
+      setInvalid(false);
       onSave(null);
       return;
     }
     if (!isValidAddress(blockchain, trimmed)) {
-      setInvalid(`That doesn't look like a ${network} address. Check it and try again.`);
+      setInvalid(true);
+      toast.error(`That doesn't look like a ${network} address. Check it and try again.`);
       return;
     }
-    setInvalid(null);
+    setInvalid(false);
     onSave(trimmed);
   }
 
-  const message = invalid ?? error;
   return (
     <form
       className="pay-refund"
@@ -64,22 +68,20 @@ export function RefundAddressField({
         <input
           id={id}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            setValue(e.target.value);
+            setInvalid(false);
+          }}
           autoComplete="off"
           spellCheck={false}
-          aria-invalid={message ? true : undefined}
+          aria-invalid={invalid || Boolean(error) || undefined}
           aria-describedby={`${id}-help`}
         />
       </label>
-      <p
-        id={`${id}-help`}
-        className={message ? 'pay-error small' : 'muted small'}
-        aria-live="polite"
-      >
-        {message ??
-          (saved
-            ? 'Saved. If any money needs to come back, it goes to this address.'
-            : 'Leave it empty and the store will help send any money back.')}
+      <p id={`${id}-help`} className="muted small">
+        {saved
+          ? 'Saved. If any money needs to come back, it goes to this address.'
+          : 'Leave it empty and the store will help send any money back.'}
       </p>
       {changed ? (
         <button type="submit" className="pay-button pay-button-secondary" disabled={busy}>

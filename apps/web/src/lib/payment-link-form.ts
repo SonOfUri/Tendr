@@ -21,6 +21,8 @@ export type LinkForm = {
   gasMaxUsd: string;
   /** '' = the store's default theme. */
   themeId: string;
+  /** Null = the store's settlement token. */
+  settlementAsset: string | null;
 };
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -49,6 +51,7 @@ export function formFromLink(link: PaymentLinkView): LinkForm {
     gasPayer: link.gas_payer ?? '',
     gasMaxUsd: link.gas_max_usd ?? '',
     themeId: link.theme_id ?? '',
+    settlementAsset: link.settlement_asset ?? null,
   };
 }
 
@@ -125,6 +128,10 @@ export function buildLinkPatch(link: PaymentLinkView, f: LinkForm): PatchResult 
   }
 
   if (f.themeId !== before.themeId) body.theme_id = f.themeId || null;
+
+  if ((f.settlementAsset ?? null) !== (before.settlementAsset ?? null)) {
+    body.settlement_asset = f.settlementAsset;
+  }
 
   return { body };
 }

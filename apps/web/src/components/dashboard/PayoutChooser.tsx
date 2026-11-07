@@ -166,13 +166,50 @@ export function PayoutChooser({
     );
   }
   if (step === 'waiting') {
+    const pendingId = view.pending!.id;
+    const approvalHref = `/dashboard/approvals/${pendingId}`;
+    async function approvePending() {
+      setBusy(true);
+      setError(null);
+      try {
+        const p = await approveProposal(pendingId, store);
+        const nextOutcome = afterApproval(p.status);
+        if (nextOutcome === 'failed') {
+          setError('The payout change did not go through. Try again.');
+        } else if (nextOutcome === 'done') {
+          const refreshed = await load();
+          setOutcome({
+            k: 'done',
+            symbol: refreshed?.settlement?.symbol ?? 'your settlement token',
+          });
+        } else {
+          setOutcome({ k: 'needs-signers' });
+          void load();
+        }
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setBusy(false);
+      }
+    }
     return (
       <>
         <Alert tone="warning">
-          A payout change for {storeName} is waiting for its signers to approve it. Payments can’t
-          be taken until it does.
+          A payout change for {storeName} is waiting for a passkey approval
+          {view.pending?.status === 'pending' ? ' from every required signer' : ''}. Payments can’t
+          be taken until it finishes.
         </Alert>
-        {onDone ? next : <Link href={`/dashboard/approvals/${view.pending!.id}`}>Open it</Link>}
+        {error ? <Alert tone="danger">{error}</Alert> : null}
+        {onDone ? (
+          next
+        ) : (
+          <div className="actions">
+            <Button disabled={busy} onClick={() => void approvePending()}>
+              {busy ? 'Waiting for your passkey…' : 'Approve with passkey'}
+            </Button>
+            <Link href={approvalHref}>View proposal</Link>
+          </div>
+        )}
       </>
     );
   }
@@ -183,7 +220,7 @@ export function PayoutChooser({
           Available after you go live: {storeName} has no live account yet. Set where live payments
           settle once it is live.
         </Alert>
-        {onDone ? next : <Link href="/dashboard">Go live</Link>}
+        {onDone ? next : <Link href="/dashboard/account">Go live</Link>}
       </>
     );
   }

@@ -376,7 +376,7 @@ impl MerchantAccount {
                 ..
             } => {
                 positive(*amount)?;
-                if !saved::SUPPORTED_CHAINS.contains(&destination_chain.as_str()) {
+                if !saved::is_supported_chain(destination_chain) {
                     return Err("unsupported chain");
                 }
                 self.check_route(asset, route, destination_chain, destination)

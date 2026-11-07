@@ -15,6 +15,7 @@ import {
   type GoLiveStatus,
   type SavedAddress,
 } from '@/lib/api';
+import { ChainLogo } from '@/components/dashboard/asset-logos';
 import { assetInfo, chainLabel, formatAmount, parseUnits } from '@/lib/assets';
 import { draftProposal } from '@/lib/proposals';
 
@@ -78,7 +79,7 @@ export default function SecurityPage() {
       {header}
       {notice && <Alert tone="success">{notice}</Alert>}
 
-      <Panel title="Approval rule">
+      <Panel title="Approval rule" id="approval-rule">
         {account.account ? (
           <ThresholdForm
             current={account.account.threshold}
@@ -471,6 +472,7 @@ function SweepForm({ saved, onDraft }: { saved: SavedAddress[]; onDraft: (id: st
           options={usable.map((a) => ({
             value: a.id,
             label: `${chainLabel(a.chain)} · ${a.address}`,
+            icon: <ChainLogo chain={a.chain} />,
           }))}
         />
       </label>

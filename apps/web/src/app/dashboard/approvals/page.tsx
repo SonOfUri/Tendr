@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { Alert, Button, Spinner } from '@tendr/ui';
+import { CheckCircle2 } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { EmptyState, ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
@@ -94,8 +95,14 @@ export default function ApprovalsPage() {
 
       {none ? (
         <EmptyState
+          icon={<CheckCircle2 size={22} strokeWidth={1.75} />}
           title="No proposals yet"
           description="Withdrawals, security changes, and other actions appear here once someone asks for them."
+          action={
+            <Link href="/dashboard/withdraw" className="dash-empty-cta">
+              Start a withdrawal
+            </Link>
+          }
         />
       ) : (
         <>

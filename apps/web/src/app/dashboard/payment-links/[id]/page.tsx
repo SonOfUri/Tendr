@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { can } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
+import { WifiOff } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import {
@@ -16,6 +17,10 @@ import {
   TextLink,
 } from '@/components/dashboard/ui';
 import { api } from '@/lib/api';
+import { canNativeShare, sharePaymentLink } from '@/lib/share-link';
+import { useOnline } from '@/components/pwa/PwaInstall';
+import { SettlementField } from '@/components/dashboard/SettlementField';
+import { toast } from '@/components/toast';
 import {
   availabilityWords,
   buildLinkPatch,
@@ -53,14 +58,19 @@ export default function PaymentLinkDetailPage() {
   const save = useAction();
   const archive = useAction();
   const [form, setForm] = useState<LinkForm | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [sent, setSent] = useState<'shared' | 'copied' | null>(null);
+  const [nativeShare, setNativeShare] = useState(false);
+  const online = useOnline();
 
   const link = detail.data;
   // Reset the form whenever a different version of the link arrives (load, save, restore).
   useEffect(() => {
     setForm(link ? formFromLink(link) : null);
   }, [link]);
+
+  useEffect(() => {
+    setNativeShare(canNativeShare());
+  }, []);
 
   if (!store || !context) return null;
   const canWrite = can(store.role, 'money:request');
@@ -78,6 +88,7 @@ export default function PaymentLinkDetailPage() {
         <PageHeader title="Payment link" />
         <Panel>
           <EmptyState
+            icon={<WifiOff size={22} strokeWidth={1.75} />}
             title="API offline"
             description="Start Postgres, Redis, and the Tendr API to manage payment links."
           />
@@ -130,24 +141,22 @@ export default function PaymentLinkDetailPage() {
 
   async function onSave(e: React.FormEvent) {
     e.preventDefault();
-    if (!link || !form) return;
-    setNotice(null);
+    if (!online || !link || !form) return;
     const built = buildLinkPatch(link, form);
     if ('error' in built) {
-      save.setError(built.error);
+      toast.error(built.error);
       return;
     }
     if (Object.keys(built.body).length === 0) {
-      save.setError(null);
-      setNotice('No changes to save.');
+      toast.info('No changes to save.');
       return;
     }
     const updated = await patch(built.body, save);
-    if (updated) setNotice('Saved.');
+    if (updated) toast.success('Saved.');
   }
 
   async function onArchive(archived: boolean) {
-    setNotice(null);
+    if (!online) return;
     if (
       archived &&
       !window.confirm(
@@ -157,22 +166,21 @@ export default function PaymentLinkDetailPage() {
       return;
     }
     const updated = await patch({ archived }, archive);
-    if (updated) setNotice(archived ? 'Archived.' : 'Restored.');
+    if (updated) toast.success(archived ? 'Archived.' : 'Restored.');
   }
 
-  async function copyUrl() {
-    try {
-      await navigator.clipboard.writeText(link!.url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* ignore */
-    }
+  async function sendUrl() {
+    const result = await sharePaymentLink(link!.url, link!.title);
+    if (result === 'cancelled' || result === 'failed') return;
+    setSent(result);
+    window.setTimeout(() => setSent(null), 2000);
   }
 
   const fixed = form.amountType === 'fixed';
   const busy = save.busy || archive.busy;
   const paymentsHref = `/dashboard/payments?payment_link_id=${encodeURIComponent(link.id)}`;
+  const sendLabel =
+    sent === 'shared' ? 'Shared' : sent === 'copied' ? 'Copied' : nativeShare ? 'Share' : 'Copy URL';
 
   return (
     <>
@@ -194,17 +202,17 @@ export default function PaymentLinkDetailPage() {
             >
               {availabilityWords(link.availability)}
             </span>
-            <Button variant="secondary" onClick={() => void copyUrl()}>
-              {copied ? 'Copied' : 'Copy URL'}
+            <Button variant="secondary" onClick={() => void sendUrl()}>
+              {sendLabel}
             </Button>
             <TextLink href={paymentsHref}>View payments</TextLink>
             {canWrite ? (
               link.archived ? (
-                <Button disabled={busy} onClick={() => void onArchive(false)}>
+                <Button disabled={busy || !online} onClick={() => void onArchive(false)}>
                   {archive.busy ? 'Restoring…' : 'Restore'}
                 </Button>
               ) : (
-                <Button variant="secondary" disabled={busy} onClick={() => void onArchive(true)}>
+                <Button variant="secondary" disabled={busy || !online} onClick={() => void onArchive(true)}>
                   {archive.busy ? 'Archiving…' : 'Archive'}
                 </Button>
               )
@@ -213,8 +221,6 @@ export default function PaymentLinkDetailPage() {
         }
       />
 
-      {archive.error ? <Alert tone="danger">{archive.error}</Alert> : null}
-      {notice ? <Alert tone="success">{notice}</Alert> : null}
       {link.archived ? (
         <Alert tone="info">
           This link is archived: it takes no payments and is hidden from the default list.
@@ -277,6 +283,12 @@ export default function PaymentLinkDetailPage() {
             <dd>{link.fee_payer ?? 'Business default'}</dd>
             <dt>Gas payer</dt>
             <dd>{link.gas_payer ?? 'Business default'}</dd>
+            <dt>Settlement token</dt>
+            <dd>
+              {link.settlement_symbol
+                ? `${link.settlement_symbol}${link.settlement_chain ? ` · ${link.settlement_chain}` : ''}`
+                : 'Business default'}
+            </dd>
             <dt>Gas cap (USD)</dt>
             <dd>{link.gas_max_usd ?? '—'}</dd>
             <dt>Theme</dt>
@@ -350,11 +362,13 @@ export default function PaymentLinkDetailPage() {
               </label>
               <label className="field">
                 <span>Currency</span>
-                <input
-                  required
+                <Select
+                  ariaLabel="Currency"
+                  className="tendr-select--field"
                   value={form.currency}
-                  onChange={(e) => set('currency', e.target.value)}
-                  placeholder="USD"
+                  disabled
+                  onChange={() => {}}
+                  options={[{ value: form.currency, label: form.currency }]}
                 />
               </label>
               {fixed ? (
@@ -380,12 +394,6 @@ export default function PaymentLinkDetailPage() {
                 </label>
               )}
             </div>
-            {form.currency.trim().toUpperCase() !== link.currency ? (
-              <p className="dash-muted dash-small">
-                Changing the currency needs the {fixed ? 'new amount' : 'minimum'} to be re-entered:
-                old figures are never carried over. The minimum is USD 1.00 equivalent.
-              </p>
-            ) : null}
             <div className="row">
               <label className="field">
                 <span>Status</span>
@@ -472,6 +480,11 @@ export default function PaymentLinkDetailPage() {
                 />
               </label>
             </div>
+            <SettlementField
+              value={form.settlementAsset}
+              onChange={(asset) => set('settlementAsset', asset)}
+              disabled={!online}
+            />
             {themes.error ? (
               <p className="dash-muted dash-small">Themes could not be loaded: {themes.error}</p>
             ) : null}
@@ -479,20 +492,18 @@ export default function PaymentLinkDetailPage() {
               The slug <span className="dash-mono">{link.slug}</span> is part of the shared URL and
               can never change.
             </p>
-            {save.error ? <Alert tone="danger">{save.error}</Alert> : null}
+            {!online ? (
+              <Alert tone="info">You’re offline. Reconnect to save this payment link.</Alert>
+            ) : null}
             <div className="actions">
-              <Button type="submit" disabled={busy}>
+              <Button type="submit" disabled={busy || !online}>
                 {save.busy ? 'Saving…' : 'Save changes'}
               </Button>
               <Button
                 type="button"
                 variant="secondary"
                 disabled={busy}
-                onClick={() => {
-                  setForm(formFromLink(link));
-                  save.setError(null);
-                  setNotice(null);
-                }}
+                onClick={() => setForm(formFromLink(link))}
               >
                 Reset
               </Button>

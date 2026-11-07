@@ -301,7 +301,7 @@ test.describe('checkout themes', () => {
     await expect(root).toHaveAttribute('data-scheme', 'dark');
     expect(
       await root.evaluate((el) => getComputedStyle(el).getPropertyValue('--theme-accent').trim()),
-    ).toBe('#7a72ff');
+    ).toBe('#f5f5f5');
     await expect(page.locator('.tdr-header-name')).toHaveText(/^E2E Shop /);
     await expect(page.getByText('Broken Look')).toHaveCount(0);
     await payExactly(page);

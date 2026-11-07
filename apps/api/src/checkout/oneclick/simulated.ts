@@ -279,8 +279,8 @@ export class SimulatedOneClick implements OneClickProvider {
   }
 
   async quote(req: QuoteRequest): Promise<QuoteResponse> {
-    const origin = token(req.originAsset);
-    const dest = token(req.destinationAsset);
+    const origin = await resolveToken(req.originAsset);
+    const dest = await resolveToken(req.destinationAsset);
     if (!/^\d+$/.test(req.amount) || BigInt(req.amount) === 0n) {
       throw new OneClickError('amount must be a positive integer', 400, 'INVALID_AMOUNT');
     }
@@ -596,10 +596,112 @@ export class SimulatedOneClick implements OneClickProvider {
   }
 }
 
-function token(assetId: string): FixtureToken {
+/** HOT / Omni `nep245:…:<evmChainId>_…` chain id → 1Click blockchain slug. */
+const HOT_EVM_CHAIN: Readonly<Record<string, string>> = {
+  '1': 'eth',
+  '10': 'op',
+  '56': 'bsc',
+  '137': 'pol',
+  '8453': 'base',
+  '42161': 'arb',
+  '43114': 'avax',
+};
+
+function synthesizeFixture(assetId: string): FixtureToken | null {
+  const omft = /^nep141:([a-z0-9]+)(?:-0x[0-9a-fA-F]{40})?\.omft\.near$/i.exec(assetId);
+  if (omft) {
+    const chain = omft[1]!.toLowerCase();
+    return {
+      assetId,
+      symbol: chain.toUpperCase().slice(0, 16),
+      blockchain: chain,
+      decimals: 18,
+      priceMicroUsd: usd(1),
+    };
+  }
+  if (/^nep141:[a-z0-9._-]+$/i.test(assetId)) {
+    const contract = assetId.slice('nep141:'.length);
+    const symbol = (contract.split('.')[0] ?? 'TOKEN').toUpperCase();
+    return {
+      assetId,
+      symbol: symbol.slice(0, 16),
+      blockchain: 'near',
+      decimals: 18,
+      priceMicroUsd: usd(1),
+    };
+  }
+  // HOT multi-token: nep245:v2_1.omni.hot.tg:56_<addr>
+  const hot = /^nep245:[^:]+:(\d+)_/i.exec(assetId);
+  if (hot) {
+    const blockchain = HOT_EVM_CHAIN[hot[1]!] ?? 'near';
+    return {
+      assetId,
+      symbol: 'TOKEN',
+      blockchain,
+      decimals: 18,
+      priceMicroUsd: usd(1),
+    };
+  }
+  if (/^nep245:/i.test(assetId)) {
+    return {
+      assetId,
+      symbol: 'TOKEN',
+      blockchain: 'near',
+      decimals: 18,
+      priceMicroUsd: usd(1),
+    };
+  }
+  return null;
+}
+
+/** Live 1Click rows so test-mode quotes for catalog assets use real decimals/prices. */
+let liveTokenCache: { at: number; byId: Map<string, TokenInfo> } | null = null;
+const LIVE_TOKEN_TTL_MS = 5 * 60_000;
+
+async function liveTokenById(assetId: string): Promise<TokenInfo | null> {
+  if (process.env.NODE_ENV === 'test' || process.env.VITEST === 'true') return null;
+  const hit = liveTokenCache;
+  if (!hit || Date.now() - hit.at >= LIVE_TOKEN_TTL_MS) {
+    try {
+      const { HttpOneClick } = await import('./http.js');
+      const e = env();
+      const client = new HttpOneClick({
+        baseUrl: e.ONECLICK_BASE_URL,
+        ...(e.ONECLICK_API_KEY ? { apiKey: e.ONECLICK_API_KEY } : {}),
+      });
+      const list = await client.tokens();
+      liveTokenCache = {
+        at: Date.now(),
+        byId: new Map(list.map((t) => [t.assetId, t])),
+      };
+    } catch {
+      // Keep a stale cache if present; otherwise fall through to synthesize.
+      if (!liveTokenCache) return null;
+    }
+  }
+  return liveTokenCache?.byId.get(assetId) ?? null;
+}
+
+function fixtureFromLive(row: TokenInfo): FixtureToken {
+  const price = Number(row.priceUsd);
+  return {
+    assetId: row.assetId,
+    symbol: row.symbol,
+    blockchain: row.blockchain,
+    decimals: row.decimals,
+    priceMicroUsd: Number.isFinite(price) && price > 0 ? usd(price) : usd(1),
+  };
+}
+
+async function resolveToken(assetId: string): Promise<FixtureToken> {
   const t = SIM_TOKENS.find((x) => x.assetId === assetId);
-  if (!t) throw new OneClickError(`unsupported asset ${assetId}`, 400, 'UNSUPPORTED_ASSET');
-  return t;
+  if (t) return t;
+  const live = await liveTokenById(assetId);
+  if (live) return fixtureFromLive(live);
+  // Live catalog assets (shopperTokens merges them in test mode) need a priced stand-in.
+  const synthesized = synthesizeFixture(assetId);
+  if (synthesized) return synthesized;
+  throw new OneClickError(`unsupported asset ${assetId}`, 400, 'UNSUPPORTED_ASSET');
 }
 
 function invalidState(message: string): OneClickError {

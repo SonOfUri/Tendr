@@ -4,6 +4,7 @@
 // asset is shown and entered in raw smallest units next to its full id, never with guessed
 // decimals or a guessed symbol.
 import { registeredAsset } from './asset-registry';
+import { chainDisplayName } from './chain-logos';
 
 export interface AssetInfo {
   /** The registry symbol, or the full asset id when the asset is not in the registry. */
@@ -64,7 +65,7 @@ export function poaTokenContract(asset: string): string | null {
   return m ? m[1]! : null;
 }
 
-/** Chains a saved address can be on (the API's SUPPORTED_CHAINS). */
+/** Contract chain names still used by refunds. Saved addresses use the 1Click catalog. */
 export const CHAINS: { id: string; label: string }[] = [
   { id: 'near', label: 'NEAR' },
   { id: 'eth', label: 'Ethereum' },
@@ -80,5 +81,5 @@ export const CHAINS: { id: string; label: string }[] = [
 ];
 
 export function chainLabel(chain: string): string {
-  return CHAINS.find((c) => c.id === chain)?.label ?? chain;
+  return CHAINS.find((c) => c.id === chain)?.label ?? chainDisplayName(chain);
 }

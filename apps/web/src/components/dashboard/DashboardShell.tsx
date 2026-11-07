@@ -8,7 +8,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ComponentType,
 } from 'react';
@@ -39,8 +38,8 @@ import {
   type LucideProps,
 } from 'lucide-react';
 import { Alert, Button, Spinner } from '@tendr/ui';
-import { TendrLogo } from '@/components/TendrLogo';
 import { ThemeMenu } from '@/components/ThemeToggle';
+import { PwaBanners, PwaInstallButton } from '@/components/pwa/PwaInstall';
 import { Select } from '@/components/dashboard/Select';
 import { countdown } from '@/lib/actions';
 import {
@@ -53,6 +52,8 @@ import {
   setCsrfToken,
   setStoreContext,
   type Me,
+  type AccountView,
+  type GoLiveStatus,
   type RecoveryRequest,
   type StoreContext,
   type StoreSummary,
@@ -72,6 +73,10 @@ interface Dashboard {
   uiPreview: boolean;
   /** Next sign-out should leave preview and go to /login. */
   endPreviewSession(): void;
+  /** Current mode uses a single-owner Intents wallet. */
+  nativeWallet: boolean;
+  /** The live account is, or will be, a single-owner Intents wallet. */
+  nativeLive: boolean;
 }
 
 /** Local-only merchant so the dashboard chrome is reviewable when the API is down. */
@@ -125,7 +130,10 @@ type NavGroup = { label: string; items: NavItem[] };
 const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Overview',
-    items: [{ href: '/dashboard', label: 'Account', icon: LayoutDashboard }],
+    items: [
+      { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
+      { href: '/dashboard/account', label: 'Account', icon: Building2 },
+    ],
   },
   {
     label: 'Money',
@@ -135,6 +143,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/dashboard/review', label: 'Review', icon: SearchCheck },
       { href: '/dashboard/approvals', label: 'Approvals', icon: CheckCircle2 },
       { href: '/dashboard/withdraw', label: 'Withdraw', icon: ArrowUpFromLine },
+      { href: '/dashboard/wallet', label: 'Wallet', icon: Wallet },
       { href: '/dashboard/addresses', label: 'Saved addresses', icon: MapPin },
     ],
   },
@@ -159,6 +168,19 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+/** Local API workbench — development, or when the console launcher sets the public flag. */
+const API_CONSOLE_NAV: NavGroup = {
+  label: 'Developer',
+  items: [{ href: '/settings/api-console', label: 'API console', icon: FlaskConical }],
+};
+
+function navGroups(): NavGroup[] {
+  const consoleOn =
+    process.env.NODE_ENV === 'development' ||
+    process.env.NEXT_PUBLIC_API_CONSOLE_ENABLED === 'true';
+  return consoleOn ? [...NAV_GROUPS, API_CONSOLE_NAV] : NAV_GROUPS;
+}
+
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -169,8 +191,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [navOpen, setNavOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [uiPreview, setUiPreview] = useState(false);
-  /** When true, missing session / API falls into UI preview instead of /login. */
-  const allowPreviewRef = useRef(true);
+  const [native, setNative] = useState({ current: false, live: false });
 
   const enterPreview = useCallback(() => {
     const m = PREVIEW_ME;
@@ -185,10 +206,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   useEffect(
     () =>
       onSignedOut(() => {
-        if (allowPreviewRef.current) {
-          enterPreview();
-          return;
-        }
         const here = window.location.pathname + window.location.search;
         router.replace(`/login?next=${encodeURIComponent(here)}`);
       }),
@@ -211,7 +228,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       setUiPreview(false);
       setError(null);
     } catch (err) {
-      if (isSignedOut(err) || (err instanceof ApiError && err.code === 'NETWORK_ERROR')) {
+      if (isSignedOut(err)) return;
+      if (err instanceof ApiError && err.code === 'NETWORK_ERROR') {
         enterPreview();
         return;
       }
@@ -268,8 +286,49 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   const endPreviewSession = useCallback(() => {
-    allowPreviewRef.current = false;
+    // Sign-out always returns to /login. Preview is only used when the API is unreachable.
   }, []);
+
+  useEffect(() => {
+    if (!context || uiPreview) {
+      setNative({ current: false, live: false });
+      return;
+    }
+    const controller = new AbortController();
+    const livemode = context.livemode;
+    void (async () => {
+      try {
+        const current = await api<AccountView>('/v1/account', { signal: controller.signal });
+        let liveNative = current.account?.kind === 'native_intents';
+        if (!livemode || !current.account) {
+          if (!livemode) {
+            const live = await api<AccountView>('/v1/account', {
+              livemode: true,
+              signal: controller.signal,
+            });
+            liveNative = live.account?.kind === 'native_intents';
+            if (!live.account) {
+              const status = await api<GoLiveStatus>('/v1/account/go-live', {
+                signal: controller.signal,
+              });
+              liveNative = status.accountKind === 'native_intents';
+            }
+          } else {
+            const status = await api<GoLiveStatus>('/v1/account/go-live', {
+              signal: controller.signal,
+            });
+            liveNative = status.accountKind === 'native_intents';
+          }
+        }
+        if (!controller.signal.aborted) {
+          setNative({ current: livemode ? liveNative : current.account?.kind === 'native_intents', live: liveNative });
+        }
+      } catch {
+        if (!controller.signal.aborted) setNative({ current: false, live: false });
+      }
+    })();
+    return () => controller.abort();
+  }, [context, uiPreview]);
 
   const value = useMemo<Dashboard | null>(
     () =>
@@ -282,9 +341,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             refresh,
             uiPreview,
             endPreviewSession,
+            nativeWallet: native.current,
+            nativeLive: native.live,
           }
         : null,
-    [me, context, selectStore, refresh, uiPreview, endPreviewSession],
+    [me, context, selectStore, refresh, uiPreview, endPreviewSession, native],
   );
 
   if (error) {
@@ -324,9 +385,20 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       >
         <DashboardTopBar navOpen={navOpen} onToggleNav={() => setNavOpen((v) => !v)} />
         <div className="dash-banners">
+          <PwaBanners />
           {!uiPreview ? <RecoveryBanner /> : null}
           {value.context?.livemode === false ? (
-            <p className="dash-test-banner">Test mode — nothing here moves real money.</p>
+            <div className="dash-test-banner-slot">
+              <div className="dash-test-banner">
+                <span className="dash-test-banner-mark" aria-hidden>
+                  <FlaskConical size={15} strokeWidth={1.85} />
+                </span>
+                <p className="dash-test-banner-copy">
+                  <strong>Test mode</strong>
+                  <span>Nothing here moves real money.</span>
+                </p>
+              </div>
+            </div>
           ) : null}
         </div>
         <button
@@ -342,6 +414,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               <PasskeyGate onDone={refresh} />
             ) : notFoundAt === pathname ? (
               <LinkNotFound />
+            ) : contractRouteBlocked(pathname, native.current, native.live) ? (
+              <ContractRouteNotice />
             ) : (
               children
             )}
@@ -369,6 +443,63 @@ async function performSignOut(opts: {
   }
 }
 
+function visibleNav(nativeWallet: boolean, nativeLive: boolean): NavGroup[] {
+  return navGroups().map((group) => ({
+    ...group,
+    items: group.items.filter((item) => {
+      if (item.href === '/dashboard/wallet') return nativeLive;
+      if (
+        nativeWallet &&
+        (item.href === '/dashboard/security' || item.href === '/dashboard/addresses')
+      ) {
+        return false;
+      }
+      if (nativeLive && item.href === '/dashboard/recovery') return false;
+      return true;
+    }),
+  })).filter((group) => group.items.length > 0);
+}
+
+function contractRouteBlocked(pathname: string, nativeWallet: boolean, nativeLive: boolean): boolean {
+  const security =
+    pathname === '/dashboard/security' || pathname.startsWith('/dashboard/security/');
+  const addresses =
+    pathname === '/dashboard/addresses' || pathname.startsWith('/dashboard/addresses/');
+  const recovery =
+    pathname === '/dashboard/recovery' || pathname.startsWith('/dashboard/recovery/');
+  const secondKey = pathname.startsWith('/dashboard/onboarding/second-key');
+  return (nativeWallet && (security || addresses)) || (nativeLive && (recovery || secondKey));
+}
+
+function ContractRouteNotice() {
+  return (
+    <section className="dash-panel stack">
+      <h1 className="dash-page-title">Single-owner wallet</h1>
+      <p className="dash-muted">
+        This wallet uses its owner’s passkey. Shared signing, saved-address restrictions, spending
+        limits, auto-sweep, and wallet recovery are not available.
+      </p>
+      <Link href="/dashboard/wallet">Open wallet</Link>
+    </section>
+  );
+}
+
+function pageTitle(pathname: string): string {
+  const items = navGroups().flatMap((group) => group.items);
+  const exact = items.find((item) => item.href === pathname);
+  if (exact) return exact.label;
+  if (pathname.startsWith('/dashboard/onboarding/second-key')) return 'Add a second key';
+  if (pathname.startsWith('/dashboard/onboarding/store')) return 'New business';
+  if (pathname.startsWith('/dashboard/payments/')) return 'Payment';
+  if (pathname.startsWith('/dashboard/payment-links/')) return 'Payment link';
+  if (pathname.startsWith('/dashboard/approvals/')) return 'Approval';
+  if (pathname.startsWith('/dashboard/settings/themes/')) return 'Edit theme';
+  const nested = items
+    .filter((item) => item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`))
+    .sort((a, b) => b.href.length - a.href.length)[0];
+  return nested?.label ?? 'Dashboard';
+}
+
 function DashboardTopBar({
   navOpen,
   onToggleNav,
@@ -377,7 +508,9 @@ function DashboardTopBar({
   onToggleNav: () => void;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const { me, context, selectStore } = useDashboard();
+  const title = pageTitle(pathname);
 
   return (
     <header className="dash-top">
@@ -392,15 +525,7 @@ function DashboardTopBar({
         >
           {navOpen ? <X size={18} strokeWidth={1.85} /> : <Menu size={18} strokeWidth={1.85} />}
         </button>
-        <Link href="/dashboard" className="dash-top-brand">
-          <span className="dash-top-brand-mark-wrap">
-            <TendrLogo size={22} className="dash-top-brand-mark" />
-          </span>
-          <span className="dash-top-brand-copy">
-            <span className="dash-top-brand-name">Tendr</span>
-            <span className="dash-top-brand-sub">Merchant dashboard</span>
-          </span>
-        </Link>
+        <p className="dash-top-title">{title}</p>
       </div>
 
       <div className="dash-top-right">
@@ -457,7 +582,7 @@ function DashboardSidebar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { me, store, uiPreview, endPreviewSession } = useDashboard();
+  const { me, store, uiPreview, endPreviewSession, nativeWallet, nativeLive } = useDashboard();
   if (!store) {
     return (
       <aside id="dash-sidebar" className="dash-sidebar" aria-label="Dashboard">
@@ -476,7 +601,7 @@ function DashboardSidebar({
       <SidebarHead collapsed={collapsed} onToggleCollapsed={onToggleCollapsed} />
       <div className="dash-sidebar-scroll">
         <nav className="dash-sidebar-nav">
-          {NAV_GROUPS.map((group) => (
+          {visibleNav(nativeWallet, nativeLive).map((group) => (
             <div key={group.label} className="dash-nav-group">
               <span className="dash-nav-label">{group.label}</span>
               <ul className="dash-nav-list">
@@ -533,6 +658,7 @@ function DashboardSidebar({
             </p>
           </div>
         </div>
+        <PwaInstallButton />
         <button
           type="button"
           className="dash-sidebar-signout"
@@ -562,7 +688,21 @@ function SidebarHead({
   return (
     <div className="dash-sidebar-head">
       <Link href="/dashboard" className="dash-sidebar-logo" aria-label="Tendr">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          className="dash-sidebar-logo-word dash-sidebar-logo-word--on-dark"
+          src="/logo-with-watermark-white.png"
+          alt=""
+        />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          className="dash-sidebar-logo-word dash-sidebar-logo-word--on-light"
+          src="/logo-with-watermark-dark.png"
+          alt=""
+        />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img className="dash-sidebar-logo-mark dash-sidebar-logo-mark--on-dark" src="/logo-white.png" alt="" />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img className="dash-sidebar-logo-mark dash-sidebar-logo-mark--on-light" src="/logo-black.png" alt="" />
       </Link>
       <button

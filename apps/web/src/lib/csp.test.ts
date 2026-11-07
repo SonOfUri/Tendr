@@ -180,6 +180,8 @@ describe('checkoutContentSecurityPolicy (/pay/*)', () => {
     expect(TOKEN_LOGO_HOSTS).toEqual([
       'https://assets.coingecko.com',
       'https://coin-images.coingecko.com',
+      'https://cdn.jsdelivr.net',
+      'https://icons.llamao.fi',
     ]);
     // Fonts: Tendr's own (self-hosted) and uploaded brand fonts; no Google Fonts anywhere.
     expect(d['font-src']).toEqual(["'self'", 'https://assets.usetendr.tech']);
@@ -216,6 +218,14 @@ describe('checkoutContentSecurityPolicy (/pay/*)', () => {
     );
     expect(d['style-src']).toEqual(["'self'", "'unsafe-inline'"]);
     expect(d['font-src']).toEqual(["'self'"]);
+    expect(d['img-src']).toEqual([
+      "'self'",
+      'data:',
+      'blob:',
+      'https://www.dextools.io',
+      ...TOKEN_LOGO_HOSTS,
+    ]);
+    expect(d['img-src']).not.toContain('https:');
   });
 });
 

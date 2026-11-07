@@ -80,6 +80,20 @@ describe('merchant accounts', () => {
     return { user, cred };
   }
 
+  /** Approves test-mode settlement (required by the go-live checklist). */
+  async function setTestPayout(merchantId: string) {
+    await prisma.settlementConfig.create({
+      data: {
+        id: `stc_${randomBytes(8).toString('hex')}`,
+        merchantId,
+        livemode: false,
+        destAssetId: 'nep141:usdc.test',
+        destChain: 'near',
+        payoutMode: 'intents',
+      },
+    });
+  }
+
   const accountRow = (merchantId: string, livemode: boolean) =>
     prisma.merchantAccount.findFirst({ where: { merchantId, livemode } });
 
@@ -287,10 +301,13 @@ describe('merchant accounts', () => {
   describe('go-live', () => {
     it('go_live_blocked_with_one_key', async () => {
       const { merchant, user } = await owner();
-      expect(await goLiveCheck(merchant.id)).toEqual({ ok: false, missing: ['second_key'] });
+      expect(await goLiveCheck(merchant.id)).toEqual({
+        ok: false,
+        missing: ['second_key', 'payout'],
+      });
       await expect(goLive({ merchantId: merchant.id, userId: user.id })).rejects.toMatchObject({
         status: 409,
-        details: { missing: ['second_key'] },
+        details: { missing: ['second_key', 'payout'] },
       });
       expect(await accountRow(merchant.id, true)).toBeNull();
     });
@@ -298,6 +315,7 @@ describe('merchant accounts', () => {
     it('go_live_allowed_with_passkey_plus_recovery', async () => {
       const { merchant, user } = await owner();
       await registerRecoveryKey({ merchantId: merchant.id, userId: user.id }, ed25519Key());
+      await setTestPayout(merchant.id);
       expect(await goLiveCheck(merchant.id)).toEqual({ ok: true, missing: [] });
     });
 
@@ -306,6 +324,7 @@ describe('merchant accounts', () => {
       await addMember(merchant.id, true);
       // A non-signer does not count.
       await addMember(merchant.id, false);
+      await setTestPayout(merchant.id);
       expect(await goLiveCheck(merchant.id)).toEqual({ ok: true, missing: [] });
       expect(await goLiveCheck(merchant.id, 2)).toEqual({ ok: true, missing: [] });
     });
@@ -317,12 +336,16 @@ describe('merchant accounts', () => {
         where: { id: cred.id },
         data: { revokedAt: new Date() },
       });
-      expect(await goLiveCheck(merchant.id)).toEqual({ ok: false, missing: ['second_key'] });
+      expect(await goLiveCheck(merchant.id)).toEqual({
+        ok: false,
+        missing: ['second_key', 'payout'],
+      });
     });
 
     it('go_live_rejects_threshold_above_signers', async () => {
       const { merchant, user } = await owner();
       await registerRecoveryKey({ merchantId: merchant.id, userId: user.id }, ed25519Key());
+      await setTestPayout(merchant.id);
       // The recovery key never counts toward the threshold.
       expect(await goLiveCheck(merchant.id, 2)).toEqual({ ok: false, missing: ['threshold'] });
       expect(await goLiveCheck(merchant.id, 0)).toEqual({ ok: false, missing: ['threshold'] });
@@ -336,6 +359,7 @@ describe('merchant accounts', () => {
       const second = await addMember(merchant.id, true);
       const recovery = ed25519Key();
       await registerRecoveryKey({ merchantId: merchant.id, userId: user.id }, recovery);
+      await setTestPayout(merchant.id);
       const created = await goLive({ merchantId: merchant.id, userId: user.id }, { threshold: 2 });
       expect(created).toMatchObject({
         nearAccountId: 'acme-coffee.tendr.near',
@@ -422,6 +446,7 @@ describe('merchant accounts', () => {
       const actor = { merchantId: merchant.id, userId: user.id };
       const original = ed25519Key();
       await registerRecoveryKey(actor, original);
+      await setTestPayout(merchant.id);
       await goLive(actor);
       await provisionMerchantAccount(merchant.id, true);
 
@@ -469,6 +494,7 @@ describe('merchant accounts', () => {
       const { merchant, user } = await owner();
       const actor = { merchantId: merchant.id, userId: user.id };
       await registerRecoveryKey(actor, ed25519Key());
+      await setTestPayout(merchant.id);
       await goLive(actor);
       await expect(registerRecoveryKey(actor, ed25519Key())).rejects.toMatchObject({
         status: 409,
@@ -495,6 +521,7 @@ describe('merchant accounts', () => {
       const r1 = ed25519Key();
       await registerRecoveryKey(actor, r1);
       const second = await addMember(merchant.id, true);
+      await setTestPayout(merchant.id);
       await goLive(actor, { threshold: 2 });
       const liveId = 'acme-coffee.tendr.near';
 
@@ -715,6 +742,7 @@ describe('merchant accounts', () => {
       const { merchant, user } = await owner();
       await provisionTestAccount(merchant.id);
       const second = await addMember(merchant.id, true);
+      await setTestPayout(merchant.id);
       await goLive({ merchantId: merchant.id, userId: user.id }, { threshold: 2 });
       await provisionMerchantAccount(merchant.id, true);
 

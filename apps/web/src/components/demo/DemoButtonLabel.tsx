@@ -15,7 +15,9 @@ export function DemoButtonLabel({ busy, busyLabel, withLogo, children }: Props) 
   return (
     <span className="demo-btn-label">
       {busy ? <span className="demo-spinner" aria-hidden /> : null}
-      {!busy && withLogo ? <TendrLogo size={18} className="demo-btn-logo" /> : null}
+      {!busy && withLogo ? (
+        <TendrLogo size={18} variant="color" tone="white" className="demo-btn-logo" />
+      ) : null}
       <span>{label}</span>
     </span>
   );

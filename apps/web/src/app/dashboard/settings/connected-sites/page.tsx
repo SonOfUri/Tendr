@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import type { ConnectedSite } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
+import { Globe } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import { EmptyState, ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
@@ -82,6 +83,7 @@ export default function ConnectedSitesPage() {
       <Panel title="Connected">
         {active.length === 0 ? (
           <EmptyState
+            icon={<Globe size={22} strokeWidth={1.75} />}
             title="No sites are connected"
             description={
               <>

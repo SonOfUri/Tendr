@@ -22,6 +22,17 @@ export function apiOrigin(apiBaseUrl: string): string {
   }
 }
 
+/**
+ * Token + chain logos the checkout may show (CoinGecko, Trust Wallet via jsDelivr, DefiLlama).
+ * Listed one by one: the checkout allows no `https:` wildcard for images.
+ */
+export const TOKEN_LOGO_HOSTS: readonly string[] = [
+  'https://assets.coingecko.com',
+  'https://coin-images.coingecko.com',
+  'https://cdn.jsdelivr.net',
+  'https://icons.llamao.fi',
+];
+
 export function contentSecurityPolicy(opts: {
   nonce: string;
   apiBaseUrl: string;
@@ -35,7 +46,7 @@ export function contentSecurityPolicy(opts: {
     `connect-src 'self' ${apiOrigin(opts.apiBaseUrl)}${opts.dev ? ' ws:' : ''}`,
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self'",
-    "img-src 'self' data: blob:",
+    ["img-src 'self' data: blob: https://www.dextools.io", ...TOKEN_LOGO_HOSTS].join(' '),
     "base-uri 'self'",
     "form-action 'self'",
     "worker-src 'self'",
@@ -57,15 +68,6 @@ export function connectContentSecurityPolicy(opts: {
 }): string {
   return `${contentSecurityPolicy(opts)}; frame-src 'none'`;
 }
-
-/**
- * Token logos the checkout may show (`Token.logo_url`, CoinGecko's image hosts). Listed one by
- * one: the checkout allows no `https:` wildcard for images.
- */
-export const TOKEN_LOGO_HOSTS: readonly string[] = [
-  'https://assets.coingecko.com',
-  'https://coin-images.coingecko.com',
-];
 
 /** The only hosts a theme's video block may frame (privacy-enhanced YouTube, Vimeo). */
 export const THEME_VIDEO_HOSTS: readonly string[] = [

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CheckoutClient, Quote, SessionView, Token } from '@/lib/checkout/api';
 import { formatUnits, formatUsd, networkName } from '@/lib/checkout/format';
+import { toast } from '@/components/toast';
 import { Countdown } from './Countdown';
 import { quoteFailure, type QuoteFailure } from './quote-errors';
 import { RefundAddressField } from './RefundAddressField';
@@ -69,6 +70,10 @@ export function QuotePending({
   /** Fetch the price again without a return address. */
   onRetryWithoutRefund?: () => void;
 }) {
+  useEffect(() => {
+    if (refundError && !loading && !blocked) toast.error(refundError);
+  }, [refundError, loading, blocked]);
+
   if (blocked) return <PaymentSentNotice blocked={blocked} onDidntGoThrough={onDidntGoThrough} />;
   if (loading) {
     return (
@@ -78,20 +83,15 @@ export function QuotePending({
     );
   }
   if (!refundError) return null;
-  return (
-    <div className="pay-alert" role="alert">
-      <p>{refundError}</p>
-      {onRetryWithoutRefund ? (
-        <button
-          type="button"
-          className="pay-button pay-button-secondary"
-          onClick={onRetryWithoutRefund}
-        >
-          Continue without a refund address
-        </button>
-      ) : null}
-    </div>
-  );
+  return onRetryWithoutRefund ? (
+    <button
+      type="button"
+      className="pay-button pay-button-secondary"
+      onClick={onRetryWithoutRefund}
+    >
+      Continue without a refund address
+    </button>
+  ) : null;
 }
 
 /**
@@ -195,7 +195,12 @@ export function PayFlow({
         else if (f.kind === 'refund_address') {
           if (reason === 'wallet') return 'refused';
           setRefundError(f.message);
-        } else setFailure(f);
+        } else {
+          setFailure(f);
+          if (f.kind === 'message') toast.error(f.message);
+          else if (f.kind === 'on_its_way') toast.info('Your payment is on its way.');
+          else toast.error('Something went wrong.');
+        }
         return 'failed';
       } finally {
         setLoading(false);
@@ -293,33 +298,24 @@ export function PayFlow({
         </button>
       </div>
 
-      {failure ? (
-        <div className="pay-alert" role="alert">
-          {failure.kind === 'on_its_way' ? (
-            <p>Your payment is on its way. This page updates when it arrives.</p>
-          ) : (
-            <>
-              <p>{failure.kind === 'message' ? failure.message : 'Something went wrong.'}</p>
-              {failure.kind === 'message' && failure.retry ? (
-                <button
-                  type="button"
-                  className="pay-button pay-button-secondary"
-                  onClick={() => void requote(token, refundFor(token), 'retry')}
-                >
-                  Try again
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="pay-button pay-button-secondary"
-                  onClick={() => setStep('choose')}
-                >
-                  Choose another token
-                </button>
-              )}
-            </>
-          )}
-        </div>
+      {failure && failure.kind !== 'on_its_way' ? (
+        failure.kind === 'message' && failure.retry ? (
+          <button
+            type="button"
+            className="pay-button pay-button-secondary"
+            onClick={() => void requote(token, refundFor(token), 'retry')}
+          >
+            Try again
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="pay-button pay-button-secondary"
+            onClick={() => setStep('choose')}
+          >
+            Choose another token
+          </button>
+        )
       ) : null}
 
       {!quote || !amount ? (

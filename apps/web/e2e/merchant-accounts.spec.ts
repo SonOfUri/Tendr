@@ -103,7 +103,7 @@ test.describe.serial('merchant accounts', () => {
     await owner.getByRole('button', { name: 'Confirm and turn on' }).click();
     await expect(owner.getByText('Your recovery kit is on.')).toBeVisible();
 
-    await owner.goto('/dashboard');
+    await owner.goto('/dashboard/account');
     // The test account is provisioned by the worker (in-memory NEAR), then shows as ready.
     const testCard = owner.locator('section.card', {
       has: owner.getByRole('heading', { name: 'Test account' }),

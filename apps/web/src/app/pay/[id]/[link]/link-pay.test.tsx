@@ -71,13 +71,19 @@ describe('link page', () => {
     expect(html).toContain('Note to Acme Studio (optional)');
     expect(html).toMatch(/maxLength="280"|maxlength="280"/);
     expect(html).toContain('Pay with crypto');
-    expect(html).not.toContain('Test mode');
+    expect(html).not.toContain('>Test<');
     // Plain text: kept as written, never turned into a link.
     expect(html).toContain('Line one\nLine two https://evil.example');
     expect(html).not.toContain('href="https://evil.example');
+    expect(html).toContain('demo-checkout-card');
+    expect(html).toContain('demo-pay-page');
+    expect(html).toContain('data-theme=');
+    expect(html).toContain('Switch to');
+    expect(html).toContain('Powered by');
+    expect(html).toContain('demo-checkout-footnote');
   });
 
-  it('draws the link on its theme: title in the order summary, payment sealed', () => {
+  it('shows the payee and trading-as on the demo card', () => {
     const theme = {
       ...tendrShopperTheme('Kola Kicks'),
       id: 'thm_link',
@@ -87,15 +93,12 @@ describe('link page', () => {
     };
     const html = render({ ...FIXED, theme });
     expect(html).toMatch(/class="tdr-theme tdr-page"/);
-    // The title is the theme's order summary block (a merchant block); the default theme puts
-    // the payment block last.
-    expect(html).toMatch(/data-type="order_summary"[\s\S]*Logo design/);
-    const inSealed = html.split('<section class="tdr-payment"')[1]!.replace(/&#x27;/g, "'");
-    expect(inSealed).toContain("You're paying <strong>Acme Studio</strong>");
-    expect(inSealed).toContain('· trading as Kola Kicks');
-    expect(inSealed).toContain('Pay with crypto');
-    expect(inSealed).toContain('Note to Acme Studio (optional)');
-    expect(inSealed).not.toContain('Logo design');
+    expect(html).toContain('demo-checkout-card');
+    expect(html).toContain('Paying Acme Studio');
+    expect(html).toContain('· trading as Kola Kicks');
+    expect(html).toContain('Logo design');
+    expect(html).toContain('Pay with crypto');
+    expect(html).toContain('Note to Acme Studio (optional)');
   });
 
   it('the theme button words label the Pay button, with Tendr formatting the amount (R22)', () => {
@@ -108,16 +111,11 @@ describe('link page', () => {
       };
     };
     const fixed = render({ ...FIXED, theme: withLabel('Grab it for {amount}') });
-    const [outside, inSealed] = fixed.split('<section class="tdr-payment"');
-    expect(inSealed).toContain('<span class="pay-button-label">Grab it for ₦25,000</span>');
-    expect(inSealed).not.toContain('Pay with crypto');
-    // Never outside the sealed block.
-    expect(outside).not.toContain('Grab it');
-    // Unset: today's wording.
+    expect(fixed).toContain('<span class="pay-button-label">Grab it for ₦25,000</span>');
+    expect(fixed).not.toContain('Pay with crypto');
     expect(render({ ...FIXED, theme: withLabel(undefined) })).toContain(
       '<span class="pay-button-label">Pay with crypto</span>',
     );
-    // An open link: the typed amount once valid; Tendr's words until then.
     const open = { ...OPEN, theme: withLabel('Send {amount}') };
     expect(render(open)).toContain('<span class="pay-button-label">Pay with crypto</span>');
     expect(render(open, { ...initialPayState(open), amount: '2500' })).toContain(
@@ -141,7 +139,6 @@ describe('link page', () => {
   });
 
   it('accepts an open RSD amount with decimals and rejects IRT decimals', () => {
-    // The live USD line appears only for an amount the page accepts.
     const rsd = { ...OPEN, currency: 'RSD', min_amount: '100.00', usd_rate: '117.5' };
     const ok = render(rsd, { ...initialPayState(rsd), amount: '100.50' });
     expect(ok).toContain('≈ $0.86');
@@ -164,9 +161,9 @@ describe('link page', () => {
     expect(render(FIXED)).not.toContain('plus fees');
   });
 
-  it('hides the note when the link takes none, and shows the test banner in test mode', () => {
+  it('hides the note when the link takes none, and shows the test chip in test mode', () => {
     expect(render({ ...FIXED, note: 'off' })).not.toContain('Note to');
-    expect(render({ ...FIXED, livemode: false })).toContain('Test mode — no real money moves');
+    expect(render({ ...FIXED, livemode: false })).toContain('>Test<');
   });
 
   it('shows each unavailable state with no pay button', () => {
@@ -203,7 +200,7 @@ describe('link page', () => {
     const html = render(FIXED, state);
     expect(html).toContain('Someone is paying this link right now, try again shortly.');
     expect(html).toMatch(
-      /<button[^>]*type="submit"(?![^>]*disabled)[^>]*><span class="pay-button-label">Pay with crypto/,
+      /<button[^>]*type="submit"(?![^>]*disabled)[^>]*>[\s\S]*<span class="pay-button-label">Pay with crypto/,
     );
   });
 
@@ -226,6 +223,11 @@ describe('link page', () => {
     expect(low).toContain('The minimum is ₦1,700.');
     expect(low).toContain('aria-invalid="true"');
     expect(low).toContain('Pay with crypto');
+    expect(msg(FIXED, 'LIVE_MODE_UNAVAILABLE')).toContain('Live payments are not open yet');
+    expect(msg(FIXED, 'ACCOUNT_NOT_READY')).toContain(
+      'This business isn&#x27;t ready to take payments yet.',
+    );
+    expect(msg(FIXED, 'NETWORK_ERROR')).toContain('We couldn&#x27;t reach Tendr');
   });
 });
 

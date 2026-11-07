@@ -14,7 +14,8 @@ use crate::HOUR;
 pub const SAVED_ADDRESS_DELAY: u64 = 24 * HOUR;
 /// Most saved addresses one account may hold; bounds contract storage.
 pub const MAX_SAVED_ADDRESSES: usize = 50;
-/// Chains a saved address may name. Extend by upgrade.
+/// Chains named before Intents chain ids were accepted as any short slug.
+/// Kept so older tests and callers can list the original set.
 pub const SUPPORTED_CHAINS: [&str; 11] = [
     "near",
     "eth",
@@ -28,6 +29,17 @@ pub const SUPPORTED_CHAINS: [&str; 11] = [
     "tron",
     "btc",
 ];
+
+/// A 1Click `blockchain` id. Any new Intents chain that fits this shape is allowed;
+/// the API still checks the id against the live catalog.
+pub fn is_supported_chain(chain: &str) -> bool {
+    let bytes = chain.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 16
+        && bytes
+            .iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
 
 #[near(serializers = [borsh])]
 #[derive(Clone, Debug, PartialEq, Eq)]

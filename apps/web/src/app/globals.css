@@ -78,17 +78,37 @@ body {
   margin: 0;
   padding: 0;
   min-height: 100%;
-  background: var(--tendr-navy);
+  background: #070707;
   color: var(--tendr-white);
   font-family: var(--tendr-font-sans);
 }
 
 body {
-  background:
-    radial-gradient(1200px 600px at 80% -10%, rgba(64, 53, 245, 0.35), transparent 60%),
-    radial-gradient(900px 500px at -10% 20%, rgba(22, 199, 247, 0.18), transparent 55%),
-    linear-gradient(180deg, #080d1b 0%, #0b1224 45%, #080d1b 100%);
+  background: #070707;
   background-attachment: fixed;
+}
+
+/* Pages outside checkout use the monochrome brand. Checkout keeps its theme tokens. */
+body:not(:has(.pay)):not(:has(.tdr-theme)) {
+  --tendr-navy: #070707;
+  --tendr-indigo: #f2f2f2;
+  --tendr-white: #f5f5f5;
+  --tendr-cyan: #e8e8e8;
+  --tendr-lavender: #cfcfcf;
+  --tendr-muted: #8f8f8f;
+  --tendr-surface: #141414;
+  --tendr-border: rgba(255, 255, 255, 0.12);
+}
+
+body:not(:has(.pay)):not(:has(.tdr-theme)) button[style*='var(--tendr-indigo)']:not(.login-panel-cta) {
+  color: #0a0a0a !important;
+}
+
+/* Alerts only — exclude toasts and demo checkout status chrome (timer / confirming / success). */
+body:not(:has(.pay)):not(:has(.tdr-theme))
+  [role='status']:not(.tendr-toast):not(.demo-transfer-timer):not(.demo-status-card) {
+  background: #181818 !important;
+  color: #f5f5f5 !important;
 }
 
 a {
@@ -99,6 +119,26 @@ a {
 main {
   width: min(1120px, calc(100% - 2rem));
   margin: 0 auto;
+}
+
+/* Dashboard chrome is full-bleed. The marketing header and footer stay off this surface. */
+body:has(.dash-app) main {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+body:has(.dash-app) .site-header,
+body:has(.dash-app) .site-footer {
+  display: none;
+}
+
+/* Installed app: no marketing chrome on login or any other page opened from the home screen. */
+@media (display-mode: standalone) {
+  .site-header,
+  .site-footer {
+    display: none;
+  }
 }
 
 .site-header {
@@ -130,6 +170,13 @@ main {
 /* Geometric mark ships white; invert for light surfaces. */
 .tendr-logo--black {
   filter: invert(1);
+}
+
+/* Powered-by black mark — never invert / never yellow badge. */
+.tendr-logo--color {
+  filter: none;
+  object-fit: contain;
+  border-radius: 6px;
 }
 
 .site-footer-brand {
@@ -450,7 +497,7 @@ body:has(.login-screen) .site-footer .tendr-logo {
 }
 
 /* Alerts (shared component sets a navy fill inline). */
-.auth-shell [role='status'] {
+.auth-shell [role='status']:not(.tendr-toast) {
   background: #181818 !important;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   border-right: 1px solid rgba(255, 255, 255, 0.08);
@@ -725,16 +772,120 @@ code {
   border-color: var(--tendr-cyan);
 }
 
+/* The sheet that "Print or save as PDF" prints. Always a white Tendr document. */
 .print-kit {
   display: grid;
-  gap: 0.75rem;
-  padding: 1.25rem;
-  border: 1px dashed var(--tendr-border);
-  border-radius: var(--tendr-radius);
+  overflow: hidden;
+  background: #fff;
+  color: #111;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 16px;
+  font-family: 'Rethink Sans', var(--tendr-font-sans), sans-serif;
 }
 
-.print-kit h3 {
+.print-kit-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.9rem 1.15rem;
+  background: #e8e120;
+  color: #111;
+}
+
+.print-kit-mark {
+  display: block;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.print-kit-name {
+  font-weight: 700;
+  font-size: 1.45rem;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: #111;
+}
+
+.print-kit-doc {
+  margin-left: auto;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #111;
+}
+
+.print-kit-body {
+  display: grid;
+  gap: 1rem;
+  padding: 1.1rem 1.15rem 1.15rem;
+}
+
+.print-kit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.6rem;
   margin: 0;
+  color: #111;
+  font-size: 0.95rem;
+}
+
+.print-kit-meta span {
+  color: #5c5c5c;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.print-kit-meta code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.9rem;
+  color: #111;
+}
+
+.print-kit .kit-code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: #111;
+}
+
+.print-kit .kit-group {
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  background: #fff;
+  color: #111;
+}
+
+.print-kit .kit-group-confirm {
+  border-color: #111;
+  background: #e8e120;
+}
+
+.print-kit-lower {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.1rem;
+}
+
+.print-kit-copy {
+  display: grid;
+  gap: 0.65rem;
+  align-content: start;
+  min-width: 0;
+}
+
+.print-kit-copy p {
+  margin: 0;
+  color: #3a3a3a;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.print-kit-foot {
+  color: #5c5c5c !important;
+  font-size: 0.8rem !important;
 }
 
 .qr {
@@ -757,8 +908,11 @@ code {
   white-space: nowrap;
 }
 
-/* Printing the recovery kit: only the kit sheet, black on white. */
+/* Printing the recovery kit: only the branded sheet. */
 @media print {
+  @page {
+    margin: 14mm;
+  }
   body {
     background: #fff !important;
   }
@@ -768,13 +922,26 @@ code {
   .print-kit,
   .print-kit * {
     visibility: visible;
-    color: #000 !important;
+    color: #111 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   .print-kit {
     position: absolute;
     inset: 0 auto auto 0;
     width: 100%;
     border: none;
+    border-radius: 0;
+    background: #fff !important;
+  }
+  .print-kit-head,
+  .print-kit .kit-group-confirm {
+    background: #e8e120 !important;
+  }
+  .print-kit .print-kit-meta span,
+  .print-kit .print-kit-copy p,
+  .print-kit .print-kit-foot {
+    color: #3a3a3a !important;
   }
 }
 
@@ -1001,6 +1168,102 @@ code {
   border: 2px solid var(--tendr-border);
   border-top-color: var(--tendr-cyan);
   animation: tendr-spin 0.8s linear infinite;
+}
+
+.pay-status-screen {
+  justify-items: center;
+  text-align: center;
+}
+
+.pay-status-hero {
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  margin: 0.25rem 0 0.35rem;
+}
+
+.pay-status-orb {
+  position: relative;
+  width: 108px;
+  height: 108px;
+  display: grid;
+  place-items: center;
+}
+
+.pay-status-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, var(--tendr-warning, #f59e0b) 55%, transparent);
+  animation: pay-status-pulse 1.8s ease-out infinite;
+}
+
+.pay-status-ring-delay {
+  animation-delay: 0.55s;
+}
+
+@keyframes pay-status-pulse {
+  0% {
+    transform: scale(0.72);
+    opacity: 0.75;
+  }
+  100% {
+    transform: scale(1.28);
+    opacity: 0;
+  }
+}
+
+.pay-status-expired-icon {
+  width: 88px;
+  height: 88px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--tendr-warning, #f59e0b) 16%, var(--tendr-surface, #1a1a1a));
+  color: var(--tendr-warning, #f59e0b);
+  border: 1px solid color-mix(in srgb, var(--tendr-warning, #f59e0b) 35%, var(--tendr-border));
+  box-shadow: 0 0 0 10px color-mix(in srgb, var(--tendr-warning, #f59e0b) 12%, transparent);
+  animation: pay-status-expired-in 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  z-index: 1;
+}
+
+.pay-status-expired-icon svg {
+  animation: pay-status-expired-tick 1.6s ease-in-out infinite;
+  transform-origin: 12px 12px;
+}
+
+@keyframes pay-status-expired-in {
+  0% {
+    transform: scale(0.55) rotate(-8deg);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.06) rotate(2deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes pay-status-expired-tick {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  40% {
+    transform: rotate(12deg);
+  }
+  55% {
+    transform: rotate(-4deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pay-status-ring,
+  .pay-status-expired-icon,
+  .pay-status-expired-icon svg {
+    animation: none;
+  }
 }
 
 .pay-tokens {
@@ -1855,7 +2118,7 @@ code {
 
 @keyframes tdr-pulse {
   0% {
-    box-shadow: inset 0 0 0 0 color-mix(in srgb, var(--theme-accent, #4035f5) 60%, transparent);
+    box-shadow: inset 0 0 0 0 color-mix(in srgb, var(--theme-accent, #f5f5f5) 60%, transparent);
   }
   100% {
     box-shadow: inset 0 0 0 40vmax transparent;
@@ -2030,12 +2293,42 @@ code {
 }
 
 .tendr-select-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   padding: 0.55rem 0.7rem;
   border-radius: 8px;
   font-size: 0.9rem;
   font-weight: 550;
   color: #d8d8d8;
   cursor: pointer;
+}
+
+.tendr-select-option-icon,
+.brand-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 1.15rem;
+  height: 1.15rem;
+  line-height: 0;
+}
+
+.brand-mark svg,
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  object-fit: cover;
+}
+
+.tendr-select-option-label,
+.tendr-select-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tendr-select-option[data-active='true'] {
@@ -2883,8 +3176,8 @@ html[data-appearance='light'] .login-panel-mark--on-light {
   max-width: none;
   padding: 0.75rem 0.85rem;
   border-radius: 12px;
-  background: #f3f7f8;
-  color: #1d3a44;
+  background: #f3f3f5;
+  color: #1a1a1a;
   font-size: 0.82rem;
   line-height: 1.45;
 }
@@ -2894,7 +3187,7 @@ html[data-appearance='light'] .login-panel-mark--on-light {
   width: 1rem;
   height: 1rem;
   margin-top: 0.12rem;
-  color: #0a6f94;
+  color: #161616;
 }
 
 .login-panel a:has(> .login-panel-cta) {
@@ -2935,6 +3228,7 @@ html[data-appearance='light'] .login-panel-mark--on-light {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  color: #f5f5f5;
 }
 
 .login-panel button.login-panel-cta::after,
@@ -3127,7 +3421,8 @@ html[data-appearance='light'] .login-panel-mark--on-light {
   position: fixed;
   top: max(0.85rem, env(safe-area-inset-top, 0px));
   left: 50%;
-  z-index: 1200;
+  /* Above checkout asset layer / wallet chrome on /pay */
+  z-index: 130000;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3147,8 +3442,9 @@ html[data-appearance='light'] .login-panel-mark--on-light {
   padding: 0.85rem 0.85rem 0.85rem 0.7rem;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: #121212;
-  color: #f5f5f5;
+  /* Always dark — light-mode [role=status] overrides must not wash these out. */
+  background: #121212 !important;
+  color: #f5f5f5 !important;
   box-shadow:
     0 12px 32px rgba(0, 0, 0, 0.28),
     0 1px 0 rgba(255, 255, 255, 0.04) inset;
@@ -3185,14 +3481,14 @@ html[data-appearance='light'] .login-panel-mark--on-light {
   font-size: 0.92rem;
   line-height: 1.4;
   letter-spacing: -0.01em;
-  color: #f2f2f2;
+  color: #f2f2f2 !important;
 }
 
 .tendr-toast-dismiss {
   appearance: none;
   border: 0;
   background: transparent;
-  color: #8f8f8f;
+  color: #8f8f8f !important;
   font-size: 1.15rem;
   line-height: 1;
   padding: 0.05rem 0.2rem;
@@ -3201,7 +3497,7 @@ html[data-appearance='light'] .login-panel-mark--on-light {
 }
 
 .tendr-toast-dismiss:hover {
-  color: #f5f5f5;
+  color: #f5f5f5 !important;
   background: rgba(255, 255, 255, 0.06);
 }
 
@@ -3303,14 +3599,25 @@ html[data-appearance='light'] .theme-menu-item:hover {
 
 html[data-appearance='light']:not(:has(.pay)) {
   color-scheme: light;
+  background: #f6f6f7;
   --tendr-navy: #f6f6f7;
-  --tendr-indigo: #4035f5;
+  --tendr-indigo: #161616;
   --tendr-white: #141414;
-  --tendr-cyan: #0a6f94;
-  --tendr-lavender: #3d3a78;
+  --tendr-cyan: #222;
+  --tendr-lavender: #3a3a3a;
   --tendr-muted: #5c6270;
   --tendr-surface: #ffffff;
   --tendr-border: rgba(20, 20, 20, 0.12);
+}
+
+html[data-appearance='light']:not(:has(.pay)) button[style*='var(--tendr-indigo)']:not(.login-panel-cta) {
+  color: #fff !important;
+}
+
+html[data-appearance='light']:not(:has(.pay))
+  [role='status']:not(.tendr-toast):not(.demo-transfer-timer):not(.demo-status-card) {
+  background: #fff !important;
+  color: #161616 !important;
 }
 
 html[data-appearance='dark'] {

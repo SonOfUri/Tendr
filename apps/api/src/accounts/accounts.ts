@@ -663,8 +663,16 @@ export async function retryProvisioning(ctx: ScopeContext): Promise<MerchantAcco
 
 // ─── go-live ─────────────────────────────────────────────────────────────────
 
-/** `live_mode_unavailable`: the platform's live-mode switch is off (always listed first). */
-export type GoLiveMissing = 'live_mode_unavailable' | 'second_key' | 'threshold' | 'wallet_passkey';
+/**
+ * `live_mode_unavailable`: the platform's live-mode switch is off (always listed first).
+ * `payout`: store settlement not approved yet (test before go-live; live after the live account is active).
+ */
+export type GoLiveMissing =
+  | 'live_mode_unavailable'
+  | 'second_key'
+  | 'threshold'
+  | 'wallet_passkey'
+  | 'payout';
 
 function goLiveRule(
   signerCount: number,
@@ -681,7 +689,8 @@ function goLiveRule(
 
 /**
  * The two-key rule for going live with `threshold` (default 1): signers (with an active passkey)
- * plus the recovery key must be at least 2, and `1 <= threshold <= signers`.
+ * plus the recovery key must be at least 2, and `1 <= threshold <= signers`. Also requires an
+ * approved test-mode payout (settlement) so payment links are not stuck on merchant_not_ready.
  */
 export async function goLiveCheck(
   merchantId: string,
@@ -696,13 +705,22 @@ export async function goLiveCheck(
     const missing: GoLiveMissing[] = [];
     if (threshold !== 1) missing.push('threshold');
     if (live?.status !== 'active') missing.push('wallet_passkey');
+    else {
+      const livePayout = await db.settlementConfig.findFirst({
+        where: { merchantId, livemode: true },
+      });
+      if (!livePayout) missing.push('payout');
+    }
     return { ok: missing.length === 0, missing };
   }
-  const [signers, recovery] = await Promise.all([
+  const [signers, recovery, testPayout] = await Promise.all([
     signerSet(db, merchantId),
     activeRecoveryKey(db, merchantId),
+    db.settlementConfig.findFirst({ where: { merchantId, livemode: false } }),
   ]);
-  return goLiveRule(signers.length, recovery !== null, threshold);
+  const check = goLiveRule(signers.length, recovery !== null, threshold);
+  if (!testPayout) check.missing.push('payout');
+  return { ok: check.missing.length === 0, missing: check.missing };
 }
 
 /**
@@ -718,8 +736,15 @@ export async function goLiveStatus(merchantId: string, threshold = 1): Promise<G
   ]);
   // While the live-mode switch is off, that is the first thing missing, whatever else is.
   const missing: GoLiveMissing[] = liveModeOpen()
-    ? check.missing
+    ? [...check.missing]
     : ['live_mode_unavailable', ...check.missing];
+  // After the live account is active, payments need a live payout too (test payout is not enough).
+  if (live?.status === 'active' && live.kind !== 'native_intents') {
+    const livePayout = await prisma.settlementConfig.findFirst({
+      where: { merchantId, livemode: true },
+    });
+    if (!livePayout && !missing.includes('payout')) missing.push('payout');
+  }
   return {
     ...(live?.kind === 'native_intents' || (!live && env().LIVE_ACCOUNT_DRIVER === 'native_intents')
       ? {

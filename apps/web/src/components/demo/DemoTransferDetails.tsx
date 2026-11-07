@@ -60,9 +60,18 @@ type Props = {
   symbol: string;
   network: string;
   deadline: string;
+  /** Fake address — warn shoppers not to send real funds. */
+  testMode?: boolean;
 };
 
-export function DemoTransferDetails({ address, amount, symbol, network, deadline }: Props) {
+export function DemoTransferDetails({
+  address,
+  amount,
+  symbol,
+  network,
+  deadline,
+  testMode = false,
+}: Props) {
   const now = useNow();
   const left = Date.parse(deadline) - now;
   const expired = left <= 0;
@@ -120,11 +129,20 @@ export function DemoTransferDetails({ address, amount, symbol, network, deadline
       </div>
 
       <p className="demo-transfer-warn" role="note">
-        Send only on <strong>{network}</strong>, exactly{' '}
-        <strong>
-          {amount} {symbol}
-        </strong>
-        . Wrong network or amount can lose funds.
+        {testMode ? (
+          <>
+            <strong>Test mode</strong> — this address is fake. Don&apos;t send real{' '}
+            {symbol}. Use Simulate a payment instead.
+          </>
+        ) : (
+          <>
+            Send only on <strong>{network}</strong>, exactly{' '}
+            <strong>
+              {amount} {symbol}
+            </strong>
+            . Wrong network or amount can lose funds.
+          </>
+        )}
       </p>
     </div>
   );

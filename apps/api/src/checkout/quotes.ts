@@ -59,6 +59,7 @@ import {
   type QuoteRequest,
   type QuoteResponse,
   type StatusResponse,
+  type TokenInfo,
 } from './oneclick/index.js';
 import {
   assertOutputWithinTarget,
@@ -504,7 +505,21 @@ const POPULAR_SYMBOLS = ['USDC', 'USDT', 'ETH', 'BTC', 'SOL', 'wNEAR', 'NEAR'];
 
 /** The mode's 1Click tokens (cached 5 min), popular first, then by symbol and chain. */
 export async function shopperTokens(livemode: boolean) {
-  const tokens = [...(await tokenList(livemode)).values()];
+  // Test mode's fixture is a small stand-in for quoting. Merge the live catalog so the asset
+  // modal matches demo (same pattern as knownIntentsChains / settlement pickers).
+  const lists = [tokenList(livemode)];
+  if (!livemode && process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
+    lists.push(tokenList(true));
+  }
+  const loaded = await Promise.all(lists.map((list) => list.catch(() => null)));
+  const byId = new Map<string, TokenInfo>();
+  for (const list of loaded) {
+    if (!list) continue;
+    for (const [id, t] of list) {
+      if (!byId.has(id)) byId.set(id, t);
+    }
+  }
+  const tokens = [...byId.values()];
   const rank = (symbol: string) => {
     const i = POPULAR_SYMBOLS.indexOf(symbol);
     return i === -1 ? POPULAR_SYMBOLS.length : i;

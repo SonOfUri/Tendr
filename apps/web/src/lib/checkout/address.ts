@@ -19,9 +19,12 @@ const EVM = new Set([
   'monad',
   'xlayer',
   'plasma',
+  'scroll',
+  'hood',
+  'abs',
 ]);
 
-function chainFamily(blockchain: string): ChainFamily {
+export function chainFamily(blockchain: string): ChainFamily {
   const b = blockchain.toLowerCase();
   if (EVM.has(b)) return 'evm';
   if (b === 'sol' || b === 'solana') return 'solana';

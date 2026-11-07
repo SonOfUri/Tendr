@@ -20,6 +20,9 @@ const EVM = new Set([
   'monad',
   'xlayer',
   'plasma',
+  'scroll',
+  'hood',
+  'abs',
 ]);
 
 /** The address family of a 1Click `blockchain` id ("eth", "sol", "tron", "near", "btc", …). */

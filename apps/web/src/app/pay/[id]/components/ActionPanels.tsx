@@ -2,26 +2,28 @@
 
 import { useState } from 'react';
 import { CheckoutApiError, type CheckoutClient, type SessionRefund } from '@/lib/checkout/api';
+import { toast } from '@/components/toast';
 import { ReturnAddressForm } from './ReturnAddressForm';
 
 /** Email capture: a return needs the shopper's address and the store gave no email. */
 export function EmailPanel({ client, onDone }: { client: CheckoutClient; onDone: () => void }) {
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [invalid, setInvalid] = useState(false);
 
   async function send() {
     setBusy(true);
-    setError(null);
+    setInvalid(false);
     try {
       await client.email(email.trim());
       onDone();
     } catch (err) {
-      setError(
+      const msg =
         err instanceof CheckoutApiError && err.code === 'VALIDATION_ERROR'
           ? 'Enter a valid email address.'
-          : 'Something went wrong. Please try again.',
-      );
+          : 'Something went wrong. Please try again.';
+      setInvalid(true);
+      toast.error(msg);
     } finally {
       setBusy(false);
     }
@@ -45,17 +47,15 @@ export function EmailPanel({ client, onDone }: { client: CheckoutClient; onDone:
           <input
             type="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              setInvalid(false);
+            }}
             autoComplete="email"
             required
-            aria-invalid={error ? true : undefined}
+            aria-invalid={invalid || undefined}
           />
         </label>
-        {error ? (
-          <p className="pay-error small" role="alert">
-            {error}
-          </p>
-        ) : null}
         <button type="submit" className="pay-button" disabled={busy || !email.trim()}>
           {busy ? 'Saving…' : 'Send me the link'}
         </button>

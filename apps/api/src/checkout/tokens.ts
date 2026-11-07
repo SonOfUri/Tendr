@@ -45,15 +45,23 @@ export async function tokenList(livemode: boolean): Promise<Map<string, TokenInf
 /** One asset's info. Throws UNSUPPORTED_ASSET (400) when the provider does not list it. */
 export async function tokenInfo(livemode: boolean, assetId: string): Promise<TokenInfo> {
   const token = (await tokenList(livemode)).get(assetId);
-  if (!token) {
-    throw new AppError(
-      'UNSUPPORTED_ASSET',
-      `Asset ${assetId} is not supported by the swap provider`,
-      400,
-      { asset: assetId },
-    );
+  if (token) return token;
+  // Test mode's fixture is small; shopperTokens also merges the live catalog — resolve those
+  // assets from live 1Click so quotes don't 400 after the picker shows them.
+  if (!livemode && process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
+    try {
+      const live = (await tokenList(true)).get(assetId);
+      if (live) return live;
+    } catch {
+      // Fall through to UNSUPPORTED_ASSET.
+    }
   }
-  return token;
+  throw new AppError(
+    'UNSUPPORTED_ASSET',
+    `Asset ${assetId} is not supported by the swap provider`,
+    400,
+    { asset: assetId },
+  );
 }
 
 /** An asset's display label for store-facing views. */

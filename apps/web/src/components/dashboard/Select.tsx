@@ -15,6 +15,8 @@ export type SelectOption = {
   value: string;
   label: string;
   disabled?: boolean;
+  /** Shown beside the label in the menu and on the closed control. */
+  icon?: ReactNode;
 };
 
 type SelectProps = {
@@ -147,7 +149,9 @@ export function Select({
         onClick={() => setOpen((v) => !v)}
         onKeyDown={onTriggerKey}
       >
-        {leading ? <span className="tendr-select-leading">{leading}</span> : null}
+        {leading || selected?.icon ? (
+          <span className="tendr-select-leading">{leading ?? selected?.icon}</span>
+        ) : null}
         <span className="tendr-select-label">{label}</span>
         <span className="tendr-select-chevron" aria-hidden>
           <ChevronDown size={14} strokeWidth={2} />
@@ -182,7 +186,8 @@ export function Select({
                   if (!opt.disabled) commit(opt.value);
                 }}
               >
-                {opt.label}
+                {opt.icon ? <span className="tendr-select-option-icon">{opt.icon}</span> : null}
+                <span className="tendr-select-option-label">{opt.label}</span>
               </li>
             );
           })}

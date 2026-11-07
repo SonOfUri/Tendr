@@ -81,6 +81,8 @@ export interface LinkSettlementToken {
 export interface LinkSettlementOptions {
   livemode: boolean;
   tokens: LinkSettlementToken[];
+  /** Every 1Click `blockchain` id in this mode's catalog, including chains with no NEP-141 token. */
+  chains: string[];
   store_default: {
     asset: string;
     symbol: string | null;

@@ -3,13 +3,15 @@
 import type { PaymentLinkAvailability, PublicPaymentLinkView } from '@tendr/contracts';
 import { PAYER_NOTE_MAX } from '@tendr/contracts';
 import { useEffect, useMemo, useState } from 'react';
-import { BlockCanvas } from '@/components/theme/BlockCanvas';
+import { TendrLogo } from '@/components/TendrLogo';
+import { toast } from '@/components/toast';
 import { payButtonLabel } from '@/components/theme/pay-label';
-import { WithPayBar } from '@/components/theme/PayBar';
 import { ThemedPage } from '@/components/theme/ThemedPage';
+import { themeDisplayName, themeLogoUrl } from '@/lib/checkout/brand';
 import { safeHttpUrl } from '@/lib/checkout/format';
 import { parseShopperTheme } from '@/lib/theme/parse';
-import { PayeeLine } from '../components/CheckoutHeader';
+import { themeDataScheme, themeScheme } from '@/lib/theme/vars';
+import { useScheme } from '@/lib/theme/use-scheme';
 import {
   decimalLess,
   formatLinkAmount,
@@ -18,6 +20,7 @@ import {
   usdEquivalent,
   type LinkPayError,
 } from '@/lib/payment-links-client';
+import './link-pay.css';
 
 const UNAVAILABLE: Record<PaymentLinkAvailability, string> = {
   available: '',
@@ -33,6 +36,9 @@ const BUSY = 'Too many people are paying right now. Try again in a minute.';
 const NO_PRICES = "Prices can't be loaded right now. Try again in a minute.";
 const TOO_SMALL = 'This amount is too small to pay in crypto right now.';
 const FAILED = "We couldn't start the payment. Try again.";
+const LIVE_OFF = 'Live payments are not open yet. Open this link in test mode (?mode=test).';
+const ACCOUNT_GAP = "This business isn't ready to take payments yet.";
+const NETWORK = "We couldn't reach Tendr. Check your connection and try again.";
 
 /** A payment this tab started from the link: its hosted checkout and when the session expires. */
 export interface PendingPayment {
@@ -166,8 +172,15 @@ export function applyPayError(
       return view.amount_type === 'open'
         ? { ...next, fieldError: 'Enter a valid amount.' }
         : { ...next, message: FAILED };
+    case 'LIVE_MODE_UNAVAILABLE':
+      return { ...next, message: LIVE_OFF };
+    case 'ACCOUNT_NOT_READY':
+    case 'UNSUPPORTED_ASSET':
+      return { ...next, message: ACCOUNT_GAP };
+    case 'NETWORK_ERROR':
+      return { ...next, message: NETWORK };
     default:
-      return { ...next, message: FAILED };
+      return { ...next, message: error.message?.trim() ? error.message : FAILED };
   }
 }
 
@@ -182,9 +195,8 @@ interface BodyProps {
 }
 
 /**
- * The page itself, from its state (LinkPay owns the state and the request), on the theme's canvas:
- * the link's title and description fill the order summary block, and the sealed payment block
- * holds the payee, the amount (or amount box), the note and the Pay button.
+ * Same checkout-card chrome as `/demo` (white card, store header, black CTA, Tendr footnote).
+ * Still starts a real checkout session via the public payment-links API.
  */
 export function LinkPayBody({
   view,
@@ -194,9 +206,28 @@ export function LinkPayBody({
   onNote,
   onSubmit,
 }: BodyProps) {
-  // A theme that doesn't parse is the Tendr default look; the link still takes payments.
   const theme = useMemo(() => parseShopperTheme(view.theme, view.merchant.name), [view]);
+  const preferred = useScheme(theme.document.settings.mode);
+  const scheme = themeScheme(theme.document.settings.mode, preferred);
+  const dataScheme = themeDataScheme(theme, scheme);
+  const [canvasTheme, setCanvasTheme] = useState<'light' | 'dark'>(
+    () => (dataScheme === 'dark' ? 'dark' : 'light'),
+  );
+  useEffect(() => {
+    setCanvasTheme(dataScheme === 'dark' ? 'dark' : 'light');
+  }, [dataScheme]);
+  useEffect(() => {
+    if (state.fieldError) toast.error(state.fieldError);
+  }, [state.fieldError]);
+  useEffect(() => {
+    if (state.message) toast.error(state.message);
+  }, [state.message]);
+  useEffect(() => {
+    if (state.tooSmall) toast.error(TOO_SMALL);
+  }, [state.tooSmall]);
   const payee = view.merchant.name;
+  const brand = themeDisplayName(theme);
+  const logo = themeLogoUrl(theme);
   const open = view.amount_type === 'open';
   const typed = open ? parseLinkAmount(state.amount, view.minor_units) : null;
   const usd = open
@@ -207,7 +238,6 @@ export function LinkPayBody({
       ? usdEquivalent(view.amount, view.currency, view.usd_rate)
       : null;
   const available = state.availability === 'available';
-  // The amount as the page shows it: the fixed price, or a valid typed amount (else none yet).
   const amountText = open
     ? typed?.ok
       ? money(typed.amount, view)
@@ -215,59 +245,128 @@ export function LinkPayBody({
     : view.amount
       ? money(view.amount, view)
       : null;
-  // The theme's button words (R22), `{amount}` filled with Tendr's formatted amount.
   const payLabel = payButtonLabel(
     theme.document.settings.button_label,
     amountText,
     'Pay with crypto',
   );
+  const initial = (brand || payee).trim().charAt(0).toUpperCase() || 'T';
 
-  const summary = (
-    <div className="pay-section">
-      <h1 id="link-title" className="pay-title">
-        {view.title}
-      </h1>
-      {view.description ? <p className="pay-link-description">{view.description}</p> : null}
-    </div>
-  );
-
-  const sealed = (
-    <>
-      <header className="pay-header">
-        <PayeeLine payee={payee} tradingAs={theme.trading_as} />
-        {!view.livemode ? (
-          <p className="pay-test-banner small" role="note">
-            Test mode — no real money moves
-          </p>
-        ) : null}
-      </header>
-
-      <section className="pay-section" aria-label="Payment">
-        {continueUrl ? (
-          <div className="pay-link-continue" role="status">
-            <p className="small">You already started paying this link.</p>
-            <a className="pay-button" href={continueUrl}>
-              Continue your payment
-            </a>
-          </div>
-        ) : null}
-
-        {!available ? (
-          <p className="pay-alert" role="status">
-            {UNAVAILABLE[state.availability]}
-          </p>
-        ) : (
-          <form
-            className="form pay-link-form"
-            noValidate
-            onSubmit={(e) => {
-              e.preventDefault();
-              onSubmit();
-            }}
+  return (
+    <ThemedPage theme={theme}>
+      <div
+        className="demo-pay-page"
+        data-theme={canvasTheme}
+        data-scheme={dataScheme}
+        data-testid="link-pay-page"
+      >
+        <div className="demo-pay-chrome">
+          <button
+            type="button"
+            className="demo-pay-theme-toggle"
+            aria-label={canvasTheme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            onClick={() => setCanvasTheme((t) => (t === 'light' ? 'dark' : 'light'))}
           >
-            {open ? (
-              <div className="pay-link-amount">
-                <label className="field">
+            {canvasTheme === 'light' ? (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path
+                  d="M21 14.3A8.5 8.5 0 0 1 9.7 3 7 7 0 1 0 21 14.3Z"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <circle cx="12" cy="12" r="4.2" stroke="currentColor" strokeWidth="1.7" />
+                <path
+                  d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.1 5.1l1.6 1.6M17.3 17.3l1.6 1.6M18.9 5.1l-1.6 1.6M6.7 17.3l-1.6 1.6"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                />
+              </svg>
+            )}
+          </button>
+        </div>
+        <div
+          className="demo-checkout-card demo-checkout-card-in"
+          data-testid="link-pay-card"
+          role="dialog"
+          aria-labelledby="link-title"
+        >
+          <div className="demo-checkout-card-top">
+            <div className="demo-checkout-store">
+              {logo ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  className="demo-checkout-store-logo"
+                  src={logo}
+                  alt=""
+                  width={40}
+                  height={40}
+                />
+              ) : (
+                <span
+                  className="demo-checkout-store-logo demo-checkout-store-logo-fallback"
+                  aria-hidden
+                >
+                  {initial}
+                </span>
+              )}
+              <div>
+                <p className="demo-card-label">
+                  Paying {payee}
+                  {theme.trading_as && theme.trading_as !== payee
+                    ? ` · trading as ${theme.trading_as}`
+                    : ''}
+                </p>
+                <h1 id="link-title" className="demo-checkout-title">
+                  {view.title}
+                </h1>
+              </div>
+            </div>
+            {!view.livemode ? (
+              <p className="demo-pay-test" role="note">
+                Test
+              </p>
+            ) : null}
+          </div>
+
+          {!open && view.amount ? (
+            <p className="demo-checkout-amount">{money(view.amount, view)}</p>
+          ) : null}
+          {!open && usd ? <p className="demo-pay-meta">≈ {usd}</p> : null}
+          {!open && view.fee_payer === 'shopper' ? (
+            <p className="demo-pay-meta">plus fees, shown before you pay</p>
+          ) : null}
+
+          {view.description ? <p className="demo-checkout-desc">{view.description}</p> : null}
+
+          {continueUrl ? (
+            <div className="demo-pay-continue" role="status">
+              <p>You already started paying this link.</p>
+              <a className="demo-checkout-primary" href={continueUrl}>
+                Continue your payment
+              </a>
+            </div>
+          ) : null}
+
+          {!available ? (
+            <p className="demo-pay-alert" role="status">
+              {UNAVAILABLE[state.availability]}
+            </p>
+          ) : (
+            <form
+              className="demo-pay-form"
+              noValidate
+              onSubmit={(e) => {
+                e.preventDefault();
+                onSubmit();
+              }}
+            >
+              {open ? (
+                <label className="demo-pay-field">
                   <span>Amount ({view.currency})</span>
                   <input
                     name="amount"
@@ -279,87 +378,50 @@ export function LinkPayBody({
                     aria-invalid={state.fieldError ? true : undefined}
                     aria-describedby="link-amount-help"
                   />
+                  <div id="link-amount-help">
+                    {view.min_amount ? (
+                      <p className="demo-pay-meta">Minimum {money(view.min_amount, view)}</p>
+                    ) : null}
+                    {usd ? (
+                      <p className="demo-pay-meta" aria-live="polite">
+                        ≈ {usd}
+                      </p>
+                    ) : null}
+                  </div>
                 </label>
-                <div id="link-amount-help">
-                  {state.fieldError ? (
-                    <p className="pay-error small" role="alert">
-                      {state.fieldError}
-                    </p>
-                  ) : null}
-                  {view.min_amount ? (
-                    <p className="muted small">Minimum {money(view.min_amount, view)}</p>
-                  ) : null}
-                  {usd ? (
-                    <p className="muted small" aria-live="polite">
-                      ≈ {usd}
-                    </p>
-                  ) : null}
-                </div>
-              </div>
-            ) : (
-              <p className="pay-link-price">
-                <strong className="pay-total">
-                  {view.amount ? money(view.amount, view) : null}
-                </strong>
-                {usd ? <span className="muted"> ≈ {usd}</span> : null}
-              </p>
-            )}
-            {view.fee_payer === 'shopper' ? (
-              <p className="muted small">plus fees, shown before you pay</p>
-            ) : null}
+              ) : null}
 
-            {view.note === 'optional' ? (
-              <label className="field">
-                <span>Note to {payee} (optional)</span>
-                <input
-                  name="note"
-                  maxLength={PAYER_NOTE_MAX}
-                  autoComplete="off"
-                  value={state.note}
-                  onChange={(e) => onNote(e.target.value)}
-                />
-              </label>
-            ) : null}
+              {view.note === 'optional' ? (
+                <label className="demo-pay-field">
+                  <span>Note to {payee} (optional)</span>
+                  <input
+                    name="note"
+                    maxLength={PAYER_NOTE_MAX}
+                    autoComplete="off"
+                    value={state.note}
+                    onChange={(e) => onNote(e.target.value)}
+                  />
+                </label>
+              ) : null}
 
-            {state.tooSmall ? (
-              <p className="pay-error small" role="alert">
-                {TOO_SMALL}
-              </p>
-            ) : (
-              <>
-                {state.message ? (
-                  <p className="pay-error small" role="alert">
-                    {state.message}
-                  </p>
-                ) : null}
-                <button type="submit" className="pay-button" disabled={state.busy}>
-                  <span className="pay-button-label">
-                    {state.busy ? <span className="pay-button-spinner" aria-hidden /> : null}
-                    {payLabel}
-                  </span>
+              {!state.tooSmall ? (
+                <button type="submit" className="demo-checkout-primary" disabled={state.busy}>
+                  {state.busy ? <span className="demo-cta-spinner" aria-hidden /> : null}
+                  <span className="pay-button-label">{payLabel}</span>
                 </button>
-              </>
-            )}
-          </form>
-        )}
-      </section>
-    </>
-  );
+              ) : null}
+            </form>
+          )}
 
-  return (
-    <ThemedPage theme={theme}>
-      <div className="pay-card">
-        <WithPayBar
-          amount={amountText ?? 'Choose an amount'}
-          payee={payee}
-          enabled={available && !state.tooSmall}
-        >
-          <BlockCanvas
-            blocks={theme.document.blocks}
-            theme={theme}
-            slots={{ payment: sealed, orderSummary: summary }}
-          />
-        </WithPayBar>
+          <p className="demo-checkout-footnote">
+            <TendrLogo
+              size={22}
+              variant="color"
+              tone={canvasTheme === 'dark' ? 'white' : 'black'}
+            />
+            Powered by <strong>Tendr</strong>
+          </p>
+        </div>
       </div>
     </ThemedPage>
   );

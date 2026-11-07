@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { can } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
+import { Palette, WifiOff } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import { EmptyState, ErrorState, PageHeader, Panel, Select } from '@/components/dashboard/ui';
@@ -144,6 +145,7 @@ export default function ThemesPage() {
       {uiPreview ? (
         <Panel>
           <EmptyState
+            icon={<WifiOff size={22} strokeWidth={1.75} />}
             title="API offline"
             description="Start Postgres, Redis, and the Tendr API to manage checkout themes."
           />
@@ -236,13 +238,14 @@ export default function ThemesPage() {
               <Spinner label="Loading themes" />
             ) : themes.length === 0 ? (
               <EmptyState
+                icon={<Palette size={22} strokeWidth={1.75} />}
                 title="No custom themes"
                 description="Start from a preset or a blank draft. Publish only when the checkout look is ready."
                 action={
                   canWrite ? (
-                    <Button variant="secondary" onClick={() => setCreating(true)}>
+                    <button type="button" className="dash-empty-cta" onClick={() => setCreating(true)}>
                       New theme
-                    </Button>
+                    </button>
                   ) : null
                 }
               />

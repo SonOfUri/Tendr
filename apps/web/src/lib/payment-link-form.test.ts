@@ -27,6 +27,9 @@ function link(over: Partial<PaymentLinkView> = {}): PaymentLinkView {
     gas_payer: null,
     gas_max_usd: null,
     theme_id: null,
+    settlement_asset: null,
+    settlement_symbol: null,
+    settlement_chain: null,
     status: 'active',
     archived: false,
     availability: 'available',
@@ -130,6 +133,19 @@ describe('buildLinkPatch', () => {
     });
     expect(buildLinkPatch(l, withForm(l, { expiresAt: '2026-01-01T00:00' }))).toEqual({
       error: 'Expiry must be in the future',
+    });
+  });
+
+  it('sends settlement_asset only when the choice changes', () => {
+    const l = link();
+    const f = formFromLink(l);
+    expect(buildLinkPatch(l, f)).toEqual({ body: {} });
+    expect(buildLinkPatch(l, { ...f, settlementAsset: 'nep141:usdc.near' })).toEqual({
+      body: { settlement_asset: 'nep141:usdc.near' },
+    });
+    const pinned = link({ settlement_asset: 'nep141:usdc.near', settlement_symbol: 'USDC' });
+    expect(buildLinkPatch(pinned, { ...formFromLink(pinned), settlementAsset: null })).toEqual({
+      body: { settlement_asset: null },
     });
   });
 });

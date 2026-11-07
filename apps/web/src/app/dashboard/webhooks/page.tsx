@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { WebhookEventTypeValues } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
+import { Webhook } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad } from '@/components/dashboard/common';
 import { EmptyState, PageHeader, Panel } from '@/components/dashboard/ui';
@@ -38,13 +39,15 @@ export default function WebhooksPage() {
       ) : (
         <>
           <Panel title="Add an endpoint">
-            <CreateForm
-              livemode={context.livemode}
-              onCreated={(url, s) => {
-                setSecret({ url, secret: s });
-                void endpoints.reload();
-              }}
-            />
+            <div id="add-webhook">
+              <CreateForm
+                livemode={context.livemode}
+                onCreated={(url, s) => {
+                  setSecret({ url, secret: s });
+                  void endpoints.reload();
+                }}
+              />
+            </div>
           </Panel>
           {secret && (
             <Alert tone="warning">
@@ -59,8 +62,14 @@ export default function WebhooksPage() {
             !endpoints.error && <Spinner label="Loading endpoints" />
           ) : endpoints.data.endpoints.length === 0 ? (
             <EmptyState
+              icon={<Webhook size={22} strokeWidth={1.75} />}
               title="No endpoints yet"
               description="Add a URL to receive signed webhook events from Tendr."
+              action={
+                <a href="#add-webhook" className="dash-empty-cta">
+                  Add one
+                </a>
+              }
             />
           ) : (
             endpoints.data.endpoints.map((e) => (

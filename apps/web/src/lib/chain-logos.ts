@@ -66,13 +66,31 @@ export type ChainLogo = {
   logoSrc: string;
 };
 
-export function chainDisplayName(blockchain: string): string {
+/** Contract names and common aliases → the 1Click `blockchain` id the logo table uses. */
+const CHAIN_ALIAS: Readonly<Record<string, string>> = {
+  arbitrum: 'arb',
+  polygon: 'pol',
+  matic: 'pol',
+  optimism: 'op',
+  avalanche: 'avax',
+  ethereum: 'eth',
+  solana: 'sol',
+  bitcoin: 'btc',
+};
+
+/** The 1Click id for a chain name (`arbitrum` and `arb` are both `arb`). */
+export function chainId(blockchain: string): string {
   const id = blockchain.toLowerCase();
+  return CHAIN_ALIAS[id] ?? id;
+}
+
+export function chainDisplayName(blockchain: string): string {
+  const id = chainId(blockchain);
   return CHAINS[id]?.name ?? blockchain.toUpperCase();
 }
 
 export function chainLogo(blockchain: string): ChainLogo {
-  const id = blockchain.toLowerCase();
+  const id = chainId(blockchain);
   const meta = CHAINS[id];
   let logoSrc = '';
   if (meta?.twKey) logoSrc = `${TW}/${meta.twKey}/info/logo.png`;

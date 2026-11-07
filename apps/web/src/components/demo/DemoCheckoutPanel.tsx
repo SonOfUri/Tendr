@@ -11,8 +11,10 @@ import { formatUnits, networkName } from '@/lib/checkout/format';
 import { screenFor } from '@/lib/checkout/status';
 import { buildDemoAssetOptions } from '@/lib/demo-assets';
 import { publicEnv } from '@/lib/env';
+import type { PaymentBlock } from '@/lib/wallets/block';
 import { createDepositReporter } from '@/lib/wallets/tx-store';
 import { TendrLogo } from '@/components/TendrLogo';
+import { toast } from '@/components/toast';
 import {
   WalletConnect,
   type WalletQuoteResult,
@@ -26,6 +28,11 @@ import { DemoStatusCard } from './DemoStatusCard';
 import { DemoTendrAiFab } from './DemoTendrAiFab';
 import { DemoTransferDetails } from './DemoTransferDetails';
 
+function checkoutErrMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.trim()) return err.message.trim();
+  return fallback;
+}
+
 type Props = {
   sessionId: string;
   clientSecret: string;
@@ -34,8 +41,12 @@ type Props = {
   merchantLogoUrl: string;
   payEyebrow: string;
   skin: DemoSlug;
+  /** Playground chrome theme — dark panels use the white Tendr mark. */
+  uiTheme?: 'light' | 'dark';
   /** Display amount while session hydrates (and as fallback). */
   amountHint?: string;
+  /** Full amount string for the card (e.g. "$2,213.00"). Overrides `$${amount}`. */
+  amountDisplay?: string;
   /** Prefetched session/tokens/quote from /api/demo/checkout — skips cold load. */
   bootstrap?: DemoCheckoutBootstrap | null;
   /** Pure frontend demo — never call the checkout API. */
@@ -43,8 +54,14 @@ type Props = {
   successHint?: string;
   onClose: () => void;
   onComplete: () => void;
-  /** Fired when the demo enters confirming / success panels (for sidebar sync). */
-  onStatusChange?: (status: 'confirming' | 'success') => void;
+  /** Fired when the demo enters confirming / success / expired panels (for sidebar sync). */
+  onStatusChange?: (status: 'confirming' | 'success' | 'expired') => void;
+  /** Hosted /pay: open wallet connect in a popup when framed. */
+  openWalletWindow?: () => Window | null;
+  checkBeforeSend?: () => Promise<'ok' | 'blocked' | 'error'>;
+  /** A payment may already be on its way — blocks further wallet sends. */
+  blocked?: PaymentBlock;
+  onDidntGoThrough?: () => void;
 };
 
 type PayMethod = 'transfer' | 'wallet';
@@ -63,6 +80,21 @@ export function clientSecretFromCheckout(opts: {
   return null;
 }
 
+function StoreLogo({ src, name }: { src: string; name: string }) {
+  const initial = name.trim().charAt(0).toUpperCase() || 'T';
+  if (!src) {
+    return (
+      <span className="demo-checkout-store-logo demo-checkout-store-logo-fallback" aria-hidden>
+        {initial}
+      </span>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={src} alt="" className="demo-checkout-store-logo" width={40} height={40} />
+  );
+}
+
 export function DemoCheckoutPanel({
   sessionId,
   clientSecret,
@@ -71,14 +103,22 @@ export function DemoCheckoutPanel({
   merchantLogoUrl,
   payEyebrow,
   skin,
+  uiTheme = 'light',
   amountHint,
+  amountDisplay,
   bootstrap,
   uiOnly = false,
   successHint,
   onClose,
   onComplete,
   onStatusChange,
+  openWalletWindow,
+  checkBeforeSend,
+  blocked,
+  onDidntGoThrough,
 }: Props) {
+  const logoTone: 'white' | 'black' =
+    skin === 'gaming' || uiTheme === 'dark' ? 'white' : 'black';
   const client = useMemo(
     () => createCheckoutClient({ baseUrl: publicEnv.apiBaseUrl, secret: clientSecret }),
     [clientSecret],
@@ -91,17 +131,27 @@ export function DemoCheckoutPanel({
   const [quote, setQuote] = useState<Quote | null>(bootstrap?.quote ?? null);
   const [method, setMethod] = useState<PayMethod>('transfer');
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
-  const [phase, setPhase] = useState<'loading' | 'pay' | 'waiting' | 'done' | 'error'>(
-    booted || uiOnly ? 'pay' : 'loading',
-  );
-  const [error, setError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<
+    'loading' | 'pay' | 'waiting' | 'done' | 'expired' | 'error'
+  >(() => {
+    if (bootstrap?.session) {
+      const kind = screenFor(bootstrap.session, new Date()).kind;
+      if (kind === 'complete') return 'done';
+      if (kind === 'detected' || kind === 'converting') return 'waiting';
+      if (kind === 'expired') return 'expired';
+      return 'pay';
+    }
+    return uiOnly ? 'pay' : 'loading';
+  });
   const [busy, setBusy] = useState(false);
   /** Skip the first auto-quote when bootstrap already supplied one for this token. */
   const skipQuoteForToken = useRef<string | null>(
     bootstrap?.quote && bootstrap.tokenId ? bootstrap.tokenId : null,
   );
 
-  const completed = useRef(false);
+  const completed = useRef(
+    Boolean(bootstrap?.session && screenFor(bootstrap.session, new Date()).kind === 'complete'),
+  );
   const demoTimerQuoteId = useRef<string | null>(null);
   const demoTimerStartedAt = useRef<number | null>(null);
   const demoTimerPausedMs = useRef(0);
@@ -131,6 +181,8 @@ export function DemoCheckoutPanel({
       setPhase('done');
     } else if (screen.kind === 'detected' || screen.kind === 'converting') {
       setPhase('waiting');
+    } else if (screen.kind === 'expired') {
+      setPhase('expired');
     }
     return next;
   }, [client, uiOnly, view]);
@@ -150,7 +202,7 @@ export function DemoCheckoutPanel({
         setPhase('pay');
       } catch (err) {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'Could not load checkout');
+        toast.error(checkoutErrMessage(err, 'Could not load checkout'));
         setPhase('error');
       }
     })();
@@ -187,7 +239,6 @@ export function DemoCheckoutPanel({
 
     if (uiOnly) {
       setBusy(true);
-      setError(null);
       // Tiny tick so asset switches still feel responsive without a network roundtrip.
       const t = window.setTimeout(() => {
         setQuote(buildDemoUiQuote(token, amountUsd));
@@ -199,14 +250,13 @@ export function DemoCheckoutPanel({
     let cancelled = false;
     (async () => {
       setBusy(true);
-      setError(null);
       setQuote(null);
       try {
         const q = await client.quote({ origin_asset: tokenId });
         if (!cancelled) setQuote(q);
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Could not get a price');
+          toast.error(checkoutErrMessage(err, 'Could not get a price for this asset'));
         }
       } finally {
         if (!cancelled) setBusy(false);
@@ -254,11 +304,28 @@ export function DemoCheckoutPanel({
   useEffect(() => {
     if (phase === 'waiting') onStatusChange?.('confirming');
     if (phase === 'done') onStatusChange?.('success');
+    if (phase === 'expired') onStatusChange?.('expired');
   }, [phase, onStatusChange]);
 
-  // UI demo: Transfer → confirming → success at 15s of active time.
-  // Pauses while asset dropdown is open or Connect wallet is selected.
+  // Quote / session window ended → full expired status card (same chrome as confirming/success).
   useEffect(() => {
+    if (phase !== 'pay' || !quote?.deadline) return;
+    const ends = Date.parse(quote.deadline);
+    if (!Number.isFinite(ends)) return;
+    const left = ends - Date.now();
+    if (left <= 0) {
+      setPhase('expired');
+      return;
+    }
+    const t = window.setTimeout(() => setPhase('expired'), left);
+    return () => window.clearTimeout(t);
+  }, [phase, quote?.deadline]);
+
+  // UI demo only: Transfer → confirming → success on a timer.
+  // Pauses while asset dropdown is open or Connect wallet is selected.
+  // Never advances real hosted checkouts — those follow on-chain session state.
+  useEffect(() => {
+    if (!uiOnly) return;
     if (!quote || completed.current) return;
     if (phase === 'loading' || phase === 'error' || phase === 'done') return;
 
@@ -303,35 +370,48 @@ export function DemoCheckoutPanel({
     tick();
     const id = window.setInterval(tick, 200);
     return () => window.clearInterval(id);
-  }, [quote, method, assetPickerOpen, phase]);
+  }, [quote, method, assetPickerOpen, phase, uiOnly]);
 
-  const amountLabel = view ? `$${view.amount}` : amountHint ? `$${amountHint}` : '—';
+  const amountLabel =
+    amountDisplay ??
+    (view ? `$${view.amount}` : amountHint ? `$${amountHint}` : '—');
   const sendAmount =
     quote && selectedToken ? formatUnits(quote.amount_in, selectedToken.decimals) : null;
   const showPayChrome = phase === 'loading' || phase === 'pay' || phase === 'error';
   const quoteReady = Boolean(quote && selectedToken && sendAmount);
+  /** Fake deposit addresses — never send real funds. */
+  const testMode = Boolean(uiOnly || (view && !view.livemode));
 
   const enterClass = booted ? '' : ' demo-checkout-overlay-in';
   const cardEnterClass = booted ? '' : ' demo-checkout-card-in';
 
-  if (phase === 'waiting' || phase === 'done') {
+  if (phase === 'waiting' || phase === 'done' || phase === 'expired') {
+    const variant = phase === 'waiting' ? 'confirming' : phase === 'expired' ? 'expired' : 'success';
     return (
       <div
         className={`demo-checkout-overlay${enterClass}`}
         role="dialog"
         aria-modal="true"
-        aria-label={phase === 'waiting' ? 'Confirming payment' : 'Payment complete'}
+        aria-label={
+          phase === 'waiting'
+            ? 'Confirming payment'
+            : phase === 'expired'
+              ? 'Checkout expired'
+              : 'Payment complete'
+        }
       >
         <DemoStatusCard
-          variant={phase === 'waiting' ? 'confirming' : 'success'}
+          variant={variant}
           skin={skin}
+          logoTone={logoTone}
           merchantName={merchantName}
           merchantLogoUrl={merchantLogoUrl}
           payEyebrow={payEyebrow}
           amountLabel={amountLabel}
           successHint={successHint}
-          onClose={phase === 'waiting' ? onClose : undefined}
-          onContinue={onComplete}
+          testMode={testMode}
+          onClose={phase === 'waiting' || phase === 'expired' ? onClose : undefined}
+          onContinue={phase === 'expired' ? onClose : onComplete}
         />
       </div>
     );
@@ -350,14 +430,7 @@ export function DemoCheckoutPanel({
       >
         <div className="demo-checkout-card-top">
           <div className="demo-checkout-store">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={merchantLogoUrl}
-              alt=""
-              className="demo-checkout-store-logo"
-              width={40}
-              height={40}
-            />
+            <StoreLogo src={merchantLogoUrl} name={merchantName} />
             <div>
               <p className="demo-card-label">
                 {payEyebrow} {merchantName}
@@ -365,16 +438,32 @@ export function DemoCheckoutPanel({
               <h2 className="demo-checkout-title">{productName}</h2>
             </div>
           </div>
-          <button type="button" className="demo-checkout-close" aria-label="Close checkout" onClick={onClose}>
-            ×
-          </button>
+          <div className="demo-checkout-card-actions">
+            {testMode ? (
+              <p
+                className="demo-pay-test"
+                role="note"
+                title="Test mode — deposit addresses are fake. Don’t send real funds."
+              >
+                Test
+              </p>
+            ) : null}
+            <button
+              type="button"
+              className="demo-checkout-close"
+              aria-label="Close checkout"
+              onClick={onClose}
+            >
+              ×
+            </button>
+          </div>
         </div>
 
         <p className="demo-checkout-amount">{amountLabel}</p>
 
         {phase === 'error' ? (
-          <p className="demo-error" role="alert">
-            {error}
+          <p className="demo-checkout-muted">
+            Checkout couldn&apos;t load. Close and open the payment link again.
           </p>
         ) : null}
 
@@ -441,7 +530,19 @@ export function DemoCheckoutPanel({
                   symbol={selectedToken!.symbol}
                   network={networkName(selectedToken!.blockchain)}
                   deadline={quote!.deadline}
+                  testMode={testMode}
                 />
+                {!uiOnly && view && !view.livemode ? (
+                  <TestModePanel
+                    client={client}
+                    kind="pay"
+                    onDone={() => {
+                      void refresh()
+                        .then(() => setPhase('waiting'))
+                        .catch(() => undefined);
+                    }}
+                  />
+                ) : null}
               </div>
             ) : null}
 
@@ -454,6 +555,10 @@ export function DemoCheckoutPanel({
                   livemode={view?.livemode ?? false}
                   sessionId={sessionId}
                   autoOpen
+                  openWalletWindow={openWalletWindow}
+                  checkBeforeSend={checkBeforeSend}
+                  blocked={blocked}
+                  onDidntGoThrough={onDidntGoThrough}
                   onWalletAddress={requoteForWallet}
                   onDepositSent={onDepositSent}
                 />
@@ -473,7 +578,7 @@ export function DemoCheckoutPanel({
           </>
         ) : null}
 
-        {phase === 'loading' || (phase === 'pay' && tokens.length === 0 && !error) ? (
+        {phase === 'loading' || (phase === 'pay' && tokens.length === 0) ? (
           <div className="demo-checkout-skeleton" aria-busy="true" aria-label="Loading checkout">
             <span className="demo-skel demo-skel-pill" />
             <span className="demo-skel demo-skel-tabs" />
@@ -483,14 +588,8 @@ export function DemoCheckoutPanel({
           </div>
         ) : null}
 
-        {error && phase !== 'error' ? (
-          <p className="demo-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-
         <p className="demo-checkout-footnote">
-          <TendrLogo size={22} />
+          <TendrLogo size={22} variant="color" tone={logoTone} />
           Powered by <strong>Tendr</strong>
         </p>
       </div>
@@ -535,14 +634,7 @@ export function DemoCheckoutOpening({
       <div className="demo-checkout-card demo-checkout-card-wide demo-checkout-card-in" data-skin={skin}>
         <div className="demo-checkout-card-top">
           <div className="demo-checkout-store">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={merchantLogoUrl}
-              alt=""
-              className="demo-checkout-store-logo"
-              width={40}
-              height={40}
-            />
+            <StoreLogo src={merchantLogoUrl} name={merchantName} />
             <div>
               <p className="demo-card-label">
                 {payEyebrow} {merchantName}
@@ -566,10 +658,11 @@ export function DemoCheckoutOpening({
         </div>
 
         <p className="demo-checkout-footnote">
-          <TendrLogo size={22} />
+          <TendrLogo size={22} variant="color" tone={skin === 'gaming' ? 'white' : 'black'} />
           Powered by <strong>Tendr</strong>
         </p>
       </div>
     </div>
   );
 }
+

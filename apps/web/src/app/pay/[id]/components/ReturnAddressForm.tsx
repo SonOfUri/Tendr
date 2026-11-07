@@ -4,6 +4,7 @@ import { useId, useState } from 'react';
 import { CheckoutApiError } from '@/lib/checkout/api';
 import { isValidAddress } from '@/lib/checkout/address';
 import { networkName } from '@/lib/checkout/format';
+import { toast } from '@/components/toast';
 
 /** Networks a return can be sent on (the API narrows this per refund). */
 export const RETURN_NETWORKS = [
@@ -40,22 +41,24 @@ export function ReturnAddressForm({
   const [chain, setChain] = useState(allowed[0] ?? 'near');
   const [address, setAddress] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [invalid, setInvalid] = useState(false);
   const network = networkName(chain);
 
   async function send() {
     const value = address.trim();
     if (!isValidAddress(chain, value)) {
-      setError(`That doesn't look like a ${network} address. Check it and try again.`);
+      setInvalid(true);
+      toast.error(`That doesn't look like a ${network} address. Check it and try again.`);
       return;
     }
     setBusy(true);
-    setError(null);
+    setInvalid(false);
     try {
       await submit(value, chain);
       onDone();
     } catch (err) {
-      setError(returnAddressError(err, setAllowed, setChain));
+      setInvalid(true);
+      toast.error(returnAddressError(err, setAllowed, setChain));
     } finally {
       setBusy(false);
     }
@@ -86,17 +89,19 @@ export function ReturnAddressForm({
         <input
           id={id}
           value={address}
-          onChange={(e) => setAddress(e.target.value)}
+          onChange={(e) => {
+            setAddress(e.target.value);
+            setInvalid(false);
+          }}
           autoComplete="off"
           spellCheck={false}
           required
-          aria-invalid={error ? true : undefined}
+          aria-invalid={invalid || undefined}
           aria-describedby={`${id}-msg`}
         />
       </label>
-      <p id={`${id}-msg`} className={error ? 'pay-error small' : 'muted small'} aria-live="polite">
-        {error ??
-          'Use an address you control, such as your own wallet. Not an exchange deposit address.'}
+      <p id={`${id}-msg`} className="muted small">
+        Use an address you control, such as your own wallet. Not an exchange deposit address.
       </p>
       <button type="submit" className="pay-button" disabled={busy || !address.trim()}>
         {busy ? 'Saving…' : 'Send my money here'}

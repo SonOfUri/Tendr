@@ -263,7 +263,7 @@ describe('PayFlow with no current quote (C35)', () => {
     expect(renderToStaticMarkup(<QuotePending blocked={null} loading={false} />)).toBe('');
   });
 
-  it('T12: a refused carried return address says why and offers to continue without it', () => {
+  it('T12: a refused carried return address offers to continue without it', () => {
     const html = renderToStaticMarkup(
       <QuotePending
         blocked={null}
@@ -272,8 +272,6 @@ describe('PayFlow with no current quote (C35)', () => {
         onRetryWithoutRefund={() => {}}
       />,
     );
-    expect(html).toContain('role="alert"');
-    expect(html).toContain('This address can&#x27;t be used for this payment.');
     expect(html).toContain('Continue without a refund address');
     // Never silent, but the loading line wins while the retry runs.
     expect(
@@ -400,6 +398,8 @@ describe('StatusScreen: sessions from a payment link', () => {
 
   it('the expired screen sends the payer back to the link page to start again', () => {
     const html = screen('expired', linked);
+    expect(html).toContain('This checkout has expired');
+    expect(html).toContain('pay-status-expired-icon');
     expect(html).toContain('Go back to Tip &lt;jar&gt; to start again.');
     expect(html).not.toContain('Return to the store');
     const plain = screen('expired', { ...VIEW, payment_link: null } as SessionView);

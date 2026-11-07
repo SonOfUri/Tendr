@@ -35,6 +35,9 @@ export function applyAppearance(pref: AppearancePref) {
   const resolved = resolve(pref);
   document.documentElement.setAttribute('data-appearance', resolved);
   document.documentElement.setAttribute('data-appearance-pref', pref);
+  document
+    .querySelector('meta[name="theme-color"]')
+    ?.setAttribute('content', resolved === 'light' ? '#ffffff' : '#070707');
   try {
     localStorage.setItem(KEY, pref);
   } catch {

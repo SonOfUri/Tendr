@@ -96,8 +96,10 @@ function ChainStack({
         />
       ))}
       {overflow ? (
-        <button
-          type="button"
+        // span — not button: this sits inside the asset row <button> (no nested buttons).
+        <span
+          role="button"
+          tabIndex={0}
           className="demo-asset-chain-more"
           aria-expanded={panelOpen}
           aria-label={`Show all ${option.chainVariants.length} chains`}
@@ -106,12 +108,19 @@ function ChainStack({
             e.stopPropagation();
             onOpenNetworks?.();
           }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            e.stopPropagation();
+            onOpenNetworks?.();
+          }}
         >
           +{extra} {extra === 1 ? 'Chain' : 'Chains'}
-        </button>
+        </span>
       ) : multi ? (
-        <button
-          type="button"
+        <span
+          role="button"
+          tabIndex={0}
           className="demo-asset-chain-more"
           aria-expanded={panelOpen}
           aria-label={`Choose network for ${option.label}`}
@@ -120,9 +129,15 @@ function ChainStack({
             e.stopPropagation();
             onOpenNetworks?.();
           }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            e.stopPropagation();
+            onOpenNetworks?.();
+          }}
         >
           {option.chainVariants.length} Chains
-        </button>
+        </span>
       ) : null}
     </span>
   );
@@ -339,7 +354,9 @@ export function DemoAssetModal({
 
   const portalTarget =
     typeof document !== 'undefined'
-      ? document.querySelector('.demo-playground') ?? document.body
+      ? document.querySelector('.demo-playground') ??
+        document.querySelector('.hosted-pay-page') ??
+        document.body
       : null;
 
   const gaming = skin === 'gaming';

@@ -72,13 +72,16 @@ export function EmptyState({
   title,
   description,
   action,
+  icon,
 }: {
   title: string;
   description?: ReactNode;
   action?: ReactNode;
+  icon?: ReactNode;
 }) {
   return (
     <div className="dash-empty">
+      {icon ? <div className="dash-empty-icon">{icon}</div> : null}
       <h3 className="dash-empty-title">{title}</h3>
       {description ? <p className="dash-empty-desc">{description}</p> : null}
       {action ? <div className="dash-empty-action">{action}</div> : null}

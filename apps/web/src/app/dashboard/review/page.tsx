@@ -6,8 +6,11 @@ import { HOLD_NOTICE, LEGAL_ACK_PHRASE } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad } from '@/components/dashboard/common';
+import { AssetGridPicker } from '@/components/dashboard/AssetGridPicker';
 import { EmptyState, ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
-import { CHAINS, chainLabel, formatAmount } from '@/lib/assets';
+import { chainLabel, formatAmount } from '@/lib/assets';
+import { chainSelectOptions } from '@/components/dashboard/asset-logos';
+import { SearchCheck } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
   heldReturnForms,
@@ -64,6 +67,7 @@ export default function ReviewPage() {
       {header}
       {empty && (
         <EmptyState
+          icon={<SearchCheck size={22} strokeWidth={1.75} />}
           title="Nothing needs review"
           description="Held payments, returns, and screening issues show up here when your team needs to act."
         />
@@ -384,13 +388,13 @@ function DestinationForm({
       <div className="row">
         <label className="field">
           <span>Network</span>
-          <select name="refund-chain" value={chain} onChange={(e) => setChain(e.target.value)}>
-            {CHAINS.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
-              </option>
-            ))}
-          </select>
+          <AssetGridPicker
+            ariaLabel="Network"
+            title="Chain"
+            value={chain}
+            onChange={setChain}
+            options={chainSelectOptions()}
+          />
         </label>
         <label className="field grow">
           <span>Address</span>

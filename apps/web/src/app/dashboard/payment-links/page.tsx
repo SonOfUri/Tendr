@@ -1,9 +1,21 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { can } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowUpRight,
+  Check,
+  Copy,
+  Link2,
+  MoreHorizontal,
+  QrCode,
+  WifiOff,
+} from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import {
@@ -12,10 +24,13 @@ import {
   PageHeader,
   Panel,
   Select,
-  TextLink,
 } from '@/components/dashboard/ui';
 import { api } from '@/lib/api';
+import { canNativeShare, sharePaymentLink } from '@/lib/share-link';
+import { useOnline } from '@/components/pwa/PwaInstall';
 import { availabilityWords, linkAmountLabel, linkUsesLabel } from '@/lib/payment-link-form';
+import { SettlementField } from '@/components/dashboard/SettlementField';
+import { toast } from '@/components/toast';
 import type { PaymentLinkList, PaymentLinkView } from '@/lib/payment-link-types';
 
 export default function PaymentLinksPage() {
@@ -26,12 +41,19 @@ export default function PaymentLinksPage() {
   const [moreHasMore, setMoreHasMore] = useState(false);
   const [moreError, setMoreError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [nativeShare, setNativeShare] = useState(false);
+  const [sentId, setSentId] = useState<string | null>(null);
+  const online = useOnline();
   const [title, setTitle] = useState('');
   const [amountType, setAmountType] = useState<'fixed' | 'open'>('fixed');
   const [amount, setAmount] = useState('');
   const [minAmount, setMinAmount] = useState('');
-  const [currency, setCurrency] = useState('USD');
+  const [settlementAsset, setSettlementAsset] = useState<string | null>(null);
   const create = useAction();
+
+  useEffect(() => {
+    setNativeShare(canNativeShare());
+  }, []);
 
   const query = (after?: string) => {
     const q = new URLSearchParams({ limit: '50' });
@@ -72,35 +94,39 @@ export default function PaymentLinksPage() {
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
+    if (!navigator.onLine) return;
     const body: Record<string, unknown> = {
       title: title.trim(),
       amount_type: amountType,
-      currency: currency.trim() || 'USD',
+      currency: 'USD',
       note: 'optional',
     };
     if (amountType === 'fixed') body.amount = amount.trim();
     else if (minAmount.trim()) body.min_amount = minAmount.trim();
+    if (settlementAsset) body.settlement_asset = settlementAsset;
 
     const created = await create.run(() =>
       api<PaymentLinkView>('/v1/payment_links', { method: 'POST', json: body }),
     );
     if (!created) return;
+    toast.success('Payment link created');
     setTitle('');
     setAmount('');
     setMinAmount('');
+    setSettlementAsset(null);
     setCreating(false);
     await list.reload();
   }
 
-  async function copyUrl(url: string) {
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      /* ignore */
-    }
+  async function sendUrl(link: PaymentLinkView) {
+    const result = await sharePaymentLink(link.url, link.title);
+    if (result === 'cancelled' || result === 'failed') return;
+    setSentId(link.id);
+    window.setTimeout(() => setSentId((current) => (current === link.id ? null : current)), 2000);
   }
 
   async function setArchived(id: string, archived: boolean) {
+    if (!navigator.onLine) return;
     if (
       archived &&
       !window.confirm('Archive this link? It stops taking payments. You can restore it later.')
@@ -113,7 +139,9 @@ export default function PaymentLinksPage() {
         json: { archived },
       }),
     );
-    if (ok) await list.reload();
+    if (!ok) return;
+    toast.success(archived ? 'Link archived' : 'Link restored');
+    await list.reload();
   }
 
   return (
@@ -128,7 +156,7 @@ export default function PaymentLinksPage() {
         }
         actions={
           canWrite && !uiPreview ? (
-            <Button onClick={() => setCreating((v) => !v)}>
+            <Button disabled={!online} onClick={() => setCreating((v) => !v)}>
               {creating ? 'Cancel' : 'Create link'}
             </Button>
           ) : null
@@ -138,6 +166,7 @@ export default function PaymentLinksPage() {
       {uiPreview ? (
         <Panel>
           <EmptyState
+            icon={<WifiOff size={22} strokeWidth={1.75} />}
             title="API offline"
             description="Start Postgres, Redis, and the Tendr API to manage payment links."
           />
@@ -146,6 +175,9 @@ export default function PaymentLinksPage() {
         <>
           {creating && canWrite ? (
             <Panel title="New payment link">
+              {!online ? (
+                <Alert tone="info">You’re offline. Reconnect to create a payment link.</Alert>
+              ) : null}
               <form className="stack" onSubmit={(e) => void onCreate(e)}>
                 <label className="field">
                   <span>Title</span>
@@ -160,21 +192,26 @@ export default function PaymentLinksPage() {
                 <div className="row">
                   <label className="field">
                     <span>Amount type</span>
-                    <select
+                    <Select
+                      ariaLabel="Amount type"
+                      className="tendr-select--field"
                       value={amountType}
-                      onChange={(e) => setAmountType(e.target.value as 'fixed' | 'open')}
-                    >
-                      <option value="fixed">Fixed</option>
-                      <option value="open">Open</option>
-                    </select>
+                      onChange={(v) => setAmountType(v as 'fixed' | 'open')}
+                      options={[
+                        { value: 'fixed', label: 'Fixed' },
+                        { value: 'open', label: 'Open' },
+                      ]}
+                    />
                   </label>
                   <label className="field">
                     <span>Currency</span>
-                    <input
-                      required
-                      value={currency}
-                      onChange={(e) => setCurrency(e.target.value)}
-                      placeholder="USD"
+                    <Select
+                      ariaLabel="Currency"
+                      className="tendr-select--field"
+                      value="USD"
+                      disabled
+                      onChange={() => {}}
+                      options={[{ value: 'USD', label: 'USD' }]}
                     />
                   </label>
                   {amountType === 'fixed' ? (
@@ -198,9 +235,9 @@ export default function PaymentLinksPage() {
                     </label>
                   )}
                 </div>
-                {create.error ? <Alert tone="danger">{create.error}</Alert> : null}
+                <SettlementField value={settlementAsset} onChange={setSettlementAsset} disabled={!online} />
                 <div className="actions">
-                  <Button type="submit" disabled={create.busy}>
+                  <Button type="submit" disabled={create.busy || !online}>
                     {create.busy ? 'Creating…' : 'Create'}
                   </Button>
                 </div>
@@ -255,6 +292,7 @@ export default function PaymentLinksPage() {
               <Spinner label="Loading payment links" />
             ) : links.length === 0 ? (
               <EmptyState
+                icon={<Link2 size={22} strokeWidth={1.75} />}
                 title={statusFilter || includeArchived ? 'No links match' : 'No payment links yet'}
                 description={
                   statusFilter || includeArchived
@@ -263,15 +301,15 @@ export default function PaymentLinksPage() {
                 }
                 action={
                   canWrite && !statusFilter && !includeArchived ? (
-                    <Button variant="secondary" onClick={() => setCreating(true)}>
-                      Create your first link
-                    </Button>
+                    <button type="button" className="dash-empty-cta" onClick={() => setCreating(true)}>
+                      Create link
+                    </button>
                   ) : null
                 }
               />
             ) : (
               <div className="dash-table-wrap">
-                <table className="dash-table">
+                <table className="dash-table dash-links-table">
                   <thead>
                     <tr>
                       <th>Title</th>
@@ -293,7 +331,7 @@ export default function PaymentLinksPage() {
                         <td>{linkAmountLabel(link)}</td>
                         <td>
                           <span
-                            className="dash-pill"
+                            className="dash-pill dash-links-status"
                             data-tone={link.availability === 'available' ? 'ok' : 'warn'}
                             title={link.availability}
                           >
@@ -302,41 +340,23 @@ export default function PaymentLinksPage() {
                         </td>
                         <td className="dash-muted">{linkUsesLabel(link)}</td>
                         <td>
-                          <div className="actions">
-                            <TextLink href={`/dashboard/payment-links/${encodeURIComponent(link.id)}`}>
-                              Open
-                            </TextLink>
-                            <a
-                              href={link.qr_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="dash-text-link"
-                            >
-                              QR
-                            </a>
-                            <Button variant="secondary" onClick={() => void copyUrl(link.url)}>
-                              Copy URL
-                            </Button>
-                            {canWrite ? (
-                              link.archived ? (
-                                <Button
-                                  variant="secondary"
-                                  disabled={create.busy}
-                                  onClick={() => void setArchived(link.id, false)}
-                                >
-                                  Restore
-                                </Button>
-                              ) : (
-                                <Button
-                                  variant="secondary"
-                                  disabled={create.busy}
-                                  onClick={() => void setArchived(link.id, true)}
-                                >
-                                  Archive
-                                </Button>
-                              )
-                            ) : null}
-                          </div>
+                          <LinkRowActions
+                            link={link}
+                            canWrite={canWrite}
+                            busy={create.busy}
+                            shareLabel={
+                              sentId === link.id
+                                ? nativeShare
+                                  ? 'Shared'
+                                  : 'Copied'
+                                : nativeShare
+                                  ? 'Share'
+                                  : 'Copy'
+                            }
+                            copied={sentId === link.id}
+                            onShare={() => void sendUrl(link)}
+                            onArchive={() => void setArchived(link.id, !link.archived)}
+                          />
                         </td>
                       </tr>
                     ))}
@@ -356,5 +376,169 @@ export default function PaymentLinksPage() {
         </>
       )}
     </>
+  );
+}
+
+function LinkRowActions({
+  link,
+  canWrite,
+  busy,
+  shareLabel,
+  copied,
+  onShare,
+  onArchive,
+}: {
+  link: PaymentLinkView;
+  canWrite: boolean;
+  busy: boolean;
+  shareLabel: string;
+  copied: boolean;
+  onShare: () => void;
+  onArchive: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const href = `/dashboard/payment-links/${encodeURIComponent(link.id)}`;
+  const archiveLabel = link.archived ? 'Restore' : 'Archive';
+
+  useEffect(() => {
+    if (!open) return;
+    function place() {
+      const el = buttonRef.current;
+      if (!el) return;
+      const box = el.getBoundingClientRect();
+      const width = 196;
+      const left = Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8));
+      setMenuStyle({ top: box.bottom + 6, left, width });
+    }
+    place();
+    function onPointer(event: MouseEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (rootRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest('.dash-links-menu')) return;
+      setOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') setOpen(false);
+    }
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    document.addEventListener('mousedown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+      document.removeEventListener('mousedown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="dash-links-actions" ref={rootRef}>
+      <div className="dash-links-icons">
+        <Link href={href} className="dash-links-icon" aria-label="Open" title="Open">
+          <ArrowUpRight size={16} strokeWidth={1.75} />
+        </Link>
+        <button
+          type="button"
+          className="dash-links-icon"
+          aria-label={shareLabel}
+          title={shareLabel}
+          onClick={onShare}
+        >
+          {copied ? <Check size={16} strokeWidth={1.75} /> : <Copy size={16} strokeWidth={1.75} />}
+        </button>
+        <a
+          href={link.qr_url}
+          target="_blank"
+          rel="noreferrer"
+          className="dash-links-icon"
+          aria-label="QR"
+          title="QR"
+        >
+          <QrCode size={16} strokeWidth={1.75} />
+        </a>
+        {canWrite ? (
+          <button
+            type="button"
+            className="dash-links-icon"
+            aria-label={archiveLabel}
+            title={archiveLabel}
+            disabled={busy}
+            onClick={onArchive}
+          >
+            {link.archived ? (
+              <ArchiveRestore size={16} strokeWidth={1.75} />
+            ) : (
+              <Archive size={16} strokeWidth={1.75} />
+            )}
+          </button>
+        ) : null}
+      </div>
+      <div className="dash-links-more">
+        <button
+          ref={buttonRef}
+          type="button"
+          className="dash-links-icon"
+          aria-label="Actions"
+          aria-expanded={open}
+          aria-haspopup="menu"
+          onClick={() => setOpen((value) => !value)}
+        >
+          <MoreHorizontal size={16} strokeWidth={1.75} />
+        </button>
+        {open
+          ? createPortal(
+              <div className="dash-links-menu" role="menu" style={menuStyle}>
+                <Link href={href} role="menuitem" onClick={() => setOpen(false)}>
+                  <ArrowUpRight size={16} strokeWidth={1.75} /> Open
+                </Link>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onShare();
+                    setOpen(false);
+                  }}
+                >
+                  {copied ? <Check size={16} strokeWidth={1.75} /> : <Copy size={16} strokeWidth={1.75} />}{' '}
+                  {shareLabel}
+                </button>
+                <a
+                  href={link.qr_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  role="menuitem"
+                  onClick={() => setOpen(false)}
+                >
+                  <QrCode size={16} strokeWidth={1.75} /> QR
+                </a>
+                {canWrite ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={busy}
+                    onClick={() => {
+                      onArchive();
+                      setOpen(false);
+                    }}
+                  >
+                    {link.archived ? (
+                      <ArchiveRestore size={16} strokeWidth={1.75} />
+                    ) : (
+                      <Archive size={16} strokeWidth={1.75} />
+                    )}{' '}
+                    {archiveLabel}
+                  </button>
+                ) : null}
+              </div>,
+              document.body,
+            )
+          : null}
+      </div>
+    </div>
   );
 }

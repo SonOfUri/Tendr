@@ -1,14 +1,11 @@
 // @vitest-environment jsdom
 import type { PublicPaymentLinkView } from '@tendr/contracts';
 import { cleanup, render } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { tendrShopperTheme } from '@/lib/checkout/brand';
 import { initialPayState, LinkPayBody } from './LinkPay';
 
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
-});
+afterEach(() => cleanup());
 
 const VIEW: PublicPaymentLinkView = {
   merchant: { name: 'Lagos Leather Co.' },
@@ -31,39 +28,6 @@ const VIEW: PublicPaymentLinkView = {
   livemode: true,
 };
 
-/** A phone, with the payment block reported 0% on screen. */
-function phoneWithBlockOffScreen() {
-  vi.stubGlobal('matchMedia', (query: string) => ({
-    matches: query === '(max-width: 640px)',
-    media: query,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  }));
-  vi.stubGlobal(
-    'IntersectionObserver',
-    class {
-      constructor(private cb: IntersectionObserverCallback) {}
-      observe(el: Element) {
-        this.cb(
-          [
-            {
-              target: el,
-              isIntersecting: false,
-              intersectionRatio: 0,
-              boundingClientRect: { height: 600 } as DOMRectReadOnly,
-              intersectionRect: { height: 0 } as DOMRectReadOnly,
-              rootBounds: { height: 812 } as DOMRectReadOnly,
-            } as unknown as IntersectionObserverEntry,
-          ],
-          this as unknown as IntersectionObserver,
-        );
-      }
-      disconnect() {}
-      unobserve() {}
-    },
-  );
-}
-
 const draw = (view: PublicPaymentLinkView) =>
   render(
     <LinkPayBody
@@ -75,18 +39,24 @@ const draw = (view: PublicPaymentLinkView) =>
     />,
   ).container;
 
-describe('link page pay bar', () => {
-  it('shows the amount and the account name while the payment block is off screen', () => {
-    phoneWithBlockOffScreen();
-    const bar = draw(VIEW).querySelector('[data-pay-bar]');
-    expect(bar).not.toBeNull();
-    expect(bar!.textContent).toContain('$15');
-    expect(bar!.textContent).toContain("You're paying Lagos Leather Co.");
-    expect(bar!.textContent).not.toContain('Kola Kicks');
+describe('link page demo card', () => {
+  it('shows amount and payee on the demo checkout card (no sticky pay bar)', () => {
+    const root = draw(VIEW);
+    expect(root.querySelector('[data-pay-bar]')).toBeNull();
+    expect(root.querySelector('.demo-checkout-card')).not.toBeNull();
+    expect(root.querySelector('.demo-pay-page')).not.toBeNull();
+    expect(root.querySelector('.demo-pay-theme-toggle')).not.toBeNull();
+    expect(root.querySelector('.demo-checkout-footnote')?.textContent).toContain('Powered by');
+    expect(root.textContent).toContain('$15');
+    expect(root.textContent).toContain('Paying Lagos Leather Co.');
+    expect(root.textContent).toContain('· trading as Kola Kicks');
   });
 
-  it('is not shown when the link takes no payments', () => {
-    phoneWithBlockOffScreen();
-    expect(draw({ ...VIEW, availability: 'expired' }).querySelector('[data-pay-bar]')).toBeNull();
+  it('keeps the card when the link takes no payments, without a pay button', () => {
+    const root = draw({ ...VIEW, availability: 'expired' });
+    expect(root.querySelector('.demo-checkout-card')).not.toBeNull();
+    expect(root.textContent).toContain('This link has expired');
+    expect(root.textContent).not.toContain('Pay with crypto');
+    expect(root.querySelector('.demo-checkout-footnote')?.textContent).toContain('Powered by');
   });
 });

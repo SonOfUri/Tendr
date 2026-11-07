@@ -7,11 +7,13 @@ import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { DestinationBox, Status, useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
+import { NativeWalletPanel } from '@/components/dashboard/NativeWallet';
 import { countdown, describeAction } from '@/lib/actions';
 import { api, type AccountView, type Proposal, type SavedAddress, type Team } from '@/lib/api';
 import { approveProposal, approvedAtEpoch, cancelProposal, STATUS_WORDS } from '@/lib/proposals';
 
 interface Detail {
+  native: boolean;
   /** The account's current signer epoch (approvals from an older epoch no longer count). */
   signerEpoch: string | null;
   threshold: number | undefined;
@@ -26,13 +28,17 @@ export default function ProposalPage() {
   const { store, context, me } = useDashboard();
   const key = context && id ? `${context.merchantId}:${context.livemode}:${id}` : null;
   const detail = useLoad<Detail>(async () => {
-    const [proposal, s, team, account] = await Promise.all([
+    const account = await api<AccountView>('/v1/account');
+    const native = account.account?.kind === 'native_intents';
+    const [proposal, s, team] = await Promise.all([
       api<Proposal>(`/v1/account/proposals/${encodeURIComponent(id)}`),
-      api<{ savedAddresses: SavedAddress[] }>('/v1/account/saved-addresses'),
+      native
+        ? Promise.resolve({ savedAddresses: [] as SavedAddress[] })
+        : api<{ savedAddresses: SavedAddress[] }>('/v1/account/saved-addresses'),
       api<Team>('/v1/team'),
-      api<AccountView>('/v1/account'),
     ]);
     return {
+      native,
       proposal,
       savedAddresses: s.savedAddresses,
       team,
@@ -70,6 +76,49 @@ export default function ProposalPage() {
     threshold,
     releaseCodeHash,
   } = detail.data;
+  if (detail.data.native) {
+    if (p.kind !== 'refund') {
+      return <Alert tone="info">This action is unavailable for a single-owner wallet.</Alert>;
+    }
+    const refundOpen = ['draft', 'pending', 'timelocked'].includes(p.status);
+    const canCancelRefund =
+      p.status === 'draft'
+        ? store.isSigner || p.createdByUserId === me.user.id
+        : refundOpen && store.isSigner;
+    return (
+      <div className="stack">
+        <p className="dash-small">
+          <Link href="/dashboard/approvals">← Approvals</Link>
+        </p>
+        {canCancelRefund ? (
+          <Panel title="Before you sign">
+            <p className="dash-muted">
+              You can cancel this refund proposal until the payout is signed. A signed payout cannot
+              be cancelled.
+            </p>
+            {action.error ? <Alert tone="danger">{action.error}</Alert> : null}
+            <Button
+              variant="secondary"
+              disabled={action.busy}
+              onClick={() =>
+                void action.run(async () => {
+                  detail.setData({ ...detail.data!, proposal: await cancelProposal(p) });
+                })
+              }
+            >
+              Cancel proposal
+            </Button>
+          </Panel>
+        ) : null}
+        <NativeWalletPanel
+          merchantId={store.id}
+          userId={me.user.id}
+          isOwner={store.role === 'owner'}
+          proposalId={p.id}
+        />
+      </div>
+    );
+  }
   const summary = describeAction(p.action, {
     savedAddresses,
     members: team.members,
@@ -189,7 +238,11 @@ export default function ProposalPage() {
           <p className="dash-muted dash-small">Only signers can approve this.</p>
         )}
         {approvedByMe && open && (
-          <p className="dash-muted dash-small">You approved this. It needs the other signers now.</p>
+          <p className="dash-muted dash-small">
+            {threshold != null && threshold <= 1
+              ? 'You approved this. If it stays pending, cancel it and try the payout again.'
+              : 'You approved this. It needs the other signers now.'}
+          </p>
         )}
       </Panel>
     </>

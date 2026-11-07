@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { chainLabel } from '@/lib/assets';
 import type { Destination } from '@/lib/actions';
+import { toast } from '@/components/toast';
 import { errorMessage } from '@/lib/api';
 import { STATUS_WORDS } from '@/lib/proposals';
 import { useDashboard } from './DashboardShell';
@@ -54,7 +55,7 @@ export function useLoad<T>(fn: () => Promise<T>, key: string | null) {
   return { data, error, reload, setData };
 }
 
-/** Runs one action at a time with a busy flag and an error message. */
+/** Runs one action at a time with a busy flag; failures go to the shared toaster. */
 export function useAction() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +65,9 @@ export function useAction() {
     try {
       return await fn();
     } catch (err) {
-      setError(errorMessage(err));
+      const message = errorMessage(err);
+      setError(message);
+      toast.error(message);
       return undefined;
     } finally {
       setBusy(false);

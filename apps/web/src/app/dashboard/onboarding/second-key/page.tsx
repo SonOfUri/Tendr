@@ -74,7 +74,7 @@ export default function SecondKeyPage() {
         </p>
         {ready ? (
           <Alert tone="success">
-            You have a second key. <Link href="/dashboard">Go to your account</Link> to go live.
+            You have a second key. <Link href="/dashboard/account">Go to your account</Link> to go live.
           </Alert>
         ) : null}
         {notice ? <Alert tone="success">{notice}</Alert> : null}

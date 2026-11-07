@@ -90,11 +90,6 @@ describe('account routes', () => {
   it('test_principal_cannot_read_live_account', async () => {
     const second = await member('admin', true);
     void second;
-    const go = await post('/v1/account/go-live', ownerLogin, { threshold: 1 });
-    expect(go.statusCode, go.body).toBe(202);
-    await provisionMerchantAccount(merchantId, true);
-    live.scriptView('intents.near', 'mt_batch_balance_of', () => ['9']);
-    test.scriptView('intents-mock.tendr.testnet', 'mt_batch_balance_of', () => ['1']);
     await prisma.settlementConfig.create({
       data: {
         id: `stc_${randomBytes(8).toString('hex')}`,
@@ -105,6 +100,11 @@ describe('account routes', () => {
         payoutMode: 'intents',
       },
     });
+    const go = await post('/v1/account/go-live', ownerLogin, { threshold: 1 });
+    expect(go.statusCode, go.body).toBe(202);
+    await provisionMerchantAccount(merchantId, true);
+    live.scriptView('intents.near', 'mt_batch_balance_of', () => ['9']);
+    test.scriptView('intents-mock.tendr.testnet', 'mt_batch_balance_of', () => ['1']);
 
     const testView = await get('/v1/account', ownerLogin, false);
     expect(testView.json().account.nearAccountId).toBe('acme.tendr.testnet');
@@ -124,13 +124,18 @@ describe('account routes', () => {
     expect(check.statusCode).toBe(200);
     // Only the checklist and the live account's status and id: no live internals.
     expect(check.json()).toEqual({
-      checklist: { ok: false, missing: ['second_key'], signerCount: 1, recoveryKeySet: false },
+      checklist: {
+        ok: false,
+        missing: ['second_key', 'payout'],
+        signerCount: 1,
+        recoveryKeySet: false,
+      },
       live: null,
     });
 
     const blocked = await post('/v1/account/go-live', ownerLogin);
     expect(blocked.statusCode).toBe(409);
-    expect(blocked.json().error.details).toEqual({ missing: ['second_key'] });
+    expect(blocked.json().error.details).toEqual({ missing: ['second_key', 'payout'] });
 
     const admin = await member('admin', true);
     expect((await post('/v1/account/go-live', admin)).statusCode).toBe(403);
@@ -140,7 +145,18 @@ describe('account routes', () => {
 
     const tooHigh = await post('/v1/account/go-live', ownerLogin, { threshold: 3 });
     expect(tooHigh.statusCode).toBe(409);
-    expect(tooHigh.json().error.details).toEqual({ missing: ['threshold'] });
+    expect(tooHigh.json().error.details).toEqual({ missing: ['threshold', 'payout'] });
+
+    await prisma.settlementConfig.create({
+      data: {
+        id: `stc_${randomBytes(8).toString('hex')}`,
+        merchantId,
+        livemode: false,
+        destAssetId: 'nep141:usdc.test',
+        destChain: 'near',
+        payoutMode: 'intents',
+      },
+    });
 
     const ok = await post('/v1/account/go-live', ownerLogin, { threshold: 2 });
     expect(ok.statusCode, ok.body).toBe(202);
@@ -166,6 +182,16 @@ describe('account routes', () => {
   it('switch off: go-live is 403 LIVE_MODE_UNAVAILABLE, creates no live account and calls no NEAR', async () => {
     setLiveMode(undefined);
     await member('admin', true);
+    await prisma.settlementConfig.create({
+      data: {
+        id: `stc_${randomBytes(8).toString('hex')}`,
+        merchantId,
+        livemode: false,
+        destAssetId: 'nep141:usdc.test',
+        destChain: 'near',
+        payoutMode: 'intents',
+      },
+    });
     const res = await post('/v1/account/go-live', ownerLogin, { threshold: 1 });
     expect(res.statusCode, res.body).toBe(403);
     expect(res.json().error).toMatchObject({
@@ -194,12 +220,22 @@ describe('account routes', () => {
     const check = await get('/v1/account/go-live', ownerLogin);
     expect(check.json().checklist).toMatchObject({
       ok: false,
-      missing: ['live_mode_unavailable', 'second_key'],
+      missing: ['live_mode_unavailable', 'second_key', 'payout'],
     });
   });
 
   it('switch off: a queued live provisioning makes no NEAR call and leaves the row as it is', async () => {
     await member('admin', true);
+    await prisma.settlementConfig.create({
+      data: {
+        id: `stc_${randomBytes(8).toString('hex')}`,
+        merchantId,
+        livemode: false,
+        destAssetId: 'nep141:usdc.test',
+        destChain: 'near',
+        payoutMode: 'intents',
+      },
+    });
     expect((await post('/v1/account/go-live', ownerLogin)).statusCode).toBe(202);
     setLiveMode(undefined);
     const row = await provisionMerchantAccount(merchantId, true);
@@ -236,6 +272,16 @@ describe('account routes', () => {
     const res = await post('/v1/account/recovery-key', ownerLogin, { publicKey: key });
     expect(res.statusCode, res.body).toBe(201);
     expect(res.json()).toMatchObject({ stored: true });
+    await prisma.settlementConfig.create({
+      data: {
+        id: `stc_${randomBytes(8).toString('hex')}`,
+        merchantId,
+        livemode: false,
+        destAssetId: 'nep141:usdc.test',
+        destChain: 'near',
+        payoutMode: 'intents',
+      },
+    });
     expect((await get('/v1/account/go-live', ownerLogin)).json().checklist).toMatchObject({
       ok: true,
       recoveryKeySet: true,

@@ -11,6 +11,7 @@ export const metadata: Metadata = {
   title: 'Tendr — One checkout. Every way to pay.',
   description:
     'Tendr is a universal checkout layer for digital commerce. Checkout is coming soon; test mode never moves real funds.',
+  applicationName: 'Tendr',
   manifest: '/manifest.webmanifest',
   icons: {
     icon: [{ url: '/favicon.png', type: 'image/png' }],
@@ -24,7 +25,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#080D1B',
+  themeColor: '#070707',
   width: 'device-width',
   initialScale: 1,
 };

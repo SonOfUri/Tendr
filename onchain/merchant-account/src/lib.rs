@@ -828,7 +828,7 @@ impl MerchantAccount {
             Action::RotateRecoveryKey(Some(pk)) => self.check_recovery_key(pk),
             Action::RotateRecoveryKey(None) => Ok(()),
             Action::AddSavedAddress { id, chain, address } => {
-                if !saved::SUPPORTED_CHAINS.contains(&chain.as_str()) {
+                if !saved::is_supported_chain(chain) {
                     return Err("unsupported chain");
                 }
                 if chain == "near" && address.parse::<AccountId>().is_err() {

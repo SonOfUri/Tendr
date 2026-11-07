@@ -24,6 +24,10 @@ export interface PaymentLinkView {
   gas_max_usd: string | null;
   /** Null = the store's default theme. */
   theme_id: string | null;
+  /** Null = the store's settlement token. The balance stays in the Intents wallet. */
+  settlement_asset: string | null;
+  settlement_symbol: string | null;
+  settlement_chain: string | null;
   status: 'active' | 'inactive';
   archived: boolean;
   availability: PaymentLinkAvailability;

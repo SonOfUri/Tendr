@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { can } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
+import { WifiOff } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useLoad } from '@/components/dashboard/common';
 import {
@@ -83,6 +84,7 @@ export default function ThemeEditorPage() {
       {uiPreview ? (
         <Panel>
           <EmptyState
+            icon={<WifiOff size={22} strokeWidth={1.75} />}
             title="API offline"
             description="Start Postgres, Redis, and the Tendr API to edit checkout themes."
           />

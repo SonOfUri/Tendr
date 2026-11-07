@@ -224,6 +224,14 @@ export interface AccountView {
   livemode: boolean;
   account: {
     id: string;
+    kind?: 'contract' | 'native_intents';
+    capabilities?: {
+      multisig: boolean;
+      timedRecovery: boolean;
+      contractLimits: boolean;
+      autoSweep: boolean;
+      nativePasskeyPayouts: boolean;
+    };
     nearAccountId: string;
     status: AccountStatus;
     threshold: number;
@@ -238,6 +246,7 @@ export interface AccountView {
   signers: { userId: string; email: string | null; keys: number }[];
   /** The mode's Tendr release code hash (base58), if configured; upgrades are compared to it. */
   releaseCodeHash?: string | null;
+  nativeWallet?: { ownerUserId: string; credentialId: string; publicKey: string } | null;
 }
 
 export interface Balances {
@@ -246,10 +255,21 @@ export interface Balances {
 }
 
 export interface GoLiveStatus {
+  accountKind?: 'native_intents';
+  registrationPath?: string;
   checklist: {
     ok: boolean;
-    /** `live_mode_unavailable` (listed first) while the platform's live-mode switch is off. */
-    missing: ('live_mode_unavailable' | 'second_key' | 'threshold')[];
+    /**
+     * `live_mode_unavailable` (listed first) while the platform's live-mode switch is off.
+     * `payout` when store settlement is not approved yet.
+     */
+    missing: (
+      | 'live_mode_unavailable'
+      | 'second_key'
+      | 'threshold'
+      | 'wallet_passkey'
+      | 'payout'
+    )[];
     signerCount: number;
     recoveryKeySet: boolean;
   };

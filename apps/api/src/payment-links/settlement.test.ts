@@ -180,9 +180,13 @@ describe('per-link Intents settlement', () => {
     expect((await linkSettlementOptions(ctx(true))).tokens.map((t) => t.asset)).toEqual([
       liveAsset,
     ]);
-    await expect(
-      createLink(ctx(false), { ...input, settlement_asset: liveAsset }),
-    ).rejects.toMatchObject({ code: 'UNSUPPORTED_ASSET' });
+    // Test-mode links may pin a live-catalog settlement asset (dashboard picker uses live 1Click).
+    const testLink = await createLink(ctx(false), { ...input, settlement_asset: liveAsset });
+    expect(testLink).toMatchObject({
+      settlement_asset: liveAsset,
+      settlement_symbol: 'USDC',
+      settlement_chain: 'base',
+    });
     const link = await createLink(ctx(true), { ...input, settlement_asset: liveAsset });
     setLiveMode(false);
     await expect(

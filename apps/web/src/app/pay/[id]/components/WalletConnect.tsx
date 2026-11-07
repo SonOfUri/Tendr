@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import type { Quote, Token } from '@/lib/checkout/api';
 import type { FeeMode, GaslessApi, GaslessMethod } from '@/lib/wallets/gasless/index';
 import { publicEnv } from '@/lib/env';
+import { toast } from '@/components/toast';
 import { showBlockNotice, type PaymentBlock } from '@/lib/wallets/block';
 import { adapterFor, needsReown, type WalletRoute } from '@/lib/wallets/index';
 import type { WalletSendResult } from '@/lib/wallets/pay';
@@ -158,6 +159,7 @@ export function WalletConnect(props: WalletConnectProps) {
       setPanel({ assetId: route.target.assetId, Panel: WalletPanel });
     } catch {
       setFailed(true);
+      toast.error("We couldn't connect your wallet. Try again or pay by sending manually.");
     } finally {
       setLoading(false);
     }
@@ -219,11 +221,6 @@ export function WalletConnect(props: WalletConnectProps) {
           <span>{loading || autoOpen ? 'Connecting' : 'Connect wallet'}</span>
         </span>
       </button>
-      {failed ? (
-        <p className="pay-error" role="alert">
-          We couldn&apos;t connect your wallet. Try again or pay by sending manually.
-        </p>
-      ) : null}
     </div>
   );
 }

@@ -17,6 +17,7 @@ type FetchHandler = (event: {
 function fetchHandler(): FetchHandler {
   const handlers: Record<string, FetchHandler> = {};
   const self = {
+    location: { origin: 'https://usetendr.tech' },
     addEventListener: (type: string, fn: FetchHandler) => {
       handlers[type] = fn;
     },
@@ -67,5 +68,34 @@ describe('service worker', () => {
         destination: 'image',
       }),
     ).toBe(true);
+  });
+
+  it('answers hashed build files so the installed app can reopen on a flaky connection', () => {
+    expect(
+      answers({
+        url: 'https://usetendr.tech/_next/static/chunks/app.js',
+        mode: 'same-origin',
+        destination: 'script',
+      }),
+    ).toBe(true);
+  });
+
+  it('never answers the API, a cross-origin call, or a mutation', () => {
+    expect(answers({ url: 'https://usetendr.tech/v1/payment_links' })).toBe(false);
+    expect(answers({ url: 'https://usetendr.tech/api/demo/checkout' })).toBe(false);
+    expect(answers({ url: 'http://localhost:4000/v1/me' })).toBe(false);
+    let responded = false;
+    fetchHandler()({
+      request: {
+        method: 'POST',
+        url: 'https://usetendr.tech/dashboard',
+        mode: 'navigate',
+        destination: 'document',
+      },
+      respondWith: () => {
+        responded = true;
+      },
+    });
+    expect(responded).toBe(false);
   });
 });

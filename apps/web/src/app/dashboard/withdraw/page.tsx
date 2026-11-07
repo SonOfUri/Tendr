@@ -4,26 +4,43 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
+import { MapPin } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { DestinationBox, useAction, useLoad, useTick } from '@/components/dashboard/common';
-import { ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
+import { EmptyState, ErrorState, PageHeader, Panel, Select } from '@/components/dashboard/ui';
 import { usableIn } from '@/lib/actions';
-import { api, type Balances, type SavedAddress } from '@/lib/api';
-import { registeredAssetIds } from '@/lib/asset-registry';
+import { api, type AccountView, type Balances, type SavedAddress } from '@/lib/api';
 import { assetInfo, chainLabel, formatAmount, parseUnits, poaTokenContract } from '@/lib/assets';
+import { AssetGridPicker } from '@/components/dashboard/AssetGridPicker';
+import { ChainLogo, TokenLogo } from '@/components/dashboard/asset-logos';
+import { NativeWalletPanel } from '@/components/dashboard/NativeWallet';
+import { chainId } from '@/lib/chain-logos';
+import { loadIntentsCatalog, type IntentsToken } from '@/lib/intents-catalog';
 import { draftProposal } from '@/lib/proposals';
 
 export default function WithdrawPage() {
-  const { store, context } = useDashboard();
+  const { store, context, me } = useDashboard();
   const router = useRouter();
   const key = context ? `${context.merchantId}:${context.livemode}` : null;
   const data = useLoad(async () => {
+    const account = await api<AccountView>('/v1/account');
+    if (account.account?.kind === 'native_intents') {
+      return { saved: [] as SavedAddress[], balances: [] as Balances['balances'], native: true };
+    }
+    if (store?.role === 'viewer') {
+      return { saved: [] as SavedAddress[], balances: [] as Balances['balances'], native: false };
+    }
     const [s, b] = await Promise.all([
       api<{ savedAddresses: SavedAddress[] }>('/v1/account/saved-addresses'),
       api<Balances>('/v1/account/balances'),
     ]);
-    return { saved: s.savedAddresses.filter((a) => a.status !== 'revoked'), balances: b.balances };
+    return {
+      saved: s.savedAddresses.filter((a) => a.status !== 'revoked'),
+      balances: b.balances,
+      native: false,
+    };
   }, key);
+  const catalog = useLoad(() => loadIntentsCatalog(), key ? 'intents-catalog' : null);
   const now = useTick();
   const [savedId, setSavedId] = useState('');
   const [asset, setAsset] = useState('');
@@ -43,14 +60,6 @@ export default function WithdrawPage() {
       }
     />
   );
-  if (store.role === 'viewer') {
-    return (
-      <>
-        {header}
-        <Alert tone="info">Viewers can’t ask for withdrawals. Ask a business admin.</Alert>
-      </>
-    );
-  }
   if (!data.data) {
     return (
       <>
@@ -63,11 +72,38 @@ export default function WithdrawPage() {
       </>
     );
   }
-  const { saved, balances } = data.data;
+  const { saved, balances, native } = data.data;
+  if (native) {
+    return (
+      <div className="stack">
+        <PageHeader
+          title="Withdraw"
+          description="Live withdrawals are quoted, then signed with the wallet passkey. A signed payout cannot be cancelled."
+        />
+        <NativeWalletPanel
+          merchantId={store.id}
+          userId={me.user.id}
+          isOwner={store.role === 'owner'}
+        />
+      </div>
+    );
+  }
+  if (store.role === 'viewer') {
+    return (
+      <>
+        {header}
+        <Alert tone="info">Viewers can’t ask for withdrawals. Ask a business admin.</Alert>
+      </>
+    );
+  }
   const target = saved.find((a) => a.id === savedId) ?? null;
   const livemode = context.livemode;
   const info = asset ? assetInfo(asset, livemode) : null;
+  const catalogTokens = catalog.data?.tokens ?? [];
+  const chosen = catalogTokens.find((token) => token.asset === asset) ?? null;
   const balance = balances.find((b) => b.asset === asset);
+  const decimals = chosen?.decimals ?? (info?.known ? info.decimals : 0);
+  const tokenChoices = withdrawTokens(catalogTokens, balances, target?.chain ?? null, livemode);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -76,11 +112,11 @@ export default function WithdrawPage() {
     if (receive !== 'same') return setError('Different-token withdrawals are coming soon.');
     const token = poaTokenContract(asset);
     if (!token) return setError('This asset can’t be withdrawn from here yet.');
-    const raw = parseUnits(amount, info!.decimals);
+    const raw = parseUnits(amount, decimals);
     if (!raw || raw === '0') {
       return setError(
-        info!.known
-          ? `Enter an amount with at most ${info!.decimals} decimal places.`
+        decimals > 0
+          ? `Enter an amount with at most ${decimals} decimal places.`
           : 'Enter a whole number of smallest units.',
       );
     }
@@ -103,29 +139,50 @@ export default function WithdrawPage() {
       {header}
 
       {saved.length === 0 ? (
-        <Alert tone="info">
-          You have no saved addresses yet. <Link href="/dashboard/addresses">Add one</Link> first;
-          it can receive money 24 hours after it is approved.
-        </Alert>
+        <Panel>
+          <EmptyState
+            icon={<MapPin size={22} strokeWidth={1.75} />}
+            title="No saved addresses yet"
+            description="Add one first. It can receive money 24 hours after it is approved."
+            action={
+              <Link href="/dashboard/addresses#add-address" className="dash-empty-cta">
+                Add one
+              </Link>
+            }
+          />
+        </Panel>
       ) : (
         <Panel title="Withdraw to a saved address">
           <form className="form" onSubmit={submit}>
           <label className="field">
             <span>To</span>
-            <select
-              name="saved-address"
-              required
+            <Select
+              ariaLabel="Saved address"
+              className="tendr-select--field"
               value={savedId}
-              onChange={(e) => setSavedId(e.target.value)}
-            >
-              <option value="">Choose a saved address</option>
-              {saved.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {chainLabel(a.chain)} · {a.address}
-                  {a.status === 'pending' ? ` (${usableIn(a.activeFrom, now)})` : ''}
-                </option>
-              ))}
-            </select>
+              onChange={(id) => {
+                setSavedId(id);
+                const next = saved.find((a) => a.id === id);
+                const nextChain = next ? chainId(next.chain) : '';
+                const token = catalogTokens.find((item) => item.asset === asset);
+                if (
+                  token &&
+                  nextChain &&
+                  nextChain !== 'near' &&
+                  chainId(token.chain) !== nextChain
+                ) {
+                  setAsset('');
+                }
+              }}
+              placeholder="Choose a saved address"
+              options={saved.map((a) => ({
+                value: a.id,
+                label: `${chainLabel(a.chain)} · ${a.address}${
+                  a.status === 'pending' ? ` (${usableIn(a.activeFrom, now)})` : ''
+                }`,
+                icon: <ChainLogo chain={a.chain} />,
+              }))}
+            />
           </label>
           {target && (
             <DestinationBox destination={{ chain: target.chain, address: target.address }} />
@@ -139,31 +196,28 @@ export default function WithdrawPage() {
 
           <label className="field">
             <span>Asset</span>
-            <input
-              name="asset"
-              list="withdraw-assets"
-              required
+            <AssetGridPicker
+              ariaLabel="Asset"
+              title="Token"
               value={asset}
-              onChange={(e) => setAsset(e.target.value.trim())}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder="nep141:…"
+              onChange={setAsset}
+              placeholder={catalog.data ? 'Choose a token' : 'Loading tokens…'}
+              disabled={!catalog.data}
+              options={tokenChoices.map((token) => ({
+                value: token.asset,
+                label: `${token.symbol} · ${chainLabel(token.chain)}`,
+                icon: <TokenLogo symbol={token.symbol} assetId={token.asset} />,
+              }))}
             />
-            <datalist id="withdraw-assets">
-              {[...new Set([...balances.map((b) => b.asset), ...registeredAssetIds(livemode)])].map(
-                (a) => (
-                  <option key={a} value={a}>
-                    {assetInfo(a, livemode).known ? assetInfo(a, livemode).symbol : a}
-                  </option>
-                ),
-              )}
-            </datalist>
           </label>
+          {catalog.error ? <Alert tone="danger">{catalog.error}</Alert> : null}
           {info && (
             <p className="dash-muted dash-small">
-              {info.known
-                ? `${info.symbol} · ${info.decimals} decimals`
-                : 'Not a registered asset: enter the amount in raw smallest units.'}
+              {chosen
+                ? `${chosen.symbol} on ${chainLabel(chosen.chain)} · ${chosen.decimals} decimals`
+                : info.known
+                  ? `${info.symbol} · ${info.decimals} decimals`
+                  : 'Not in the 1Click catalog: enter the amount in raw smallest units.'}
               {balance && ` · balance ${formatAmount(asset, balance.amount, livemode)}`}
             </p>
           )}
@@ -218,5 +272,37 @@ export default function WithdrawPage() {
         </Panel>
       )}
     </div>
+  );
+}
+
+/** 1Click tokens that can be sent to `destinationChain`. A NEAR address can take any of them. */
+function withdrawTokens(
+  tokens: IntentsToken[],
+  balances: { asset: string }[],
+  destinationChain: string | null,
+  livemode: boolean,
+): IntentsToken[] {
+  const dest = destinationChain ? chainId(destinationChain) : '';
+  const matched = tokens.filter(
+    (token) => !dest || dest === 'near' || chainId(token.chain) === dest,
+  );
+  const byId = new Map(matched.map((token) => [token.asset, token]));
+  if (!dest || dest === 'near') {
+    for (const balance of balances) {
+      if (byId.has(balance.asset)) continue;
+      const known = assetInfo(balance.asset, livemode);
+      byId.set(balance.asset, {
+        asset: balance.asset,
+        symbol: known.known ? known.symbol : balance.asset,
+        chain: dest || 'near',
+        decimals: known.decimals,
+      });
+    }
+  }
+  return [...byId.values()].sort(
+    (a, b) =>
+      a.symbol.localeCompare(b.symbol) ||
+      a.chain.localeCompare(b.chain) ||
+      a.asset.localeCompare(b.asset),
   );
 }

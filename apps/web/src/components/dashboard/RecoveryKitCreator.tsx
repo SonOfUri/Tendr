@@ -56,10 +56,14 @@ export function RecoveryKitCreator({
     setBusy(true);
     setError(null);
     try {
+      // The public key is stored for the live account by the API. The dashboard header may be
+      // on Live while the platform switch is still off; a live-mode write is then refused even
+      // though this is not a payment. Send it as test mode, the same as an invite on this page.
       const res = await withStepUp(() =>
         api<Registered>('/v1/account/recovery-key', {
           method: 'POST',
           json: { publicKey: kit.publicKeyB64 },
+          livemode: false,
         }),
       );
       setKit(null);
@@ -95,24 +99,38 @@ export function RecoveryKitCreator({
     <div className="form">
       {step === 'show' && (
         <div className="print-kit">
-          <h3>Tendr recovery kit</h3>
-          <p className="small">
-            Business: <strong>{storeName}</strong> · Address: <code>{storeSlug}</code>
-          </p>
-          <p className="kit-code" aria-label="Recovery code">
-            {groups.map((g, i) => (
-              <span key={i} className={i === 1 ? 'kit-group kit-group-confirm' : 'kit-group'}>
-                {g}
-              </span>
-            ))}
-          </p>
-          <QrImage value={kit.secretWords} label="Recovery code as a QR code" />
-          <p className="small">
-            Keep this private and offline. Anyone with this code can ask to take over the account
-            (signers get 3 days to stop it). Tendr does not have a copy and cannot send you a new
-            one.
-          </p>
-          <p className="small muted">Made {new Date().toLocaleDateString()}</p>
+          <div className="print-kit-head">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img className="print-kit-mark" src="/icons/icon-192.png" alt="" width={44} height={44} />
+            <span className="print-kit-name">Tendr</span>
+            <span className="print-kit-doc">Recovery kit</span>
+          </div>
+          <div className="print-kit-body">
+            <p className="print-kit-meta">
+              <span>Business</span>
+              <strong>{storeName}</strong>
+              <span>Address</span>
+              <code>{storeSlug}</code>
+            </p>
+            <p className="kit-code" aria-label="Recovery code">
+              {groups.map((g, i) => (
+                <span key={i} className={i === 1 ? 'kit-group kit-group-confirm' : 'kit-group'}>
+                  {g}
+                </span>
+              ))}
+            </p>
+            <div className="print-kit-lower">
+              <QrImage value={kit.secretWords} label="Recovery code as a QR code" />
+              <div className="print-kit-copy">
+                <p>
+                  Keep this private and offline. Anyone with this code can ask to take over the
+                  account (signers get 3 days to stop it). Tendr does not have a copy and cannot
+                  send you a new one.
+                </p>
+                <p className="print-kit-foot">Made {new Date().toLocaleDateString()}</p>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

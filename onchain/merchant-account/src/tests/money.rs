@@ -562,7 +562,7 @@ fn refund_validates_route_and_chain() {
         destination_chain, ..
     } = &mut bad_chain
     {
-        *destination_chain = "doge".into();
+        *destination_chain = "Doge".into();
     }
     let msg = panics(|| {
         propose(&mut c, &a, bad_chain, 1);

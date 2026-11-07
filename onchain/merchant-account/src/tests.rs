@@ -1072,8 +1072,18 @@ fn chain_and_address_validated() {
         };
         run(&mut c, &a, action, n as u8);
     }
+    run(
+        &mut c,
+        &a,
+        Action::AddSavedAddress {
+            id: "sav_doge".into(),
+            chain: "doge".into(),
+            address: ADDR.into(),
+        },
+        80,
+    );
     let bad = [
-        ("doge", ADDR, "unsupported chain"),
+        ("bad chain", ADDR, "unsupported chain"),
         ("ETH", ADDR, "unsupported chain"),
         ("", ADDR, "chain must be 1 to 16"),
         ("base", "", "address must be 1 to 128"),

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { toast } from '@/components/toast';
 
 /** Copies `value`; the button confirms "Copied" (announced politely). */
 export function CopyButton({ value, label }: { value: string; label: string }) {
@@ -17,6 +18,7 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
       setState('copied');
     } catch {
       setState('failed');
+      toast.error('Copy failed. Select the text and copy it.');
     }
   }
 
@@ -33,11 +35,6 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
             ? 'Copy failed. Select it and copy it.'
             : ''}
       </span>
-      {state === 'failed' ? (
-        <span className="pay-error small" aria-hidden>
-          Select and copy it
-        </span>
-      ) : null}
     </span>
   );
 }

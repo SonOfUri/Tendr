@@ -57,6 +57,8 @@ import {
   type ActionOf,
   type ApprovalIntent,
 } from './encoding.js';
+import { isValidAddress } from '../checkout/address-format.js';
+import { canonicalIntentsChain, oneclickChainId } from '../checkout/intents-catalog.js';
 import { nsToDate, parseAccountEvents, u64Of, type AccountEvent } from './events.js';
 import { afterAccountEvents, applyAccountEventsTx } from './watcher.js';
 
@@ -471,9 +473,14 @@ export async function validateLocally(ctx: ScopeContext, action: ActionJson): Pr
       return;
     case 'add_saved_address': {
       const v = a.add_saved_address as ActionOf<'add_saved_address'>;
-      if (!SUPPORTED_CHAINS.includes(v.chain)) throw invalid('unsupported chain');
-      if (v.chain === 'near' && !AccountIdSchema.safeParse(v.address).success) {
+      const chain = await canonicalIntentsChain(ctx.livemode, v.chain);
+      if (!chain) throw invalid('unsupported chain');
+      v.chain = chain;
+      if (chain === 'near' && !AccountIdSchema.safeParse(v.address).success) {
         throw invalid('near destination must be a valid NEAR account id');
+      }
+      if (chain !== 'near' && !isValidAddress(oneclickChainId(chain), v.address)) {
+        throw invalid('that address does not match this network');
       }
       const clash = await prisma.payoutAllowlistEntry.findFirst({
         where: {
@@ -1388,6 +1395,21 @@ export async function cancelProposal(
   );
   if (!landed(result)) {
     await recordTxHash(prisma, actor, p.id, result.txHash);
+    // Local fake NEAR is in-memory: after a restart the DB row can outlive the contract
+    // proposal. Cancel must still clear the dashboard so payout can be set again.
+    const gone = /unknown proposal|account does not exist/.test(result.failure ?? '');
+    if (gone && env().NEAR_CLIENT_DRIVER === 'fake') {
+      await prisma.accountProposal.updateMany({
+        where: {
+          id: p.id,
+          merchantId: actor.merchantId,
+          livemode: actor.livemode,
+          status: { in: ['pending', 'timelocked', 'executing'] },
+        },
+        data: { status: 'cancelled' },
+      });
+      return getProposal(actor, p.id);
+    }
     throw rejected(result);
   }
   const events = parseAccountEvents(result.successLogs);

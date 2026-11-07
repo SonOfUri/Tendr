@@ -1,0 +1,1302 @@
+[
+  {
+    "id": "GET /v1/account",
+    "method": "GET",
+    "path": "/v1/account",
+    "group": "accounts",
+    "source": "apps/api/src/routes/accounts.ts",
+    "line": 31,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/account/settlement",
+    "method": "GET",
+    "path": "/v1/account/settlement",
+    "group": "accounts",
+    "source": "apps/api/src/routes/accounts.ts",
+    "line": 38,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/account/balances",
+    "method": "GET",
+    "path": "/v1/account/balances",
+    "group": "accounts",
+    "source": "apps/api/src/routes/accounts.ts",
+    "line": 43,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/account/saved-addresses",
+    "method": "GET",
+    "path": "/v1/account/saved-addresses",
+    "group": "accounts",
+    "source": "apps/api/src/routes/accounts.ts",
+    "line": 50,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/account/limits",
+    "method": "GET",
+    "path": "/v1/account/limits",
+    "group": "accounts",
+    "source": "apps/api/src/routes/accounts.ts",
+    "line": 70,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/account/go-live",
+    "method": "GET",
+    "path": "/v1/account/go-live",
+    "group": "accounts",
+    "source": "apps/api/src/routes/accounts.ts",
+    "line": 97,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/account/go-live",
+    "method": "POST",
+    "path": "/v1/account/go-live",
+    "group": "accounts",
+    "source": "apps/api/src/routes/accounts.ts",
+    "line": 103,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/recovery-key",
+    "method": "POST",
+    "path": "/v1/account/recovery-key",
+    "group": "accounts",
+    "source": "apps/api/src/routes/accounts.ts",
+    "line": 119,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/retry",
+    "method": "POST",
+    "path": "/v1/account/retry",
+    "group": "accounts",
+    "source": "apps/api/src/routes/accounts.ts",
+    "line": 133,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/api_keys",
+    "method": "GET",
+    "path": "/v1/api_keys",
+    "group": "api keys",
+    "source": "apps/api/src/routes/api-keys.ts",
+    "line": 17,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage"
+  },
+  {
+    "id": "POST /v1/api_keys",
+    "method": "POST",
+    "path": "/v1/api_keys",
+    "group": "api keys",
+    "source": "apps/api/src/routes/api-keys.ts",
+    "line": 22,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage",
+    "stepUp": true
+  },
+  {
+    "id": "DELETE /v1/api_keys/:id",
+    "method": "DELETE",
+    "path": "/v1/api_keys/:id",
+    "group": "api keys",
+    "source": "apps/api/src/routes/api-keys.ts",
+    "line": 32,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/auth/email/start",
+    "method": "POST",
+    "path": "/v1/auth/email/start",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 104,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/auth/email/verify",
+    "method": "POST",
+    "path": "/v1/auth/email/verify",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 111,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/auth/passkeys/register/options",
+    "method": "POST",
+    "path": "/v1/auth/passkeys/register/options",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 124,
+    "principals": ["user_session"]
+  },
+  {
+    "id": "POST /v1/auth/passkeys/register/verify",
+    "method": "POST",
+    "path": "/v1/auth/passkeys/register/verify",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 143,
+    "principals": ["user_session"]
+  },
+  {
+    "id": "POST /v1/auth/passkeys/login/options",
+    "method": "POST",
+    "path": "/v1/auth/passkeys/login/options",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 189,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/auth/passkeys/login/verify",
+    "method": "POST",
+    "path": "/v1/auth/passkeys/login/verify",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 197,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/auth/passkeys/step-up/options",
+    "method": "POST",
+    "path": "/v1/auth/passkeys/step-up/options",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 206,
+    "principals": ["user_session"]
+  },
+  {
+    "id": "POST /v1/auth/passkeys/step-up/verify",
+    "method": "POST",
+    "path": "/v1/auth/passkeys/step-up/verify",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 210,
+    "principals": ["user_session"]
+  },
+  {
+    "id": "GET /v1/auth/passkeys",
+    "method": "GET",
+    "path": "/v1/auth/passkeys",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 219,
+    "principals": ["user_session"]
+  },
+  {
+    "id": "DELETE /v1/auth/passkeys/:id",
+    "method": "DELETE",
+    "path": "/v1/auth/passkeys/:id",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 224,
+    "principals": ["user_session"],
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/auth/recovery-session",
+    "method": "GET",
+    "path": "/v1/auth/recovery-session",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 239,
+    "principals": ["user_session"]
+  },
+  {
+    "id": "POST /v1/auth/logout",
+    "method": "POST",
+    "path": "/v1/auth/logout",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 253,
+    "principals": ["user_session"]
+  },
+  {
+    "id": "GET /v1/me",
+    "method": "GET",
+    "path": "/v1/me",
+    "group": "auth",
+    "source": "apps/api/src/routes/auth.ts",
+    "line": 260,
+    "principals": ["user_session"]
+  },
+  {
+    "id": "GET /v1/checkout/client/session",
+    "method": "GET",
+    "path": "/v1/checkout/client/session",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 68,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "GET /v1/checkout/client/tokens",
+    "method": "GET",
+    "path": "/v1/checkout/client/tokens",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 72,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "POST /v1/checkout/client/quote",
+    "method": "POST",
+    "path": "/v1/checkout/client/quote",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 77,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "POST /v1/checkout/client/deposit",
+    "method": "POST",
+    "path": "/v1/checkout/client/deposit",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 87,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "POST /v1/checkout/client/gasless/options",
+    "method": "POST",
+    "path": "/v1/checkout/client/gasless/options",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 98,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "POST /v1/checkout/client/gasless/prepare",
+    "method": "POST",
+    "path": "/v1/checkout/client/gasless/prepare",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 108,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "POST /v1/checkout/client/gasless/submit",
+    "method": "POST",
+    "path": "/v1/checkout/client/gasless/submit",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 124,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "POST /v1/checkout/paymaster/:token",
+    "method": "POST",
+    "path": "/v1/checkout/paymaster/:token",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 155,
+    "principals": ["public"]
+  },
+  {
+    "id": "GET /v1/checkout/client/gasless/submissions/:id",
+    "method": "GET",
+    "path": "/v1/checkout/client/gasless/submissions/:id",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 161,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "POST /v1/checkout/client/email",
+    "method": "POST",
+    "path": "/v1/checkout/client/email",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 167,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "POST /v1/checkout/client/refund-address",
+    "method": "POST",
+    "path": "/v1/checkout/client/refund-address",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 176,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "POST /v1/checkout/refund-address",
+    "method": "POST",
+    "path": "/v1/checkout/refund-address",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 188,
+    "principals": ["public"]
+  },
+  {
+    "id": "GET /v1/checkout/public/:sessionId/frame-origins",
+    "method": "GET",
+    "path": "/v1/checkout/public/:sessionId/frame-origins",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 197,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/checkout/client/simulate",
+    "method": "POST",
+    "path": "/v1/checkout/client/simulate",
+    "group": "checkout client",
+    "source": "apps/api/src/routes/checkout-client.ts",
+    "line": 209,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "POST /v1/checkout/sessions",
+    "method": "POST",
+    "path": "/v1/checkout/sessions",
+    "group": "checkout sessions",
+    "source": "apps/api/src/routes/checkout-sessions.ts",
+    "line": 26,
+    "principals": ["secret_key"],
+    "scope": "sessions:write"
+  },
+  {
+    "id": "GET /v1/checkout/sessions/:id",
+    "method": "GET",
+    "path": "/v1/checkout/sessions/:id",
+    "group": "checkout sessions",
+    "source": "apps/api/src/routes/checkout-sessions.ts",
+    "line": 32,
+    "principals": ["secret_key"],
+    "scope": "sessions:read"
+  },
+  {
+    "id": "POST /v1/checkout/sessions/:id/expire",
+    "method": "POST",
+    "path": "/v1/checkout/sessions/:id/expire",
+    "group": "checkout sessions",
+    "source": "apps/api/src/routes/checkout-sessions.ts",
+    "line": 38,
+    "principals": ["secret_key"],
+    "scope": "sessions:write"
+  },
+  {
+    "id": "POST /v1/connect/authorize",
+    "method": "POST",
+    "path": "/v1/connect/authorize",
+    "group": "connect",
+    "source": "apps/api/src/routes/connect.ts",
+    "line": 86,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/connect/token",
+    "method": "POST",
+    "path": "/v1/connect/token",
+    "group": "connect",
+    "source": "apps/api/src/routes/connect.ts",
+    "line": 93,
+    "principals": ["public"]
+  },
+  {
+    "id": "GET /v1/connect/status",
+    "method": "GET",
+    "path": "/v1/connect/status",
+    "group": "connect",
+    "source": "apps/api/src/routes/connect.ts",
+    "line": 108,
+    "principals": ["secret_key"]
+  },
+  {
+    "id": "POST /v1/connect/disconnect",
+    "method": "POST",
+    "path": "/v1/connect/disconnect",
+    "group": "connect",
+    "source": "apps/api/src/routes/connect.ts",
+    "line": 112,
+    "principals": ["secret_key"]
+  },
+  {
+    "id": "POST /v1/connect/replace",
+    "method": "POST",
+    "path": "/v1/connect/replace",
+    "group": "connect",
+    "source": "apps/api/src/routes/connect.ts",
+    "line": 118,
+    "principals": ["secret_key"]
+  },
+  {
+    "id": "GET /v1/connections",
+    "method": "GET",
+    "path": "/v1/connections",
+    "group": "connect",
+    "source": "apps/api/src/routes/connect.ts",
+    "line": 122,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage"
+  },
+  {
+    "id": "DELETE /v1/connections/:id",
+    "method": "DELETE",
+    "path": "/v1/connections/:id",
+    "group": "connect",
+    "source": "apps/api/src/routes/connect.ts",
+    "line": 126,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage",
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/gas-policy",
+    "method": "GET",
+    "path": "/v1/gas-policy",
+    "group": "gas",
+    "source": "apps/api/src/routes/gas.ts",
+    "line": 75,
+    "principals": ["dashboard_user", "secret_key"]
+  },
+  {
+    "id": "PUT /v1/gas-policy",
+    "method": "PUT",
+    "path": "/v1/gas-policy",
+    "group": "gas",
+    "source": "apps/api/src/routes/gas.ts",
+    "line": 80,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "sessions:write"
+  },
+  {
+    "id": "GET /v1/gas-policy/usage",
+    "method": "GET",
+    "path": "/v1/gas-policy/usage",
+    "group": "gas",
+    "source": "apps/api/src/routes/gas.ts",
+    "line": 85,
+    "principals": ["dashboard_user", "secret_key"]
+  },
+  {
+    "id": "GET /v1/gas-sponsorships",
+    "method": "GET",
+    "path": "/v1/gas-sponsorships",
+    "group": "gas",
+    "source": "apps/api/src/routes/gas.ts",
+    "line": 91,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "payments:read"
+  },
+  {
+    "id": "GET /v1/health",
+    "method": "GET",
+    "path": "/v1/health",
+    "group": "health",
+    "source": "apps/api/src/routes/health.ts",
+    "line": 5,
+    "principals": ["public"]
+  },
+  {
+    "id": "GET /v1/ready",
+    "method": "GET",
+    "path": "/v1/ready",
+    "group": "health",
+    "source": "apps/api/src/routes/health.ts",
+    "line": 7,
+    "principals": ["public"]
+  },
+  {
+    "id": "GET /v1/hook-calls",
+    "method": "GET",
+    "path": "/v1/hook-calls",
+    "group": "hooks",
+    "source": "apps/api/src/routes/hooks.ts",
+    "line": 37,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "payments:read"
+  },
+  {
+    "id": "POST /v1/payments/:id/hook/resend",
+    "method": "POST",
+    "path": "/v1/payments/:id/hook/resend",
+    "group": "hooks",
+    "source": "apps/api/src/routes/hooks.ts",
+    "line": 42,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "sessions:write"
+  },
+  {
+    "id": "GET /v1/settings/checkout",
+    "method": "GET",
+    "path": "/v1/settings/checkout",
+    "group": "merchant settings",
+    "source": "apps/api/src/routes/merchant-settings.ts",
+    "line": 96,
+    "principals": ["dashboard_user", "secret_key"]
+  },
+  {
+    "id": "PATCH /v1/settings/checkout",
+    "method": "PATCH",
+    "path": "/v1/settings/checkout",
+    "group": "merchant settings",
+    "source": "apps/api/src/routes/merchant-settings.ts",
+    "line": 101,
+    "principals": ["dashboard_user", "secret_key"]
+  },
+  {
+    "id": "POST /v1/settings/notification-email/verify",
+    "method": "POST",
+    "path": "/v1/settings/notification-email/verify",
+    "group": "merchant settings",
+    "source": "apps/api/src/routes/merchant-settings.ts",
+    "line": 112,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/merchants",
+    "method": "POST",
+    "path": "/v1/merchants",
+    "group": "merchants",
+    "source": "apps/api/src/routes/merchants.ts",
+    "line": 10,
+    "principals": ["user_session"]
+  },
+  {
+    "id": "GET /v1/merchants/:id",
+    "method": "GET",
+    "path": "/v1/merchants/:id",
+    "group": "merchants",
+    "source": "apps/api/src/routes/merchants.ts",
+    "line": 28,
+    "principals": ["user_session", "dashboard_user"]
+  },
+  {
+    "id": "POST /v1/account/native/passkey/options",
+    "method": "POST",
+    "path": "/v1/account/native/passkey/options",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 33,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/passkey/verify",
+    "method": "POST",
+    "path": "/v1/account/native/passkey/verify",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 36,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/activate/options",
+    "method": "POST",
+    "path": "/v1/account/native/activate/options",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 43,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/activate",
+    "method": "POST",
+    "path": "/v1/account/native/activate",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 46,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "PUT /v1/account/native/settlement",
+    "method": "PUT",
+    "path": "/v1/account/native/settlement",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 55,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/account/native/payouts",
+    "method": "GET",
+    "path": "/v1/account/native/payouts",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 63,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/account/native/payouts",
+    "method": "POST",
+    "path": "/v1/account/native/payouts",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 66,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/account/native/payouts/:id",
+    "method": "GET",
+    "path": "/v1/account/native/payouts/:id",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 71,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/account/native/payouts/:id/challenge",
+    "method": "POST",
+    "path": "/v1/account/native/payouts/:id/challenge",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 76,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/payouts/:id/submit",
+    "method": "POST",
+    "path": "/v1/account/native/payouts/:id/submit",
+    "group": "native accounts",
+    "source": "apps/api/src/routes/native-accounts.ts",
+    "line": 81,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/payment_links/public/:merchant/:link",
+    "method": "GET",
+    "path": "/v1/payment_links/public/:merchant/:link",
+    "group": "payment links public",
+    "source": "apps/api/src/routes/payment-links-public.ts",
+    "line": 37,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/payment_links/public/:merchant/:link/sessions",
+    "method": "POST",
+    "path": "/v1/payment_links/public/:merchant/:link/sessions",
+    "group": "payment links public",
+    "source": "apps/api/src/routes/payment-links-public.ts",
+    "line": 43,
+    "principals": ["public"]
+  },
+  {
+    "id": "GET /v1/payment_links/settlement-options",
+    "method": "GET",
+    "path": "/v1/payment_links/settlement-options",
+    "group": "payment links",
+    "source": "apps/api/src/routes/payment-links.ts",
+    "line": 51,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "payment_links:read"
+  },
+  {
+    "id": "POST /v1/payment_links",
+    "method": "POST",
+    "path": "/v1/payment_links",
+    "group": "payment links",
+    "source": "apps/api/src/routes/payment-links.ts",
+    "line": 55,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "payment_links:write"
+  },
+  {
+    "id": "GET /v1/payment_links",
+    "method": "GET",
+    "path": "/v1/payment_links",
+    "group": "payment links",
+    "source": "apps/api/src/routes/payment-links.ts",
+    "line": 61,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "payment_links:read"
+  },
+  {
+    "id": "GET /v1/payment_links/:id",
+    "method": "GET",
+    "path": "/v1/payment_links/:id",
+    "group": "payment links",
+    "source": "apps/api/src/routes/payment-links.ts",
+    "line": 66,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "payment_links:read"
+  },
+  {
+    "id": "PATCH /v1/payment_links/:id",
+    "method": "PATCH",
+    "path": "/v1/payment_links/:id",
+    "group": "payment links",
+    "source": "apps/api/src/routes/payment-links.ts",
+    "line": 72,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "payment_links:write"
+  },
+  {
+    "id": "DELETE /v1/payment_links/:id",
+    "method": "DELETE",
+    "path": "/v1/payment_links/:id",
+    "group": "payment links",
+    "source": "apps/api/src/routes/payment-links.ts",
+    "line": 82,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "payment_links:write"
+  },
+  {
+    "id": "GET /v1/payments",
+    "method": "GET",
+    "path": "/v1/payments",
+    "group": "payments",
+    "source": "apps/api/src/routes/payments.ts",
+    "line": 17,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/payments/:id",
+    "method": "GET",
+    "path": "/v1/payments/:id",
+    "group": "payments",
+    "source": "apps/api/src/routes/payments.ts",
+    "line": 21,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/ping",
+    "method": "GET",
+    "path": "/v1/ping",
+    "group": "ping",
+    "source": "apps/api/src/routes/ping.ts",
+    "line": 6,
+    "principals": ["secret_key", "publishable_key"]
+  },
+  {
+    "id": "POST /v1/account/proposals",
+    "method": "POST",
+    "path": "/v1/account/proposals",
+    "group": "proposals",
+    "source": "apps/api/src/routes/proposals.ts",
+    "line": 27,
+    "principals": ["dashboard_user"],
+    "permission": "money:request"
+  },
+  {
+    "id": "GET /v1/account/proposals",
+    "method": "GET",
+    "path": "/v1/account/proposals",
+    "group": "proposals",
+    "source": "apps/api/src/routes/proposals.ts",
+    "line": 36,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/account/proposals/:id",
+    "method": "GET",
+    "path": "/v1/account/proposals/:id",
+    "group": "proposals",
+    "source": "apps/api/src/routes/proposals.ts",
+    "line": 45,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/account/proposals/:id/challenge",
+    "method": "POST",
+    "path": "/v1/account/proposals/:id/challenge",
+    "group": "proposals",
+    "source": "apps/api/src/routes/proposals.ts",
+    "line": 52,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/account/proposals/:id/approve",
+    "method": "POST",
+    "path": "/v1/account/proposals/:id/approve",
+    "group": "proposals",
+    "source": "apps/api/src/routes/proposals.ts",
+    "line": 65,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/account/proposals/:id/cancel",
+    "method": "POST",
+    "path": "/v1/account/proposals/:id/cancel",
+    "group": "proposals",
+    "source": "apps/api/src/routes/proposals.ts",
+    "line": 75,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/assets/*",
+    "method": "GET",
+    "path": "/v1/assets/*",
+    "group": "public assets",
+    "source": "apps/api/src/routes/public-assets.ts",
+    "line": 24,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/account/recovery/start",
+    "method": "POST",
+    "path": "/v1/account/recovery/start",
+    "group": "recovery",
+    "source": "apps/api/src/routes/recovery.ts",
+    "line": 71,
+    "principals": ["public"]
+  },
+  {
+    "id": "GET /v1/account/recovery",
+    "method": "GET",
+    "path": "/v1/account/recovery",
+    "group": "recovery",
+    "source": "apps/api/src/routes/recovery.ts",
+    "line": 80,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/account/recovery/params",
+    "method": "GET",
+    "path": "/v1/account/recovery/params",
+    "group": "recovery",
+    "source": "apps/api/src/routes/recovery.ts",
+    "line": 87,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/account/recovery/challenge",
+    "method": "POST",
+    "path": "/v1/account/recovery/challenge",
+    "group": "recovery",
+    "source": "apps/api/src/routes/recovery.ts",
+    "line": 92,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/account/recovery/cancel",
+    "method": "POST",
+    "path": "/v1/account/recovery/cancel",
+    "group": "recovery",
+    "source": "apps/api/src/routes/recovery.ts",
+    "line": 96,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/auth/recovery-session/options",
+    "method": "POST",
+    "path": "/v1/auth/recovery-session/options",
+    "group": "recovery",
+    "source": "apps/api/src/routes/recovery.ts",
+    "line": 103,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/auth/recovery-session/verify",
+    "method": "POST",
+    "path": "/v1/auth/recovery-session/verify",
+    "group": "recovery",
+    "source": "apps/api/src/routes/recovery.ts",
+    "line": 116,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/refunds",
+    "method": "POST",
+    "path": "/v1/refunds",
+    "group": "refunds",
+    "source": "apps/api/src/routes/refunds.ts",
+    "line": 25,
+    "principals": ["secret_key"],
+    "scope": "refunds:write"
+  },
+  {
+    "id": "POST /v1/refunds/:id/cancel",
+    "method": "POST",
+    "path": "/v1/refunds/:id/cancel",
+    "group": "refunds",
+    "source": "apps/api/src/routes/refunds.ts",
+    "line": 32,
+    "principals": ["secret_key"],
+    "scope": "refunds:write"
+  },
+  {
+    "id": "GET /v1/relayers",
+    "method": "GET",
+    "path": "/v1/relayers",
+    "group": "relayers",
+    "source": "apps/api/src/routes/relayers.ts",
+    "line": 73,
+    "principals": ["public"]
+  },
+  {
+    "id": "GET /v1/review",
+    "method": "GET",
+    "path": "/v1/review",
+    "group": "review",
+    "source": "apps/api/src/routes/review.ts",
+    "line": 31,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/review/:paymentId/acknowledge-legal",
+    "method": "POST",
+    "path": "/v1/review/:paymentId/acknowledge-legal",
+    "group": "review",
+    "source": "apps/api/src/routes/review.ts",
+    "line": 36,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/review/:paymentId/refund",
+    "method": "POST",
+    "path": "/v1/review/:paymentId/refund",
+    "group": "review",
+    "source": "apps/api/src/routes/review.ts",
+    "line": 47,
+    "principals": ["dashboard_user"],
+    "permission": "money:request",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/review/refunds/:refundId/cancel",
+    "method": "POST",
+    "path": "/v1/review/refunds/:refundId/cancel",
+    "group": "review",
+    "source": "apps/api/src/routes/review.ts",
+    "line": 60,
+    "principals": ["dashboard_user"],
+    "permission": "money:request",
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/team",
+    "method": "GET",
+    "path": "/v1/team",
+    "group": "team",
+    "source": "apps/api/src/routes/team.ts",
+    "line": 14,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/team/:membershipId/signer-keys",
+    "method": "GET",
+    "path": "/v1/team/:membershipId/signer-keys",
+    "group": "team",
+    "source": "apps/api/src/routes/team.ts",
+    "line": 26,
+    "principals": ["dashboard_user"],
+    "permission": "team:manage"
+  },
+  {
+    "id": "POST /v1/team/invites",
+    "method": "POST",
+    "path": "/v1/team/invites",
+    "group": "team",
+    "source": "apps/api/src/routes/team.ts",
+    "line": 44,
+    "principals": ["dashboard_user"],
+    "permission": "team:manage"
+  },
+  {
+    "id": "PATCH /v1/team/:membershipId",
+    "method": "PATCH",
+    "path": "/v1/team/:membershipId",
+    "group": "team",
+    "source": "apps/api/src/routes/team.ts",
+    "line": 58,
+    "principals": ["dashboard_user"],
+    "permission": "team:manage"
+  },
+  {
+    "id": "POST /v1/invites/accept",
+    "method": "POST",
+    "path": "/v1/invites/accept",
+    "group": "team",
+    "source": "apps/api/src/routes/team.ts",
+    "line": 70,
+    "principals": ["user_session"]
+  },
+  {
+    "id": "POST /v1/theme-assets",
+    "method": "POST",
+    "path": "/v1/theme-assets",
+    "group": "theme assets",
+    "source": "apps/api/src/routes/theme-assets.ts",
+    "line": 95,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:write"
+  },
+  {
+    "id": "GET /v1/theme-assets",
+    "method": "GET",
+    "path": "/v1/theme-assets",
+    "group": "theme assets",
+    "source": "apps/api/src/routes/theme-assets.ts",
+    "line": 104,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:read"
+  },
+  {
+    "id": "DELETE /v1/theme-assets/:id",
+    "method": "DELETE",
+    "path": "/v1/theme-assets/:id",
+    "group": "theme assets",
+    "source": "apps/api/src/routes/theme-assets.ts",
+    "line": 108,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:write"
+  },
+  {
+    "id": "POST /v1/themes/from-website",
+    "method": "POST",
+    "path": "/v1/themes/from-website",
+    "group": "theme brand",
+    "source": "apps/api/src/routes/theme-brand.ts",
+    "line": 39,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:write"
+  },
+  {
+    "id": "POST /v1/themes/from-store",
+    "method": "POST",
+    "path": "/v1/themes/from-store",
+    "group": "theme brand",
+    "source": "apps/api/src/routes/theme-brand.ts",
+    "line": 45,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:write"
+  },
+  {
+    "id": "PUT /v1/connection/brand",
+    "method": "PUT",
+    "path": "/v1/connection/brand",
+    "group": "theme brand",
+    "source": "apps/api/src/routes/theme-brand.ts",
+    "line": 51,
+    "principals": ["secret_key", "dashboard_user"]
+  },
+  {
+    "id": "GET /v1/themes/preview/:token",
+    "method": "GET",
+    "path": "/v1/themes/preview/:token",
+    "group": "theme preview public",
+    "source": "apps/api/src/routes/theme-preview-public.ts",
+    "line": 22,
+    "principals": ["public"]
+  },
+  {
+    "id": "GET /v1/themes/presets",
+    "method": "GET",
+    "path": "/v1/themes/presets",
+    "group": "themes",
+    "source": "apps/api/src/routes/themes.ts",
+    "line": 75,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:read"
+  },
+  {
+    "id": "POST /v1/themes/validate",
+    "method": "POST",
+    "path": "/v1/themes/validate",
+    "group": "themes",
+    "source": "apps/api/src/routes/themes.ts",
+    "line": 79,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:write"
+  },
+  {
+    "id": "GET /v1/themes",
+    "method": "GET",
+    "path": "/v1/themes",
+    "group": "themes",
+    "source": "apps/api/src/routes/themes.ts",
+    "line": 84,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:read"
+  },
+  {
+    "id": "POST /v1/themes",
+    "method": "POST",
+    "path": "/v1/themes",
+    "group": "themes",
+    "source": "apps/api/src/routes/themes.ts",
+    "line": 88,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:write"
+  },
+  {
+    "id": "GET /v1/themes/:id",
+    "method": "GET",
+    "path": "/v1/themes/:id",
+    "group": "themes",
+    "source": "apps/api/src/routes/themes.ts",
+    "line": 94,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:read"
+  },
+  {
+    "id": "PATCH /v1/themes/:id",
+    "method": "PATCH",
+    "path": "/v1/themes/:id",
+    "group": "themes",
+    "source": "apps/api/src/routes/themes.ts",
+    "line": 98,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:write"
+  },
+  {
+    "id": "DELETE /v1/themes/:id",
+    "method": "DELETE",
+    "path": "/v1/themes/:id",
+    "group": "themes",
+    "source": "apps/api/src/routes/themes.ts",
+    "line": 107,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:write"
+  },
+  {
+    "id": "POST /v1/themes/:id/preview",
+    "method": "POST",
+    "path": "/v1/themes/:id/preview",
+    "group": "themes",
+    "source": "apps/api/src/routes/themes.ts",
+    "line": 113,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:read"
+  },
+  {
+    "id": "POST /v1/themes/:id/publish",
+    "method": "POST",
+    "path": "/v1/themes/:id/publish",
+    "group": "themes",
+    "source": "apps/api/src/routes/themes.ts",
+    "line": 123,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:write"
+  },
+  {
+    "id": "POST /v1/themes/:id/default",
+    "method": "POST",
+    "path": "/v1/themes/:id/default",
+    "group": "themes",
+    "source": "apps/api/src/routes/themes.ts",
+    "line": 129,
+    "principals": ["dashboard_user", "secret_key"],
+    "scope": "themes:write"
+  },
+  {
+    "id": "POST /v1/webhooks/endpoints",
+    "method": "POST",
+    "path": "/v1/webhooks/endpoints",
+    "group": "webhooks",
+    "source": "apps/api/src/routes/webhooks.ts",
+    "line": 34,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage",
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/webhooks/endpoints",
+    "method": "GET",
+    "path": "/v1/webhooks/endpoints",
+    "group": "webhooks",
+    "source": "apps/api/src/routes/webhooks.ts",
+    "line": 45,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage"
+  },
+  {
+    "id": "DELETE /v1/webhooks/endpoints/:id",
+    "method": "DELETE",
+    "path": "/v1/webhooks/endpoints/:id",
+    "group": "webhooks",
+    "source": "apps/api/src/routes/webhooks.ts",
+    "line": 49,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage"
+  },
+  {
+    "id": "POST /v1/webhooks/endpoints/:id/rotate",
+    "method": "POST",
+    "path": "/v1/webhooks/endpoints/:id/rotate",
+    "group": "webhooks",
+    "source": "apps/api/src/routes/webhooks.ts",
+    "line": 55,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/webhooks/endpoints/:id/test",
+    "method": "POST",
+    "path": "/v1/webhooks/endpoints/:id/test",
+    "group": "webhooks",
+    "source": "apps/api/src/routes/webhooks.ts",
+    "line": 61,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage"
+  },
+  {
+    "id": "GET /v1/webhooks/endpoints/:id/deliveries",
+    "method": "GET",
+    "path": "/v1/webhooks/endpoints/:id/deliveries",
+    "group": "webhooks",
+    "source": "apps/api/src/routes/webhooks.ts",
+    "line": 67,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage"
+  },
+  {
+    "id": "POST /v1/webhooks/deliveries/:id/resend",
+    "method": "POST",
+    "path": "/v1/webhooks/deliveries/:id/resend",
+    "group": "webhooks",
+    "source": "apps/api/src/routes/webhooks.ts",
+    "line": 73,
+    "principals": ["dashboard_user"],
+    "permission": "webhooks:resend"
+  }
+]

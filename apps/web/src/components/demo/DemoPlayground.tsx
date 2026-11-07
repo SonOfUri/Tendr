@@ -192,7 +192,7 @@ export function DemoPlayground() {
   }, [demo.successHint]);
 
   const onCheckoutStatus = useCallback(
-    (status: 'confirming' | 'success') => {
+    (status: 'confirming' | 'success' | 'expired') => {
       if (status === 'success') setSettledHint(demo.successHint);
     },
     [demo.successHint],
@@ -305,6 +305,7 @@ export function DemoPlayground() {
             merchantLogoUrl={brand.logoUrl}
             payEyebrow={demo.branding.payEyebrow}
             skin={demo.slug}
+            uiTheme={theme}
             amountHint={checkoutAmount}
             bootstrap={checkout.bootstrap}
             uiOnly={DEMO_UI_ONLY}

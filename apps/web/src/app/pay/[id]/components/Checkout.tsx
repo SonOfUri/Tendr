@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckoutApiError,
   createCheckoutClient,
-  type Quote,
   type SessionView,
   type Token,
 } from '@/lib/checkout/api';
+import { themeLogoUrl } from '@/lib/checkout/brand';
 import { createEmbedBridge, type EmbedBridge } from '@/lib/checkout/embed-bridge';
 import { isModalEmbed, shouldForwardEscape } from '@/lib/checkout/escape';
+import { formatOrderAmount, safeHttpUrl } from '@/lib/checkout/format';
 import { createPoller, type Poller } from '@/lib/checkout/poller';
 import { clearClientSecret, takeClientSecret } from '@/lib/checkout/secret';
 import { screenFor, type ScreenKind } from '@/lib/checkout/status';
@@ -23,17 +24,20 @@ import {
 } from '@/lib/wallets/popup';
 import { walletModalOpen } from '@/lib/wallets/modal-state';
 import { createDepositReporter, type PendingTx } from '@/lib/wallets/tx-store';
-import { PayLabelContext } from '@/components/theme/pay-label';
-import { ThemedPage } from '@/components/theme/ThemedPage';
-import { formatOrderAmount } from '@/lib/checkout/format';
+import { TendrLogo } from '@/components/TendrLogo';
+import { toast } from '@/components/toast';
+import {
+  DemoCheckoutOpening,
+  DemoCheckoutPanel,
+} from '@/components/demo/DemoCheckoutPanel';
 import { parseShopperThemeCached } from '@/lib/theme/parse';
 import { EmailPanel, NeedsAddressPanel } from './ActionPanels';
-import { CheckoutCanvas, successBackBlock } from './CheckoutCanvas';
-import { CheckoutHeader } from './CheckoutHeader';
-import { PayFlow } from './PayFlow';
+import { successBackBlock } from './CheckoutCanvas';
 import type { WalletSendResult } from './WalletConnect';
 import { CheckingScreen, StatusScreen } from './StatusScreens';
 import { useNow } from './useNow';
+import '@/components/demo/demo-playground.css';
+import './hosted-pay.css';
 
 /** What a screen reader hears when the screen changes. */
 const ANNOUNCE: Record<ScreenKind, string> = {
@@ -50,7 +54,25 @@ const ANNOUNCE: Record<ScreenKind, string> = {
   checking: 'Checking your payment',
 };
 
+/** Screens that use the demo checkout chrome (transfer / confirming / success / expired). */
+const DEMO_SCREEN: ReadonlySet<ScreenKind> = new Set([
+  'pay',
+  'detected',
+  'converting',
+  'complete',
+  'expired',
+  'checking',
+]);
+
 type Fatal = 'incomplete' | 'invalid';
+
+function productTitle(view: SessionView): string {
+  const linkTitle = view.payment_link?.title?.trim();
+  if (linkTitle) return linkTitle;
+  const first = Array.isArray(view.line_items) ? view.line_items[0] : null;
+  if (first?.name?.trim()) return first.name.trim();
+  return 'Your Cart';
+}
 
 /**
  * The shopper checkout. Reads the client secret from the fragment (memory only), polls the session
@@ -164,7 +186,10 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     client
       .tokens()
       .then((r) => setTokens(r.tokens))
-      .catch(() => setTokensFailed(true));
+      .catch(() => {
+        setTokensFailed(true);
+        toast.error("We can't load the ways to pay right now.");
+      });
   }, [client]);
   useEffect(loadTokens, [loadTokens]);
 
@@ -237,7 +262,6 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     setDismissedAt(at);
     refresh();
   }, [reporter, view?.deposit_submitted_at, refresh]);
-  const onQuote = useCallback((q: Quote) => setView((v) => (v ? { ...v, quote: q } : v)), []);
 
   const screen = view ? screenFor(view, new Date(now)) : null;
 
@@ -285,127 +309,198 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     [tokens],
   );
 
+  const closeCheckout = useCallback(() => {
+    if (bridgeRef.current?.targetOrigin) {
+      bridgeRef.current.close();
+      return;
+    }
+    const link = view?.payment_link?.url;
+    const cancel = safeHttpUrl(link ?? view?.cancel_url);
+    if (cancel) {
+      window.location.assign(cancel);
+      return;
+    }
+    if (window.history.length > 1) window.history.back();
+  }, [view?.cancel_url, view?.payment_link?.url]);
+
+  const completeCheckout = useCallback(() => {
+    const success = safeHttpUrl(view?.success_url);
+    if (success) {
+      window.location.assign(success);
+      return;
+    }
+    if (bridgeRef.current?.targetOrigin) {
+      bridgeRef.current.close();
+      return;
+    }
+    closeCheckout();
+  }, [closeCheckout, view?.success_url]);
+
+  useEffect(() => {
+    if (!fatal) return;
+    toast.error(
+      fatal === 'incomplete'
+        ? 'This checkout link is incomplete. Return to the store and try again.'
+        : 'This checkout link is no longer valid. Return to the store and try again.',
+    );
+  }, [fatal]);
+
   if (fatal) {
     return (
-      <div className="pay-card">
-        <section className="pay-section">
-          <h1 className="pay-title">
-            {fatal === 'incomplete'
-              ? 'This checkout link is incomplete'
-              : 'This checkout link is no longer valid'}
-          </h1>
-          <p role="alert">
-            {fatal === 'incomplete'
-              ? 'This checkout link is incomplete. Return to the store and try again.'
-              : 'Return to the store and try again.'}
+      <div className="hosted-pay-page" data-theme="light">
+        <div className="hosted-pay-edge">
+          <section className="pay-section">
+            <h1 className="pay-title">
+              {fatal === 'incomplete'
+                ? 'This checkout link is incomplete'
+                : 'This checkout link is no longer valid'}
+            </h1>
+            <p className="muted">Return to the store and try again.</p>
+          </section>
+          <p className="demo-checkout-footnote">
+            <TendrLogo size={22} variant="color" />
+            Powered by <strong>Tendr</strong>
           </p>
-        </section>
+        </div>
+      </div>
+    );
+  }
+
+  if (!secret) {
+    return (
+      <div className="hosted-pay-page" data-theme="light">
+        <div className="hosted-pay-edge">
+          {connection === 'reconnecting' ? <Reconnecting /> : null}
+          <CheckingScreen />
+          <p className="demo-checkout-footnote">
+            <TendrLogo size={22} variant="color" />
+            Powered by <strong>Tendr</strong>
+          </p>
+        </div>
       </div>
     );
   }
 
   if (!view || !screen || !client) {
     return (
-      <div className="pay-card">
+      <div className="hosted-pay-page" data-theme="light">
         {connection === 'reconnecting' ? <Reconnecting /> : null}
-        <CheckingScreen />
+        <DemoCheckoutOpening
+          productName="Checkout"
+          merchantName="Store"
+          merchantLogoUrl=""
+          payEyebrow="Paying"
+          skin="ecommerce"
+          amountHint="…"
+          onClose={closeCheckout}
+        />
       </div>
     );
   }
 
   const settlementSymbol =
     view.amount_currency === 'USD' ? null : (tokenOf(view.amount_currency)?.symbol ?? null);
-  // A theme that doesn't parse is the Tendr default look; payment never depends on the theme.
   const theme = parseShopperThemeCached(view.theme, view.merchant.name);
+  const merchantName = view.merchant.name;
+  const logoUrl = themeLogoUrl(theme) ?? '';
+  const amountDisplay = formatOrderAmount(view.amount, view.amount_currency, settlementSymbol);
+  const title = productTitle(view);
+  const useDemo = DEMO_SCREEN.has(screen.kind);
+  const blocked = paymentBlock({
+    status: view.status,
+    pending: pendingTx,
+    depositSubmittedAt: view.deposit_submitted_at ?? null,
+    dismissedSubmittedAt: dismissedAt,
+  });
 
-  // The sealed payment block: everything about the money stays Tendr's, whatever the theme says.
-  // The theme's button words reach only its primary pay button (WalletPanel, R22).
-  const sealed = (
-    <PayLabelContext.Provider value={theme.document.settings.button_label ?? null}>
-      <CheckoutHeader
-        view={view}
-        tradingAs={theme.trading_as}
-        settlementSymbol={settlementSymbol}
-        now={now}
-        showTimer={screen.kind === 'pay'}
-        canClose={canClose}
-        onClose={() => bridgeRef.current?.close()}
-      />
-      {connection === 'reconnecting' ? <Reconnecting /> : null}
+  return (
+    <div className="hosted-pay-page" data-theme="light">
       <p className="sr-only" role="status" aria-live="polite">
         {ANNOUNCE[screen.kind]}
       </p>
+      {connection === 'reconnecting' ? <Reconnecting /> : null}
 
-      {screen.kind === 'pay' && screen.notice === 'previous_returned' ? (
-        <p className="pay-alert" role="note">
-          Your earlier payment didn&apos;t cover the full amount and is being returned to you. You
-          can try again below.
-        </p>
-      ) : null}
-
-      {screen.kind === 'pay' ? (
-        tokens ? (
-          <PayFlow
-            view={view}
-            client={client}
-            tokens={tokens}
-            now={now}
-            onQuote={onQuote}
-            onRefresh={refresh}
-            onDepositSent={onDepositSent}
-            blocked={paymentBlock({
-              status: view.status,
-              pending: pendingTx,
-              depositSubmittedAt: view.deposit_submitted_at ?? null,
-              dismissedSubmittedAt: dismissedAt,
-            })}
-            onDidntGoThrough={onDidntGoThrough}
-            checkBeforeSend={checkBeforeSend}
-            openWalletWindow={walletWindow ? undefined : openWallet}
-          />
-        ) : tokensFailed ? (
-          <section className="pay-section">
-            <p role="alert">We can&apos;t load the ways to pay right now.</p>
-            <button type="button" className="pay-button pay-button-secondary" onClick={loadTokens}>
-              Try again
-            </button>
-          </section>
+      {useDemo ? (
+        tokensFailed && screen.kind === 'pay' ? (
+          <div className="hosted-pay-edge">
+            <section className="pay-section">
+              <p className="muted">Payment options didn&apos;t load.</p>
+              <button type="button" className="pay-button pay-button-secondary" onClick={loadTokens}>
+                Try again
+              </button>
+            </section>
+            <p className="demo-checkout-footnote">
+              <TendrLogo size={22} variant="color" />
+              Powered by <strong>Tendr</strong>
+            </p>
+          </div>
         ) : (
-          <CheckingScreen />
+          <DemoCheckoutPanel
+            sessionId={sessionId}
+            clientSecret={secret}
+            productName={title}
+            merchantName={merchantName}
+            merchantLogoUrl={logoUrl}
+            payEyebrow="Paying"
+            skin="ecommerce"
+            amountDisplay={amountDisplay}
+            amountHint={view.amount}
+            successHint="Order confirmed. Fulfillment can proceed."
+            bootstrap={
+              tokens
+                ? {
+                    session: view,
+                    tokens,
+                    tokenId:
+                      view.quote?.origin_asset ??
+                      tokens.find((t) => t.popular)?.asset_id ??
+                      tokens[0]?.asset_id ??
+                      '',
+                    quote: view.quote,
+                  }
+                : null
+            }
+            onClose={closeCheckout}
+            onComplete={completeCheckout}
+            openWalletWindow={walletWindow ? undefined : openWallet}
+            checkBeforeSend={checkBeforeSend}
+            blocked={blocked}
+            onDidntGoThrough={onDidntGoThrough}
+          />
         )
       ) : (
-        <StatusScreen
-          view={view}
-          screen={screen}
-          tokenOf={tokenOf}
-          client={client}
-          now={now}
-          onRefresh={refresh}
-          showBackLink={screen.kind !== 'complete' || successBackBlock(theme) === null}
-        />
+        <div className="hosted-pay-edge">
+          <StatusScreen
+            view={view}
+            screen={screen}
+            tokenOf={tokenOf}
+            client={client}
+            now={now}
+            onRefresh={refresh}
+            showBackLink={screen.kind !== 'complete' || successBackBlock(theme) === null}
+          />
+          <p className="demo-checkout-footnote">
+            <TendrLogo size={22} variant="color" />
+            Powered by <strong>Tendr</strong>
+          </p>
+        </div>
       )}
 
-      {screen.action === 'email' ? <EmailPanel client={client} onDone={refresh} /> : null}
-      {screen.action === 'needs_address' && screen.refundNeedingAddress ? (
-        <NeedsAddressPanel client={client} refund={screen.refundNeedingAddress} onDone={refresh} />
+      {screen.action === 'email' ? (
+        <div className="hosted-pay-edge" style={{ marginTop: '0.75rem' }}>
+          <EmailPanel client={client} onDone={refresh} />
+        </div>
       ) : null}
-    </PayLabelContext.Provider>
-  );
-
-  return (
-    <ThemedPage theme={theme}>
-      <div className="pay-card">
-        <CheckoutCanvas
-          view={view}
-          theme={theme}
-          screen={screen.kind}
-          sealed={sealed}
-          amountText={formatOrderAmount(view.amount, view.amount_currency, settlementSymbol)}
-          settlementSymbol={settlementSymbol}
-        />
-        <p className="pay-foot muted small">Payments by Tendr</p>
-      </div>
-    </ThemedPage>
+      {screen.action === 'needs_address' && screen.refundNeedingAddress ? (
+        <div className="hosted-pay-edge" style={{ marginTop: '0.75rem' }}>
+          <NeedsAddressPanel
+            client={client}
+            refund={screen.refundNeedingAddress}
+            onDone={refresh}
+          />
+        </div>
+      ) : null}
+    </div>
   );
 }
 

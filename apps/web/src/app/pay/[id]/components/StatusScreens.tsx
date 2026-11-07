@@ -285,7 +285,25 @@ export function StatusScreen({
 
     case 'expired':
       return (
-        <section className="pay-section" aria-labelledby="pay-expired-title">
+        <section className="pay-section pay-status-screen" aria-labelledby="pay-expired-title">
+          <div className="pay-status-hero" aria-hidden>
+            <div className="pay-status-orb pay-status-orb-expired">
+              <span className="pay-status-ring" />
+              <span className="pay-status-ring pay-status-ring-delay" />
+              <span className="pay-status-expired-icon">
+                <svg width="34" height="34" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="8.25" stroke="currentColor" strokeWidth="1.8" />
+                  <path
+                    d="M12 7.5V12l3.2 2.1"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </span>
+            </div>
+          </div>
           <h2 id="pay-expired-title">This checkout has expired</h2>
           <p>
             {view.payment_link

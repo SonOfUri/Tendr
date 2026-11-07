@@ -138,12 +138,48 @@
   transition: background-color 220ms ease;
 }
 
+/* Canvas stays dark in both themes — theme toggle does not restyle it. */
 .demo-playground[data-theme='light'] .demo-canvas {
   --demo-dot: rgba(255, 255, 255, 0.12);
 }
 
 .demo-playground[data-theme='dark'] .demo-canvas {
   --demo-dot: rgba(255, 255, 255, 0.09);
+}
+
+/* Light mode: timer must stay light with dark type (readable). */
+.demo-playground[data-theme='light'] .demo-transfer-timer {
+  background: #f3f3f3;
+  border-color: #e4e4e4;
+  color: #111111;
+}
+
+.demo-playground[data-theme='light'] .demo-transfer-timer-label {
+  color: #6b6b6b;
+}
+
+.demo-playground[data-theme='light'] .demo-transfer-timer-value {
+  color: #111111;
+}
+
+.demo-playground[data-theme='light'] .demo-transfer-timer-track {
+  background: #e0e0e0;
+}
+
+.demo-playground[data-theme='light'] .demo-transfer-timer-fill {
+  background: #111111;
+}
+
+/* Light mode: confirming / success cards stay white (never inherit a dark panel). */
+.demo-playground[data-theme='light'] .demo-status-card,
+.demo-playground[data-theme='light'] .demo-checkout-card {
+  --demo-panel: #ffffff;
+  --demo-panel-ink: #111111;
+  --demo-panel-muted: #6b6b6b;
+  --demo-panel-border: #e8e8e8;
+  --demo-chip: #f1f1f1;
+  background: #ffffff;
+  color: #111111;
 }
 
 .demo-canvas-chrome {
@@ -181,6 +217,15 @@
   object-fit: cover;
   background: var(--demo-chip);
   flex-shrink: 0;
+}
+
+.demo-checkout-store-logo-fallback {
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--demo-panel);
+  background: var(--demo-panel-ink);
 }
 
 .demo-store-logo-row {
@@ -827,6 +872,70 @@
   animation: demo-status-pop 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.demo-status-orb-expired .demo-status-ring-expired {
+  border-color: color-mix(in srgb, #f59e0b 55%, transparent);
+}
+
+.demo-status-expired {
+  width: 88px;
+  height: 88px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, #f59e0b 16%, var(--demo-chip));
+  color: #b45309;
+  border: 1px solid color-mix(in srgb, #f59e0b 35%, var(--demo-panel-border));
+  box-shadow:
+    0 0 0 10px color-mix(in srgb, #f59e0b 12%, transparent),
+    0 18px 40px rgba(0, 0, 0, 0.12);
+  animation: demo-status-expired-in 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  z-index: 1;
+}
+
+.demo-status-expired svg {
+  animation: demo-status-expired-tick 1.6s ease-in-out infinite;
+  transform-origin: 12px 12px;
+}
+
+@keyframes demo-status-expired-in {
+  0% {
+    transform: scale(0.55) rotate(-8deg);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.06) rotate(2deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes demo-status-expired-tick {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  40% {
+    transform: rotate(12deg);
+  }
+  55% {
+    transform: rotate(-4deg);
+  }
+}
+
+.demo-status-card[data-skin='gaming'] .demo-status-expired {
+  background: color-mix(in srgb, #fbbf24 18%, #1a2218);
+  color: #fde68a;
+  border-color: color-mix(in srgb, #fbbf24 40%, #2a3a28);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .demo-status-expired,
+  .demo-status-expired svg {
+    animation: none;
+  }
+}
+
 @keyframes demo-status-pop {
   0% {
     transform: scale(0.55);
@@ -1036,6 +1145,9 @@
   gap: 0.65rem;
 }
 
+/* Transfer + wallet slots both host .pay-test; scope to the card so light mode ink beats globals. */
+.demo-checkout-card .pay-button,
+.demo-checkout-card button.pay-button,
 .demo-wallet-slot .pay-button,
 .demo-wallet-slot button.pay-button {
   appearance: none;
@@ -1052,6 +1164,8 @@
   width: 100%;
 }
 
+.demo-checkout-card .pay-button-secondary,
+.demo-checkout-card button.pay-button-secondary,
 .demo-wallet-slot .pay-button-secondary,
 .demo-wallet-slot button.pay-button-secondary {
   background: var(--demo-chip);
@@ -1059,6 +1173,9 @@
   border: 1px solid var(--demo-panel-border);
 }
 
+.demo-checkout-card .muted,
+.demo-checkout-card .small,
+.demo-checkout-card .pay-test p,
 .demo-wallet-slot .muted,
 .demo-wallet-slot .small,
 .demo-wallet-slot p {
@@ -1067,10 +1184,12 @@
   margin: 0;
 }
 
+.demo-checkout-card .pay-error,
 .demo-wallet-slot .pay-error {
   color: var(--demo-error);
 }
 
+.demo-checkout-card .pay-test,
 .demo-wallet-slot .pay-test {
   display: grid;
   gap: 0.55rem;
@@ -1080,12 +1199,14 @@
   background: var(--demo-chip);
 }
 
+.demo-checkout-card .pay-test .row,
 .demo-wallet-slot .pay-test .row {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
 }
 
+.demo-checkout-card .pay-test .pay-button-small,
 .demo-wallet-slot .pay-test .pay-button-small {
   width: auto;
   padding: 0.45rem 0.7rem;
@@ -1094,6 +1215,8 @@
   border-radius: 999px;
 }
 
+.demo-checkout-card[data-skin='gaming'] .pay-button,
+.demo-checkout-card[data-skin='gaming'] button.pay-button,
 .demo-checkout-card[data-skin='gaming'] .demo-wallet-slot .pay-button,
 .demo-checkout-card[data-skin='gaming'] .demo-wallet-slot button.pay-button {
   border-radius: 3px;
@@ -1105,6 +1228,8 @@
   box-shadow: 0 4px 0 #5f8a1f;
 }
 
+.demo-checkout-card[data-skin='gaming'] .pay-button-secondary,
+.demo-checkout-card[data-skin='gaming'] button.pay-button-secondary,
 .demo-checkout-card[data-skin='gaming'] .demo-wallet-slot .pay-button-secondary,
 .demo-checkout-card[data-skin='gaming'] .demo-wallet-slot button.pay-button-secondary {
   border-radius: 3px;
@@ -1113,12 +1238,14 @@
   color: #f4ffe8 !important;
 }
 
+.demo-checkout-card[data-skin='gaming'] .pay-test,
 .demo-checkout-card[data-skin='gaming'] .demo-wallet-slot .pay-test {
   border-radius: 4px;
   border-color: #2d3b2e;
   background: #0d1410;
 }
 
+.demo-checkout-card[data-skin='gaming'] .pay-test .pay-button-small,
 .demo-checkout-card[data-skin='gaming'] .demo-wallet-slot .pay-test .pay-button-small {
   border-radius: 3px;
   font-size: 0.42rem;
@@ -1140,6 +1267,36 @@ wui-card,
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
+}
+
+.demo-checkout-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+.demo-pay-test {
+  margin: 0;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--demo-panel-ink);
+  background: var(--demo-chip);
+  border: 1px solid var(--demo-panel-border);
+  white-space: nowrap;
+}
+
+.demo-checkout-card[data-skin='gaming'] .demo-pay-test,
+.demo-status-card[data-skin='gaming'] .demo-pay-test {
+  border-radius: 3px;
+  border: 2px solid #2d3b2e;
+  background: #b6f34d;
+  color: #102010;
+  letter-spacing: 0.06em;
 }
 
 .demo-checkout-title {
@@ -2916,9 +3073,8 @@ wui-card,
   height: 120px;
   border-radius: 14px;
   background:
-    radial-gradient(circle at 30% 20%, rgba(64, 53, 245, 0.55), transparent 55%),
-    radial-gradient(circle at 80% 70%, rgba(22, 199, 247, 0.35), transparent 50%),
-    linear-gradient(145deg, #1a1f35, #0c1020);
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.16), transparent 55%),
+    linear-gradient(145deg, #2a2a2a, #101010);
 }
 
 /* Pixel / arcade item shop (Gaming scenario) */
@@ -3924,6 +4080,13 @@ wui-card,
   margin-top: 0.85rem;
   color: var(--demo-error);
   font-size: 0.85rem;
+}
+
+.demo-checkout-muted {
+  margin: 0.5rem 0 0;
+  color: var(--demo-panel-muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
 }
 
 .demo-sidebar-footer {

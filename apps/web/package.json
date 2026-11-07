@@ -13,7 +13,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:e2e": "playwright test",
-    "test:e2e:woocommerce": "playwright test --config=playwright.woocommerce.config.ts"
+    "test:e2e:woocommerce": "playwright test --config=playwright.woocommerce.config.ts",
+    "api-console:catalog": "node scripts/api-console-catalog.mjs",
+    "api-console:check": "node scripts/api-console-catalog.mjs --check",
+    "test:api-console": "playwright test --config=playwright.api-console.config.ts"
   },
   "dependencies": {
     "@ethersproject/sha2": "5.8.0",

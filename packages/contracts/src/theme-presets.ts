@@ -29,14 +29,14 @@ function doc(
   };
 }
 
-/** Today's navy look (the `--tendr-*` tokens) in dark, plus a light palette. */
+/** The current black-and-white Tendr look, in dark and light. */
 export function TENDR_DEFAULT_THEME(displayName: string): ThemeDocument {
   return doc({
     display_name: displayName,
     mode: 'dark',
     palettes: {
-      dark: { accent: '#7a72ff', background: '#080d1b', surface: '#0f1629', text: '#ffffff' },
-      light: { accent: '#4035f5', background: '#ffffff', surface: '#f3f4fb', text: '#080d1b' },
+      dark: { accent: '#f5f5f5', background: '#070707', surface: '#161616', text: '#f5f5f5' },
+      light: { accent: '#161616', background: '#ffffff', surface: '#f4f4f5', text: '#141414' },
     },
     font: { kind: 'curated', id: 'sora' },
     corner: 'soft',
@@ -49,7 +49,7 @@ export const THEME_PRESETS: Record<
 > = {
   blank: {
     label: 'Tendr default',
-    description: 'The standard Tendr look, with light and dark palettes.',
+    description: 'The standard Tendr look, black and white, with light and dark palettes.',
     document: TENDR_DEFAULT_THEME,
   },
   fashion: {

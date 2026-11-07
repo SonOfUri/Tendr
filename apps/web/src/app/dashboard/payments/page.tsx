@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { Button, Spinner } from '@tendr/ui';
+import { CreditCard } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useLoad } from '@/components/dashboard/common';
 import {
@@ -139,7 +140,9 @@ function PaymentsContent() {
         ) : !first.data ? (
           <Spinner label="Loading payments" />
         ) : rows.length === 0 ? (
-          <EmptyState title="No payments match"
+          <EmptyState
+            icon={<CreditCard size={22} strokeWidth={1.75} />}
+            title="No payments match"
             description={
               paymentLinkId
                 ? 'No payments yet for this payment link. Try clearing the filters.'

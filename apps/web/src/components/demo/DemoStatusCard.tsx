@@ -3,15 +3,20 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DemoSlug } from '@/lib/demo';
 import { TendrLogo } from '@/components/TendrLogo';
+import { burstDemoConfetti } from '@/lib/demo/confetti';
 
 type Props = {
-  variant: 'confirming' | 'success';
+  variant: 'confirming' | 'success' | 'expired';
   skin: DemoSlug;
+  /** White mark on dark panels; black on light. */
+  logoTone?: 'white' | 'black';
   merchantName: string;
   merchantLogoUrl: string;
   payEyebrow: string;
   amountLabel: string;
   successHint?: string;
+  /** Test mode — fake addresses / simulated settlement. */
+  testMode?: boolean;
   onContinue?: () => void;
   onClose?: () => void;
 };
@@ -21,47 +26,27 @@ const CONFIRM_STEPS = 3;
 /** Time on each step before advancing (fits under the 15s total checkout timer). */
 const CONFIRM_STEP_MS = 3_500;
 
-const CONFETTI_COLORS = ['#b6f34d', '#111111', '#ffffff', '#6ee7b7', '#93c5fd', '#fbbf24'];
-
-function burstConfetti(root: HTMLElement) {
-  const layer = document.createElement('div');
-  layer.className = 'demo-confetti-layer';
-  layer.setAttribute('aria-hidden', 'true');
-  const count = 64;
-  for (let i = 0; i < count; i++) {
-    const piece = document.createElement('span');
-    piece.className = 'demo-confetti-piece';
-    piece.style.setProperty('--x', `${8 + Math.random() * 84}%`);
-    piece.style.setProperty('--delay', `${Math.random() * 0.35}s`);
-    piece.style.setProperty('--dur', `${1.4 + Math.random() * 1.2}s`);
-    piece.style.setProperty('--rot', `${Math.random() * 720 - 360}deg`);
-    piece.style.setProperty('--drift', `${Math.random() * 120 - 60}px`);
-    piece.style.setProperty('--size', `${6 + Math.random() * 8}px`);
-    piece.style.background = CONFETTI_COLORS[i % CONFETTI_COLORS.length]!;
-    layer.appendChild(piece);
-  }
-  root.appendChild(layer);
-  window.setTimeout(() => layer.remove(), 3200);
-}
-
 export function DemoStatusCard({
   variant,
   skin,
+  logoTone,
   merchantName,
   merchantLogoUrl,
   payEyebrow,
   amountLabel,
   successHint,
+  testMode = false,
   onContinue,
   onClose,
 }: Props) {
+  const poweredByTone: 'white' | 'black' =
+    logoTone ?? (skin === 'gaming' ? 'white' : 'black');
   const shellRef = useRef<HTMLDivElement>(null);
   /** How many steps are complete (1 = payment detected done; 3 = settlement done). */
   const [progress, setProgress] = useState(1);
-
   useEffect(() => {
     if (variant !== 'success' || !shellRef.current) return;
-    burstConfetti(shellRef.current);
+    return burstDemoConfetti(shellRef.current);
   }, [variant]);
 
   useEffect(() => {
@@ -80,10 +65,45 @@ export function DemoStatusCard({
   }, [variant]);
 
   const confirming = variant === 'confirming';
+  const expired = variant === 'expired';
   const tickLabels =
     skin === 'gaming'
       ? (['Payment received', 'Minting unlock', 'Inventory sync'] as const)
       : (['Payment detected', 'Confirming on-chain', 'Settlement'] as const);
+
+  const title = confirming
+    ? skin === 'gaming'
+      ? 'SYNCING…'
+      : 'Confirming'
+    : expired
+      ? skin === 'gaming'
+        ? 'TIMED OUT'
+        : 'Expired'
+      : skin === 'gaming'
+        ? 'UNLOCKED'
+        : 'All set';
+
+  const eyebrow = confirming
+    ? `${payEyebrow} ${merchantName}`
+    : expired
+      ? `${payEyebrow} ${merchantName}`
+      : merchantName;
+
+  const copy = confirming
+    ? skin === 'gaming'
+      ? 'Loot detected — confirming on-chain…'
+      : 'Payment detected — confirming on-chain…'
+    : expired
+      ? skin === 'gaming'
+        ? 'This checkout timed out. Start again from the store.'
+        : 'This checkout has expired. Don’t send money to an address from this page.'
+      : (successHint ?? 'Payment complete. You’re good to go.');
+
+  const ariaLabel = confirming
+    ? 'Confirming payment'
+    : expired
+      ? 'Checkout expired'
+      : 'Payment complete';
 
   return (
     <div
@@ -93,32 +113,45 @@ export function DemoStatusCard({
       data-skin={skin}
       role="status"
       aria-live="polite"
-      aria-label={confirming ? 'Confirming payment' : 'Payment complete'}
+      aria-label={ariaLabel}
     >
       <div className="demo-status-card-top">
         <div className="demo-checkout-store">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={merchantLogoUrl}
-            alt=""
-            className="demo-checkout-store-logo"
-            width={40}
-            height={40}
-          />
+          {merchantLogoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={merchantLogoUrl}
+              alt=""
+              className="demo-checkout-store-logo"
+              width={40}
+              height={40}
+            />
+          ) : (
+            <span className="demo-checkout-store-logo demo-checkout-store-logo-fallback" aria-hidden>
+              {merchantName.trim().charAt(0).toUpperCase() || 'T'}
+            </span>
+          )}
           <div>
-            <p className="demo-card-label">
-              {confirming ? `${payEyebrow} ${merchantName}` : merchantName}
-            </p>
-            <h2 className="demo-checkout-title">
-              {confirming ? (skin === 'gaming' ? 'SYNCING…' : 'Confirming') : skin === 'gaming' ? 'UNLOCKED' : 'All set'}
-            </h2>
+            <p className="demo-card-label">{eyebrow}</p>
+            <h2 className="demo-checkout-title">{title}</h2>
           </div>
         </div>
-        {onClose ? (
-          <button type="button" className="demo-checkout-close" aria-label="Close" onClick={onClose}>
-            ×
-          </button>
-        ) : null}
+        <div className="demo-checkout-card-actions">
+          {testMode ? (
+            <p
+              className="demo-pay-test"
+              role="note"
+              title="Test mode — no real funds move."
+            >
+              Test
+            </p>
+          ) : null}
+          {onClose ? (
+            <button type="button" className="demo-checkout-close" aria-label="Close" onClick={onClose}>
+              ×
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="demo-status-hero" aria-hidden>
@@ -133,6 +166,23 @@ export function DemoStatusCard({
                   stroke="currentColor"
                   strokeWidth="1.7"
                   strokeLinecap="round"
+                />
+              </svg>
+            </span>
+          </div>
+        ) : expired ? (
+          <div className="demo-status-orb demo-status-orb-expired">
+            <span className="demo-status-ring demo-status-ring-expired" />
+            <span className="demo-status-ring demo-status-ring-delay demo-status-ring-expired" />
+            <span className="demo-status-expired">
+              <svg width="34" height="34" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="8.25" stroke="currentColor" strokeWidth="1.8" />
+                <path
+                  d="M12 7.5V12l3.2 2.1"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
                 />
               </svg>
             </span>
@@ -153,13 +203,7 @@ export function DemoStatusCard({
       </div>
 
       <p className="demo-status-amount">{amountLabel}</p>
-      <p className="demo-status-copy">
-        {confirming
-          ? skin === 'gaming'
-            ? 'Loot detected — confirming on-chain…'
-            : 'Payment detected — confirming on-chain…'
-          : successHint ?? 'Payment complete. You’re good to go.'}
-      </p>
+      <p className="demo-status-copy">{copy}</p>
 
       {confirming ? (
         <ol className="demo-status-ticks" aria-label="Confirmation progress">
@@ -199,13 +243,19 @@ export function DemoStatusCard({
           })}
         </ol>
       ) : (
-        <button type="button" className="demo-status-cta" onClick={onContinue}>
-          {skin === 'gaming' ? 'BACK TO GAME' : 'Continue'}
+        <button type="button" className="demo-status-cta" onClick={onContinue ?? onClose}>
+          {expired
+            ? skin === 'gaming'
+              ? 'TRY AGAIN'
+              : 'Start again'
+            : skin === 'gaming'
+              ? 'BACK TO GAME'
+              : 'Continue'}
         </button>
       )}
 
       <p className="demo-checkout-footnote">
-        <TendrLogo size={22} />
+        <TendrLogo size={22} variant="color" tone={poweredByTone} />
         Powered by <strong>Tendr</strong>
       </p>
     </div>

@@ -23,6 +23,7 @@ import {
   type FeeMode,
   type GaslessOption,
 } from '@/lib/wallets/gasless/index';
+import { toast } from '@/components/toast';
 import { NetworkFee, showFeeChoice } from './NetworkFee';
 import type { WalletConnectProps, WalletGaslessParams, WalletQuoteResult } from './WalletConnect';
 
@@ -141,6 +142,25 @@ export function WalletPanel({
   const [canRetry, setCanRetry] = useState(false);
   // The theme's button words for the main "Pay …" action (R22); unset keeps Tendr's.
   const themeLabel = usePayLabel();
+
+  useEffect(() => {
+    if (message) toast.error(message);
+  }, [message]);
+
+  useEffect(() => {
+    if (refused) {
+      toast.error(`${WALLET_REFUSED} You can still pay by sending manually below.`);
+    }
+  }, [refused]);
+
+  useEffect(() => {
+    if (gasless === undefined || gaslessMethodOf(quote) === null) return;
+    try {
+      quoteFee(quote);
+    } catch {
+      toast.error(MISMATCH_COPY);
+    }
+  }, [gasless, quote]);
 
   // Mounted by the "Connect wallet" click: start connecting right away. Unmounting (another
   // token, or a payment went out) drops the wallet connection.
@@ -601,11 +621,6 @@ export function WalletPanel({
                   accepts. Nothing is sent.
                 </p>
               ) : null}
-              {fee === null ? (
-                <p className="pay-error" role="alert">
-                  {MISMATCH_COPY}
-                </p>
-              ) : null}
             </>
           ) : (
             <p className="muted small">
@@ -616,16 +631,6 @@ export function WalletPanel({
         </>
       )}
 
-      {refused ? (
-        <p className="pay-error" role="alert">
-          {WALLET_REFUSED} You can still pay by sending manually below.
-        </p>
-      ) : null}
-      {message ? (
-        <p className="pay-error" role="alert">
-          {message}
-        </p>
-      ) : null}
       {canRetry && phase === 'ready' ? (
         <button
           type="button"

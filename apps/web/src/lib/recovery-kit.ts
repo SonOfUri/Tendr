@@ -140,11 +140,18 @@ export function signRecovery(kitSecret: string | Uint8Array, payloadBytes: Uint8
 export { qrDataUrl } from './qr';
 
 /**
- * Prints the kit. The page renders the kit sheet (`.print-kit`, text plus the QR from
+ * Prints the kit. The page renders the branded kit sheet (`.print-kit`, text plus the QR from
  * `qrDataUrl(kit.secretWords)`); the print stylesheet hides everything else, so "Save as PDF" in
  * the print dialog gives a one-page kit. Nothing is uploaded.
  */
 export function recoveryKitPdfOrPrint(kit: Pick<RecoveryKit, 'secretWords'>): void {
   if (!kit.secretWords || typeof window === 'undefined') return;
+  const previous = document.title;
+  document.title = 'Tendr recovery kit';
+  const restore = () => {
+    document.title = previous;
+    window.removeEventListener('afterprint', restore);
+  };
+  window.addEventListener('afterprint', restore);
   window.print();
 }

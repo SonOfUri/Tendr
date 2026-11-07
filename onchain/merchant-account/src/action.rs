@@ -21,7 +21,7 @@ pub const MAX_ORIGINS: usize = 10;
 pub const MAX_ORIGIN_LEN: usize = 256;
 /// Longest id (signer, saved address, payment).
 pub const MAX_ID_LEN: usize = 64;
-/// Longest chain name (`saved::SUPPORTED_CHAINS` narrows it further).
+/// Longest chain name. `saved::is_supported_chain` also requires a lowercase slug.
 pub const MAX_CHAIN_LEN: usize = 16;
 /// Longest destination or saved address.
 pub const MAX_ADDRESS_LEN: usize = 128;
