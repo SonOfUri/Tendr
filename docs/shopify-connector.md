@@ -10,6 +10,30 @@ The UI uses React Router 7 framework mode (the maintained successor to Remix 2's
 APIs), Express and the Shopify API SDK. The tutorial's older Remix dependencies were not
 retained because of reported security issues. See the [migration reference](https://reactrouter.com/7.18.0/upgrading/remix).
 
+## Hosted Shopify development store
+
+Created on 7 November 2026 with Shopify CLI, separately from the local simulator:
+
+| Item         | Value                                                  |
+| ------------ | ------------------------------------------------------ |
+| Name         | Tendr Integration Test                                 |
+| Storefront   | https://tendr-integration-test.myshopify.com           |
+| Admin        | https://admin.shopify.com/store/tendr-integration-test |
+| Store type   | `dev`, verified using `shopify store list --type dev`  |
+| Features     | Basic plan features in a free development store        |
+| Initial data | Shopify's generated demo data (`--demo-data`)          |
+
+Shopify's [demo-data preset](https://shopify.dev/docs/apps/build/stores/generated-test-data)
+includes sample products, collections, customers, draft orders and the Bogus payment gateway
+for test orders. This is an actual Shopify storefront and admin. Tendr is not yet installed as a
+checkout payment option; that still needs the approved payments extension and mTLS hosting
+covered below. No real transaction has been tested on this store.
+
+The storefront was checked and responds successfully at its password-protected page. Sign in
+to the store admin, then open the storefront. To share access, view or set a separate storefront
+password under **Online Store → Preferences → Password protection**. Shopify requires password
+protection on dev stores; see [development-store access](https://shopify.dev/docs/storefronts/themes/tools/development-stores).
+
 ## Run locally
 
 From the repository root, with Docker running:
