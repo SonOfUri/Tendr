@@ -29,7 +29,8 @@
     "db:seed": "npm run db:seed --workspace=@tendr/api",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,mdx,yml,yaml,css}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,mdx,yml,yaml,css}\"",
-    "dev:wordpress": "node scripts/dev-wordpress.mjs"
+    "dev:wordpress": "node scripts/dev-wordpress.mjs",
+    "dev:shopify": "node scripts/dev-shopify.mjs"
   },
   "devDependencies": {
     "prettier": "^3.5.3",

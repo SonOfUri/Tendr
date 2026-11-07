@@ -1,0 +1,23 @@
+# Copy to shopify.app.toml after registering the app. See docs/shopify-connector.md.
+name = "Tendr"
+client_id = "REPLACE_WITH_REGISTERED_CLIENT_ID"
+application_url = "https://REPLACE_WITH_CONNECTOR_HOST/app"
+embedded = false
+
+[build]
+include_config_on_deploy = true
+
+[access_scopes]
+# Initial extension deployment: leave empty. After Shopify grants the Payments API
+# scopes, set to "write_payment_gateways,write_payment_sessions" and deploy again.
+scopes = ""
+
+[auth]
+redirect_urls = ["https://REPLACE_WITH_CONNECTOR_HOST/auth/callback"]
+
+[webhooks]
+api_version = "2026-10"
+
+[[webhooks.subscriptions]]
+topics = ["app/uninstalled"]
+uri = "/webhooks/shopify/uninstalled"

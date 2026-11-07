@@ -56,3 +56,11 @@ apps/woocommerce/vendor/
 # the web app, not committed)
 apps/web/public/downloads/woocommerce/*.zip
 .env*
+
+# Shopify local builds, durable state and account-specific CLI configuration
+apps/shopify/build/
+apps/shopify/data/
+apps/shopify/.shopify/
+apps/shopify/shopify.app.toml
+apps/shopify/extensions/*/shopify.extension.toml
+apps/shopify/.react-router/

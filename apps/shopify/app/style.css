@@ -1,0 +1,234 @@
+:root {
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    sans-serif;
+  color: #182e29;
+  background: #f5f7f4;
+  font-synthesis: none;
+  line-height: 1.55;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+header {
+  padding: 24px 5vw;
+  border-bottom: 1px solid #dae2d9;
+  background: #fff;
+}
+header a {
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+header b {
+  font-size: 30px;
+  letter-spacing: -1.5px;
+}
+header span {
+  font-size: 14px;
+  border-left: 1px solid #cad4cd;
+  padding-left: 22px;
+  color: #50665b;
+}
+main {
+  max-width: 1120px;
+  margin: 60px auto;
+  padding: 0 28px;
+}
+h1 {
+  font-size: clamp(30px, 4vw, 46px);
+  line-height: 1.15;
+  letter-spacing: -1.5px;
+  margin: 14px 0 20px;
+}
+h2 {
+  font-size: 20px;
+  margin: 0 0 12px;
+  letter-spacing: -0.4px;
+}
+p {
+  color: #50665b;
+}
+.eyebrow {
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 1.5px;
+  color: #367759;
+}
+.intro {
+  max-width: 700px;
+  margin-bottom: 30px;
+  font-size: 17px;
+}
+.card {
+  background: white;
+  border: 1px solid #dce3da;
+  border-radius: 16px;
+  padding: 28px;
+  margin: 24px 0;
+  box-shadow: 0 4px 16px #10281504;
+}
+.inline {
+  display: flex;
+  align-items: end;
+  gap: 16px;
+}
+label {
+  font-size: 14px;
+  font-weight: 600;
+  display: block;
+}
+input {
+  display: block;
+  margin-top: 8px;
+  border: 1px solid #b8c7bc;
+  border-radius: 8px;
+  padding: 12px;
+  font: inherit;
+  color: inherit;
+  max-width: 200px;
+}
+button,
+.button {
+  display: inline-block;
+  background: #185c42;
+  border: 1px solid #185c42;
+  border-radius: 8px;
+  color: white;
+  padding: 12px 18px;
+  font: 600 14px inherit;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+button:hover,
+.button:hover {
+  background: #10452f;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.secondary {
+  background: white;
+  color: #185c42;
+  border-color: #b8c7bc;
+}
+.secondary:hover {
+  background: #edf4ec;
+}
+a {
+  color: #185c42;
+}
+.actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.checkout {
+  max-width: 660px;
+  margin: 70px auto;
+}
+.table-scroll {
+  overflow: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+}
+th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #697c70;
+  padding: 14px 12px;
+  border-bottom: 1px solid #dce3da;
+}
+td {
+  padding: 18px 12px;
+  border-bottom: 1px solid #edf1ec;
+}
+small {
+  display: block;
+  color: #697c70;
+  font-size: 12px;
+  margin-top: 6px;
+}
+.badge {
+  display: inline-block;
+  background: #f5f2e7;
+  color: #6c5b2c;
+  padding: 5px 9px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.badge.done {
+  background: #e9f4e6;
+  color: #216b39;
+}
+.refund-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.refund-form input {
+  width: 75px;
+  margin: 0;
+  padding: 9px;
+}
+.refund-form button {
+  padding: 10px;
+}
+.empty {
+  padding: 24px 0;
+}
+footer {
+  color: #697c70;
+  font-size: 13px;
+  margin: 30px 0;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 600px) {
+  main {
+    padding: 0 18px;
+    margin-top: 35px;
+  }
+  .card {
+    padding: 20px;
+  }
+  .inline {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  header span {
+    font-size: 12px;
+  }
+  .checkout {
+    margin-top: 40px;
+  }
+  button {
+    min-height: 44px;
+  }
+}

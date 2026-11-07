@@ -64,7 +64,9 @@ a successful deployment or a UI preview is not evidence that a payment executed.
 
 General refunds from an ordinary settled-payment detail, dashboard analytics/time series, global
 payment search and CSV export still need explicit backend/product contracts where no matching
-endpoint exists. Do not invent figures from a single page of records. Shopify is not implemented;
+endpoint exists. Do not invent figures from a single page of records. Shopify now has a separate,
+single-store connector pilot with a local simulator ([setup](../shopify-connector.md)); it has not
+been validated on an approved Shopify store and is not a dashboard Connect integration;
 WooCommerce source exists but its public ZIP release was still unpublished on 7 November.
 Neither is a prerequisite for the native dashboard work.
 

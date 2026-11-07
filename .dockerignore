@@ -29,3 +29,7 @@ test-results
 .seed-output.txt
 session.json
 demo-body.json
+apps/shopify/build
+apps/shopify/data
+apps/shopify/.react-router
+apps/shopify/.shopify

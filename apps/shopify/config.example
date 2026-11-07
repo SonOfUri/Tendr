@@ -1,0 +1,23 @@
+# Real connector configuration. Keep filled values in .keyvault, not in Git/chat.
+SHOPIFY_SIMULATOR=false
+SHOPIFY_TEST_ONLY=true
+SHOPIFY_APP_URL=https://YOUR_CONNECTOR_HOST
+SHOPIFY_SHOP=YOUR_STORE.myshopify.com
+SHOPIFY_API_KEY=
+SHOPIFY_API_SECRET=
+SHOPIFY_STORAGE_KEY=
+SHOPIFY_DATABASE=/data/shopify.sqlite
+PORT=3355
+# Publicly trusted SERVER certificate and its private key:
+SHOPIFY_TLS_CERT=/certs/server-fullchain.pem
+SHOPIFY_TLS_KEY=/certs/server-key.pem
+# Shopify's current client CA from the official payments considerations page:
+SHOPIFY_CLIENT_CA=/certs/shopify-client-ca.pem
+TENDR_API_URL=https://api.usetendr.tech
+TENDR_CHECKOUT_ORIGIN=https://pay.usetendr.tech
+TENDR_STORE_HANDLE=
+TENDR_TEST_SECRET_KEY=
+TENDR_TEST_WEBHOOK_SECRET=
+# Only after approved test-store validation: set SHOPIFY_TEST_ONLY=false and supply both.
+TENDR_LIVE_SECRET_KEY=
+TENDR_LIVE_WEBHOOK_SECRET=
