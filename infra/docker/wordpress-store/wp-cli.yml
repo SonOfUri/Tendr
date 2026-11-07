@@ -1,0 +1,3 @@
+# The Apache image has mod_rewrite enabled; tell WP-CLI so --hard writes .htaccess.
+apache_modules:
+  - mod_rewrite

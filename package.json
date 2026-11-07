@@ -28,7 +28,8 @@
     "db:migrate": "npm run db:migrate --workspace=@tendr/api",
     "db:seed": "npm run db:seed --workspace=@tendr/api",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,mdx,yml,yaml,css}\"",
-    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,mdx,yml,yaml,css}\""
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,mdx,yml,yaml,css}\"",
+    "dev:wordpress": "node scripts/dev-wordpress.mjs"
   },
   "devDependencies": {
     "prettier": "^3.5.3",
