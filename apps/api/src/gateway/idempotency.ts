@@ -30,6 +30,13 @@ export const IDEMPOTENCY_HEADER = 'idempotency-key';
 export const REPLAYED_HEADER = 'Idempotent-Replayed';
 const MAX_KEY_LENGTH = 255;
 
+declare module 'fastify' {
+  interface FastifyContextConfig {
+    /** One-time credentials must not be persisted in the response replay cache. */
+    idempotency?: false;
+  }
+}
+
 /** Database "now" in UTC, the convention Prisma uses for `timestamp(3)` columns. */
 const NOW = Prisma.sql`(now() AT TIME ZONE 'UTC')`;
 const TTL = Prisma.sql`interval '24 hours'`;
@@ -164,6 +171,13 @@ const idempotencyPlugin: FastifyPluginAsync = async (app) => {
     if (req.principal.kind === 'user_session') return;
     const header = req.headers[IDEMPOTENCY_HEADER];
     if (header === undefined) return;
+    if (req.routeOptions.config.idempotency === false) {
+      throw new AppError(
+        'VALIDATION_ERROR',
+        'This endpoint returns a one-time secret and does not accept Idempotency-Key. If a response is lost, list and revoke the key before creating another.',
+        400,
+      );
+    }
     if (typeof header !== 'string' || header.length < 1 || header.length > MAX_KEY_LENGTH) {
       throw new AppError(
         'VALIDATION_ERROR',

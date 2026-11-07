@@ -296,6 +296,7 @@ const NAV: { href: string; label: string }[] = [
   { href: '/dashboard/withdraw', label: 'Withdraw' },
   { href: '/dashboard/addresses', label: 'Saved addresses' },
   { href: '/dashboard/webhooks', label: 'Webhooks' },
+  { href: '/dashboard/api-keys', label: 'API keys' },
   { href: '/dashboard/settings/checkout', label: 'Checkout settings' },
   { href: '/dashboard/settings/connected-sites', label: 'Connected sites' },
   { href: '/dashboard/settings/payout', label: 'Payout' },
