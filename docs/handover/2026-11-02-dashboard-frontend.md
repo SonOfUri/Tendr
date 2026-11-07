@@ -1,204 +1,418 @@
 # Tendr dashboard frontend handover
 
-**Live wallet update:** New live stores now use native passkey-controlled Intents accounts.
-Follow [the native wallet API handover](2026-11-02-native-intents-wallets.md) for onboarding,
-withdrawal/refund signing and capability checks. The existing contract proposal/recovery UI
-below applies to contract accounts; it does not apply to native accounts. No UI implementation
-is included in this backend update.
+Updated **7 November 2026**. Audience: the developer building the merchant dashboard in `apps/web`.
+This is the current entry point for frontend work. It supersedes the deployment assumptions and
+"missing screens" lists in earlier versions of this handover. The filename is retained for existing links.
 
-Updated 2 November 2026. For the frontend developer building the merchant dashboard in `apps/web`.
+## Start here
 
-The dashboard already has account onboarding, payments, approvals, withdrawals, team management, and security flows connected to the API. Build on those flows, improve their presentation, and add the missing payment-link and checkout-theme management screens. Preserve passkey signing, merchant isolation, and the distinction between test and live money throughout the work.
+The live backend supports native passkey wallets, payment links, incoming payments, withdrawals,
+settlement selection and API-key management. **The merchant reports successfully receiving a live
+payment through a payment link and withdrawing funds on 7 November.** Preserve those working
+flows when integrating them into the redesigned dashboard.
 
-**Test branch update:** `test/api-console` now includes a basic `/dashboard/payment-links` screen and navigation: create fixed/open amounts, edit/pause, expiry/use limits, share URL/QR, archive/restore, and store/mode isolation. Its form is in `apps/web/src/app/dashboard/payment-links/PaymentLinkForm.tsx`; payload validation and response types are in `apps/web/src/lib/dashboard-payment-links.ts`. Reuse this work when building the full dashboard. Checkout overrides, totals, and link-filtered payment history remain follow-up work. The deployment baseline described below has not changed.
+There are two frontend implementations to reconcile:
 
-The test branch also supports a per-link settlement asset: choose a source chain and token from
-the mode's provider catalog, or inherit the store default. Funds stay in the merchant's Tendr
-Intents account. The implementation and migration are described in the
-[payment-link handover](2026-10-30-payment-links.md); preserve its session pinning and recipient
-rules when redesigning this selector. Fee/gas/theme overrides remain separate follow-up work.
+| Branch / audited revision              | What to use it for                                                                                                                                                                                                           |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `origin/deploy` at `04cd49c`           | Implementation baseline: redesigned dashboard and auth screens, payment-link list/detail/editor, theme list/editor, shared UI components, API-key page and deployed backend. Railway builds this branch.                     |
+| `origin/test/api-console` at `fc4fee9` | Working functional references: native-wallet setup, settlement and withdrawals; native refund approvals; capability guards; per-link settlement selector; isolated API console and local frontend connected to the live API. |
 
-## Starting point and deployment
-
-Use **`origin/deploy`**, baseline commit **`37617ac`**, for the implementation. `main` does not yet include all deployment changes, including host routing and the live-mode availability checklist. Create a feature branch from `deploy` and submit the dashboard work for review against that branch. Railway builds from `deploy`, so a push there can deploy immediately.
+The revisions above identify code reviewed for this handover, not a requirement to reset a newer
+checkout. Fetch before starting and review any subsequent changes. `main` is not the deployment baseline.
 
 ```bash
 git fetch origin
 git switch -c feat/dashboard origin/deploy
 ```
 
-Deployment status at handover:
+Keep the redesigned shell and existing editors from `deploy`. Port the native-wallet and settlement
+behavior from the console branch into that design. A wholesale replacement with the console
+frontend would lose the richer payment-link/theme editors and the redesigned navigation.
+Submit a PR against `deploy`; pushing directly to that branch can deploy immediately.
 
-| Item                     | Status and frontend impact                                                                                                                                                     |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Railway                  | HODL workspace, `tendr` project, production environment. API, worker, web, Postgres, and Redis reported successful deployments on 2 November.                                  |
-| Dashboard origin         | Configured as `https://app.usetendr.tech`; custom-domain DNS and HTTPS still need verification before using it for browser acceptance tests.                                   |
-| Checkout and API origins | Configured as `https://pay.usetendr.tech` and `https://api.usetendr.tech`. Keep merchant navigation on the app host and shopper navigation on the pay host.                    |
-| Provider configuration   | Resend, 1Click, Open Exchange Rates, and Reown values have been copied into Railway. This is configuration confirmation, not an end-to-end provider test.                      |
-| Outstanding backend work | Chainalysis key; NEAR parent-account access and funding; contract publication and fee accounts; Resend domain verification; end-to-end payment verification.                   |
-| Live money               | `LIVE_MODE_ENABLED=false`, `GASLESS_LIVE_ENABLED=false`, and `FEE_SWEEP_ENABLED=false`. A successful deployment does not mean live payment processing is enabled.              |
-| Keys and assets          | The deployed API and worker use an environment-backed software vault. Assets use a private Railway bucket served through the API. GCP billing is not needed for frontend work. |
+## Current live status and evidence
 
-Production requires real NEAR RPC even for testnet account provisioning. Until the testnet setup is complete, deployed signup can reach an account-setup failure. Use the local fake NEAR environment below for dashboard development; do not hide a provisioning failure behind a successful UI state.
+Configuration was read from the Railway API and worker on 7 November; no credentials are included here.
 
-## Code map
+| Area                     | Current state and frontend implication                                                                                                                                                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Live processing          | `LIVE_MODE_ENABLED=true`; new live accounts use `LIVE_ACCOUNT_DRIVER=native_intents`. Do not hard-code a "live disabled" banner. Read account/checklist responses.                                                                                                                                |
+| Verification             | Merchant-reported live payment-link receipt and withdrawal succeeded. This establishes those exercised flows, not every chain, token, refund, wallet/browser or integration. No new money movement was performed for this documentation review.                                                   |
+| Email                    | `MAIL_DRIVER=resend`; the merchant fixed domain DNS and reported signup mail arriving. Resend verification is no longer an outstanding setup blocker.                                                                                                                                             |
+| Screening                | `SCREENING_MODE=disabled`, an operator-selected hackathon configuration. Live funds are **not sanctions-screened**. Do not label skipped screening as a passed check; existing held payments remain held.                                                                                         |
+| Gas sponsorship / sweeps | `GASLESS_LIVE_ENABLED=false`, `FEE_SWEEP_ENABLED=false`. Do not promise active gasless sponsorship or automatic sweeps from a saved preference alone.                                                                                                                                             |
+| API / checkout           | `https://api.usetendr.tech` and `https://pay.usetendr.tech`. API readiness and the new authenticated API-key route were checked on 7 November. Shopper links stay on the pay host.                                                                                                                |
+| Public dashboard         | Configured origin is `https://app.usetendr.tech`, RP ID `usetendr.tech`. On 7 November the public domain returned Vercel `DEPLOYMENT_NOT_FOUND`, even though Railway's web deployment succeeded. Public dashboard DNS/hosting is an outstanding operator task.                                    |
+| Working live console     | A dedicated Chrome profile maps the app origin to a loopback frontend while calling the real API. This is how the functional console is used; it does not establish that the public app domain works. See development setup below.                                                                |
+| Infrastructure           | HODL workspace, Railway `tendr` project; API, worker, web, Postgres, Redis. API/worker use `KEYVAULT_DRIVER=env`; assets use `ASSET_STORE_DRIVER=s3` with API-served assets. Native wallet onboarding does not require GCP billing, funding `tendr.near`, or deploying a per-store NEAR contract. |
 
-All code paths below are relative to the repository root on `deploy`.
+A missing frontend feature must not be presented as a disabled backend capability. Conversely,
+a successful deployment or a UI preview is not evidence that a payment executed.
 
-| Path                                                   | Responsibility                                                                                                                     |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/web/src/app/dashboard/`                          | Next.js App Router merchant pages.                                                                                                 |
-| `apps/web/src/components/dashboard/DashboardShell.tsx` | Session boot, store selection, test/live selection, navigation, passkey gate, recovery banner, sign-out. Exposes `useDashboard()`. |
-| `apps/web/src/components/dashboard/common.tsx`         | `useLoad`, `useAction`, status rendering, destination display, countdown updates.                                                  |
-| `apps/web/src/lib/api.ts`                              | Cookie-authenticated dashboard requests, CSRF, merchant/mode headers, typed errors, account/team/proposal types.                   |
-| `apps/web/src/lib/webauthn.ts`                         | Passkey registration, login, step-up, and challenge signing.                                                                       |
-| `apps/web/src/lib/proposals.ts` and `actions.ts`       | Proposal creation, approval/cancellation, action summaries and destination rules.                                                  |
-| `apps/web/src/lib/payments.ts` and `assets.ts`         | Payment/refund types, exact amount formatting, token metadata, transaction links.                                                  |
-| `apps/web/src/components/dashboard/PayoutChooser.tsx`  | Settlement selection and signer approval.                                                                                          |
-| `packages/contracts/src/`                              | Shared Zod schemas, roles, permissions, state enums, themes, payment links.                                                        |
-| `packages/ui/src/`                                     | Shared `Button`, `Alert`, `Spinner`, `StatusBadge`, and design tokens.                                                             |
-| `apps/web/src/app/globals.css`                         | Existing application and dashboard styles. There is no dashboard component framework to replace.                                   |
-| `apps/api/src/routes/`                                 | Authoritative route methods and authentication requirements. Business logic sits in adjacent feature directories.                  |
+## Delivery checklist: what actually needs work
 
-Stack: Next.js 15, React 19, TypeScript, npm workspaces and Turborepo; Vitest and Playwright for tests. The existing dashboard uses client components and direct calls through `api()`, rather than a query-cache library.
+| Priority | Work                                                            | Existing code / completion requirement                                                                                                                                                                                                                                                 |
+| -------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1        | Integrate native wallet setup and account capabilities          | `deploy` still has contract-oriented onboarding/checklist controls. Port `NativeWallet.tsx`, `lib/native-wallet.ts`, the native fields in `lib/api.ts`, and account-home integration from the console branch. Show create, resume activation, active and non-owner states.             |
+| 1        | Integrate live withdrawals and default settlement               | Add `/dashboard/wallet` or integrate its behavior into the existing wallet/withdraw/payout screens. Dispatch using `account.kind`; preserve the contract flow for contract accounts. Review and sign the exact native payout, then track its outcome.                                  |
+| 1        | Integrate native refund approval and capability guards          | Port native handling in approvals list/detail and the shell's `AccountCapabilityGate`. Hide or explain unavailable contract-only actions, including on direct navigation. Keep login roles separate from wallet ownership.                                                             |
+| 1        | Add per-link settlement selection to the redesigned link editor | Backend and console selector exist. `deploy`'s `payment-link-types.ts` and `payment-link-form.ts` currently omit settlement fields. Add default/custom selection without dropping its fee/gas/theme overrides, totals or linked payments.                                              |
+| 2        | Finish presentation and regression coverage                     | API-key management is now implemented on both branches. Refine it with the existing design, preserving its permissions, context isolation and one-time secret handling. Exercise payments, webhooks, settings and team flows with real API data.                                       |
+| 2        | Extend themes only where required                               | Theme list/editor already exists on `deploy`: presets, website brand import, basic branding, logo upload, custom CSS, validation, preview, publish/default. Advanced block/success-block/font editing and connected-store brand import UI are additional work; backend support exists. |
+| Operator | Restore public dashboard origin                                 | Correct the app domain's hosting/DNS before public-browser acceptance. Do not change production RP ID or widen CORS to work around it.                                                                                                                                                 |
 
-## Existing screens
+General refunds from an ordinary settled-payment detail, dashboard analytics/time series, global
+payment search and CSV export still need explicit backend/product contracts where no matching
+endpoint exists. Do not invent figures from a single page of records. Shopify is not implemented;
+WooCommerce source exists but its public ZIP release was still unpublished on 7 November.
+Neither is a prerequisite for the native dashboard work.
 
-These routes exist and call the API. Treat them as the functional baseline for a redesign.
+## Source map and branch-specific references
 
-| Route                                                  | Current behavior                                                                                                                                          |
-| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/signup`, `/verify`, `/login`                         | Email verification and passkey signup/sign-in.                                                                                                            |
-| `/dashboard/onboarding/store`                          | Create a store; start account setup.                                                                                                                      |
-| `/dashboard/onboarding/second-key`                     | Recovery-kit setup, invitation, and additional-device guidance.                                                                                           |
-| `/dashboard`                                           | Test and live account cards, balances, provisioning status/retry, storage warning, and go-live checklist. Both account modes are deliberately shown here. |
-| `/dashboard/payments`                                  | Payment list with status/date filters and cursor pagination.                                                                                              |
-| `/dashboard/payments/[id]`                             | Amounts, fee breakdown, transactions, and refund status.                                                                                                  |
-| `/dashboard/review`                                    | Held payments, unresolved screening, returns, and missing return addresses.                                                                               |
-| `/dashboard/approvals` and `/dashboard/approvals/[id]` | Drafts, pending approvals, timelocks, execution history, signer approval/cancellation.                                                                    |
-| `/dashboard/withdraw`                                  | Withdrawal requests through proposals.                                                                                                                    |
-| `/dashboard/addresses`                                 | Saved payout addresses, activation waits, and pending proposals.                                                                                          |
-| `/dashboard/settings/payout`                           | Settlement asset selection and approval through `PayoutChooser`.                                                                                          |
-| `/dashboard/settings/checkout`                         | Allowed checkout domains, fee/gas defaults, payment email preferences, notification-email verification.                                                   |
-| `/dashboard/settings/connected-sites`                  | Connected store integrations and disconnection.                                                                                                           |
-| `/dashboard/webhooks`                                  | Endpoint management, one-time secret display, test deliveries, delivery history, and resend.                                                              |
-| `/dashboard/api-keys`                                  | Create scoped secret keys, display each secret once, list key metadata and revoke access. Owners/admins only; selected store and mode apply.              |
-| `/dashboard/team`                                      | Members, invites, roles, and signer-related actions.                                                                                                      |
-| `/dashboard/security`                                  | Approval threshold, withdrawal limits, refund cap, auto-sweep, recovery kit.                                                                              |
-| `/dashboard/recovery`                                  | Live-account recovery status/start/cancel. Recovery also has a dashboard-wide warning banner.                                                             |
+Paths are relative to the repository root. Read route declarations and shared schemas before
+changing a request; some API fields use snake_case and native-wallet fields use camelCase.
 
-Missing dashboard screens with existing backend support: payment-link management and checkout-theme management. `/dashboard/settings/checkout` currently edits checkout settings; it is not a theme editor. The public payment-link and checkout experiences already exist under `apps/web/src/app/pay/`.
+| Source                                                                    | Responsibility                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/api/src/routes/`                                                    | Authoritative methods, principal types, permissions and step-up requirements.                                                                                                                                  |
+| `packages/contracts/src/`                                                 | Roles, scopes, schemas, statuses, payment links and themes.                                                                                                                                                    |
+| `apps/web/src/components/dashboard/DashboardShell.tsx`                    | Session boot, store/mode selection, navigation, passkey gate, sign-out. `deploy` also supports an explicitly entered UI preview.                                                                               |
+| `apps/web/src/components/dashboard/common.tsx`                            | `useLoad`, `useAction`, display helpers. `deploy` has stale-response protection in `useLoad`; the console branch's simpler helper does not. Preserve the stronger behavior and protect custom polling as well. |
+| `apps/web/src/lib/api.ts`                                                 | Cookie auth, CSRF, context headers, error parsing and response types. `deploy` already supports `formData` and `AbortSignal`; retain both when adding native types.                                            |
+| `apps/web/src/lib/webauthn.ts`                                            | Login-passkey registration, sign-in, step-up and contract challenge signing.                                                                                                                                   |
+| `apps/web/src/lib/payments.ts`, `assets.ts`, `asset-registry.ts`          | Payment/refund types, exact amount formatting, known token metadata and explorer links. Provider catalogs supplement the static registry.                                                                      |
+| `apps/web/src/lib/proposals.ts`, `actions.ts`                             | Existing contract proposal creation, signing, cancellation and action summaries.                                                                                                                               |
+| `apps/web/src/lib/payment-link-types.ts`, `payment-link-form.ts`          | Redesigned link DTO/form logic on `deploy`; extend with settlement fields.                                                                                                                                     |
+| `apps/web/src/lib/themes.ts`                                              | Theme draft state, validation mapping and editor helpers on `deploy`.                                                                                                                                          |
+| `apps/web/src/components/dashboard/ui.tsx`, `Select.tsx`, `dashboard.css` | Redesigned dashboard primitives and responsive monochrome styling on `deploy`; use these with shared `packages/ui`.                                                                                            |
+| `apps/web/src/app/dashboard/api-keys/`                                    | Working create/list/revoke page and component tests on both branches.                                                                                                                                          |
 
-## Suggested delivery order
+Native references **on `origin/test/api-console`**, principally commit `85ccc73`:
 
-1. **Dashboard shell and account overview.** Improve navigation, responsive layout, store/mode visibility, loading and retry states, and setup guidance. Preserve existing routes and their actions. Show balances with token-aware formatting; the current account cards expose raw smallest units.
-2. **Payments and payment links.** Refine the list/detail/review flows, then add `/dashboard/payment-links` with create, detail, edit, archive/restore, URL/QR sharing, and linked payments. The new route name is a proposal, not an existing route.
-3. **Checkout appearance.** Add a theme list and editor under a proposed `/dashboard/settings/themes`, beginning with presets, core branding controls, validation, preview, publish, and default selection. Add advanced block/CSS editing afterward.
-4. **Operational screens.** Apply the same UI patterns to approvals, withdrawals, payout settings, team, webhooks, and security. Keep complete destination details and timed waits visible during money and security actions.
+- `apps/web/src/components/dashboard/NativeWallet.tsx` and `NativeWallet.test.tsx`.
+- `apps/web/src/lib/native-wallet.ts`: `registerWallet`, `activateWallet`, `signPayout`.
+- `apps/web/src/app/dashboard/wallet/page.tsx`.
+- Native branches in account home, `withdraw/page.tsx`, `settings/payout/page.tsx`,
+  `approvals/page.tsx`, `approvals/[id]/page.tsx`, and the shell capability guard.
+- `apps/web/src/app/dashboard/payment-links/SettlementSelector.tsx`, `PaymentLinkForm.tsx`,
+  and `apps/web/src/lib/dashboard-payment-links.ts` for per-link settlement behavior.
+- `docs/api-console.md` and the console launchers; these files/scripts are not present on the
+  audited `deploy` revision. Read that document from the console branch.
 
-An overview can show account readiness, balances, recent payments, pending approvals, and review items using existing endpoints. Revenue time series, conversion rates, customer analytics, global payment search, CSV export, and merchant API-key management have no dedicated dashboard endpoints in this baseline. Agree on backend contracts before presenting those as working features. Never calculate a lifetime total from one paginated result or add amounts across currencies without conversion semantics.
+The backend same-authenticator registration fix is already on both branches (`4b6e431` on console,
+`acac4fa` on deploy). A wallet credential may be created on the same device/authenticator that
+holds a login credential; they must still be distinct credentials and keys.
 
-## Session and data integration
+## Session, context and permissions
 
-Use `api()` from `@/lib/api` for merchant dashboard requests. Do not introduce browser-held Tendr secret keys or replace dashboard sessions with bearer tokens.
+Use `api()` for dashboard requests. It sends `credentials: 'include'`, `Tendr-Merchant`,
+`Tendr-Livemode` and, on mutations, `Tendr-CSRF`. `GET /v1/me` uses `{ store: false }` and returns
+session data and the CSRF token. Keep the in-memory CSRF response handling: the API and app are
+different subdomains, so reading an app-host cookie alone is insufficient.
 
-The shell loads `GET /v1/me` with `{ store: false }`. It restores the selected store and mode from per-tab `sessionStorage`, verifies membership, and exposes `me`, `store`, `context`, `selectStore`, and `refresh`. A person with no store is directed to onboarding; a person without a passkey sees the passkey gate.
+Store selection is a per-tab preference in `sessionStorage`. The server validates membership.
+Use merchant ID, mode, resource ID and filters in data-loading keys. Clear old results/drafts on
+context changes, abort or ignore stale responses, and pass an explicit captured `store` to
+multi-step ceremonies so a dropdown change cannot retarget a pending signature or write.
 
-The client sends `credentials: 'include'`, `Tendr-Merchant`, and `Tendr-Livemode`. Mutations send `Tendr-CSRF`, taken from the session response and retained in memory; the readable cookie is a same-host fallback. Preserve this because the production dashboard and API use different subdomains. Person-level requests use `{ store: false }`.
+Email deep links may include `?store=<id>&mode=...`; preserve membership checks, parameter cleanup
+and the sign-in return route. An unavailable resource must not silently fall back to another store.
 
-Use merchant ID, mode, filters, and resource ID in request/cache keys where the resource is mode-specific. Clear visible results on a context change and ignore or abort responses from an older context. **The existing `useLoad` helper has no cancellation or stale-response guard**, so harden it or supply equivalent protection when refactoring data loading. Checkout domains, fee/gas defaults, notification preferences, team membership, and themes are store-wide; label their scope because selecting test mode does not isolate those changes.
+| Scope                  | Resources                                                                                                                                          |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Store + test/live mode | Accounts, balances, sessions, payments, payment links, proposals, withdrawals, API keys and webhook endpoints.                                     |
+| Store-wide             | Team membership, checkout domains, fee/gas defaults, email preferences, themes and theme assets. Selecting Test does not isolate changes to these. |
+| Person                 | Login passkeys and session operations (`store: false`).                                                                                            |
 
-Email links can contain `?store=<id>&mode=...`. The shell checks membership before selecting that context and removes those parameters. Preserve this behavior and the sign-in return path. Never silently fall back to displaying another store's resource after a failed deep link.
+Use `can()` / `ROLE_PERMISSIONS` from `@tendr/contracts`; backend authorization remains authoritative.
 
-### Permissions and signing
+| Role    | Relevant capabilities                                                                                                                                     |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Viewer  | Account/payment reads and other `account:read` routes.                                                                                                    |
+| Finance | Viewer plus `money:request`, including payment-link writes and eligible refund/proposal requests.                                                         |
+| Admin   | Finance plus settings, team management, API keys and webhook management/resend.                                                                           |
+| Owner   | Admin plus security and native-wallet management. Native signing additionally requires the designated wallet owner and their dedicated wallet credential. |
 
-Use `can()` / `ROLE_PERMISSIONS` from `@tendr/contracts` as the role source of truth. Backend checks remain authoritative.
+A contract signer's status is separate from their dashboard role. For native wallets, check
+`nativeWallet.ownerUserId === me.user.id` as well as the owner role. Adding a teammate or promoting
+another owner does not give them control of the wallet. The API enforces these boundaries.
 
-| Role    | Dashboard permissions                                                                       |
-| ------- | ------------------------------------------------------------------------------------------- |
-| Viewer  | Read account data.                                                                          |
-| Finance | Viewer permissions plus `money:request`, including payment-link writes and money proposals. |
-| Admin   | Finance permissions plus settings, team management, and webhook resend.                     |
-| Owner   | Admin permissions plus security proposals and owner-specific operations such as go-live.    |
+Use `withStepUp()` for a recent **login-passkey** assertion; it handles `STEP_UP_REQUIRED` and
+retries once. Wallet signing is a separate ceremony. Browser callbacks or a successful signature
+submission must not be displayed as completed payment/withdrawal execution.
 
-Role and signer status are separate. `store.isSigner` and the account's signer state determine signing eligibility; being an owner does not replace a valid signing key. Invitations and role changes can have additional owner/self restrictions already handled by the team screen.
+Dashboard requests authenticate with cookies, not a merchant secret key. The API-key screen is
+the intentional one-time secret display; do not reuse that key to authenticate dashboard features.
 
-Use `withStepUp()` for endpoints requiring a fresh passkey. It handles `STEP_UP_REQUIRED`, runs a ceremony, and retries once. Use `approveProposal()` / `cancelProposal()` for on-chain actions: they obtain a server challenge and submit the passkey assertion. A submitted approval is not proof that a transfer executed; render the returned proposal state and refresh until the backend reports the outcome.
+## Account type and native-wallet flow
 
-### Error and money display rules
+Read `GET /v1/account` for the selected mode and `GET /v1/account/go-live` for live onboarding.
+The latter describes live readiness even when requested while the dashboard is showing Test.
 
-| Condition                                        | UI behavior                                                                                                                                               |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `401 UNAUTHENTICATED`                            | Let the shell redirect to login and preserve the return route.                                                                                            |
-| `STEP_UP_REQUIRED`                               | Run `withStepUp`; do not sign the person out.                                                                                                             |
-| Closed/timed-out passkey prompt                  | Offer retry without claiming the action succeeded.                                                                                                        |
-| `403 LIVE_MODE_UNAVAILABLE`                      | Explain that live payments are unavailable. Keep the backend checklist authoritative.                                                                     |
-| `VALIDATION_ERROR` or `THEME_INVALID`            | Map available error details to fields; keep entered values for correction.                                                                                |
-| `NETWORK_ERROR`, rate limit, or provider failure | Show a retryable state without treating uncertain writes as completed. Reuse an idempotency key for retries of the same create operation where supported. |
-| Cross-store/mode `NOT_FOUND`                     | Show a missing/unavailable resource, not data from a different context.                                                                                   |
+| Response                                                      | Behavior                                                                                |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Existing `account.kind === 'native_intents'`                  | Use native setup/settlement/payout paths and `nativeWallet` ownership.                  |
+| No live account and `goLive.accountKind === 'native_intents'` | Offer native registration; use returned `registrationPath`.                             |
+| `account.kind === 'contract'`                                 | Preserve contract proposals, saved-address restrictions, limits and supported recovery. |
+| `checklist.missing` contains `live_mode_unavailable`          | Explain backend availability and disable live writes. Do not bypass the switch.         |
 
-`ApiError` exposes `status`, `code`, `message`, `requestId`, and `details`. Show a request ID when useful for support, without exposing raw payloads or credentials.
+`account.capabilities` contains `multisig`, `timedRecovery`, `contractLimits`, `autoSweep`,
+`nativePasskeyPayouts`. Native accounts have threshold 1 and no multisig, wallet-key replacement,
+wallet recovery, delayed address allowlist, contract limits or automatic sweeps. Gate controls and
+direct routes, not just sidebar links. Login recovery does not recover a lost wallet passkey.
 
-Token amounts cross the API as integer strings in the asset's smallest units. Order/fiat values are decimal strings. Reuse `formatAmount`, `formatUsd`, `feeLines`, and `explorerTxUrl`; do not use floating-point arithmetic for money. Unknown assets retain their full ID and raw units. Do not render missing settlement data as zero or an estimated fee as final.
+`nearAccountId` on a native account is the Intents balance identifier (often `0x…`). It is not an
+external EVM receiving address. Checkout's quoted deposit address belongs to a specific payment
+route; external withdrawal addresses belong to the selected destination chain.
 
-Payment states include `DETECTED`, `PROCESSING`, `SETTLED`, `PARTIALLY_REFUNDED`, `REFUNDING`, `REFUNDED`, `HELD`, and `SCREENING_PENDING`. Proposal states include `draft`, `pending`, `timelocked`, `executing`, `executed`, `cancelled`, `expired`, and `failed`. Use readable labels while retaining the underlying state for support. A countdown reaching zero is not confirmation of execution.
+### Register and activate
 
-## API map for frontend work
+1. With a live store context, call `POST /v1/account/native/passkey/options` and pass the returned
+   options to `startRegistration({ optionsJSON })`.
+2. Send `{ response }` to `POST /v1/account/native/passkey/verify`. The wallet is provisioning,
+   not yet active. Registration returns activation options as well.
+3. Sign activation options with the dedicated wallet credential, then send `{ response }` to
+   `POST /v1/account/native/activate`.
+4. Refresh account/readiness/balances. Activation installs the default NEAR USDC settlement.
+   If interrupted after registration, call `POST /v1/account/native/activate/options` and resume;
+   do not register another wallet against the existing account.
 
-| Area                      | Endpoints and contract notes                                                                                                                                                                                                                                                                     |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Account overview          | `GET /v1/account`, `/v1/account/balances`, `/v1/account/settlement`, `/v1/account/go-live`. Retry and go-live are `POST /v1/account/retry` and `/v1/account/go-live`, with owner/step-up requirements.                                                                                           |
-| Payments                  | `GET /v1/payments`, `GET /v1/payments/:id`. Filters: `status`, `created_from` inclusive, `created_to` exclusive, `payment_link_id`, `limit` 1–100, `starting_after`. Response: `{ payments, has_more, next_cursor }`. No free-text query parameter.                                              |
-| Proposals                 | `GET/POST /v1/account/proposals`; `GET /v1/account/proposals/:id`; `POST .../:id/challenge`, `.../:id/approve`, `.../:id/cancel`. Prefer existing helpers over duplicating ceremony code.                                                                                                        |
-| Addresses and limits      | `GET /v1/account/saved-addresses`, `GET /v1/account/limits`. Changes are proposals, not direct edits to those read endpoints.                                                                                                                                                                    |
-| Payment links             | `GET/POST /v1/payment_links`; `GET/PATCH/DELETE /v1/payment_links/:id`. Reads require account access; writes require `money:request`, with no step-up.                                                                                                                                           |
-| Themes                    | `GET /v1/themes/presets`; `GET/POST /v1/themes`; `GET/PATCH/DELETE /v1/themes/:id`; `POST /v1/themes/validate`; `POST .../:id/preview`, `.../:id/publish`, `.../:id/default`. Writes require settings permission; publish/default require step-up for dashboard users.                           |
-| Theme assets and brand    | `GET/POST /v1/theme-assets`, `DELETE /v1/theme-assets/:id`; `POST /v1/themes/from-website` and `/v1/themes/from-store`. Uploads use multipart, not JSON.                                                                                                                                         |
-| Review                    | `GET /v1/review`; `POST /v1/review/:paymentId/acknowledge-legal`, `.../:paymentId/refund`; `POST /v1/review/refunds/:refundId/cancel`. Preserve the owner-only legal acknowledgement and the existing return eligibility rules.                                                                  |
-| Settings and integrations | `GET/PATCH /v1/settings/checkout`; `GET /v1/connections`, `DELETE /v1/connections/:id`. Reuse the current settings and connected-sites screens for step-up and verification behavior.                                                                                                            |
-| Team                      | `GET /v1/team`, `POST /v1/team/invites`, `PATCH /v1/team/:membershipId`, `GET /v1/team/:membershipId/signer-keys`.                                                                                                                                                                               |
-| Webhooks                  | `GET/POST /v1/webhooks/endpoints`; endpoint delete, `/rotate`, `/test`, `/deliveries`; `POST /v1/webhooks/deliveries/:id/resend`. Creation/rotation return secrets once and require step-up.                                                                                                     |
-| API keys                  | `GET/POST /v1/api_keys`; `DELETE /v1/api_keys/:id`. Dashboard `settings:manage`; create/revoke require step-up. Create accepts `{name, scopes}` and returns `{api_key, secret}` once. No `Idempotency-Key` on creation; refresh/revoke after a lost response. Connected keys stay under Connect. |
+Reuse `registerWallet`/`activateWallet` from the console reference; its activation helper requests
+fresh options. Activation proves ownership with an empty intent and a read-only mainnet simulation;
+it does not transfer money. The challenge expires after five minutes.
 
-**Refund boundary:** `POST /v1/refunds` accepts secret API keys only. Do not wire a new dashboard refund button directly to it or expose a secret key to make it work. The current dashboard review routes handle eligible returns and cancellation of store refunds; a general refund-from-payment-detail feature needs an agreed dashboard API contract. There is no route to release a held payment into settlement.
+Explain login versus wallet passkeys before the ceremony. A phone QR prompt is an authenticator
+choice; do not force it or claim a passkey is on the computer merely because email signup happened
+there. The same system authenticator can hold separate login and per-store wallet credentials.
 
-### Payment link implementation details
+### Default settlement and per-link overrides
 
-Use `PaymentLinkCreateSchema` and `PaymentLinkUpdateSchema` in `packages/contracts/src/payment-links.ts`. Support fixed and open amounts, title/description, currency, optional minimum, expiry, use limit, and checkout overrides. The minimum is USD 1 equivalent before fees; surface backend FX/minimum errors.
+Use `GET /v1/payment_links/settlement-options` for current selectable assets:
 
-The slug is set only on creation. `DELETE` archives; `PATCH { archived: false }` restores. Omitted PATCH fields stay unchanged; supported nullable fields clear with `null`. Use backend `availability`, totals, `url`, and `qr_url` instead of rebuilding them. A link's uses and availability are not interchangeable: an unexpired checkout can reserve capacity before a payment settles.
+```ts
+type SettlementOptions = {
+  livemode: boolean;
+  tokens: { asset: string; symbol: string; chain: string; decimals: number }[];
+  store_default: {
+    asset: string;
+    symbol: string | null;
+    chain: string | null;
+    payout_mode: string;
+  } | null;
+};
+```
 
-List filters are `status=active|inactive`, `include_archived=true|false`, `limit`, and `starting_after`. Add the existing payments filter `payment_link_id` to the UI when linking from a payment link. The backend also returns payment-link references and payer-note data through `sessionRefs`; reconcile these with `lib/payments.ts`, whose current `PaymentSummary` does not declare all those fields.
+The API uses the simulated catalog in test mode and the provider catalog in live mode. Do not use
+hard-coded live token lists or treat symbols alone as unique. Group by chain and select by asset ID.
 
-See [the payment links handover](2026-10-30-payment-links.md) for schemas, availability, reservations, totals, and errors. Use API-returned URLs: older examples in that document predate the separate pay host.
+For native store defaults, `PUT /v1/account/native/settlement` accepts `{ asset }`, requires the
+wallet owner and login step-up, and returns `{ asset, payoutMode: 'intents' }`. Contract defaults
+still use the settlement/proposal flow. `GET /v1/account/settlement` retains a small legacy choices
+list; use the provider catalog for the full native/per-link selector.
 
-### Theme implementation details
+Payment-link create/update accepts `settlement_asset: '<asset ID>'`; `null` means inherit the store
+default. Responses include `settlement_asset`, `settlement_symbol`, `settlement_chain`. An explicit
+link asset needs an active account but does not require a store default. Already-created sessions
+keep their pinned asset/recipient when a link or default changes.
 
-Themes are store-wide across test and live. Saving a draft does not publish it. Publish and make-default are separate actions that can change live checkout appearance even when the dashboard is viewing test mode. Explain that scope before the action.
+The chain label describes the selected token's source chain. For example, Base USDC settlement
+means Base USDC represented **inside the merchant's Intents wallet**, not an automatic transfer to
+an external Base address. Withdrawal is a separate operation. Neither a link form nor its text may
+substitute a different recipient or payment address.
 
-Display the normalized document returned after save, including sanitized HTML. Map `THEME_INVALID` details to fields. A theme can remain `published` while having unpublished draft edits; compare draft and published content rather than using its status alone.
+### Withdraw and track the result
 
-Use the returned preview URL and honor the current preview CSP; do not assume an iframe editor preview is permitted. Preview tokens expire after 15 minutes. Preserve the sealed payment block, real amount/destination/QR, and the validators around custom text, CSS, HTML, fonts, and images.
+Amounts are integer strings in the input token's smallest units. Use `parseUnits` and catalog
+decimals; keep output/minimum amounts and fees token-aware.
 
-The API client accepts other `RequestInit` options but serializes only its `json` body. Add a FormData-capable request path that preserves cookies, CSRF, merchant/mode headers, and error parsing for asset uploads. Send the asset `kind` and exactly one `file`; let the browser set the multipart boundary. Bucket credentials never belong in the frontend.
+`POST /v1/account/native/payouts`:
 
-See [the checkout themes handover](2026-10-30-checkout-themes.md) for editor capabilities and validation rules. Its older GCS/public-bucket instructions are superseded for this deployment: Railway assets are served from `https://api.usetendr.tech/v1/assets`.
+```json
+{
+  "asset": "<asset ID in the wallet balance>",
+  "amount": "1000000",
+  "destinationAsset": "<asset ID from the catalog>",
+  "destination": "<address on that asset's destination chain>"
+}
+```
 
-## Local development
+Creation returns HTTP 201 with a payout including `id`, `status`, `asset`, `amount`,
+`destinationAsset`, `destinationChain`, `destination`, `proposalId`, `quote`, `expiresAt`,
+`intentHash`, `providerStatus`, `createdAt`. Show full destination/chain, input amount, quoted
+output and minimum output before enabling an explicit sign action.
 
-Use Node 22+, npm 10+, and Docker. In your own feature checkout, create `.env` from `.env.example` **only if it does not already exist**. Keep existing credentials private; do not copy a production `.env` into a frontend fixture.
+1. `POST /v1/account/native/payouts/:id/challenge` returns payout details, `payload` and WebAuthn
+   `options`. Compare the returned payout with what the person reviewed. Do not reconstruct payload JSON.
+2. `startAuthentication({ optionsJSON: options })` uses the wallet credential.
+3. `POST /v1/account/native/payouts/:id/submit` with `{ response }` returns HTTP 202.
+4. Poll `GET /v1/account/native/payouts/:id`; history is `GET /v1/account/native/payouts` →
+   `{ payouts }` (latest 100, no cursor pagination currently). Refresh balances after outcomes;
+   account balances can be cached for 15 seconds. The console polls pending payouts every five seconds.
 
-For a local-only dashboard environment, set these development values in that root `.env`:
+States: `awaiting_signature`, `submitting`, `submitted`, `completed`, `refunded`, `failed`, `expired`.
+`completed` means the backend received provider success with a destination transaction hash;
+`refunded` means the withdrawal input was returned to the Intents wallet. The current payout view
+exposes provider status and intent hash but no dedicated destination explorer URL; do not fabricate
+one from the intent hash. A richer withdrawal receipt needs a response-contract extension.
+
+Use returned `expiresAt`; provider deadlines can differ from requested deadlines. An expired
+unsigned quote needs a new quote and review. A timeout after signing is an unknown/pending outcome:
+read the same payout, do not create a replacement payment. Resubmission uses the same payout and
+signed intent. There is no cancellation endpoint for an authorized native payout.
+
+### Refunds and review
+
+`POST /v1/refunds` is secret-key-only. Do not put a secret key in the dashboard to implement a
+general refund button. Dashboard review routes handle eligible returns and cancellation; ordinary
+settled-payment refund creation still needs an agreed dashboard endpoint.
+
+For an existing native refund proposal, create a payout with **only** `{ proposalId: 'prop_…' }`.
+The server derives amount, asset and recipient from the refund. Review and sign through the same
+native payout flow. Repeating creation for that proposal returns its existing payout. Same-asset
+returns to the token's catalog chain are supported; unsupported conversion cases stay in review.
+
+Preserve owner-only legal acknowledgement and its exact phrase where required. There is no held
+payment "release to settlement" endpoint. Refund proposals may be cancelled through the existing
+proposal cancel flow before authorization; never offer cancellation of an already signed payout.
+See [the native wallet handover](2026-11-02-native-intents-wallets.md) for the detailed contract.
+
+## API map for the remaining screens
+
+All dashboard calls below use cookie authentication and the selected store/mode unless stated
+otherwise. Routes are authoritative; the SDK is not the dashboard transport.
+
+| Area                  | Contract and permissions                                                                                                                                                                                                                                               |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Account               | `GET /v1/account`, `/v1/account/balances`, `/v1/account/settlement`, `/v1/account/go-live`; `account:read`. `POST /v1/account/retry` and `POST /v1/account/go-live` are owner/step-up contract operations, not native activation.                                      |
+| Payments              | `GET /v1/payments`, `/v1/payments/:id`; `account:read`. List filters: `status`, `created_from` inclusive, `created_to` exclusive, `payment_link_id`, `limit` 1–100, `starting_after`. Returns `{payments, has_more, next_cursor}`. No free-text search.                |
+| Payment links         | `GET/POST /v1/payment_links`; `GET/PATCH/DELETE /v1/payment_links/:id`; `GET /v1/payment_links/settlement-options`. Read: `account:read`; write: `money:request`, no step-up. List returns `{data, has_more}`; cursor is last row ID.                                  |
+| Contract proposals    | `GET/POST /v1/account/proposals`; `GET /v1/account/proposals/:id`; `POST .../:id/challenge`, `/approve`, `/cancel`. Use existing proposal helpers and backend permission/action checks. Native refund signing uses native payouts instead.                             |
+| Contract policy reads | `GET /v1/account/saved-addresses`, `/v1/account/limits`; changes are proposals. These are not native spending controls.                                                                                                                                                |
+| Review                | `GET /v1/review`; `POST /v1/review/:paymentId/acknowledge-legal` (owner + step-up); `POST .../:paymentId/refund` and `/v1/review/refunds/:refundId/cancel` (`money:request` + step-up).                                                                                |
+| Checkout settings     | `GET/PATCH /v1/settings/checkout`; `settings:manage`, PATCH step-up. Store-wide checkout domains, fee/gas defaults, notification email and payment emails.                                                                                                             |
+| Connected sites       | `GET /v1/connections`, `DELETE /v1/connections/:id`; settings permission, removal step-up. WooCommerce Connect currently supplies these; Shopify is not an accepted platform.                                                                                          |
+| Team                  | `GET /v1/team`, `POST /v1/team/invites`, `PATCH /v1/team/:membershipId`, `GET /v1/team/:membershipId/signer-keys`. Preserve existing restrictions; a role change is not native wallet ownership transfer.                                                              |
+| Webhooks              | `GET/POST /v1/webhooks/endpoints`, `DELETE /v1/webhooks/endpoints/:id`; `POST .../:id/rotate`, `/test`; `GET .../:id/deliveries`; `POST /v1/webhooks/deliveries/:id/resend`. Management needs `settings:manage`; create/rotate step-up; resend uses `webhooks:resend`. |
+| API keys              | `GET/POST /v1/api_keys`, `DELETE /v1/api_keys/:id`; `settings:manage`, create/revoke step-up. POST `{name, scopes}` → `{api_key, secret}`; GET `{api_keys}`; DELETE `{api_key}`. Store/mode-specific, manually issued keys only.                                       |
+| Themes                | `GET /v1/themes/presets`; `GET/POST /v1/themes`; `GET/PATCH/DELETE /v1/themes/:id`; `POST /v1/themes/validate`; `POST .../:id/preview`, `/publish`, `/default`. Reads: account permission; writes: settings permission; dashboard publish/default require step-up.     |
+| Assets / brand        | `GET/POST /v1/theme-assets`, `DELETE /v1/theme-assets/:id`; `POST /v1/themes/from-website`, `/v1/themes/from-store`. Upload via `api(..., {formData})` with `kind` and one `file`; browser sets the boundary.                                                          |
+
+### Payment links and themes: preserve what already works
+
+`deploy` already has `/dashboard/payment-links` and `/dashboard/payment-links/[id]`: fixed/open
+amounts, edit, archive/restore, sharing/QR, totals, linked payment history and checkout overrides.
+Use `PaymentLinkCreateSchema` / `PaymentLinkUpdateSchema`; bodies are strict. Preserve immutable
+slugs, nullable clearing semantics, and unchanged expired timestamps when editing other fields.
+`DELETE` archives; `PATCH {archived: false}` restores. List filters are `status`,
+`include_archived`, `limit`, `starting_after`.
+
+Use API `availability`, totals, `url` and `qr_url`. Availability can be `available`, `inactive`,
+`archived`, `expired`, `used_up`, `merchant_not_ready`; open checkout reservations can consume
+capacity before settlement. A payment link is reusable according to its limits, while each
+checkout session and quote has its own expiry. Never reuse yesterday's deposit address as a
+permanent payment address. `payment_link_id` filtering and payer-note/link fields already exist
+in the redesigned payments UI/types; preserve them.
+
+Use one idempotency key for retries of a supported create operation; generate a new one only for
+a new logical operation. Do not apply that rule to API-key creation (below).
+
+`deploy` already has `/dashboard/settings/themes` and `/dashboard/settings/themes/[id]`. Themes
+and assets are store-wide. Saving a draft does not publish; publishing and selecting a default are
+separate actions that affect live checkout appearance even while viewing Test. Render normalized
+saved documents; map `THEME_INVALID.details.problems` to fields. Preserve existing blocks when
+editing basic settings, and distinguish unpublished edits from the theme's published status.
+
+Preview URLs expire after 15 minutes; use their returned URL and respect preview CSP. Preserve the
+sealed payment block, real amounts/destination/QR and HTML/CSS validators. Asset URLs in this
+deployment are served through `https://api.usetendr.tech/v1/assets`; GCS/public-bucket examples in
+older handovers are historical. No storage credentials belong in browser code.
+
+See [payment links](2026-10-30-payment-links.md) and [checkout themes](2026-10-30-checkout-themes.md)
+for detailed schemas. Their deployment/readiness notes yield to this document and current code.
+
+### Keys, webhooks and domains
+
+API-key creation displays a server secret once; only a hash is stored. List metadata includes
+prefix, scopes, creation, last use and revocation. Do not persist the raw secret in URLs, browser
+storage, logs, fixtures or analytics. Clear it on dismissal, navigation and store/mode changes.
+Use `ScopeValues`; default checkout permissions are deliberately narrower than all scopes.
+
+Creation rejects `Idempotency-Key` so the secret cannot enter the replay cache. If its response is
+lost, refresh metadata, revoke the unseen key and create a replacement. Revoke requires explicit
+confirmation; subsequent authentication fails. Connected-site keys remain under Connected sites,
+where disconnection also handles webhooks/domain ownership. The API-key page does not grant wallet
+signing authority or bypass live/account readiness.
+
+Webhook signing secrets are also displayed once on create/rotate. Distinguish a test delivery from
+a real payment event. Checkout browser events are informational; fulfillment follows authoritative
+backend settlement and signed webhooks.
+
+Checkout domains are origins allowed to embed checkout, not branded checkout hosting. Require
+HTTPS in production, no path or wildcard, up to 20 entries, shared across modes. Direct hosted
+payment links do not require any entries. Notification-email changes remain pending until the
+new address is verified; keep payment-email preferences separate from authentication emails.
+
+## Error, money and interaction rules
+
+| Condition                                                      | Required behavior                                                                                                                         |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `401 UNAUTHENTICATED`                                          | Let the shell redirect to sign-in with the return path.                                                                                   |
+| `STEP_UP_REQUIRED`                                             | Use `withStepUp`; do not sign the person out.                                                                                             |
+| Passkey cancellation/timeout                                   | Keep current state and offer retry; no success message.                                                                                   |
+| `403 FORBIDDEN`                                                | Explain required role/owner; do not offer an API-key or different-store workaround.                                                       |
+| `LIVE_MODE_UNAVAILABLE`                                        | Render backend availability. Local simulator intentionally has live writes off.                                                           |
+| `ACCOUNT_NOT_READY` / provisioning                             | Show setup/resume based on account kind; native provisioning resumes activation.                                                          |
+| `VALIDATION_ERROR`, `THEME_INVALID`, unsupported asset/address | Use `ApiError.details` and keep form input. Display exact backend constraint without substituting another asset.                          |
+| Network error, rate limit, provider timeout                    | Distinguish safe reads, supported idempotent writes and pending signed payouts. Reload known resources before retrying uncertain actions. |
+| Cross-store/mode `NOT_FOUND`                                   | Clear stale data and show unavailable; no fallback to another store.                                                                      |
+
+`ApiError` exposes status, code, message, request ID and details. Show a support request ID where
+useful; do not expose raw secrets or internal provider errors. Never treat missing balances as zero.
+
+Token amounts are integer strings; order/fiat amounts are decimal strings. Use `parseUnits`,
+`formatAmount`, `formatUsd`, `feeLines`, token decimals and supported explorer helpers. Avoid
+floating-point money arithmetic and summing different assets. Unknown assets retain their full ID
+and raw units. Distinguish quoted fees from recorded fees and a pending transfer from completion.
+
+Payment states: `DETECTED`, `PROCESSING`, `SETTLED`, `PARTIALLY_REFUNDED`, `REFUNDING`, `REFUNDED`,
+`HELD`, `SCREENING_PENDING`. Contract proposal states: `draft`, `pending`, `timelocked`, `executing`,
+`executed`, `cancelled`, `expired`, `failed`. Native payout states are a separate set listed above.
+Countdowns reaching zero do not prove execution.
+
+Preserve the current monochrome dashboard in `dashboard.css` and its shared primitives; the old
+indigo/cyan redesign brief is superseded by the implemented design. Scope styles away from
+checkout. Keep full destinations available, mode/store visible, keyboard controls labeled and
+mobile layouts usable. Every screen needs loading, empty, error, permission and pending states.
+
+UI preview must remain visibly simulated and must not claim a real wallet balance, payment,
+withdrawal or successful write. Do not silently enter preview after authentication/provider failure.
+Private dashboard/API responses must not enter the service worker cache. Preserve nonce CSP,
+self-hosted fonts, cookie/CSRF handling and the existing WebAuthn ceremonies.
+
+## Development setup
+
+Use Node 22+, npm 10+, Docker and Chrome/Chromium. Copy `.env.example` to `.env` only if missing;
+use development-only values. Never borrow a production database or provider vault for fixtures.
+The compose Postgres port is 15432; an older local container may use 5433—match the actual mapping.
+
+### Work on the redesigned feature branch with a local backend
+
+The following root `.env` overrides provide a local fake backend (other required defaults come
+from `.env.example`). Keep `TEST_DATABASE_URL` separate: automated tests erase that database.
 
 ```dotenv
 NODE_ENV=development
 DATABASE_URL=postgresql://postgres:postgres@localhost:15432/tendr
 TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:15432/tendr_test
-REDIS_URL=redis://localhost:6380
+REDIS_URL=redis://localhost:6380/6
+API_HOST=127.0.0.1
+API_PORT=4000
 API_BASE_URL=http://localhost:4000
 NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
 WEB_URL=http://localhost:3000
 CHECKOUT_BASE_URL=http://localhost:3000
+TENDR_CHECKOUT_BASE_URL=http://localhost:3000
 CORS_ORIGINS=http://localhost:3000
 WEBAUTHN_RP_ID=localhost
 NEXT_PUBLIC_WEBAUTHN_RP_ID=localhost
@@ -208,11 +422,16 @@ KEYVAULT_DRIVER=local
 NEAR_CLIENT_DRIVER=fake
 NEAR_FAKE_SIMULATE=1
 MERCHANT_ACCOUNT_CODE_HASH_TEST=11111111111111111111111111111111
-ASSET_STORE_DRIVER=memory
+LIVE_ACCOUNT_DRIVER=native_intents
 LIVE_MODE_ENABLED=false
+GASLESS_LIVE_ENABLED=false
+FEE_SWEEP_ENABLED=false
+FX_PROVIDER=fixed
+ASSET_STORE_DRIVER=memory
+ASSET_PUBLIC_PROXY=true
+TENDR_ASSET_ORIGIN=http://localhost:4000/v1/assets
+WEB_INTERNAL_TOKEN=local-frontend-development-only-token
 ```
-
-The placeholder code hash is for the fake client only. Do not use it in Railway. Local fake NEAR and the local key vault are rejected in production. In-memory asset storage is enough for API/editor development but does not provide a persistent public image/font server; use a configured development asset store to test actual asset rendering.
 
 ```bash
 npm ci
@@ -221,56 +440,99 @@ npm run build --workspace=@tendr/contracts
 npm run db:generate
 npm run db:migrate:dev --workspace=@tendr/api
 npm run db:migrate:test --workspace=@tendr/api
-npm run dev
+# Terminal 1: API and fake-chain worker share one process.
+npm run e2e:serve --workspace=@tendr/api
+# Terminal 2, same checkout:
+npm run dev:web
 ```
 
-Open `http://localhost:3000/signup`. With `MAIL_DRIVER=log`, verification links are written to `apps/api/.mail/*.json`; use the newest message for your development email. Register a passkey, create a store, and let the worker provision the fake account. Keep the web, API, and worker running together. `npm run db:seed` supplies demo API fixtures if needed; it does not replace the merchant's email/passkey signup.
+Open `http://localhost:3000/signup`. Local verification links appear in `apps/api/.mail/*.json`.
+Use `localhost` consistently. `npm run dev` starts separate API/worker processes and therefore is
+not the appropriate launcher for shared in-memory fake-chain state. The audited `deploy` helper
+has no console checkpoint restoration; use disposable local fixtures after simulator restarts.
+Memory assets are served through the local proxy and disappear on restart.
 
-Use `localhost` consistently for WebAuthn. Production passkeys use RP ID `usetendr.tech`; changing hosts or RP IDs affects which credentials can authenticate. The current deploy compose file uses Postgres port **15432**; older README instructions mention 5433.
+Live native writes are intentionally disabled in this local setup. Native component tests use
+mocked responses, backend integration tests use fake provider/RPC responses, and funded live tests
+use the separate setup below. Turning on the local live flag alone does not create a complete
+native-mainnet simulator.
 
-Frontend needs the public API URL and public RP ID. Reown is for checkout wallet connections, not dashboard passkey login. `NEXT_PUBLIC_*` values are baked into the browser build. `WEB_INTERNAL_TOKEN`, provider API keys, database URLs, vault bundles, and bucket credentials remain server-only.
+### Inspect the working console
 
-## Visual and interaction requirements
+In a separate checkout of `origin/test/api-console`, use `npm run dev:console`. It runs web 3300,
+API 4300, isolated `tendr_api_console` database, Redis DB 8, local mail inbox and checkpointed fake
+state. It removes production provider credentials and disables live money. Read `docs/api-console.md`
+on that branch for setup, the 133-route workbench and database/state backup behavior.
 
-Start with the existing Tendr tokens: navy `#080d1b`, indigo `#4035f5`, cyan `#16c7f7`, lavender `#c9c6ff`; Sora body, Instrument Sans display, and JetBrains Mono for addresses. Fonts are self-hosted to satisfy CSP. Scope dashboard layout changes so shared CSS does not alter checkout or its sealed payment block.
+### Local frontend with the live API
 
-Keep the selected store and mode visible on desktop and mobile. Retain the test-mode banner and the recovery warning. Give each page loading, empty, error, permission-denied, and in-progress states. Distinguish no records from filters matching nothing. Prevent duplicate submissions and preserve form input after a recoverable failure.
+The console branch has `npm run dev:console:live`. It serves only the frontend at loopback port
+3343 and opens a dedicated Chrome window at `https://app.usetendr.tech/dashboard`, with that host
+mapped locally. API calls still reach Railway and move real funds when a person signs a live action.
+This bypass applies only inside that Chrome profile; it does not change public DNS or fix the
+public Vercel error. Reopen with `npm run dev:console:live -- --open`.
 
-Use labeled controls, visible keyboard focus, accessible dialog behavior, and status text beyond color. On small screens, keep filters usable and full destinations available. Show the complete chain and destination at approval time; a nickname or truncated address alone is insufficient. Preserve saved-address activation waits and proposal timelocks from server timestamps.
+Configuration lives in ignored `.keyvault/live-console.json`; the deployment owner supplies it
+privately. It contains web settings, including the server-only `WEB_INTERNAL_TOKEN`. Do not copy
+wallet credentials, Railway tokens, database/provider secrets or another person's Chrome profile.
+Each developer signs in using their own account and an appropriate store role.
 
-Do not cache private dashboard/API responses in the service worker or store session/CSRF secrets in localStorage. Preserve nonce-based CSP and the existing WebAuthn ceremonies when adding UI libraries.
+These commands are not yet in `deploy`. To use this same harness for the redesigned feature branch,
+port the launcher and its environment/Next-config support from console commit `98520e4`, preserving
+the feature branch's design and existing config. Keep the loopback binding, exact certificate pin,
+separate browser profile, isolated build directory, skip-dotenv behavior and production RP/origin.
+It must not be turned into a public console deployment. Do not point a plain localhost frontend
+at production: the deployed CORS, RP ID and cookies require the approved app origin.
 
-## Verification and completion
+## Verification and acceptance
 
-Run the workspace checks appropriate to the changed screens:
+This document was checked against both branch revisions, API routes/schemas and the live
+configuration. API-key route/component/browser checks passed in the preceding implementation.
+The merchant's receipt/withdrawal report is recorded above; no broader funded-flow certification
+is implied. Public DNS restoration and the native UI merge remain incomplete.
+
+From the feature branch, run checks for changed code:
 
 ```bash
 npm run typecheck --workspace=@tendr/web
 npm run lint --workspace=@tendr/web
 npm run test --workspace=@tendr/web
+npm run build --workspace=@tendr/web
 npm run test:e2e --workspace=@tendr/web -- merchant-accounts.spec.ts
 ```
 
-Playwright starts its own API/worker/web against `TEST_DATABASE_URL`, with fake NEAR and a virtual passkey authenticator. It uses web port 3100, API port 4100, and fixture-store port 3200 by default. Stop the normal development stack if its worker health port 4100 conflicts. The test suite's enabled live flag is confined to its fake environment and is not a production launch setting.
+Add native component coverage when porting `NativeWallet.test.tsx`, plus regression coverage for
+mode/store switching during pending requests. Existing useful tests include `lib/api.test.ts`,
+`lib/payment-link-form.test.ts`, `lib/themes.test.ts` and `app/dashboard/api-keys/page.test.tsx` on
+`deploy`. Use `checkout.spec.ts`, `payment-links.spec.ts`, `themes.spec.ts` for affected public flows.
+The console's `npm run test:api-console --workspace=@tendr/web` uses its own launcher and covers
+real local browser signup, links and API keys. Do not assume that command exists on `deploy`.
 
-Use `checkout.spec.ts`, `payment-links.spec.ts`, and `themes.spec.ts` when changing shared checkout, link, or theme behavior. Existing suites cover those public experiences, not the missing dashboard editors; add focused coverage for the new merchant workflows. Useful unit regression files under `apps/web/src` include `lib/api.test.ts`, `lib/payments.test.ts`, `lib/actions.test.ts`, and `components/dashboard/GoLiveChecklist.test.tsx`.
+Standard Playwright uses an isolated test database, fake API/worker and virtual authenticator;
+default web/API/store ports are 3100/4100/3200. Keep real credentials and funds out of these suites.
+Disable trace/video/screenshots for tests displaying raw keys or sensitive signatures. Capture
+review screenshots only after secrets are dismissed and with disposable test data.
 
-A dashboard change is ready for review when:
+| Acceptance case                             | Required result                                                                                                                                  |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Signup, login and session expiry            | Email/passkey flow works; user returns to intended route; step-up cancellation preserves state.                                                  |
+| Native setup interrupted after registration | "Finish activation" resumes the existing wallet; no second registration or false active state.                                                   |
+| Same authenticator / multiple stores        | Separate login and wallet credentials work on one device; stores receive distinct wallet keys/accounts.                                          |
+| Native versus contract account              | Correct setup, withdrawal, settlement, approval and recovery controls; direct URLs respect capabilities.                                         |
+| Wallet ownership and team roles             | Non-owner members can use allowed reads; cannot sign another person's wallet or gain control by changing role.                                   |
+| Store/mode change during a request          | No old balances, drafts, secret keys, quotes or actions appear under the new selection.                                                          |
+| Link settlement selection                   | Provider catalog, default/custom choice, null inheritance and historical session pinning all work; recipient remains the store wallet.           |
+| Native withdrawal                           | Exact units and full recipient reviewed; signature only after explicit action; pending/expired/refunded/failed/completed states remain distinct. |
+| Timeout after payout submission             | UI resumes the same payout; no replacement transfer or false cancellation.                                                                       |
+| Refund approval                             | Proposal-derived payout uses server amount/destination; unsupported cases remain in review; contract and native ceremonies stay separate.        |
+| API keys                                    | Owner/admin create with selected scopes, one-time copy, context reset, lost-response recovery and revoke are preserved.                          |
+| Themes and settings                         | Shared scope is clear; drafts/publish/default are distinct; uploaded assets render; notification email remains pending until verified.           |
+| Payments and money display                  | Backend totals and final statuses used; exact amounts, fees, token IDs and valid explorer links; missing data is not zero.                       |
+| Public deployment                           | App DNS/HTTPS and RP/origin behavior work outside the local Chrome override before public acceptance.                                            |
+| Accessibility / review                      | Mobile and keyboard flows work; screenshots show test data; PR lists checks run and any unresolved API dependency.                               |
 
-- The implemented screens use real API data and render useful loading, empty, error, and permission states.
-- Switching stores or modes cannot display stale data or submit an action for the wrong context.
-- Viewer, finance, admin, owner, signer, and non-signer behavior matches the API permissions.
-- Signup/sign-in, step-up cancellation, session expiry, and signed-out return navigation still work.
-- Amounts, destination details, fee estimates, pending transfers, and timed waits are represented accurately.
-- Payment links use backend availability and URLs; theme drafts and publish/default actions remain distinct.
-- Mobile and keyboard flows work, and checkout/theme rendering survives shared-style changes.
-- The PR includes screenshots, the checks run, and any backend dependency that remains unresolved. Production payment verification belongs to the deployment owner after the outstanding setup is complete.
-
-## Further references
-
-- [Merchant accounts design](../superpowers/specs/2026-10-25-merchant-accounts-design.md)
-- [Checkout core design](../superpowers/specs/2026-10-25-checkout-core-design.md)
-- [Payment links handover](2026-10-30-payment-links.md)
-- [Checkout themes handover](2026-10-30-checkout-themes.md)
-- Deployment runbook on `deploy`: `docs/handover/2026-10-31-deploy-runbook.md`
-- [Railway project](https://railway.com/project/a2f21ff5-5b3e-49f1-beb7-8990234aeca8)
+Further references: [native wallets](2026-11-02-native-intents-wallets.md),
+[payment links](2026-10-30-payment-links.md), [themes](2026-10-30-checkout-themes.md),
+[deployment runbook](2026-10-31-deploy-runbook.md),
+[Railway project](https://railway.com/project/a2f21ff5-5b3e-49f1-beb7-8990234aeca8).
+Historical runbook readiness notes must be rechecked against the current status above.
