@@ -60,8 +60,8 @@ type Phase =
 const POLL_MS = 3000;
 
 /**
- * Choose payout (spec §2), in test mode: for a new store, and for a picked store with none set
- * (the step moves on by itself when the store already has one).
+ * Optional test payout setup for a newly created store. Existing stores go straight to approval:
+ * connection authorization is store-wide, and the plugin checks payment readiness per mode.
  */
 function payoutPhase(store: Store, isNew: boolean): Phase {
   return { k: 'payout', store, storeContext: { merchantId: store.id, livemode: false }, isNew };
@@ -224,7 +224,7 @@ export function ConnectFlow() {
       {phase.k === 'pick' && me && (
         <StorePicker
           stores={eligibleStores(me.stores)}
-          onPick={(store) => setPhase(payoutPhase(store, false))}
+          onPick={(store) => setPhase({ k: 'approve', store })}
           onNew={() => setPhase({ k: 'new-store' })}
         />
       )}
@@ -602,6 +602,10 @@ function Approve({
     <>
       <h1>{approvalQuestion(siteLabel(params), store.name)}</h1>
       <p>{APPROVAL_DETAIL}</p>
+      <p>
+        The plugin starts in Test mode. To use your live wallet, select Live in the plugin’s
+        settings after connecting. Live payment readiness is checked separately from test setup.
+      </p>
       <dl className="facts">
         <dt>Business</dt>
         <dd>{store.name}</dd>
