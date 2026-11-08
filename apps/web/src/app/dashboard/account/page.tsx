@@ -6,6 +6,7 @@ import { Alert, Button, Spinner, StatusBadge } from '@tendr/ui';
 import { Check, ChevronRight, CircleCheck, Wallet } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { NativeWalletSetup } from '@/components/dashboard/NativeWallet';
+import { CopyableId } from '@/components/dashboard/CopyableId';
 import { EmptyState, ErrorState, PageHeader, Panel, Stat } from '@/components/dashboard/ui';
 import { api, errorMessage, type AccountView, type Balances, type GoLiveStatus } from '@/lib/api';
 import { assetInfo, formatAmount } from '@/lib/assets';
@@ -236,7 +237,13 @@ export default function AccountHomePage() {
                 ? 'Unavailable'
                 : 'Not yet'
           }
-          hint={live ? live.nearAccountId : 'Complete go-live when ready'}
+          hint={
+            live ? (
+              <CopyableId value={live.nearAccountId} label="Copy account id" />
+            ) : (
+              'Complete go-live when ready'
+            )
+          }
         />
       </div>
 
@@ -289,7 +296,7 @@ export default function AccountHomePage() {
                 Live account {(STATUS_WORDS[live.status] ?? live.status).toLowerCase()}
               </strong>
               <p className="dash-muted dash-small">
-                <span className="dash-mono">{live.nearAccountId}</span>
+                <CopyableId value={live.nearAccountId} label="Copy account id" />
               </p>
             </div>
           </div>
@@ -311,7 +318,7 @@ export default function AccountHomePage() {
                     Live account {(STATUS_WORDS[live.status] ?? live.status).toLowerCase()}
                   </strong>
                   <p className="dash-muted dash-small">
-                    <span className="dash-mono">{live.nearAccountId}</span>
+                    <CopyableId value={live.nearAccountId} label="Copy account id" />
                   </p>
                 </div>
               </div>
@@ -422,7 +429,9 @@ function AccountCard({
       action={a ? <StatusBadge status={STATUS_WORDS[a.status] ?? a.status} /> : null}
     >
       {a ? (
-        <p className="dash-mono dash-small">{a.nearAccountId}</p>
+        <p className="dash-small">
+          <CopyableId value={a.nearAccountId} label="Copy account id" />
+        </p>
       ) : (
         <p className="dash-muted">Not created yet.</p>
       )}
