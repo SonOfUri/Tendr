@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect } from 'react';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { DestinationBox, Status, useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
@@ -64,7 +65,7 @@ export default function ProposalPage() {
     return detail.error ? (
       <ErrorState message={detail.error} onRetry={() => void detail.reload()} />
     ) : (
-      <Spinner label="Loading the proposal" />
+      <PageSkeleton label="Loading the proposal" />
     );
   }
 

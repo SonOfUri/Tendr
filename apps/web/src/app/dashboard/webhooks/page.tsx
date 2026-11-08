@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import { WebhookEventTypeValues } from '@tendr/contracts';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { Webhook } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad } from '@/components/dashboard/common';
@@ -58,7 +59,7 @@ export default function WebhooksPage() {
             </Alert>
           )}
           {!endpoints.data ? (
-            !endpoints.error && <Spinner label="Loading endpoints" />
+            !endpoints.error && <PageSkeleton label="Loading endpoints" />
           ) : endpoints.data.endpoints.length === 0 ? (
             <EmptyState
               icon={<Webhook size={22} strokeWidth={1.75} />}
@@ -214,7 +215,7 @@ function EndpointCard({
       </div>
       {open &&
         (!deliveries.data ? (
-          <Spinner label="Loading deliveries" />
+          <PageSkeleton label="Loading deliveries" rows={2} />
         ) : deliveries.data.deliveries.length === 0 ? (
           <p className="dash-muted">No deliveries yet.</p>
         ) : (

@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { can } from '@tendr/contracts';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import {
   Archive,
   ArchiveRestore,
@@ -29,6 +30,7 @@ import { api } from '@/lib/api';
 import { canNativeShare, sharePaymentLink } from '@/lib/share-link';
 import { useOnline } from '@/components/pwa/PwaInstall';
 import { availabilityWords, linkAmountLabel, linkUsesLabel } from '@/lib/payment-link-form';
+import { PaymentLinkPreview } from '@/components/dashboard/PaymentLinkPreview';
 import { SettlementField } from '@/components/dashboard/SettlementField';
 import { toast } from '@/components/toast';
 import type { PaymentLinkList, PaymentLinkView } from '@/lib/payment-link-types';
@@ -183,70 +185,79 @@ export default function PaymentLinksPage() {
               {!online ? (
                 <Alert tone="info">You’re offline. Reconnect to create a payment link.</Alert>
               ) : null}
-              <form className="stack" onSubmit={(e) => void onCreate(e)}>
-                <label className="field">
-                  <span>Title</span>
-                  <input
-                    required
-                    maxLength={80}
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="Invoice — spring order"
-                  />
-                </label>
-                <div className="row">
+              <div className="dash-link-editor">
+                <form className="stack" onSubmit={(e) => void onCreate(e)}>
                   <label className="field">
-                    <span>Amount type</span>
-                    <Select
-                      ariaLabel="Amount type"
-                      className="tendr-select--field"
-                      value={amountType}
-                      onChange={(v) => setAmountType(v as 'fixed' | 'open')}
-                      options={[
-                        { value: 'fixed', label: 'Fixed' },
-                        { value: 'open', label: 'Open' },
-                      ]}
+                    <span>Title</span>
+                    <input
+                      required
+                      maxLength={80}
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      placeholder="Invoice — spring order"
                     />
                   </label>
-                  <label className="field">
-                    <span>Currency</span>
-                    <Select
-                      ariaLabel="Currency"
-                      className="tendr-select--field"
-                      value="USD"
-                      disabled
-                      onChange={() => {}}
-                      options={[{ value: 'USD', label: 'USD' }]}
-                    />
-                  </label>
-                  {amountType === 'fixed' ? (
+                  <div className="row">
                     <label className="field">
-                      <span>Amount</span>
-                      <input
-                        required
-                        value={amount}
-                        onChange={(e) => setAmount(e.target.value)}
-                        placeholder="25.00"
+                      <span>Amount type</span>
+                      <Select
+                        ariaLabel="Amount type"
+                        className="tendr-select--field"
+                        value={amountType}
+                        onChange={(v) => setAmountType(v as 'fixed' | 'open')}
+                        options={[
+                          { value: 'fixed', label: 'Fixed' },
+                          { value: 'open', label: 'Open' },
+                        ]}
                       />
                     </label>
-                  ) : (
                     <label className="field">
-                      <span>Min amount (optional)</span>
-                      <input
-                        value={minAmount}
-                        onChange={(e) => setMinAmount(e.target.value)}
-                        placeholder="1.00"
+                      <span>Currency</span>
+                      <Select
+                        ariaLabel="Currency"
+                        className="tendr-select--field"
+                        value="USD"
+                        disabled
+                        onChange={() => {}}
+                        options={[{ value: 'USD', label: 'USD' }]}
                       />
                     </label>
-                  )}
-                </div>
-                <SettlementField value={settlementAsset} onChange={setSettlementAsset} disabled={!online} />
-                <div className="actions">
-                  <Button type="submit" disabled={create.busy || !online}>
-                    {create.busy ? 'Creating…' : 'Create'}
-                  </Button>
-                </div>
-              </form>
+                    {amountType === 'fixed' ? (
+                      <label className="field">
+                        <span>Amount</span>
+                        <input
+                          required
+                          value={amount}
+                          onChange={(e) => setAmount(e.target.value)}
+                          placeholder="25.00"
+                        />
+                      </label>
+                    ) : (
+                      <label className="field">
+                        <span>Min amount (optional)</span>
+                        <input
+                          value={minAmount}
+                          onChange={(e) => setMinAmount(e.target.value)}
+                          placeholder="1.00"
+                        />
+                      </label>
+                    )}
+                  </div>
+                  <SettlementField value={settlementAsset} onChange={setSettlementAsset} disabled={!online} />
+                  <div className="actions">
+                    <Button type="submit" disabled={create.busy || !online}>
+                      {create.busy ? 'Creating…' : 'Create'}
+                    </Button>
+                  </div>
+                </form>
+                <PaymentLinkPreview
+                  merchantName={store.name}
+                  title={title}
+                  amountType={amountType}
+                  amount={amount}
+                  minAmount={minAmount}
+                />
+              </div>
             </Panel>
           ) : null}
 
@@ -294,7 +305,7 @@ export default function PaymentLinksPage() {
             {list.error ? (
               <ErrorState message={list.error} onRetry={() => void list.reload()} />
             ) : !list.data ? (
-              <Spinner label="Loading payment links" />
+              <PageSkeleton label="Loading payment links" />
             ) : links.length === 0 ? (
               <EmptyState
                 icon={<Link2 size={22} strokeWidth={1.75} />}

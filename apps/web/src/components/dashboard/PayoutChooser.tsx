@@ -7,7 +7,8 @@
 // the popup still lets the site connect (its status then reports the missing payout).
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { api, errorMessage, type StoreContext } from '@/lib/api';
 import {
   afterApproval,
@@ -144,7 +145,7 @@ export function PayoutChooser({
   if (!view) {
     return (
       <>
-        <Spinner label="Loading payout" />
+        <PageSkeleton label="Loading payout" rows={2} />
         {later}
       </>
     );
@@ -222,7 +223,7 @@ export function PayoutChooser({
   if (step === 'account-pending') {
     return (
       <>
-        <Spinner label={`Setting up ${storeName}’s ${modeWord} account`} />
+        <PageSkeleton label={`Setting up ${storeName}’s ${modeWord} account`} rows={2} />
         <p className="muted small">This usually takes a few seconds.</p>
         {later}
       </>

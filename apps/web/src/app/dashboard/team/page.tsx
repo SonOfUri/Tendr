@@ -2,7 +2,8 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import { PageHeader, Panel, Select } from '@/components/dashboard/ui';
@@ -44,7 +45,7 @@ export default function TeamPage() {
 
       <Panel title="Members">
         {!team.data ? (
-          <Spinner label="Loading the team" />
+          <PageSkeleton label="Loading the team" />
         ) : (
           <ul className="list">
             {team.data.members.map((m) => (

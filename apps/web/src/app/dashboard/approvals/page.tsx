@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { CheckCircle2 } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad, useTick } from '@/components/dashboard/common';
@@ -44,7 +45,7 @@ export default function ApprovalsPage() {
         {inbox.error ? (
           <ErrorState message={inbox.error} onRetry={() => void inbox.reload()} />
         ) : (
-          <Spinner label="Loading approvals" />
+          <PageSkeleton label="Loading approvals" />
         )}
       </>
     );
@@ -97,7 +98,7 @@ export default function ApprovalsPage() {
           title="No proposals yet"
           description="Withdrawals, security changes, and other actions appear here once someone asks for them."
           action={
-            <Link href="/dashboard/withdraw" className="dash-empty-cta">
+            <Link href="/dashboard/wallet" className="dash-empty-cta">
               Start a withdrawal
             </Link>
           }

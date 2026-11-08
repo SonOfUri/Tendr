@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { ErrorState, PageHeader, Panel, Select } from '@/components/dashboard/ui';
@@ -62,7 +63,7 @@ export default function RecoveryPage() {
 
       <Panel title="Status">
         {!status.data ? (
-          <Spinner label="Loading" />
+          <PageSkeleton label="Loading" />
         ) : pending && recovery ? (
           <>
             <Alert tone="danger">
@@ -138,7 +139,7 @@ function StartRecovery({ onStarted }: { onStarted: () => void }) {
   if (people.error) {
     return <ErrorState message={people.error} onRetry={() => void people.reload()} />;
   }
-  if (!people.data) return <Spinner label="Loading the team" />;
+  if (!people.data) return <PageSkeleton label="Loading the team" />;
 
   const selected = people.data.filter((c) => chosen.includes(c.userId));
 

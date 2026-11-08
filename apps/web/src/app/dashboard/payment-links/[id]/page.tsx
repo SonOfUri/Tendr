@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { can } from '@tendr/contracts';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { WifiOff } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
@@ -19,6 +20,7 @@ import {
 import { api } from '@/lib/api';
 import { canNativeShare, sharePaymentLink } from '@/lib/share-link';
 import { useOnline } from '@/components/pwa/PwaInstall';
+import { PaymentLinkPreview } from '@/components/dashboard/PaymentLinkPreview';
 import { SettlementField } from '@/components/dashboard/SettlementField';
 import { toast } from '@/components/toast';
 import {
@@ -105,7 +107,7 @@ export default function PaymentLinkDetailPage() {
         {detail.error ? (
           <ErrorState message={detail.error} onRetry={() => void detail.reload()} />
         ) : (
-          <Spinner label="Loading the payment link" />
+          <PageSkeleton label="Loading the payment link" />
         )}
       </>
     );
@@ -332,6 +334,7 @@ export default function PaymentLinkDetailPage() {
 
       {canWrite ? (
         <Panel title="Edit link">
+          <div className="dash-link-editor">
           <form className="stack" onSubmit={(e) => void onSave(e)}>
             <label className="field">
               <span>Title</span>
@@ -514,6 +517,15 @@ export default function PaymentLinkDetailPage() {
               </Button>
             </div>
           </form>
+          <PaymentLinkPreview
+            merchantName={store.name}
+            title={form.title}
+            amountType={form.amountType}
+            amount={form.amount}
+            minAmount={form.minAmount}
+            currency={form.currency}
+          />
+          </div>
         </Panel>
       ) : (
         <p className="dash-muted dash-small">Your role can view this link but not change it.</p>

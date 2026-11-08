@@ -5,7 +5,8 @@
 // admin, with a passkey step-up).
 import { useState } from 'react';
 import type { ConnectedSite } from '@tendr/contracts';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { Globe } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
@@ -55,7 +56,7 @@ export default function ConnectedSitesPage() {
         {sites.error ? (
           <ErrorState message={sites.error} onRetry={() => void sites.reload()} />
         ) : (
-          <Spinner label="Loading connected sites" />
+          <PageSkeleton label="Loading connected sites" />
         )}
       </div>
     );

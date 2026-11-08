@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { Alert, Spinner } from '@tendr/ui';
+import { Alert } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useLoad } from '@/components/dashboard/common';
 import { ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
@@ -33,7 +34,7 @@ export default function PaymentPage() {
         {detail.error ? (
           <ErrorState message={detail.error} onRetry={() => void detail.reload()} />
         ) : (
-          <Spinner label="Loading the payment" />
+          <PageSkeleton label="Loading the payment" />
         )}
       </>
     );

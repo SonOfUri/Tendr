@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { CircleCheck } from 'lucide-react';
-import { ChainLogo, TokenLogo, tokenSelectOptions } from '@/components/dashboard/asset-logos';
+import { ChainLogo, TokenLogo } from '@/components/dashboard/asset-logos';
 import { AssetGridPicker } from '@/components/dashboard/AssetGridPicker';
 import { Panel } from '@/components/dashboard/ui';
-import { assetInfo, chainLabel, formatAmount, formatUnits, parseUnits, poaTokenContract } from '@/lib/assets';
+import { assetInfo, chainLabel, formatAmount, formatUnits, parseUnits } from '@/lib/assets';
 import {
   api,
   errorMessage,
@@ -34,6 +35,8 @@ type WalletData = {
 };
 
 type SettlementToken = { asset: string; symbol: string; chain: string; decimals: number };
+
+const PCTS = [25, 50, 75, 100] as const;
 
 export function NativeWalletSetup({
   view,
@@ -128,6 +131,7 @@ export function NativeWalletPanel({
   const [settlement, setSettlement] = useState('');
   const [asset, setAsset] = useState('');
   const [amount, setAmount] = useState('');
+  const [pct, setPct] = useState<number | null>(null);
   const [destinationAsset, setDestinationAsset] = useState('');
   const [destination, setDestination] = useState('');
   const [review, setReview] = useState<NativePayout | null>(null);
@@ -200,7 +204,7 @@ export function NativeWalletPanel({
     return loadFailed ? (
       <p className="dash-muted">Couldn’t load the wallet. Try again in a moment.</p>
     ) : (
-      <Spinner label="Loading wallet" />
+      <PageSkeleton label="Loading wallet" rows={3} />
     );
   }
 
@@ -225,16 +229,48 @@ export function NativeWalletPanel({
     icon: <TokenLogo symbol={token.symbol} assetId={token.asset} />,
   }));
 
-  function showAmount(id: string, raw: string) {
+  function tokenMeta(id: string): { symbol: string; decimals: number; chain: string } {
     const token = data!.tokens.find((t) => t.asset === id);
-    if (token) return `${formatUnits(raw, token.decimals)} ${token.symbol}`;
+    if (token) return { symbol: token.symbol, decimals: token.decimals, chain: token.chain };
+    const info = assetInfo(id, true);
+    return {
+      symbol: info.symbol,
+      decimals: info.decimals,
+      chain: id.startsWith('nep141:') ? 'near' : '',
+    };
+  }
+
+  function showAmount(id: string, raw: string) {
+    const meta = tokenMeta(id);
+    if (data!.tokens.some((t) => t.asset === id) || assetInfo(id, true).known) {
+      return `${formatUnits(raw, meta.decimals)} ${meta.symbol}`;
+    }
     return formatAmount(id, raw, true);
+  }
+
+  function selectBalance(id: string) {
+    setAsset(id);
+    setPct(null);
+    setAmount('');
+  }
+
+  function applyPct(n: number) {
+    if (!asset) return;
+    const bal = data!.balances.balances.find((b) => b.asset === asset);
+    if (!bal) return;
+    const { decimals } = tokenMeta(asset);
+    const slice = ((BigInt(bal.amount) * BigInt(n)) / 100n).toString();
+    const human = formatUnits(slice, decimals);
+    // Round-trip through parseUnits so the field matches what quote will accept.
+    const raw = parseUnits(human, decimals);
+    setAmount(raw != null ? formatUnits(raw, decimals) : human);
+    setPct(n);
   }
 
   async function quote() {
     await run(async () => {
-      const token = data!.tokens.find((t) => t.asset === asset);
-      const raw = token ? parseUnits(amount, token.decimals) : null;
+      const { decimals } = tokenMeta(asset);
+      const raw = asset ? parseUnits(amount, decimals) : null;
       if (!proposalId && (raw === null || BigInt(raw) <= 0n)) {
         throw new Error('Enter a valid amount for the selected token.');
       }
@@ -256,8 +292,16 @@ export function NativeWalletPanel({
     });
   }
 
+  const funded = data.balances.balances.filter((b) => {
+    try {
+      return BigInt(b.amount) > 0n;
+    } catch {
+      return false;
+    }
+  });
+
   return (
-    <div className="stack">
+    <div className="stack wallet-layout">
       <NativeWalletSetup
         view={data.view}
         status={data.status}
@@ -275,13 +319,34 @@ export function NativeWalletPanel({
             </Alert>
           ) : null}
           <Panel title="Balances">
-            {data.balances.balances.length ? (
-              data.balances.balances.map((b) => (
-                <p key={b.asset} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <TokenLogo symbol={assetInfo(b.asset, true).symbol} assetId={b.asset} />{' '}
-                  {showAmount(b.asset, b.amount)}
-                </p>
-              ))
+            {funded.length ? (
+              <div className="wallet-balances" role="listbox" aria-label="Balances">
+                {funded.map((b) => {
+                  const meta = tokenMeta(b.asset);
+                  const selected = asset === b.asset;
+                  return (
+                    <button
+                      key={b.asset}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      className="wallet-bal-card"
+                      data-selected={selected ? 'true' : 'false'}
+                      disabled={busy || Boolean(proposalId)}
+                      onClick={() => selectBalance(b.asset)}
+                    >
+                      <div className="wallet-bal-top">
+                        <TokenLogo symbol={meta.symbol} assetId={b.asset} size={22} />
+                        <span className="wallet-bal-sym">{meta.symbol}</span>
+                      </div>
+                      <div className="wallet-bal-amt">{formatUnits(b.amount, meta.decimals)}</div>
+                      {meta.chain ? (
+                        <div className="wallet-bal-chain">{chainLabel(meta.chain)}</div>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
             ) : (
               <p className="dash-muted">No funds received yet.</p>
             )}
@@ -335,29 +400,30 @@ export function NativeWalletPanel({
               ) : (
                 <>
                   <label className="field">
-                    <span>Token to send</span>
-                    <AssetGridPicker
-                      ariaLabel="Token to send"
-                      title="Token to send"
-                      value={asset}
-                      disabled={busy}
-                      onChange={setAsset}
-                      placeholder="Choose a balance"
-                      options={tokenSelectOptions(
-                        data.balances.balances.filter((b) => BigInt(b.amount) > 0n).map((b) => b.asset),
-                        (id) => assetInfo(id, true),
-                      )}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Amount to send</span>
+                    <span>Amount to send{asset ? ` (${tokenMeta(asset).symbol})` : ''}</span>
                     <input
                       value={amount}
-                      disabled={busy}
+                      disabled={busy || !asset}
                       inputMode="decimal"
-                      onChange={(e) => setAmount(e.target.value)}
+                      onChange={(e) => {
+                        setAmount(e.target.value);
+                        setPct(null);
+                      }}
                     />
                   </label>
+                  <div className="wallet-pct" role="group" aria-label="Amount percentage">
+                    {PCTS.map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        disabled={busy || !asset}
+                        aria-pressed={pct === n}
+                        onClick={() => applyPct(n)}
+                      >
+                        {n === 100 ? 'Max' : `${n}%`}
+                      </button>
+                    ))}
+                  </div>
                   <label className="field">
                     <span>Token and chain to receive</span>
                     <AssetGridPicker
@@ -397,24 +463,43 @@ export function NativeWalletPanel({
           ) : null}
           {review ? (
             <Panel title="Review payout">
-              <p>
-                Send: <strong>{showAmount(review.asset, review.amount)}</strong>
-              </p>
-              <p>Estimated receive: {showAmount(review.destinationAsset, review.quote.quote.amountOut)}</p>
-              {review.quote.quote.minAmountOut ? (
-                <p>
-                  Minimum receive: {showAmount(review.destinationAsset, review.quote.quote.minAmountOut)}
-                </p>
-              ) : null}
-              <p style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <ChainLogo chain={review.destinationChain} /> Destination chain:{' '}
-                <strong>{chainLabel(review.destinationChain)}</strong>
-              </p>
-              <p className="dash-mono">{review.destination}</p>
-              <p>Quote expires: {new Date(review.expiresAt).toLocaleString()}</p>
-              <p>
-                Status: <strong>{review.status}</strong>
-              </p>
+              <div className="wallet-quote">
+                <div className="wallet-quote-row">
+                  <span className="wallet-quote-label">Send</span>
+                  <strong>{showAmount(review.asset, review.amount)}</strong>
+                </div>
+                <div className="wallet-quote-row">
+                  <span className="wallet-quote-label">Est. receive</span>
+                  <strong>{showAmount(review.destinationAsset, review.quote.quote.amountOut)}</strong>
+                </div>
+                {review.quote.quote.minAmountOut ? (
+                  <div className="wallet-quote-row">
+                    <span className="wallet-quote-label">Min. receive</span>
+                    <strong>
+                      {showAmount(review.destinationAsset, review.quote.quote.minAmountOut)}
+                    </strong>
+                  </div>
+                ) : null}
+                <div className="wallet-quote-row">
+                  <span className="wallet-quote-label">Destination</span>
+                  <strong style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <ChainLogo chain={review.destinationChain} />
+                    {chainLabel(review.destinationChain)}
+                  </strong>
+                </div>
+                <div className="wallet-quote-row">
+                  <span className="wallet-quote-label">Address</span>
+                  <strong className="dash-mono">{review.destination}</strong>
+                </div>
+                <div className="wallet-quote-row">
+                  <span className="wallet-quote-label">Expires</span>
+                  <strong>{new Date(review.expiresAt).toLocaleString()}</strong>
+                </div>
+                <div className="wallet-quote-row">
+                  <span className="wallet-quote-label">Status</span>
+                  <strong>{review.status}</strong>
+                </div>
+              </div>
               {mine && review.status === 'awaiting_signature' ? (
                 <div>
                   <Button
@@ -440,19 +525,40 @@ export function NativeWalletPanel({
               </Button>
             </div>
             {data.payouts.length ? (
-              data.payouts.map((p) => (
-                <div key={p.id} className="stack">
-                  <p>
-                    {showAmount(p.asset, p.amount)} · <strong>{p.status}</strong>
-                  </p>
-                  <p className="dash-mono">{p.destination}</p>
-                  <div>
-                    <Button variant="secondary" onClick={() => setReview(p)}>
-                      Review payout {p.id.slice(-6)}
-                    </Button>
-                  </div>
-                </div>
-              ))
+              <div className="dash-table-wrap">
+                <table className="dash-table">
+                  <thead>
+                    <tr>
+                      <th>Amount</th>
+                      <th>Status</th>
+                      <th>Destination</th>
+                      <th>Date</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.payouts.map((p) => (
+                      <tr key={p.id}>
+                        <td>{showAmount(p.asset, p.amount)}</td>
+                        <td>
+                          <strong>{p.status}</strong>
+                        </td>
+                        <td>
+                          <span className="dash-mono" title={p.destination}>
+                            {shortAddr(p.destination)}
+                          </span>
+                        </td>
+                        <td>{new Date(p.expiresAt).toLocaleString()}</td>
+                        <td>
+                          <Button variant="secondary" onClick={() => setReview(p)}>
+                            Review
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             ) : (
               <p className="dash-muted">No payouts yet.</p>
             )}
@@ -461,4 +567,10 @@ export function NativeWalletPanel({
       ) : null}
     </div>
   );
+}
+
+function shortAddr(value: string): string {
+  const t = value.trim();
+  if (t.length <= 16) return t;
+  return `${t.slice(0, 8)}…${t.slice(-6)}`;
 }

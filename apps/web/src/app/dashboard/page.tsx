@@ -12,11 +12,12 @@ import {
   Receipt,
   RotateCcw,
 } from 'lucide-react';
-import { Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
+import { InfoTip } from '@/components/dashboard/InfoTip';
+import { OverviewSkeleton } from '@/components/dashboard/Skeleton';
 import { ErrorState } from '@/components/dashboard/ui';
 import { useLoad } from '@/components/dashboard/common';
-import { assetInfo, chainLabel, formatAmount } from '@/lib/assets';
+import { assetInfo, chainLabel, formatAmount, formatUnits } from '@/lib/assets';
 import { api, type Balances } from '@/lib/api';
 import type { PaymentList, PaymentStatus, PaymentSummary } from '@/lib/payments';
 
@@ -76,6 +77,45 @@ function fromScaled(n: bigint): string {
 
 function showMoney(amount: bigint, currency: string): string {
   return `${fromScaled(amount)} ${currency}`;
+}
+
+/** Shorten a decimal string to at most `dp` places; flag when the full value differs. */
+function approxDecimal(raw: string, dp = 3): { short: string; full: string; truncated: boolean } {
+  const full = raw.trim();
+  const m = /^(-?\d[\d,]*)(?:\.(\d+))?$/.exec(full);
+  if (!m) return { short: full, full, truncated: false };
+  const whole = m[1]!;
+  const frac = m[2] ?? '';
+  if (frac.length <= dp) return { short: full, full, truncated: false };
+  const cut = frac.slice(0, dp).replace(/0+$/, '');
+  return { short: cut ? `${whole}.${cut}` : whole, full, truncated: true };
+}
+
+function approxMoney(amount: bigint, currency: string): { short: string; full: string; tip: boolean } {
+  const fullNum = fromScaled(amount);
+  const approx = approxDecimal(fullNum);
+  return {
+    short: `${approx.short} ${currency}`,
+    full: `${approx.full} ${currency}`,
+    tip: approx.truncated,
+  };
+}
+
+function approxAssetAmount(
+  asset: string,
+  raw: string,
+  livemode: boolean,
+): { short: string; full: string; tip: boolean } {
+  const full = formatAmount(asset, raw, livemode);
+  const info = assetInfo(asset, livemode);
+  if (!info.known) return { short: full, full, tip: false };
+  const units = formatUnits(raw, info.decimals);
+  const approx = approxDecimal(units);
+  return {
+    short: `${approx.short} ${info.symbol}`,
+    full: `${approx.full} ${info.symbol}`,
+    tip: approx.truncated,
+  };
 }
 
 function changePill(today: bigint, yesterday: bigint): { text: string; up: boolean } {
@@ -247,7 +287,7 @@ export default function OverviewPage() {
 
   if (!store || !context) return null;
   if (data.error) return <ErrorState message={data.error} onRetry={() => void data.reload()} />;
-  if (!data.data) return <Spinner label="Loading overview" />;
+  if (!data.data) return <OverviewSkeleton />;
 
   const balances = data.data.balances.balances.filter((b) => b.amount !== '0');
   const lead = balances[0];
@@ -258,6 +298,8 @@ export default function OverviewPage() {
     (selectedDay ? view.byDay.find((d) => d.key === selectedDay) : null) ??
     view.byDay[view.byDay.length - 1];
   const delta = changePill(view.todayVolume, view.yesterdayVolume);
+  const leadAmt = lead ? approxAssetAmount(lead.asset, lead.amount, livemode) : null;
+  const revenueAmt = approxMoney(view.todayVolume, view.currency);
   const caption = activeDay
     ? `${dayLabel(activeDay.key)} · ${showMoney(activeDay.volume, view.currency)} · ${activeDay.count} payment${activeDay.count === 1 ? '' : 's'}${selectedDay ? ' · click the day again to clear' : ''}`
     : 'No payments in this range';
@@ -268,9 +310,10 @@ export default function OverviewPage() {
         <article className="ov-stat">
           <p className="ov-kicker">Wallet balance</p>
           <div className="ov-stat-foot">
-            <p className="ov-figure ov-figure--xl">
-              {lead ? formatAmount(lead.asset, lead.amount, livemode) : '0'}
-            </p>
+            <div className="ov-figure-row">
+              <p className="ov-figure ov-figure--xl">{leadAmt ? leadAmt.short : '0'}</p>
+              {leadAmt?.tip ? <InfoTip text={leadAmt.full} label="Full wallet balance" /> : null}
+            </div>
             <p className="ov-sub">
               {balances.length > 1
                 ? `${balances.length - 1} more asset${balances.length === 2 ? '' : 's'}`
@@ -287,12 +330,18 @@ export default function OverviewPage() {
             ) : null}
             {walletOpen ? (
               <ul className="ov-assets">
-                {balances.map((b) => (
-                  <li key={b.asset}>
-                    <span>{assetInfo(b.asset, livemode).symbol}</span>
-                    <strong>{formatAmount(b.asset, b.amount, livemode)}</strong>
-                  </li>
-                ))}
+                {balances.map((b) => {
+                  const row = approxAssetAmount(b.asset, b.amount, livemode);
+                  return (
+                    <li key={b.asset}>
+                      <span>{assetInfo(b.asset, livemode).symbol}</span>
+                      <strong>
+                        {row.short}
+                        {row.tip ? <InfoTip text={row.full} label="Full asset balance" /> : null}
+                      </strong>
+                    </li>
+                  );
+                })}
               </ul>
             ) : null}
       </div>
@@ -304,7 +353,10 @@ export default function OverviewPage() {
             <span className={`ov-delta${delta.up ? ' ov-delta--up' : ''}`}>{delta.text}</span>
           </p>
           <div className="ov-stat-foot">
-            <p className="ov-figure ov-figure--xl">{showMoney(view.todayVolume, view.currency)}</p>
+            <div className="ov-figure-row">
+              <p className="ov-figure ov-figure--xl">{revenueAmt.short}</p>
+              {revenueAmt.tip ? <InfoTip text={revenueAmt.full} label="Full today's revenue" /> : null}
+            </div>
             <p className="ov-sub">vs. yesterday</p>
           </div>
         </article>

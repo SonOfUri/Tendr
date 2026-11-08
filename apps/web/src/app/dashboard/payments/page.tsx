@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
-import { Button, Spinner } from '@tendr/ui';
+import { Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { CreditCard } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useLoad } from '@/components/dashboard/common';
@@ -30,7 +31,7 @@ const dayAfter = (d: string) => {
 /** `useSearchParams` needs a Suspense boundary above it. */
 export default function PaymentsPage() {
   return (
-    <Suspense fallback={<Spinner label="Loading payments" />}>
+    <Suspense fallback={<PageSkeleton label="Loading payments" />}>
       <PaymentsContent />
     </Suspense>
   );
@@ -138,7 +139,7 @@ function PaymentsContent() {
         {first.error ? (
           <ErrorState message={first.error} onRetry={() => void first.reload()} />
         ) : !first.data ? (
-          <Spinner label="Loading payments" />
+          <PageSkeleton label="Loading payments" />
         ) : rows.length === 0 ? (
           <EmptyState
             icon={<CreditCard size={22} strokeWidth={1.75} />}

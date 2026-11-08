@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { AssetGridPicker } from '@/components/dashboard/AssetGridPicker';
@@ -69,7 +70,7 @@ export default function SavedAddressesPage() {
 
       <Panel title="Addresses">
         {!data.data ? (
-          <Spinner label="Loading saved addresses" />
+          <PageSkeleton label="Loading saved addresses" />
         ) : data.data.saved.length === 0 ? (
           <EmptyState
             icon={<MapPin size={22} strokeWidth={1.75} />}

@@ -12,7 +12,6 @@ import {
   type ComponentType,
 } from 'react';
 import {
-  ArrowUpFromLine,
   CheckCircle2,
   CreditCard,
   FlaskConical,
@@ -37,7 +36,8 @@ import {
   X,
   type LucideProps,
 } from 'lucide-react';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { ThemeMenu } from '@/components/ThemeToggle';
 import { PwaBanners, PwaInstallButton } from '@/components/pwa/PwaInstall';
 import { Select } from '@/components/dashboard/Select';
@@ -115,7 +115,6 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/dashboard/payment-links', label: 'Payment links', icon: Link2 },
       { href: '/dashboard/review', label: 'Review', icon: SearchCheck },
       { href: '/dashboard/approvals', label: 'Approvals', icon: CheckCircle2 },
-      { href: '/dashboard/withdraw', label: 'Withdraw', icon: ArrowUpFromLine },
       { href: '/dashboard/wallet', label: 'Wallet', icon: Wallet },
       { href: '/dashboard/addresses', label: 'Saved addresses', icon: MapPin },
     ],
@@ -332,7 +331,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return (
       <div className="dash-app dash-app--boot">
         <div className="dash-loading-screen">
-          <Spinner label="Loading your dashboard" />
+          <PageSkeleton label="Loading your dashboard" />
         </div>
       </div>
     );
@@ -410,7 +409,6 @@ function visibleNav(nativeWallet: boolean, nativeLive: boolean): NavGroup[] {
   return navGroups().map((group) => ({
     ...group,
     items: group.items.filter((item) => {
-      if (item.href === '/dashboard/wallet') return nativeLive;
       if (
         nativeWallet &&
         (item.href === '/dashboard/security' || item.href === '/dashboard/addresses')

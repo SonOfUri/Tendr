@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { can } from '@tendr/contracts';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { Palette, WifiOff } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
@@ -233,7 +234,7 @@ export default function ThemesPage() {
             {list.error ? (
               <ErrorState message={list.error} onRetry={() => void list.reload()} />
             ) : !list.data ? (
-              <Spinner label="Loading themes" />
+              <PageSkeleton label="Loading themes" />
             ) : themes.length === 0 ? (
               <EmptyState
                 icon={<Palette size={22} strokeWidth={1.75} />}

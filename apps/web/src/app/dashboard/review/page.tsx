@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { HOLD_NOTICE, LEGAL_ACK_PHRASE } from '@tendr/contracts';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad } from '@/components/dashboard/common';
 import { AssetGridPicker } from '@/components/dashboard/AssetGridPicker';
@@ -52,7 +53,7 @@ export default function ReviewPage() {
         {queue.error ? (
           <ErrorState message={queue.error} onRetry={() => void queue.reload()} />
         ) : (
-          <Spinner label="Loading the review queue" />
+          <PageSkeleton label="Loading the review queue" />
         )}
       </>
     );

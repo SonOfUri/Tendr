@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
-import { Alert, Button, Spinner, StatusBadge } from '@tendr/ui';
+import { Alert, Button, StatusBadge } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { Check, ChevronRight, CircleCheck, Wallet } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { NativeWalletSetup } from '@/components/dashboard/NativeWallet';
@@ -137,7 +138,7 @@ export default function AccountHomePage() {
       <ErrorState message={error} onRetry={() => void load()} />
     ) : (
       <div className="dash-loading-screen">
-        <Spinner label="Loading your account" />
+        <PageSkeleton label="Loading your account" />
       </div>
     );
   }
@@ -221,7 +222,7 @@ export default function AccountHomePage() {
       <div className="dash-stat-grid">
         <Stat
           label="Role"
-          value={store.role}
+          value={store.role ? store.role.charAt(0).toUpperCase() + store.role.slice(1) : store.role}
           hint={store.isSigner ? 'Signer on this business' : 'Not a signer'}
         />
         <Stat

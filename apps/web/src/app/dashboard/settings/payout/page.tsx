@@ -4,7 +4,7 @@
 // plugin's "payout missing" status item, `GET /v1/connect/status`, links here), and the dashboard
 // pages that move money out.
 import Link from 'next/link';
-import { Spinner } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useLoad } from '@/components/dashboard/common';
 import { PayoutChooser } from '@/components/dashboard/PayoutChooser';
@@ -22,7 +22,7 @@ export default function PayoutPage() {
     return account.error ? (
       <ErrorState message={account.error} onRetry={() => void account.reload()} />
     ) : (
-      <Spinner label="Loading payout settings" />
+      <PageSkeleton label="Loading payout settings" />
     );
   }
   const native = account.data.account?.kind === 'native_intents';
@@ -80,7 +80,7 @@ export default function PayoutPage() {
               <br />
               <span className="muted small">Send your balance to a saved address.</span>
             </span>
-            <Link href="/dashboard/withdraw">Withdraw</Link>
+            <Link href="/dashboard/wallet">Withdraw</Link>
           </li>
           <li>
             <span className="grow">

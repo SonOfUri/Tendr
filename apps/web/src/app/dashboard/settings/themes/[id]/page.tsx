@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { can } from '@tendr/contracts';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { WifiOff } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useLoad } from '@/components/dashboard/common';
@@ -96,7 +97,7 @@ export default function ThemeEditorPage() {
         </Panel>
       ) : !loaded.data ? (
         <Panel>
-          <Spinner label="Loading theme" />
+          <PageSkeleton label="Loading theme" />
         </Panel>
       ) : (
         <Editor
@@ -430,7 +431,7 @@ function Editor({
         {assets.error ? (
           <ErrorState message={assets.error} onRetry={() => void assets.reload()} />
         ) : !assets.data ? (
-          <Spinner label="Loading files" />
+          <PageSkeleton label="Loading files" rows={2} />
         ) : (
           <div className="stack">
             <p className="dash-small">

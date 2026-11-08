@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { ScopeValues, type Scope } from '@tendr/contracts';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Button } from '@tendr/ui';
+import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import { api, type StoreContext } from '@/lib/api';
@@ -203,7 +204,7 @@ function KeyManager({ context }: { context: StoreContext }) {
           </Button>
         </div>
         {!keys.data ? (
-          !keys.error && <Spinner label="Loading API keys" />
+          !keys.error && <PageSkeleton label="Loading API keys" />
         ) : keys.data.api_keys.length === 0 ? (
           <p className="muted">No API keys in {mode} mode yet.</p>
         ) : (
