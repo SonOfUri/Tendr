@@ -2080,12 +2080,93 @@ html[data-appearance='light'] .dash-app {
   color: #161616;
   --tendr-navy: #f4f4f5;
   --tendr-indigo: #161616;
+  /* Text / accent tokens must stay dark on light surfaces. Primary buttons still force
+     white label via the [style*='var(--tendr-indigo)'] rule below. */
   --tendr-white: #161616;
   --tendr-cyan: #222;
   --tendr-lavender: #333;
   --tendr-muted: #5e5e5e;
   --tendr-surface: #ffffff;
   --tendr-border: rgba(0, 0, 0, 0.1);
+  --tendr-danger: #3a3a3a;
+  --tendr-success: #161616;
+  --tendr-warning: #2a2a2a;
+  --tendr-fg: #161616;
+}
+
+/*
+ * Dark theme hardcodes near-white text (#f5f5f5 / #fff / #e8e8e8). Light appearance flips
+ * the page background but those literals stay — invisible on white cards. Remap the common
+ * content surfaces here so every page inherits readable ink without a per-widget chase.
+ */
+html[data-appearance='light'] .dash-app a,
+html[data-appearance='light'] .dash-app .dash-main a {
+  color: #161616;
+  text-decoration-color: rgba(0, 0, 0, 0.35);
+}
+
+html[data-appearance='light'] .dash-app .stack > h1,
+html[data-appearance='light'] .dash-app .stack > div > h1,
+html[data-appearance='light'] .dash-app .card h1,
+html[data-appearance='light'] .dash-app .card h2,
+html[data-appearance='light'] .dash-page-title,
+html[data-appearance='light'] .dash-panel-title,
+html[data-appearance='light'] .dash-empty-title,
+html[data-appearance='light'] .dash-error-msg,
+html[data-appearance='light'] .dash-facts dd,
+html[data-appearance='light'] .dash-app .facts dd,
+html[data-appearance='light'] .dash-recovery-banner a,
+html[data-appearance='light'] .dash-test-banner-copy strong,
+html[data-appearance='light'] .dash-pwa-copy strong,
+html[data-appearance='light'] .dash-empty-icon,
+html[data-appearance='light'] .dash-app .status,
+html[data-appearance='light'] .dash-fixture-badge,
+html[data-appearance='light'] .dash-field-error,
+html[data-appearance='light'] .dash-stat-value,
+html[data-appearance='light'] .dash-mono,
+html[data-appearance='light'] .dash-table th,
+html[data-appearance='light'] .dash-table td,
+html[data-appearance='light'] .dash-text-link,
+html[data-appearance='light'] .ov-figure,
+html[data-appearance='light'] .ov-assets strong,
+html[data-appearance='light'] .ov-assets li,
+html[data-appearance='light'] .ov-delta,
+html[data-appearance='light'] .ov-text-btn,
+html[data-appearance='light'] .ov-text-link,
+html[data-appearance='light'] .ov-icon-link,
+html[data-appearance='light'] .ov-person strong,
+html[data-appearance='light'] .ov-empty-icon,
+html[data-appearance='light'] .ov-card-head,
+html[data-appearance='light'] .ov-table th,
+html[data-appearance='light'] .ov-table td {
+  color: #161616;
+}
+
+html[data-appearance='light'] .dash-field-error {
+  text-decoration-color: rgba(0, 0, 0, 0.45);
+}
+
+html[data-appearance='light'] .dash-app .status,
+html[data-appearance='light'] .ov-delta {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+html[data-appearance='light'] .ov-assets {
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+html[data-appearance='light'] .ov-assets li {
+  color: #5e5e5e;
+}
+
+html[data-appearance='light'] .ov-text-btn:hover,
+html[data-appearance='light'] .ov-text-link:hover,
+html[data-appearance='light'] .ov-icon-link:hover {
+  color: #111;
+}
+
+html[data-appearance='light'] .ov-icon-link {
+  border-color: rgba(0, 0, 0, 0.12);
 }
 
 html[data-appearance='light'] .dash-top {
