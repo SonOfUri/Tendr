@@ -17,6 +17,7 @@ const REDACT_KEYS = new Set(
     'RESEND_API_KEY',
     'ONECLICK_API_KEY',
     'AI_API_KEY',
+    'NEARAI_API_KEY',
     'FX_API_KEY',
     'X-API-Key',
   ].map((k) => k.toLowerCase()),

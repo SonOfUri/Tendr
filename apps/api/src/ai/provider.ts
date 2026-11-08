@@ -3,6 +3,7 @@ import { env } from '../env.js';
 import { AppError, providerNotConfigured } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { getSecret } from '../secrets/secrets.js';
+import { NEAR_AI_BASE_URL, NEAR_AI_MODELS, NEAR_AI_SECRET_PURPOSE } from './near-config.js';
 
 export const AI_SECRET_PURPOSE = 'ai-provider';
 export type AssistantFact = { id: string; text: string };
@@ -12,7 +13,13 @@ export type JsonGenerator = (request: {
   input: unknown;
   maxTokens: number;
 }) => Promise<unknown>;
-type ProviderConfig = { url: string; model: string; key: string; timeoutMs: number };
+export type ProviderConfig = {
+  provider?: 'openai-compatible' | 'near-ai';
+  url: string;
+  model: string;
+  key: string;
+  timeoutMs: number;
+};
 type FactTopic = 'checkout' | 'insights';
 
 async function limitedBody(response: Response): Promise<string> {
@@ -46,18 +53,23 @@ export function redactQuestion(question: string): string {
     .replace(/\b[A-Za-z0-9]{32,}\b/g, '[identifier]');
 }
 
-async function providerConfig(): Promise<ProviderConfig> {
+export async function providerConfig(): Promise<ProviderConfig> {
   const e = env();
   if (e.AI_PROVIDER === 'disabled' || !e.AI_MODEL)
     throw providerNotConfigured('The AI provider is not enabled');
   const secret = await prisma.secret.findFirst({
-    where: { purpose: AI_SECRET_PURPOSE },
+    where: { purpose: e.AI_PROVIDER === 'near-ai' ? NEAR_AI_SECRET_PURPOSE : AI_SECRET_PURPOSE },
     orderBy: { createdAt: 'desc' },
     select: { id: true },
   });
-  const key = secret ? await getSecret(secret.id) : e.AI_API_KEY;
+  const key = secret
+    ? await getSecret(secret.id)
+    : e.AI_PROVIDER === 'near-ai'
+      ? e.NEARAI_API_KEY
+      : e.AI_API_KEY;
   if (!key) throw providerNotConfigured('The AI provider is not configured');
   return {
+    provider: e.AI_PROVIDER,
     url: e.AI_BASE_URL,
     model: e.AI_MODEL,
     key,
@@ -82,6 +94,12 @@ export function httpJsonGenerator(
     try {
       if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 2000)
         throw new Error('Invalid token limit');
+      const near = config.provider === 'near-ai';
+      const profile = Object.hasOwn(NEAR_AI_MODELS, config.model)
+        ? NEAR_AI_MODELS[config.model as keyof typeof NEAR_AI_MODELS]
+        : undefined;
+      if (near && (config.url.replace(/\/+$/, '') !== NEAR_AI_BASE_URL || !profile))
+        throw new Error('Invalid NEAR AI configuration');
       const response = await fetchImpl(`${config.url.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST',
         redirect: 'error',
@@ -89,8 +107,10 @@ export function httpJsonGenerator(
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.key}` },
         body: JSON.stringify({
           model: config.model,
-          store: false,
-          max_completion_tokens: maxTokens,
+          ...(near
+            ? { max_tokens: maxTokens, ...profile }
+            : { store: false, max_completion_tokens: maxTokens }),
+          stream: false,
           response_format: { type: 'json_object' },
           messages: [
             { role: 'system', content: system },
@@ -98,7 +118,15 @@ export function httpJsonGenerator(
           ],
         }),
       });
-      if (!response.ok) throw new Error('Provider failed');
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new AppError(
+          'PROVIDER_UNAVAILABLE',
+          'The AI provider is temporarily unavailable',
+          503,
+          { provider_status: response.status },
+        );
+      }
       // No provider error text, question, credential or raw response reaches the API error/log.
       const raw = await limitedBody(response);
       const wire = z
@@ -114,7 +142,8 @@ export function httpJsonGenerator(
         })
         .parse(JSON.parse(raw));
       return JSON.parse(wire.choices[0]!.message.content) as unknown;
-    } catch {
+    } catch (error) {
+      if (error instanceof AppError) throw error;
       throw new AppError('PROVIDER_UNAVAILABLE', 'The AI provider is temporarily unavailable', 503);
     }
   };
@@ -148,7 +177,8 @@ export function httpFactSelector(
       if (result.fact_ids.some((id) => !facts.some((f) => f.id === id)))
         throw new Error('Unknown fact');
       return [...new Set(result.fact_ids)];
-    } catch {
+    } catch (error) {
+      if (error instanceof AppError) throw error;
       throw new AppError('PROVIDER_UNAVAILABLE', 'The AI provider is temporarily unavailable', 503);
     }
   };

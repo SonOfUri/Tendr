@@ -580,25 +580,53 @@ emails, transaction hashes, refund destinations, order metadata, branding or pro
 from Tendr's records. Common identifiers in the free-text question are redacted, but this is not a
 general PII detector: tell shoppers not to enter personal information, keys or seed phrases. The
 configured model provider processes the redacted question and supplied facts under its own data
-policy. Tendr does not persist chat transcripts or provider responses; `store: false` is sent.
+policy. Tendr does not persist chat transcripts or provider responses. The generic adapter sends
+`store: false`; the NEAR adapter uses its documented Chat Completions fields.
 
-Server configuration:
+Server configuration for NEAR AI Cloud (added 8 November 2026):
 
 ```dotenv
-AI_PROVIDER=openai-compatible
-AI_BASE_URL=https://api.openai.com/v1
-AI_MODEL=<your chosen compatible model id>
-AI_TIMEOUT_MS=10000
+AI_PROVIDER=near-ai
+AI_BASE_URL=https://cloud-api.near.ai/v1
+AI_MODEL=z-ai/glm-5.3-flash
+AI_TIMEOUT_MS=20000
 AI_DAILY_REQUEST_LIMIT=200
 ```
 
-Set `AI_API_KEY` as a server-only Railway secret, or store the credential encrypted under KeyVault
-purpose `ai-provider` using the existing `secrets:put` operator command. A stored key takes
-precedence over the environment. Never put it in browser configuration or `NEXT_PUBLIC_*`.
-The default is `AI_PROVIDER=disabled`; no provider/model or billing account is provisioned by this
-change. Compatible providers must support Chat Completions, JSON mode, `max_completion_tokens`
-and `store: false`; verify the selected model with a synthetic checkout before enabling publicly.
-See [the API's JSON-mode requirements](https://developers.openai.com/api/docs/guides/structured-outputs).
+Set `NEARAI_API_KEY` as a server-only Railway secret or in the ignored root `.env` for local
+use. Alternatively, store it encrypted under KeyVault purpose `near-ai` with `secrets:put`.
+An encrypted key takes precedence over the environment. The NEAR adapter does not reuse
+`AI_API_KEY` or a generic `ai-provider` secret. Never put credentials in `NEXT_PUBLIC_*`.
+The NEAR base URL is selected automatically when omitted; a different gateway is rejected
+in `near-ai` mode to prevent sending this credential to another provider.
+
+Supported profiles are `z-ai/glm-5.3-flash` (minimal reasoning with a 32-token thinking cap)
+and `Qwen/Qwen3.6-35B-A3B-FP8` (thinking disabled). NEAR requests use `max_tokens` and JSON mode.
+There is no automatic model/provider fallback. Unknown profiles fail configuration validation.
+The model catalog and reasoning behavior were checked against
+[NEAR's reasoning documentation](https://docs.near.ai/cloud/reasoning-models).
+
+This integration uses HTTPS to NEAR AI Cloud. The selected models are listed by NEAR as Private
+TEE models, but **Tendr does not yet independently verify attestations or response signatures,
+and does not enable client-to-model E2EE**. Do not show a verified-private badge. NEAR's current
+[verification SDK](https://docs.near.ai/cloud/inference-sdk/javascript) requires Node 24.22.1+;
+Tendr's API currently runs Node 22. Inference privacy does not make blockchain payments confidential.
+
+After configuring the key, run `npm run ai:verify --workspace=@tendr/api`. This operator-only
+command makes three billable model requests with synthetic facts/design text, validates assistant
+and insight selections plus the full generated theme document, and prints no credentials or raw
+model output. It does not create payment, theme or chat records. It exits nonzero on a failed check;
+`provider_status` identifies upstream HTTP failures without leaking their response bodies.
+This explicit operator check is separate from the public API's Redis usage reservations.
+
+Model calls still default to `AI_PROVIDER=disabled`. `npm run dev:console` deliberately disables
+model calls and strips AI credentials, just like other real-provider secrets. Use the regular API
+with the root `.env`, or the live console after the Railway API has been deployed and configured.
+
+The generic adapter remains available with `AI_PROVIDER=openai-compatible`, `AI_API_KEY` (or
+KeyVault purpose `ai-provider`), an explicit model, and `AI_BASE_URL` (defaults to
+`https://api.openai.com/v1`). It requires Chat Completions JSON mode, `max_completion_tokens`
+and `store: false`. These settings are independent of the NEAR profile.
 
 The assistant permits six requests per session/minute. All model features share 30 calls per
 merchant/minute and the configured platform maximum per UTC day across live/test. Each assistant

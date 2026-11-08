@@ -7,6 +7,25 @@ import { KEY_NAMES } from './keyvault/keys.js';
 const base = { DATABASE_URL: 'postgresql://x/y', REDIS_URL: 'redis://localhost:6380' };
 
 describe('AI provider configuration', () => {
+  it('uses the NEAR gateway and rejects mismatched endpoints or unsupported reasoning profiles', () => {
+    const near = {
+      ...base,
+      AI_PROVIDER: 'near-ai',
+      AI_MODEL: 'z-ai/glm-5.3-flash',
+      NEARAI_API_KEY: 'near-test-credential',
+    };
+    expect(loadEnv(near)).toMatchObject({
+      AI_PROVIDER: 'near-ai',
+      AI_BASE_URL: 'https://cloud-api.near.ai/v1',
+      NEARAI_API_KEY: 'near-test-credential',
+    });
+    expect(() => loadEnv({ ...near, AI_BASE_URL: 'https://api.openai.com/v1' })).toThrow(
+      /AI_BASE_URL/,
+    );
+    expect(() => loadEnv({ ...near, AI_MODEL: 'unknown-model' })).toThrow(/AI_MODEL/);
+    expect(loadEnv({ ...near, AI_MODEL: 'Qwen/Qwen3.6-35B-A3B-FP8' }).AI_PROVIDER).toBe('near-ai');
+    expect(loadEnv(base).AI_BASE_URL).toBe('https://api.openai.com/v1');
+  });
   it('defaults off and requires an explicit model before enabling', () => {
     expect(loadEnv(base).AI_PROVIDER).toBe('disabled');
     expect(() => loadEnv({ ...base, AI_PROVIDER: 'openai-compatible' })).toThrow(/AI_MODEL/);
