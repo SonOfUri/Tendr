@@ -40,14 +40,24 @@ export async function registerWallet(store: StoreContext) {
   });
 }
 
+type ActivationChallenge = {
+  options: PublicKeyCredentialRequestOptionsJSON;
+};
+
 export async function activateWallet(store: StoreContext) {
-  const options = await withStepUp(() =>
-    api<PublicKeyCredentialRequestOptionsJSON>('/v1/account/native/activate/options', {
+  // POST /activate/options returns account metadata plus nested WebAuthn `options`
+  // (same shape as register/verify). Passing the whole body to startAuthentication
+  // leaves challenge undefined → "Cannot read properties of undefined (reading 'replace')".
+  const { options } = await withStepUp(() =>
+    api<ActivationChallenge>('/v1/account/native/activate/options', {
       method: 'POST',
       json: {},
       store,
     }),
   );
+  if (!options?.challenge) {
+    throw new Error('Wallet activation challenge was incomplete. Try again.');
+  }
   const credential: AuthenticationResponseJSON = await startAuthentication({
     optionsJSON: options,
   });
