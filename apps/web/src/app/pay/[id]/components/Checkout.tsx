@@ -345,13 +345,22 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     );
   }, [fatal]);
 
-  if (fatal) {
+  // First open after "Pay" on a payment link: if the session never arrives, don't spin forever.
+  useEffect(() => {
+    if (!secret || view || fatal) return;
+    const t = window.setTimeout(() => {
+      toast.error("Checkout is taking too long. Go back and use Continue your payment.");
+    }, 12_000);
+    return () => window.clearTimeout(t);
+  }, [secret, view, fatal]);
+
+  if (fatal || secret === null) {
     return (
       <div className="hosted-pay-page" data-theme="light">
         <div className="hosted-pay-edge">
           <section className="pay-section">
             <h1 className="pay-title">
-              {fatal === 'incomplete'
+              {(fatal ?? 'incomplete') === 'incomplete'
                 ? 'This checkout link is incomplete'
                 : 'This checkout link is no longer valid'}
             </h1>
@@ -366,7 +375,8 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     );
   }
 
-  if (!secret) {
+  // undefined = boot/handoff not read yet; never treat null as "still checking".
+  if (secret === undefined) {
     return (
       <div className="hosted-pay-page" data-theme="light">
         <div className="hosted-pay-edge">

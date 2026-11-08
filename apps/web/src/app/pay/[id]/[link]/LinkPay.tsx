@@ -457,6 +457,18 @@ export function LinkPay({
     });
   }, [key]);
 
+  const goToCheckout = (url: string) => {
+    // Same mechanism as "Continue your payment": a real top-level <a> navigation.
+    // `location.assign` after an awaited fetch has left some browsers on this page with the
+    // Pay button stuck busy while the next document never replaces it.
+    const a = document.createElement('a');
+    a.href = url;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
   const submit = async () => {
     if (state.busy) return;
     const body: { amount?: string; note?: string } = {};
@@ -480,10 +492,18 @@ export function LinkPay({
     setState((s) => ({ ...s, busy: true, fieldError: null, message: null }));
     const out = await startLinkPayment(merchant, link, test, body);
     if ('url' in out) {
-      if (out.expires_at) {
-        savePendingPayment(tabStorage(), key, { url: out.url, expires_at: out.expires_at });
+      const entry =
+        out.expires_at != null ? { url: out.url, expires_at: out.expires_at } : null;
+      if (entry) {
+        savePendingPayment(tabStorage(), key, entry);
+        setPending(entry);
       }
-      window.location.assign(out.url);
+      goToCheckout(out.url);
+      // If navigation never replaces this document, unstick Pay and offer Continue.
+      window.setTimeout(() => {
+        setState((s) => ({ ...s, busy: false }));
+        setPending(readPendingPayment(tabStorage(), key, Date.now()));
+      }, 4000);
       return;
     }
     setState((s) => applyPayError(s, view, out.error));
