@@ -10,6 +10,7 @@ import { CopyableId } from '@/components/dashboard/CopyableId';
 import { EmptyState, ErrorState, PageHeader, Panel, Stat } from '@/components/dashboard/ui';
 import { api, errorMessage, type AccountView, type Balances, type GoLiveStatus } from '@/lib/api';
 import { assetInfo, formatAmount } from '@/lib/assets';
+import { toast } from '@/components/toast';
 import { withStepUp } from '@/lib/webauthn';
 
 interface Home {
@@ -99,7 +100,9 @@ export default function AccountHomePage() {
       setHome({ test, live, testBalances, liveBalances, goLive });
       setError(null);
     } catch (err) {
-      setError(errorMessage(err));
+      const message = errorMessage(err);
+      setError(message);
+      toast.error(message);
     }
   }, [merchantId, uiPreview]);
 
@@ -118,12 +121,11 @@ export default function AccountHomePage() {
 
   async function act(fn: () => Promise<unknown>) {
     setBusy(true);
-    setError(null);
     try {
       await withStepUp(fn);
       await load();
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -203,7 +205,6 @@ export default function AccountHomePage() {
       {allReady && live?.status === 'active' && checklist.ok ? (
         <Alert tone="success">Account ready.</Alert>
       ) : null}
-      {error ? <Alert tone="danger">{error}</Alert> : null}
       {[home.test, home.live]
         .filter((v) => v.account?.storageLowAt)
         .map((v) => (

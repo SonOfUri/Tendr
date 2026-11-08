@@ -171,7 +171,6 @@ function CancelStoreRefund({ r, onChanged }: { r: Refund; onChanged: () => void 
   }
   return (
     <>
-      {cancel.error && <Alert tone="danger">{cancel.error}</Alert>}
       <Button variant="secondary" onClick={() => void run()} disabled={cancel.busy}>
         {cancel.busy ? 'Cancelling…' : 'Cancel refund'}
       </Button>
@@ -251,7 +250,6 @@ function HeldCard({
                 autoComplete="off"
               />
             </label>
-            {ack.error && <Alert tone="danger">{ack.error}</Alert>}
             <Button type="submit" disabled={ack.busy || phrase !== LEGAL_ACK_PHRASE}>
               {ack.busy ? 'Confirming…' : 'Confirm legal clearance'}
             </Button>
@@ -321,7 +319,6 @@ function ReturnRow({
             ? `To ${chainLabel(r.destination_chain ?? '')}: ${r.destination}`
             : 'No destination yet'}
         </span>
-        {redo.error && <Alert tone="danger">{redo.error}</Alert>}
         {give && (
           <DestinationForm
             paymentId={r.payment_id}
@@ -361,7 +358,7 @@ function DestinationForm({
 }) {
   const [address, setAddress] = useState('');
   const [chain, setChain] = useState('near');
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -407,7 +404,6 @@ function DestinationForm({
           />
         </label>
       </div>
-      {error && <Alert tone="danger">{error}</Alert>}
       <Button type="submit" disabled={busy || !address}>
         {busy ? 'Drafting…' : label}
       </Button>

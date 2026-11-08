@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { Alert } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
+import { toast } from '@/components/toast';
 import { api, errorMessage, type StoreSummary } from '@/lib/api';
 
 type Created = StoreSummary & { testAccount: { nearAccountId: string; status: string } };
@@ -20,7 +21,6 @@ export default function StoreNamePage() {
   const [name, setName] = useState('');
   const [created, setCreated] = useState<Created | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!firstBusiness || phase !== 'welcome') return;
@@ -49,7 +49,6 @@ export default function StoreNamePage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
-    setError(null);
     try {
       const res = await api<Created>('/v1/merchants', {
         method: 'POST',
@@ -61,7 +60,7 @@ export default function StoreNamePage() {
       setCreated(res);
       setPhase('done');
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -106,7 +105,6 @@ export default function StoreNamePage() {
               autoComplete="organization"
             />
           </label>
-          {error ? <Alert tone="danger">{error}</Alert> : null}
           <button className="biz-welcome-cta" type="submit" disabled={busy || !name.trim()}>
             <span>{busy ? 'Creating…' : 'Continue'}</span>
           </button>

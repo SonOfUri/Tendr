@@ -59,6 +59,7 @@ import {
   type StoreSummary,
 } from '@/lib/api';
 import { linkedStore, withoutStoreLink } from '@/lib/store-link';
+import { toast } from '@/components/toast';
 import { registerPasskey } from '@/lib/webauthn';
 
 interface Dashboard {
@@ -193,7 +194,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         goToLogin();
         return;
       }
-      if (!isSignedOut(err)) setError(errorMessage(err));
+      if (!isSignedOut(err)) {
+        const message = errorMessage(err);
+        setError(message);
+        toast.error(message);
+      }
     }
   }, [goToLogin]);
 
@@ -310,7 +315,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return (
       <div className="dash-app dash-app--boot">
         <div className="dash-loading-screen">
-          <Alert tone="danger">{error}</Alert>
+          <p className="dash-muted">{error}</p>
           <div className="dash-page-actions">
             <Button variant="secondary" onClick={() => void refresh()}>
               Try again
@@ -740,15 +745,13 @@ function LinkNotFound() {
 /** A signed-in person with no passkey yet (they left after confirming their email). */
 function PasskeyGate({ onDone }: { onDone: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   async function create() {
     setBusy(true);
-    setError(null);
     try {
       await registerPasskey();
       await onDone();
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
       setBusy(false);
     }
   }
@@ -759,7 +762,6 @@ function PasskeyGate({ onDone }: { onDone: () => Promise<void> }) {
         You need a passkey before you can use your business on Tendr. Your device will ask for Face
         ID, Touch ID, Windows Hello or its PIN.
       </p>
-      {error && <Alert tone="danger">{error}</Alert>}
       <Button onClick={create} disabled={busy}>
         {busy ? 'Waiting for your device…' : 'Create my passkey'}
       </Button>

@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad, useTick } from '@/components/dashboard/common';
-import { PageHeader, Panel, Select } from '@/components/dashboard/ui';
+import { ErrorState, PageHeader, Panel, Select } from '@/components/dashboard/ui';
 import { countdown } from '@/lib/actions';
 import {
   api,
@@ -61,7 +61,6 @@ export default function RecoveryPage() {
       />
 
       <Panel title="Status">
-        {status.error && <Alert tone="danger">{status.error}</Alert>}
         {!status.data ? (
           <Spinner label="Loading" />
         ) : pending && recovery ? (
@@ -79,7 +78,6 @@ export default function RecoveryPage() {
             ) : (
               <p className="dash-muted dash-small">Any signer can cancel it.</p>
             )}
-            {cancel.error && <Alert tone="danger">{cancel.error}</Alert>}
           </>
         ) : (
           <p className="dash-muted">
@@ -134,10 +132,12 @@ function StartRecovery({ onStarted }: { onStarted: () => void }) {
   const [chosen, setChosen] = useState<string[]>([]);
   const [threshold, setThreshold] = useState(1);
   const [done, setDone] = useState<string | null>(null);
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
 
   if (!store) return null;
-  if (people.error) return <Alert tone="danger">{people.error}</Alert>;
+  if (people.error) {
+    return <ErrorState message={people.error} onRetry={() => void people.reload()} />;
+  }
   if (!people.data) return <Spinner label="Loading the team" />;
 
   const selected = people.data.filter((c) => chosen.includes(c.userId));
@@ -261,7 +261,6 @@ function StartRecovery({ onStarted }: { onStarted: () => void }) {
         />
       </label>
 
-      {error && <Alert tone="danger">{error}</Alert>}
       <Button type="submit" disabled={busy || !kit.trim() || selected.length === 0}>
         {busy ? 'Signing…' : 'Sign with the kit and start recovery'}
       </Button>

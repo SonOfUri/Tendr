@@ -16,6 +16,7 @@ import {
   Select,
   TextLink,
 } from '@/components/dashboard/ui';
+import { toast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/api';
 import {
   PALETTE_KEYS,
@@ -124,7 +125,6 @@ function Editor({
   const [settings, setSettings] = useState<ThemeSettings>(initial.draft.settings);
   const [css, setCss] = useState(initial.draft.custom_css ?? '');
   const [busy, setBusy] = useState<Busy>(null);
-  const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [problems, setProblems] = useState<MappedProblems>(EMPTY);
   const [preview, setPreview] = useState<ThemePreviewResult | null>(null);
@@ -160,7 +160,6 @@ function Editor({
 
   async function run(kind: Exclude<Busy, null>, fn: () => Promise<void>) {
     setBusy(kind);
-    setError(null);
     setNotice(null);
     try {
       await fn();
@@ -168,9 +167,9 @@ function Editor({
       const list = themeProblems(err);
       if (list) {
         setProblems(mapProblems(list));
-        setError('The theme has problems. Fix the highlighted fields; your entries are kept.');
+        toast.error('The theme has problems. Fix the highlighted fields; your entries are kept.');
       } else {
-        setError(errorMessage(err));
+        toast.error(errorMessage(err));
       }
     } finally {
       setBusy(null);
@@ -199,7 +198,7 @@ function Editor({
       });
       setProblems(mapProblems(r.problems));
       if (r.valid) setNotice('No problems found. This is not saved yet.');
-      else setError('The theme has problems. Fix the highlighted fields.');
+      else toast.error('The theme has problems. Fix the highlighted fields.');
     });
 
   const openPreview = () =>
@@ -284,7 +283,6 @@ function Editor({
       {!canWrite ? (
         <Alert tone="info">You can view this theme. Editing needs the settings permission.</Alert>
       ) : null}
-      {error ? <Alert tone="danger">{error}</Alert> : null}
       {notice ? <Alert tone="success">{notice}</Alert> : null}
       {problems.other.length > 0 ? (
         <Alert tone="warning">

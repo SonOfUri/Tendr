@@ -57,7 +57,6 @@ export default function WebhooksPage() {
               </code>
             </Alert>
           )}
-          {endpoints.error && <Alert tone="danger">{endpoints.error}</Alert>}
           {!endpoints.data ? (
             !endpoints.error && <Spinner label="Loading endpoints" />
           ) : endpoints.data.endpoints.length === 0 ? (
@@ -96,7 +95,7 @@ function CreateForm({
 }) {
   const [url, setUrl] = useState('');
   const [events, setEvents] = useState<string[]>([]);
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -143,7 +142,6 @@ function CreateForm({
           </label>
         ))}
       </fieldset>
-      {error && <Alert tone="danger">{error}</Alert>}
       <Button type="submit" disabled={busy || !url}>
         {busy ? 'Adding…' : 'Add endpoint'}
       </Button>
@@ -214,14 +212,9 @@ function EndpointCard({
           Delete
         </button>
       </div>
-      {action.error && <Alert tone="danger">{action.error}</Alert>}
       {open &&
         (!deliveries.data ? (
-          deliveries.error ? (
-            <Alert tone="danger">{deliveries.error}</Alert>
-          ) : (
-            <Spinner label="Loading deliveries" />
-          )
+          <Spinner label="Loading deliveries" />
         ) : deliveries.data.deliveries.length === 0 ? (
           <p className="dash-muted">No deliveries yet.</p>
         ) : (

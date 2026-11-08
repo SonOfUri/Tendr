@@ -195,12 +195,6 @@ function KeyManager({ context }: { context: StoreContext }) {
           </Button>
         </form>
       </section>
-      {action.error && (
-        <Alert tone="danger">
-          {action.error} If creation lost its response, check the list below and revoke the new key
-          before trying again.
-        </Alert>
-      )}
       <section className="card stack">
         <div className="row">
           <h2>Your {mode} keys</h2>
@@ -208,7 +202,6 @@ function KeyManager({ context }: { context: StoreContext }) {
             Refresh keys
           </Button>
         </div>
-        {keys.error && <Alert tone="danger">{keys.error}</Alert>}
         {!keys.data ? (
           !keys.error && <Spinner label="Loading API keys" />
         ) : keys.data.api_keys.length === 0 ? (

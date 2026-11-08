@@ -91,8 +91,6 @@ export default function ApprovalsPage() {
   return (
     <div className="stack">
       {header}
-      {cancel.error && <Alert tone="danger">{cancel.error}</Alert>}
-
       {none ? (
         <EmptyState
           icon={<CheckCircle2 size={22} strokeWidth={1.75} />}

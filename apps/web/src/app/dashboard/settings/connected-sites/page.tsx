@@ -24,7 +24,7 @@ export default function ConnectedSitesPage() {
   );
   const [confirming, setConfirming] = useState<string | null>(null);
   const [removed, setRemoved] = useState<string | null>(null);
-  const { busy, error, setError, run } = useAction();
+  const { busy, setError, run } = useAction();
 
   const header = (
     <PageHeader
@@ -106,7 +106,6 @@ export default function ConnectedSitesPage() {
                       connected site uses it. A domain you added yourself in Checkout settings
                       stays.
                     </Alert>
-                    {error && <Alert tone="danger">{error}</Alert>}
                     <div className="button-row">
                       <Button onClick={() => void remove(c)} disabled={busy}>
                         {busy ? 'Waiting for your passkey…' : 'Remove site'}

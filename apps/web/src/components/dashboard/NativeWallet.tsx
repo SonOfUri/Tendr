@@ -15,6 +15,7 @@ import {
   type GoLiveStatus,
   type StoreContext,
 } from '@/lib/api';
+import { toast } from '@/components/toast';
 import { withStepUp } from '@/lib/webauthn';
 import {
   activateWallet,
@@ -49,7 +50,6 @@ export function NativeWalletSetup({
   onDone: () => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const wallet = view.nativeWallet;
   const mine = isOwner && (!wallet || wallet.ownerUserId === userId);
   const active = view.account?.status === 'active';
@@ -57,13 +57,12 @@ export function NativeWalletSetup({
 
   async function setup() {
     setBusy(true);
-    setError(null);
     try {
       if (!wallet) await registerWallet(store);
       await activateWallet(store);
       onDone();
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -87,7 +86,6 @@ export function NativeWalletSetup({
           ? 'This wallet exists but is not active yet. Finish activation with its passkey. That does not move any money.'
           : 'Create the wallet passkey, then activate the wallet. Activation does not move any money, and it sets the store default to NEAR USDC until you change it.'}
       </p>
-      {error ? <Alert tone="danger">{error}</Alert> : null}
       <div>
         <Button disabled={!mine || busy} onClick={() => void setup()}>
           {busy ? 'Waiting for your passkey…' : wallet ? 'Finish wallet activation' : 'Create wallet passkey and activate'}
@@ -115,7 +113,7 @@ export function NativeWalletPanel({
 }) {
   const store: StoreContext = { merchantId, livemode: true };
   const [data, setData] = useState<WalletData | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [settlement, setSettlement] = useState('');
@@ -152,9 +150,16 @@ export function NativeWalletPanel({
 
   useEffect(() => {
     const controller = new AbortController();
-    void load().catch((err) => {
-      if (!controller.signal.aborted) setError(errorMessage(err));
-    });
+    void load()
+      .then(() => {
+        if (!controller.signal.aborted) setLoadFailed(false);
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          setLoadFailed(true);
+          toast.error(errorMessage(err));
+        }
+      });
     return () => controller.abort();
     // store identity is merchant id; livemode is always live here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -164,7 +169,7 @@ export function NativeWalletPanel({
   useEffect(() => {
     if (!pending) return;
     const timer = setInterval(() => {
-      void load().catch((err) => setError(errorMessage(err)));
+      void load().catch((err) => toast.error(errorMessage(err)));
     }, 5000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -172,19 +177,23 @@ export function NativeWalletPanel({
 
   async function run(op: () => Promise<void>) {
     setBusy(true);
-    setError(null);
     setNotice(null);
     try {
       await op();
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setBusy(false);
     }
   }
 
-  if (!data && !error) return <Spinner label="Loading wallet" />;
-  if (!data) return <Alert tone="danger">{error}</Alert>;
+  if (!data) {
+    return loadFailed ? (
+      <p className="dash-muted">Couldn’t load the wallet. Try again in a moment.</p>
+    ) : (
+      <Spinner label="Loading wallet" />
+    );
+  }
 
   const native =
     data.view.account?.kind === 'native_intents' ||
@@ -246,9 +255,8 @@ export function NativeWalletPanel({
         store={store}
         userId={userId}
         isOwner={isOwner}
-        onDone={() => void load().catch((err) => setError(errorMessage(err)))}
+        onDone={() => void load().catch((err) => toast.error(errorMessage(err)))}
       />
-      {error ? <Alert tone="danger">{error}</Alert> : null}
       {notice ? <Alert tone="success">{notice}</Alert> : null}
       {active ? (
         <>

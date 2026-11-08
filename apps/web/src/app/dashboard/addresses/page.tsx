@@ -16,6 +16,7 @@ import { chainFamily, isValidAddress } from '@/lib/checkout/address';
 import { chainId } from '@/lib/chain-logos';
 import { loadIntentsCatalog } from '@/lib/intents-catalog';
 import { MapPin } from 'lucide-react';
+import { toast } from '@/components/toast';
 import { draftProposal } from '@/lib/proposals';
 
 export default function SavedAddressesPage() {
@@ -67,8 +68,6 @@ export default function SavedAddressesPage() {
       )}
 
       <Panel title="Addresses">
-        {data.error && <Alert tone="danger">{data.error}</Alert>}
-        {remove.error && <Alert tone="danger">{remove.error}</Alert>}
         {!data.data ? (
           <Spinner label="Loading saved addresses" />
         ) : data.data.saved.length === 0 ? (
@@ -161,8 +160,7 @@ function AddAddress() {
   const [chains, setChains] = useState<string[]>([]);
   const [chain, setChain] = useState('near');
   const [address, setAddress] = useState('');
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const { busy, error, setError, run } = useAction();
+  const { busy, run } = useAction();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -176,7 +174,7 @@ function AddAddress() {
         );
       })
       .catch((err) => {
-        if (!controller.signal.aborted) setLoadError(errorMessage(err));
+        if (!controller.signal.aborted) toast.error(errorMessage(err));
       });
     return () => controller.abort();
   }, []);
@@ -185,7 +183,7 @@ function AddAddress() {
     e.preventDefault();
     const trimmed = address.trim();
     if (!isValidAddress(chainId(chain), trimmed)) {
-      setError('That address does not match this network.');
+      toast.error('That address does not match this network.');
       return;
     }
     // The API mints the saved address's id (`pal_…`); the empty id here is replaced.
@@ -227,12 +225,10 @@ function AddAddress() {
           />
         </label>
       </div>
-      {loadError ? <Alert tone="danger">{loadError}</Alert> : null}
       <Alert tone="info">
         After the signers approve it, this address waits 24 hours before it can receive money. Check
         every character: money sent to a wrong address cannot be recovered.
       </Alert>
-      {error && <Alert tone="danger">{error}</Alert>}
       <Button type="submit" disabled={busy || !address.trim()}>
         {busy ? 'Saving…' : 'Ask to add this address'}
       </Button>

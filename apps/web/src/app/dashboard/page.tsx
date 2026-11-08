@@ -295,7 +295,7 @@ export default function OverviewPage() {
                 ))}
               </ul>
             ) : null}
-          </div>
+      </div>
         </article>
 
         <article className="ov-stat">
@@ -546,21 +546,21 @@ export default function OverviewPage() {
               <ArrowRightLeft size={22} strokeWidth={1.75} />
             </span>
             <p>No transactions{selectedDay ? ' on this day' : ' in this range'}.</p>
-          </div>
+      </div>
         ) : (
           <div className="dash-table-wrap">
             <table className="dash-table ov-table">
-              <thead>
-                <tr>
+            <thead>
+              <tr>
                   <th>Payment</th>
                   <th>Reference</th>
                   <th>Amount</th>
                   <th>Received</th>
                   <th>Status</th>
                   <th>Date</th>
-                </tr>
-              </thead>
-              <tbody>
+              </tr>
+            </thead>
+            <tbody>
                 {shown.slice(0, 8).map((p) => {
                   const received = formatAmount(p.received.asset, p.received.amount, livemode);
                   const receivedCopy =
@@ -597,16 +597,16 @@ export default function OverviewPage() {
                         <span className="ov-status" data-tone={statusTone(p.status)}>
                           {STATUS_LABEL[p.status]}
                         </span>
-                      </td>
+                  </td>
                       <td className="ov-muted">{shortWhen(p.created_at)}</td>
-                    </tr>
+                </tr>
                   );
                 })}
-              </tbody>
-            </table>
+            </tbody>
+          </table>
           </div>
-        )}
-      </section>
+      )}
+    </section>
     </div>
   );
 }

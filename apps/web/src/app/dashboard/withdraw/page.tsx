@@ -16,6 +16,7 @@ import { ChainLogo, TokenLogo } from '@/components/dashboard/asset-logos';
 import { NativeWalletPanel } from '@/components/dashboard/NativeWallet';
 import { chainId } from '@/lib/chain-logos';
 import { loadIntentsCatalog, type IntentsToken } from '@/lib/intents-catalog';
+import { toast } from '@/components/toast';
 import { draftProposal } from '@/lib/proposals';
 
 export default function WithdrawPage() {
@@ -46,7 +47,7 @@ export default function WithdrawPage() {
   const [asset, setAsset] = useState('');
   const [amount, setAmount] = useState('');
   const [receive, setReceive] = useState<'same' | 'other'>('same');
-  const { busy, error, setError, run } = useAction();
+  const { busy, run } = useAction();
 
   if (!store || !context) return null;
   const header = (
@@ -107,14 +108,13 @@ export default function WithdrawPage() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
-    if (!target) return setError('Choose a saved address.');
-    if (receive !== 'same') return setError('Different-token withdrawals are coming soon.');
+    if (!target) return toast.error('Choose a saved address.');
+    if (receive !== 'same') return toast.error('Different-token withdrawals are coming soon.');
     const token = poaTokenContract(asset);
-    if (!token) return setError('This asset can’t be withdrawn from here yet.');
+    if (!token) return toast.error('This asset can’t be withdrawn from here yet.');
     const raw = parseUnits(amount, decimals);
     if (!raw || raw === '0') {
-      return setError(
+      return toast.error(
         decimals > 0
           ? `Enter an amount with at most ${decimals} decimal places.`
           : 'Enter a whole number of smallest units.',
@@ -210,7 +210,6 @@ export default function WithdrawPage() {
               }))}
             />
           </label>
-          {catalog.error ? <Alert tone="danger">{catalog.error}</Alert> : null}
           {info && (
             <p className="dash-muted dash-small">
               {chosen
@@ -264,7 +263,6 @@ export default function WithdrawPage() {
             </p>
           </fieldset>
 
-          {error && <Alert tone="danger">{error}</Alert>}
           <Button type="submit" disabled={busy}>
             {busy ? 'Asking…' : 'Ask to withdraw'}
           </Button>

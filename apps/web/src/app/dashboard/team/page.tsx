@@ -43,7 +43,6 @@ export default function TeamPage() {
       )}
 
       <Panel title="Members">
-        {team.error && <Alert tone="danger">{team.error}</Alert>}
         {!team.data ? (
           <Spinner label="Loading the team" />
         ) : (
@@ -91,7 +90,7 @@ function InviteForm({ onSent }: { onSent: () => void }) {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<Role>('finance');
   const [sent, setSent] = useState<string | null>(null);
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -136,7 +135,6 @@ function InviteForm({ onSent }: { onSent: () => void }) {
         </label>
       </div>
       {sent && <Alert tone="success">Invite sent to {sent}. It works for 7 days.</Alert>}
-      {error && <Alert tone="danger">{error}</Alert>}
       <Button type="submit" disabled={busy || !email}>
         {busy ? 'Sending…' : 'Send invite'}
       </Button>
@@ -160,7 +158,7 @@ function MemberRow({
   onChanged: () => void;
 }) {
   const router = useRouter();
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
   const canEditRole = canManage && !self && (isOwner || member.role !== 'owner');
 
   async function changeRole(role: Role) {
@@ -211,11 +209,6 @@ function MemberRow({
         <Button variant="secondary" disabled={busy} onClick={() => void makeSigner()}>
           {busy ? 'Working…' : `Make signer${livemode ? '' : ' (test)'}`}
         </Button>
-      )}
-      {error && (
-        <div style={{ flexBasis: '100%' }}>
-          <Alert tone="danger">{error}</Alert>
-        </div>
       )}
     </li>
   );

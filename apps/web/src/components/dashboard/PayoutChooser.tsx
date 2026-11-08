@@ -18,6 +18,7 @@ import {
   type OwnDraft,
   type SettlementView,
 } from '@/lib/payout';
+import { toast } from '@/components/toast';
 import { approveProposal, cancelProposal, draftProposal } from '@/lib/proposals';
 
 const POLL_MS = 3000;
@@ -38,7 +39,6 @@ export function PayoutChooser({
   const [view, setView] = useState<SettlementView | null>(null);
   const [chosen, setChosen] = useState<string>('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome>(null);
   // A draft an earlier attempt made whose passkey prompt failed: approved on the retry (C14).
   const [ownDraft, setOwnDraft] = useState<OwnDraft | null>(null);
@@ -50,7 +50,7 @@ export function PayoutChooser({
       setChosen((c) => c || defaultChoice(v)?.asset || '');
       return v;
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
       return null;
     }
   }, [store]);
@@ -75,7 +75,6 @@ export function PayoutChooser({
   async function approve() {
     if (!chosen) return;
     setBusy(true);
-    setError(null);
     try {
       const attempt = payoutAttempt(ownDraft, chosen);
       let id: string;
@@ -93,14 +92,14 @@ export function PayoutChooser({
       setOwnDraft(null);
       const next = afterApproval(p.status);
       if (next === 'failed') {
-        setError('The payout change did not go through. Try again.');
+        toast.error('The payout change did not go through. Try again.');
       } else {
         const symbol = view?.choices.find((c) => c.asset === chosen)?.symbol ?? chosen;
         setOutcome(next === 'done' ? { k: 'done', symbol } : { k: 'needs-signers' });
       }
       void load();
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -143,13 +142,11 @@ export function PayoutChooser({
     );
   }
   if (!view) {
-    return error ? (
+    return (
       <>
-        <Alert tone="danger">{error}</Alert>
+        <Spinner label="Loading payout" />
         {later}
       </>
-    ) : (
-      <Spinner label="Loading payout" />
     );
   }
 
@@ -170,12 +167,11 @@ export function PayoutChooser({
     const approvalHref = `/dashboard/approvals/${pendingId}`;
     async function approvePending() {
       setBusy(true);
-      setError(null);
       try {
         const p = await approveProposal(pendingId, store);
         const nextOutcome = afterApproval(p.status);
         if (nextOutcome === 'failed') {
-          setError('The payout change did not go through. Try again.');
+          toast.error('The payout change did not go through. Try again.');
         } else if (nextOutcome === 'done') {
           const refreshed = await load();
           setOutcome({
@@ -187,7 +183,7 @@ export function PayoutChooser({
           void load();
         }
       } catch (err) {
-        setError(errorMessage(err));
+        toast.error(errorMessage(err));
       } finally {
         setBusy(false);
       }
@@ -199,7 +195,6 @@ export function PayoutChooser({
           {view.pending?.status === 'pending' ? ' from every required signer' : ''}. Payments can’t
           be taken until it finishes.
         </Alert>
-        {error ? <Alert tone="danger">{error}</Alert> : null}
         {onDone ? (
           next
         ) : (
@@ -279,7 +274,6 @@ export function PayoutChooser({
         Shoppers pay with any token they like; {storeName} receives this one in its own tendr
         account. Approving needs your passkey.
       </p>
-      {error && <Alert tone="danger">{error}</Alert>}
       <Button type="submit" disabled={busy || !chosen}>
         {busy ? 'Waiting for your passkey…' : 'Approve payout'}
       </Button>

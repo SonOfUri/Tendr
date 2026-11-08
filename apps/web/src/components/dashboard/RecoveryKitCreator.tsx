@@ -10,6 +10,7 @@ import {
   recoveryKitPdfOrPrint,
   type RecoveryKit,
 } from '@/lib/recovery-kit';
+import { toast } from '@/components/toast';
 import { withStepUp } from '@/lib/webauthn';
 
 type Registered = { stored: true } | { stored: false; proposal: { id: string } };
@@ -34,8 +35,6 @@ export function RecoveryKitCreator({
   const [step, setStep] = useState<'show' | 'confirm'>('show');
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
   // Clear the kit if the person leaves this screen half way.
   useEffect(() => () => setKit(null), []);
 
@@ -43,18 +42,16 @@ export function RecoveryKitCreator({
     setKit(createRecoveryKit());
     setStep('show');
     setTyped('');
-    setError(null);
   }
 
   async function confirm(e: React.FormEvent) {
     e.preventDefault();
     if (!kit) return;
     if (!matchesConfirmation(kit.secretWords, typed)) {
-      setError('Those characters don’t match. Look at the second group on your kit.');
+      toast.error('Those characters don’t match. Look at the second group on your kit.');
       return;
     }
     setBusy(true);
-    setError(null);
     try {
       // The public key is stored for the live account by the API. The dashboard header may be
       // on Live while the platform switch is still off; a live-mode write is then refused even
@@ -71,7 +68,7 @@ export function RecoveryKitCreator({
       onRegistered(res);
     } catch (err) {
       // Keep the kit so the person can retry without printing a new one.
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -158,7 +155,6 @@ export function RecoveryKitCreator({
               inputMode="text"
             />
           </label>
-          {error && <Alert tone="danger">{error}</Alert>}
           <div className="cta-row">
             <Button variant="ghost" onClick={() => setStep('show')} disabled={busy}>
               Back

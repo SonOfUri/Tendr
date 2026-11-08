@@ -173,7 +173,7 @@ function ThresholdForm({
   onDraft: (id: string) => void;
 }) {
   const [n, setN] = useState(current);
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
   return (
     <form
       className="form"
@@ -208,7 +208,6 @@ function ThresholdForm({
       ) : (
         <p className="dash-muted dash-small">Only the owner can change the approval rule.</p>
       )}
-      {error && <Alert tone="danger">{error}</Alert>}
     </form>
   );
 }
@@ -295,7 +294,7 @@ function LimitsForm({ onDraft }: { onDraft: (id: string) => void }) {
   const [asset, setAsset] = useState('');
   const [perTx, setPerTx] = useState('');
   const [perDay, setPerDay] = useState('');
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
   return (
     <form
       className="form"
@@ -324,7 +323,6 @@ function LimitsForm({ onDraft }: { onDraft: (id: string) => void }) {
           <input inputMode="decimal" value={perDay} onChange={(e) => setPerDay(e.target.value)} />
         </label>
       </div>
-      {error && <Alert tone="danger">{error}</Alert>}
       <Button type="submit" disabled={busy || !asset}>
         Ask to set limits
       </Button>
@@ -336,7 +334,7 @@ function RefundCapForm({ onDraft }: { onDraft: (id: string) => void }) {
   const livemode = useLivemode();
   const [asset, setAsset] = useState('');
   const [daily, setDaily] = useState('');
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
   return (
     <form
       className="form"
@@ -360,7 +358,6 @@ function RefundCapForm({ onDraft }: { onDraft: (id: string) => void }) {
           />
         </label>
       </div>
-      {error && <Alert tone="danger">{error}</Alert>}
       <Button type="submit" disabled={busy || !asset}>
         Ask to set the refund cap
       </Button>
@@ -379,7 +376,7 @@ function SweepRow({
 }) {
   const s = limit.autoSweep!;
   const livemode = useLivemode();
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
   return (
     <li>
       <span className="grow">
@@ -401,7 +398,6 @@ function SweepRow({
           Turn off
         </Button>
       )}
-      {error && <Alert tone="danger">{error}</Alert>}
     </li>
   );
 }
@@ -413,7 +409,7 @@ function SweepForm({ saved, onDraft }: { saved: SavedAddress[]; onDraft: (id: st
   const [trigger, setTrigger] = useState('');
   const [keep, setKeep] = useState('');
   const [savedId, setSavedId] = useState('');
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
   if (usable.length === 0) {
     return (
       <p className="dash-muted dash-small">
@@ -482,7 +478,6 @@ function SweepForm({ saved, onDraft }: { saved: SavedAddress[]; onDraft: (id: st
           <span className="dash-mono">{target.address}</span>
         </p>
       )}
-      {error && <Alert tone="danger">{error}</Alert>}
       <Button type="submit" disabled={busy || !asset || !savedId}>
         Ask to turn on auto-sweep
       </Button>

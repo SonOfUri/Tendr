@@ -31,7 +31,7 @@ export default function CheckoutSettingsPage() {
   const [saved, setSaved] = useState(false);
   // The connected-site domains the person has agreed to remove (the warning shown once).
   const [confirmedRemoval, setConfirmedRemoval] = useState<string | null>(null);
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
 
   // The server copy the form was last filled from. When the notification form below saves, the
   // server copy changes under this form: keep what the person typed here (C13).
@@ -177,7 +177,6 @@ export default function CheckoutSettingsPage() {
             these defaults.
           </p>
           {saved && <Alert tone="success">Saved.</Alert>}
-          {error && <Alert tone="danger">{error}</Alert>}
           <div>
             <Button type="submit" disabled={busy}>
               {busy ? 'Saving…' : 'Save'}
@@ -201,7 +200,7 @@ function NotificationEmail({
   const [email, setEmail] = useState(settings.notification_email ?? '');
   const [paymentEmails, setPaymentEmails] = useState(settings.payment_emails_enabled);
   const [notice, setNotice] = useState<string | null>(null);
-  const { busy, error, run } = useAction();
+  const { busy, run } = useAction();
   const status = notificationEmailStatus(settings);
 
   useEffect(() => {
@@ -288,7 +287,6 @@ function NotificationEmail({
           <span>Email me when a payment arrives (“You got paid”)</span>
         </label>
         {notice && <Alert tone="success">{notice}</Alert>}
-        {error && <Alert tone="danger">{error}</Alert>}
         <div>
           <Button type="submit" disabled={busy}>
             {busy ? 'Saving…' : 'Save'}

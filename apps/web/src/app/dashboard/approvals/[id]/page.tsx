@@ -96,7 +96,6 @@ export default function ProposalPage() {
               You can cancel this refund proposal until the payout is signed. A signed payout cannot
               be cancelled.
             </p>
-            {action.error ? <Alert tone="danger">{action.error}</Alert> : null}
             <Button
               variant="secondary"
               disabled={action.busy}
@@ -221,7 +220,6 @@ export default function ProposalPage() {
             ))}
           </ul>
         )}
-        {action.error && <Alert tone="danger">{action.error}</Alert>}
         <div className="cta-row">
           {canApprove && (
             <Button onClick={() => void approve()} disabled={action.busy}>

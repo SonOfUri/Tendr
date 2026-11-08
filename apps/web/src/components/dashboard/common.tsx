@@ -31,7 +31,9 @@ export function useLoad<T>(fn: () => Promise<T>, key: string | null) {
     if (uiPreview) {
       if (gen !== genRef.current || keyRef.current !== requestKey) return;
       setData(null);
-      setError('API offline — start Postgres/Redis and the Tendr API to load this screen.');
+      const message = 'API offline — start Postgres/Redis and the Tendr API to load this screen.';
+      setError(message);
+      toast.error(message);
       return;
     }
     try {
@@ -41,7 +43,9 @@ export function useLoad<T>(fn: () => Promise<T>, key: string | null) {
       setError(null);
     } catch (err) {
       if (gen !== genRef.current || keyRef.current !== requestKey) return;
-      setError(errorMessage(err));
+      const message = errorMessage(err);
+      setError(message);
+      toast.error(message);
     }
   }, [uiPreview]);
 
@@ -55,7 +59,7 @@ export function useLoad<T>(fn: () => Promise<T>, key: string | null) {
   return { data, error, reload, setData };
 }
 
-/** Runs one action at a time with a busy flag; failures go to the shared toaster. */
+/** Runs one action at a time with a busy flag; failures go to the shared toaster only. */
 export function useAction() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,9 +69,7 @@ export function useAction() {
     try {
       return await fn();
     } catch (err) {
-      const message = errorMessage(err);
-      setError(message);
-      toast.error(message);
+      toast.error(errorMessage(err));
       return undefined;
     } finally {
       setBusy(false);

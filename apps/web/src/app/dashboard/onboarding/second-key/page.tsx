@@ -8,6 +8,7 @@ import { RecoveryKitCreator } from '@/components/dashboard/RecoveryKitCreator';
 import { PageHeader, Panel, Select, TextLink } from '@/components/dashboard/ui';
 import { QrImage } from '@/components/QrImage';
 import { api, errorMessage, type GoLiveStatus, type Role } from '@/lib/api';
+import { toast } from '@/components/toast';
 import { registerPasskey, stepUp, withStepUp } from '@/lib/webauthn';
 
 export default function SecondKeyPage() {
@@ -118,13 +119,11 @@ function InviteSigner() {
   const [role, setRole] = useState<Role>('admin');
   const [sent, setSent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const canInvite = store?.role === 'owner' || store?.role === 'admin';
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
-    setError(null);
     try {
       await withStepUp(() =>
         api('/v1/team/invites', { method: 'POST', json: { email, role }, livemode: false }),
@@ -132,7 +131,7 @@ function InviteSigner() {
       setSent(email);
       setEmail('');
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -178,7 +177,6 @@ function InviteSigner() {
         </label>
       </div>
       {sent ? <Alert tone="success">Invite sent to {sent}. It works for 7 days.</Alert> : null}
-      {error ? <Alert tone="danger">{error}</Alert> : null}
       <div className="actions">
         <Button type="submit" disabled={busy || !email}>
           {busy ? 'Sending…' : 'Send invite'}
@@ -193,7 +191,6 @@ function AddDevice() {
   const [phase, setPhase] = useState<'idle' | 'confirmed' | 'done'>('idle');
   const [label, setLabel] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [addUrl, setAddUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -206,11 +203,10 @@ function AddDevice() {
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
-    setError(null);
     try {
       await fn();
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -266,7 +262,6 @@ function AddDevice() {
         </>
       ) : null}
       {phase === 'done' ? <Alert tone="success">Your new passkey is ready.</Alert> : null}
-      {error ? <Alert tone="danger">{error}</Alert> : null}
       {addUrl ? (
         <div className="dash-qr-row">
           <QrImage value={addUrl} label="Link to sign in and add a device" size={140} />

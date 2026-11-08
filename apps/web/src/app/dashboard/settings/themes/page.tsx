@@ -180,7 +180,6 @@ export default function ThemesPage() {
                     placeholder="Checkout look"
                   />
                 </label>
-                {action.error ? <Alert tone="danger">{action.error}</Alert> : null}
                 <div className="actions">
                   <Button type="submit" disabled={action.busy}>
                     {action.busy ? 'Reading site…' : 'Create draft'}
@@ -218,7 +217,6 @@ export default function ThemesPage() {
                     ]}
                   />
                 </div>
-                {action.error ? <Alert tone="danger">{action.error}</Alert> : null}
                 <div className="actions">
                   <Button type="submit" disabled={action.busy}>
                     {action.busy ? 'Creating…' : 'Create'}
@@ -331,9 +329,6 @@ export default function ThemesPage() {
                 </table>
               </div>
             )}
-            {action.error && !creating && !importing ? (
-              <Alert tone="danger">{action.error}</Alert>
-            ) : null}
           </Panel>
         </>
       )}
