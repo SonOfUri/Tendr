@@ -13,11 +13,18 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHAINALYSIS_PURPOSE } from '../src/checkout/screening.js';
+import { AI_SECRET_PURPOSE } from '../src/ai/provider.js';
+import { NEAR_AI_SECRET_PURPOSE } from '../src/ai/near-config.js';
 import { loadDotenvFile } from '../src/lib/load-dotenv.js';
 import { PIMLICO_SECRET_PURPOSE } from '../src/relayer/evm/pimlico.js';
 
 /** Secrets looked up by purpose (`findFirst where purpose`), not by a stored reference. */
-export const ALLOWED_PURPOSES: readonly string[] = [CHAINALYSIS_PURPOSE, PIMLICO_SECRET_PURPOSE];
+export const ALLOWED_PURPOSES: readonly string[] = [
+  CHAINALYSIS_PURPOSE,
+  PIMLICO_SECRET_PURPOSE,
+  AI_SECRET_PURPOSE,
+  NEAR_AI_SECRET_PURPOSE,
+];
 
 export interface PutSecretOptions {
   /** Command-line arguments after the script name. */

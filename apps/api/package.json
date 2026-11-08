@@ -19,6 +19,7 @@
     "db:migrate:test": "tsx scripts/migrate-test.ts",
     "kms:verify": "tsx scripts/verify-gcp-kms.ts",
     "secrets:put": "tsx scripts/put-secret.ts",
+    "ai:verify": "tsx scripts/verify-ai.ts",
     "jobs:failed": "tsx scripts/jobs-failed.ts",
     "e2e:serve": "tsx scripts/e2e-server.ts",
     "onchain:publish:testnet": "tsx scripts/onchain-publish-testnet.ts",

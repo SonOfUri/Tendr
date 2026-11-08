@@ -76,6 +76,17 @@ const examples: Record<string, unknown> = {
     cancel_url: 'http://localhost:3000/settings/api-console',
   },
   'POST /v1/checkout/client/quote': { origin_asset: 'copy-an-asset-id-from-the-tokens-response' },
+  'POST /v1/checkout/client/ai/assistant': {
+    question: 'Has my payment completed? What happens next?',
+  },
+  'POST /v1/ai/insights': { days: 30, question: 'Summarize conversion and checkout drop-offs.' },
+  'POST /v1/ai/themes': {
+    name: 'Midnight draft',
+    prompt: 'A dark checkout with violet accents, rounded corners and clear typography.',
+  },
+  'POST /v1/checkout/client/ai/recommendations': {
+    assets: [{ asset_id: 'copy-an-asset-id-from-the-tokens-response' }],
+  },
   'POST /v1/checkout/client/deposit': { quote_id: 'quo_...', tx_hash: 'paste-transaction-hash' },
   'POST /v1/checkout/client/email': { email: 'shopper@example.com' },
   'POST /v1/checkout/client/simulate': { scenario: 'exact' },

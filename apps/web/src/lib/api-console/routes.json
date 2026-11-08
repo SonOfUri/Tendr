@@ -243,6 +243,24 @@
     "principals": ["user_session"]
   },
   {
+    "id": "POST /v1/checkout/client/ai/assistant",
+    "method": "POST",
+    "path": "/v1/checkout/client/ai/assistant",
+    "group": "checkout ai",
+    "source": "apps/api/src/routes/checkout-ai.ts",
+    "line": 23,
+    "principals": ["session_client"]
+  },
+  {
+    "id": "POST /v1/checkout/client/ai/recommendations",
+    "method": "POST",
+    "path": "/v1/checkout/client/ai/recommendations",
+    "group": "checkout ai",
+    "source": "apps/api/src/routes/checkout-ai.ts",
+    "line": 26,
+    "principals": ["session_client"]
+  },
+  {
     "id": "GET /v1/checkout/client/session",
     "method": "GET",
     "path": "/v1/checkout/client/session",
@@ -541,6 +559,36 @@
     "line": 42,
     "principals": ["dashboard_user", "secret_key"],
     "scope": "sessions:write"
+  },
+  {
+    "id": "GET /v1/ai/insights",
+    "method": "GET",
+    "path": "/v1/ai/insights",
+    "group": "merchant ai",
+    "source": "apps/api/src/routes/merchant-ai.ts",
+    "line": 21,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/ai/insights",
+    "method": "POST",
+    "path": "/v1/ai/insights",
+    "group": "merchant ai",
+    "source": "apps/api/src/routes/merchant-ai.ts",
+    "line": 25,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/ai/themes",
+    "method": "POST",
+    "path": "/v1/ai/themes",
+    "group": "merchant ai",
+    "source": "apps/api/src/routes/merchant-ai.ts",
+    "line": 28,
+    "principals": ["dashboard_user"],
+    "permission": "settings:manage"
   },
   {
     "id": "GET /v1/settings/checkout",

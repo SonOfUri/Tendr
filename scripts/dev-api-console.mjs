@@ -68,10 +68,13 @@ Object.assign(env, {
   NEXT_PUBLIC_E2E_INJECTED_WALLET: '',
   WEB_INTERNAL_TOKEN: 'local-api-console-internal-token-not-for-deployment',
   LOG_LEVEL: 'warn',
+  AI_PROVIDER: 'disabled',
 });
 // Never forward production provider/vault credentials into the local fake stack.
 for (const key of [
   'RESEND_API_KEY',
+  'AI_API_KEY',
+  'NEARAI_API_KEY',
   'ONECLICK_API_KEY',
   'FX_API_KEY',
   'CHAINALYSIS_API_KEY',

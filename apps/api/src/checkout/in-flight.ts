@@ -3,7 +3,7 @@
 // `external_ref`, and the store's `/expire`. A session with a deposit in flight is never expired:
 // expiring it would turn an on-time payment late and invite the shopper to pay again.
 import type { Prisma } from '@prisma/client';
-import type { prisma } from '../lib/prisma.js';
+import { prisma } from '../lib/prisma.js';
 
 /** How long after a quote's deadline a reported or superseded deposit is still tracked. */
 export const SUPERSEDED_GRACE_MS = 30 * 60_000;
@@ -12,6 +12,14 @@ export const SUPERSEDED_GRACE_MS = 30 * 60_000;
 export const IN_FLIGHT_PAYMENT_STATUSES = ['DETECTED', 'PROCESSING', 'SCREENING_PENDING'] as const;
 
 type Db = Prisma.TransactionClient | typeof prisma;
+
+/** Read-only check for services that must not receive internal relay-record delegates. */
+export function sessionDepositInFlight(
+  session: { id: string; merchantId: string; livemode: boolean; expiresAt: Date },
+  now: Date,
+): Promise<boolean> {
+  return depositInFlight(prisma, session, now).then((reason) => reason !== null);
+}
 
 /** Why a session's deposit is in flight, or null when nothing is. */
 export type InFlightReason = 'unpolled' | 'payment' | 'reported';
