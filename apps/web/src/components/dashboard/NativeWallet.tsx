@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Alert, Button, Spinner } from '@tendr/ui';
+import { CircleCheck } from 'lucide-react';
 import { ChainLogo, TokenLogo, tokenSelectOptions } from '@/components/dashboard/asset-logos';
 import { AssetGridPicker } from '@/components/dashboard/AssetGridPicker';
 import { Panel } from '@/components/dashboard/ui';
@@ -73,10 +74,18 @@ export function NativeWalletSetup({
   }
   if (active) {
     return (
-      <Alert tone="success">
-        Wallet activated. Settlement and withdrawals are on the{' '}
-        <Link href="/dashboard/wallet">wallet page</Link>.
-      </Alert>
+      <div className="dash-golive-ready">
+        <span className="dash-golive-ready-mark" aria-hidden>
+          <CircleCheck size={22} strokeWidth={1.85} />
+        </span>
+        <div className="dash-golive-ready-copy">
+          <strong>Wallet activated</strong>
+          <p className="dash-muted dash-small">
+            Settlement and withdrawals are on the{' '}
+            <Link href="/dashboard/wallet">wallet page</Link>.
+          </p>
+        </div>
+      </div>
     );
   }
   return (
