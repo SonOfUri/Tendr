@@ -3725,6 +3725,17 @@ html[data-appearance='light'] .ov-bar-hit:focus-visible .ov-bar-fill::before {
   background: #fff;
 }
 
+html[data-appearance='light'] .ov-status {
+  background: rgba(0, 0, 0, 0.06);
+  color: #5e5e5e;
+}
+
+/* Processing / pending: dark-mode uses near-white text; that vanishes on light cards. */
+html[data-appearance='light'] .ov-status[data-tone='warn'] {
+  background: #e8e8e8;
+  color: #161616;
+}
+
 html[data-appearance='light'] .ov-delta--up,
 html[data-appearance='light'] .ov-status[data-tone='ok'],
 html[data-appearance='light'] .ov-avatar,
