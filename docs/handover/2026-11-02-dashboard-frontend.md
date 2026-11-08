@@ -550,7 +550,16 @@ Historical runbook readiness notes must be rechecked against the current status 
 ## AI APIs
 
 Added on `test/api-console` on 7 November 2026. This covers checkout assistance, quote previews,
-merchant insights and theme drafts, not the complete AI roadmap or production activation.
+merchant insights and theme drafts; risk detection and agent/MCP payments remain separate work.
+**Production activation — 8 November 2026:** the Railway API in the HODL workspace now uses
+NEAR AI Cloud with `z-ai/glm-5.3-flash`. Backend deployment commit: `f30fe51` on `deploy`.
+The saved key is configured as the API service's server-only `NEARAI_API_KEY`. The three
+synthetic checks (checkout assistant, merchant insights, full theme validation) passed from
+inside the production API container; the public health check returned 200 and unauthenticated
+AI requests returned 401 with `Cache-Control: no-store`. The check created no orders, payments
+or saved themes. API, worker and web deployed successfully. These are operational smoke checks,
+not a broad model-quality evaluation. Attestation verification and E2EE remain unimplemented.
+
 The two checkout routes use the current checkout's
 `Authorization: Bearer <client_secret>` and return `Cache-Control: no-store`. Dashboard cookies,
 merchant API keys and client-supplied session/account IDs cannot substitute for that credential.
