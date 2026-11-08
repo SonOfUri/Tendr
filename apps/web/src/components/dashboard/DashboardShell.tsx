@@ -69,43 +69,15 @@ interface Dashboard {
   selectStore(ctx: StoreContext): void;
   /** Re-reads the person and their stores (after creating or joining a store). */
   refresh(): Promise<void>;
-  /** True when the shell is rendering without a live API (UI review). */
+  /** Always false; kept for callers that still branch on preview chrome. */
   uiPreview: boolean;
-  /** Next sign-out should leave preview and go to /login. */
+  /** No-op; preview sessions are no longer used. */
   endPreviewSession(): void;
   /** Current mode uses a single-owner Intents wallet. */
   nativeWallet: boolean;
   /** The live account is, or will be, a single-owner Intents wallet. */
   nativeLive: boolean;
 }
-
-/** Local-only merchant so the dashboard chrome is reviewable when the API is down. */
-const PREVIEW_ME: Me = {
-  user: {
-    id: 'usr_preview',
-    email: 'preview@usetendr.tech',
-    emailVerifiedAt: '2026-01-01T00:00:00.000Z',
-  },
-  stores: [
-    {
-      id: 'mer_preview',
-      name: 'Preview Business',
-      slug: 'preview-business',
-      status: 'active',
-      membershipId: 'mem_preview',
-      role: 'owner',
-      isSigner: true,
-    },
-  ],
-  passkeys: [
-    {
-      id: 'pk_preview',
-      deviceLabel: 'Preview',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      lastUsedAt: null,
-    },
-  ],
-};
 
 const DashboardContext = createContext<Dashboard | null>(null);
 
@@ -190,27 +162,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [notFoundAt, setNotFoundAt] = useState<string | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  const [uiPreview, setUiPreview] = useState(false);
   const [native, setNative] = useState({ current: false, live: false });
+  const uiPreview = false;
 
-  const enterPreview = useCallback(() => {
-    const m = PREVIEW_ME;
-    const ctx = pickContext(m) ?? { merchantId: m.stores[0]!.id, livemode: false };
-    setStoreContext(ctx);
-    setContext(ctx);
-    setMe(m);
-    setUiPreview(true);
-    setError(null);
-  }, []);
+  const goToLogin = useCallback(() => {
+    const here = window.location.pathname + window.location.search;
+    router.replace(`/login?next=${encodeURIComponent(here)}`);
+  }, [router]);
 
-  useEffect(
-    () =>
-      onSignedOut(() => {
-        const here = window.location.pathname + window.location.search;
-        router.replace(`/login?next=${encodeURIComponent(here)}`);
-      }),
-    [router, enterPreview],
-  );
+  useEffect(() => onSignedOut(goToLogin), [goToLogin]);
 
   const refresh = useCallback(async () => {
     try {
@@ -225,17 +185,17 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       setStoreContext(ctx);
       setContext(ctx);
       setMe(m);
-      setUiPreview(false);
       setError(null);
     } catch (err) {
       if (isSignedOut(err)) return;
+      // No offline/fake dashboard: signed-out and unreachable API both go to login.
       if (err instanceof ApiError && err.code === 'NETWORK_ERROR') {
-        enterPreview();
+        goToLogin();
         return;
       }
       if (!isSignedOut(err)) setError(errorMessage(err));
     }
-  }, [enterPreview]);
+  }, [goToLogin]);
 
   useEffect(() => {
     void refresh();
@@ -285,12 +245,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     setContext(ctx);
   }, []);
 
-  const endPreviewSession = useCallback(() => {
-    // Sign-out always returns to /login. Preview is only used when the API is unreachable.
-  }, []);
+  const endPreviewSession = useCallback(() => {}, []);
 
   useEffect(() => {
-    if (!context || uiPreview) {
+    if (!context) {
       setNative({ current: false, live: false });
       return;
     }
@@ -328,7 +286,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       }
     })();
     return () => controller.abort();
-  }, [context, uiPreview]);
+  }, [context]);
 
   const value = useMemo<Dashboard | null>(
     () =>
@@ -357,8 +315,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             <Button variant="secondary" onClick={() => void refresh()}>
               Try again
             </Button>
-            <Button variant="ghost" onClick={enterPreview}>
-              Open UI preview
+            <Button variant="ghost" onClick={goToLogin}>
+              Back to sign in
             </Button>
           </div>
         </div>
