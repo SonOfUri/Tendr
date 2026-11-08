@@ -171,7 +171,12 @@ export default function PaymentLinkDetailPage() {
 
   async function sendUrl() {
     const result = await sharePaymentLink(link!.url, link!.title);
-    if (result === 'cancelled' || result === 'failed') return;
+    if (result === 'cancelled') return;
+    if (result === 'failed') {
+      toast.error('Could not copy the link. Select the URL and copy it manually.');
+      return;
+    }
+    toast.success(result === 'shared' ? 'Opened share sheet' : 'Link copied');
     setSent(result);
     window.setTimeout(() => setSent(null), 2000);
   }

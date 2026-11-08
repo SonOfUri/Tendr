@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
+import { copyToClipboard } from '@/lib/share-link';
+import { toast } from '@/components/toast';
 
 /** Middle-ellipsis for long account ids / addresses (`0xa5cd…983c`). */
 export function shortId(id: string, head = 6, tail = 4): string {
@@ -36,13 +38,14 @@ export function CopyableId({
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          void navigator.clipboard.writeText(value).then(
-            () => {
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 1200);
-            },
-            () => undefined,
-          );
+          void copyToClipboard(value).then((ok) => {
+            if (!ok) {
+              toast.error('Could not copy. Select the text and copy it manually.');
+              return;
+            }
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1200);
+          });
         }}
       >
         {copied ? <Check size={12} strokeWidth={2.2} /> : <Copy size={12} strokeWidth={2} />}
