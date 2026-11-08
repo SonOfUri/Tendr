@@ -53,7 +53,11 @@ const meta = (view: PublicPaymentLinkView | null, mode?: string) => {
 beforeEach(() => {
   // A new "request" per test: React's cache is scoped to one server request.
   (globalThis as { __req?: number }).__req = ++req;
+  // Empty CHECKOUT_BASE_URL so linkBaseUrl falls through to WEB_URL (a local .env often sets both).
+  vi.stubEnv('CHECKOUT_BASE_URL', '');
   vi.stubEnv('WEB_URL', 'https://usetendr.tech');
+  // serverEnv() asserts this when NODE_ENV=production (e.g. a deploy shell running vitest).
+  vi.stubEnv('WEB_INTERNAL_TOKEN', 't'.repeat(32));
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -67,6 +71,7 @@ describe('generateMetadata', () => {
     expect(m.openGraph?.images).toEqual([
       { url: 'https://pay.example.com/acme/tee/opengraph-image', width: 1200, height: 630 },
     ]);
+    expect(m.openGraph?.url).toBe('https://pay.example.com/acme/tee');
   });
 
   it('one render path reads the link once', async () => {
@@ -82,18 +87,24 @@ describe('generateMetadata', () => {
 
   it('metadata for fixed, open, test and inactive links', async () => {
     const fixed = await meta(base);
-    expect(fixed.title).toBe('T-shirt');
-    expect(fixed.openGraph?.title).toBe('T-shirt');
+    expect(fixed.title).toBe('Pay ₦25,000 · T-shirt · Acme');
+    expect(fixed.robots).toEqual({ index: true, follow: true });
+    expect(fixed.openGraph?.title).toBe('Pay ₦25,000 · T-shirt · Acme');
     expect(fixed.openGraph?.description).toBe('Acme · ₦25,000');
+    expect(fixed.openGraph?.siteName).toBe('Tendr');
+    expect(fixed.openGraph?.url).toBe('https://usetendr.tech/acme/tee');
     expect(fixed.openGraph?.images).toEqual([
       { url: 'https://usetendr.tech/acme/tee/opengraph-image', width: 1200, height: 630 },
     ]);
 
     const open = await meta({ ...base, amount_type: 'open', amount: null });
+    expect(open.title).toBe('Pay any amount · T-shirt · Acme');
     expect(open.openGraph?.description).toBe('Acme · Pay any amount');
 
     const test = await meta({ ...base, livemode: false }, 'test');
+    expect(test.title).toBe('Test · Pay ₦25,000 · T-shirt · Acme');
     expect(test.openGraph?.description).toBe('Test · Acme · ₦25,000');
+    expect(test.openGraph?.url).toBe('https://usetendr.tech/acme/tee?mode=test');
     expect(test.openGraph?.images).toEqual([
       {
         url: 'https://usetendr.tech/acme/tee/opengraph-image?mode=test',
@@ -104,12 +115,13 @@ describe('generateMetadata', () => {
 
     const off = await meta({ ...base, availability: 'inactive' });
     expect(off.openGraph?.description).toBe('Acme');
-    expect(off.title).toBe('T-shirt');
+    expect(off.title).toBe('T-shirt · Acme');
   });
 
   it('handles an unknown link without throwing', async () => {
     const m = await meta(null);
     expect(m.title).toBe('Payment link not found');
     expect(m.openGraph).toBeUndefined();
+    expect(m.robots).toBeUndefined();
   });
 });
