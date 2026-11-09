@@ -56,6 +56,27 @@ function toCheckoutTokens(tokens: SettlementToken[]): Token[] {
 
 const PCTS = [25, 50, 75, 100] as const;
 
+/** Sum balance USD strings with fixed-point cents so the total never uses floats. */
+function sumUsd(rows: BalanceRow[]): string | null {
+  let cents = 0n;
+  let any = false;
+  for (const row of rows) {
+    const v = row.amount_usd?.trim();
+    if (!v) continue;
+    const m = /^(\d+)(?:\.(\d+))?$/.exec(v);
+    if (!m) continue;
+    any = true;
+    const frac = (m[2] ?? '').padEnd(3, '0');
+    let c = BigInt(m[1]!) * 100n + BigInt(frac.slice(0, 2));
+    if (Number(frac[2] ?? '0') >= 5) c += 1n;
+    cents += c;
+  }
+  if (!any) return null;
+  const whole = (cents / 100n).toString();
+  const rest = (cents % 100n).toString().padStart(2, '0');
+  return `${whole}.${rest}`;
+}
+
 export function NativeWalletSetup({
   view,
   status,
@@ -348,6 +369,8 @@ export function NativeWalletPanel({
       return false;
     }
   });
+  const totalUsd = sumUsd(funded);
+  const totalUsdLabel = totalUsd ? formatUsd(totalUsd) : funded.length === 0 ? '$0.00' : '—';
   const withdrawOptions = buildDemoAssetOptions(
     toCheckoutTokens(
       funded.map((b) => {
@@ -439,7 +462,12 @@ export function NativeWalletPanel({
           ) : null}
           <Panel title="Balances">
             {funded.length ? (
-              <div className="wallet-balances" role="listbox" aria-label="Balances">
+              <>
+                <div className="wallet-bal-total">
+                  <span className="wallet-bal-total-label">Total balance</span>
+                  <strong className="wallet-bal-total-usd">{totalUsdLabel}</strong>
+                </div>
+                <div className="wallet-balances" role="listbox" aria-label="Balances">
                 {funded.map((b) => {
                   const meta = tokenMeta(b.asset, b);
                   const selected = asset === b.asset;
@@ -482,6 +510,7 @@ export function NativeWalletPanel({
                   );
                 })}
               </div>
+              </>
             ) : (
               <p className="dash-muted">No funds received yet.</p>
             )}

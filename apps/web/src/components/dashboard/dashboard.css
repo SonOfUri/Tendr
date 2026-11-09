@@ -4417,6 +4417,28 @@ html[data-appearance='light'] .dash-info-tip-bubble {
   gap: 1.15rem;
 }
 
+.wallet-bal-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.15rem 0.1rem 0.35rem;
+}
+
+.wallet-bal-total-label {
+  color: var(--tendr-muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.wallet-bal-total-usd {
+  font-family: var(--tendr-font-display);
+  font-size: clamp(1.45rem, 2.4vw, 1.85rem);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+}
+
 .wallet-balances {
   display: grid;
   gap: 0.85rem;
