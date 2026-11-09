@@ -6,7 +6,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { Alert, Button } from '@tendr/ui';
 import { api, errorMessage } from '@/lib/api';
 import { loadConnectParams, takeConnectWaiting } from '@/lib/connect';
-import { takePendingInvite } from '@/lib/navigation';
+import { safeNext, takePendingInvite } from '@/lib/navigation';
 import { registerPasskey, type SessionStart } from '@/lib/webauthn';
 
 type Step = 'confirm' | 'passkey' | 'done' | 'connect-elsewhere';
@@ -16,6 +16,7 @@ function Verify() {
   const params = useSearchParams();
   // Read once, then dropped from the address bar so it is not kept in history or referrers.
   const [token] = useState(() => params.get('token'));
+  const [next] = useState(() => safeNext(params.get('next')));
   const [step, setStep] = useState<Step>('confirm');
   const [email, setEmail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,7 +42,7 @@ function Verify() {
     setStep('done');
     // A new person lands on store naming (the dashboard sends anyone with no store there), or
     // back on the invite they came from.
-    router.replace(takePendingInvite() ?? '/dashboard');
+    router.replace(takePendingInvite() ?? next);
   }
 
   // Confirming needs a click: mail scanners that open links must not use up the link.
@@ -83,7 +84,7 @@ function Verify() {
       <div className="card">
         <h1>This link is incomplete</h1>
         <p className="muted">
-          Open the link from your email again, or <Link href="/signup">ask for a new one</Link>.
+          Open the link from your email again, or <Link href="/login">ask for a new one</Link>.
         </p>
       </div>
     );
@@ -101,22 +102,31 @@ function Verify() {
     );
   }
 
-  if (step === 'passkey' || step === 'done') {
+  if (step === 'done') {
+    return (
+      <div className="card">
+        <h1>You’re signed in</h1>
+        <p>Opening your account…</p>
+      </div>
+    );
+  }
+
+  if (step === 'passkey') {
     return (
       <div className="card">
         <p className="step-label">Step 2 of 3</p>
         <h1>Create your passkey</h1>
         <p>
           {email ? <strong>{email}</strong> : 'Your email'} is confirmed. Now make a passkey: it is
-          how you sign in and approve money leaving your store. Your device asks for Face ID, Touch
-          ID, Windows Hello or its PIN — there is no password to remember.
+          a quick way to sign in and confirm sensitive account changes. Your live wallet uses a
+          separate wallet passkey to approve transfers. You can also sign in with an email link.
         </p>
         <p className="muted small">
           The passkey stays on your device (or in your iCloud / Google account). Tendr never sees
           it.
         </p>
         {error && <Alert tone="danger">{error}</Alert>}
-        <Button onClick={createPasskey} disabled={busy || step === 'done'}>
+        <Button onClick={createPasskey} disabled={busy}>
           {busy ? 'Waiting for your device…' : 'Create my passkey'}
         </Button>
       </div>
@@ -126,10 +136,10 @@ function Verify() {
   return (
     <div className="card">
       <h1>Confirm your email</h1>
-      <p className="muted">One click and you’re in. Then you’ll create your passkey.</p>
+      <p className="muted">Confirm to open your account. New accounts will finish passkey setup.</p>
       {error && (
         <Alert tone="danger">
-          {error} <Link href="/signup">Ask for a new link</Link>.
+          {error} <Link href="/login">Ask for a new link</Link>.
         </Alert>
       )}
       <Button onClick={confirm} disabled={busy}>

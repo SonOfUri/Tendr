@@ -32,27 +32,44 @@ describe('magic links', () => {
     expect(memoryMailer().sent[0]).toMatchObject({ template: 'login_link' });
   });
 
-  it('a person with an active passkey gets no email link at all (passkey login only)', async () => {
+  it('a person with an active passkey signs into the same person by verified email', async () => {
     const user = await createUser({ email: 'pk@example.com', emailVerifiedAt: new Date() });
     await createCredential(user.id);
-    await startEmailSignIn('pk@example.com');
-    expect(memoryMailer().sent).toEqual([]);
-    expect(await prisma.emailToken.count()).toBe(0);
-    // A revoked passkey does not count: the person can bootstrap a new first passkey by email.
-    // (Losing every passkey of a signer is handled by the recovery kit, Task 12.)
-    await prisma.webauthnCredential.updateMany({ data: { revokedAt: new Date() } });
-    await startEmailSignIn('pk@example.com');
+    await startEmailSignIn(' PK@Example.com ');
     expect(memoryMailer().sent).toHaveLength(1);
+    const token = tokenFromMail('pk@example.com', 'login_link');
+    expect(await consumeEmailLink(token)).toEqual({ userId: user.id, email: user.email });
+    expect(await prisma.user.count()).toBe(1);
+    expect(
+      await prisma.webauthnCredential.count({ where: { userId: user.id, revokedAt: null } }),
+    ).toBe(1);
+    await expect(consumeEmailLink(token)).rejects.toMatchObject({ status: 401 });
   });
 
-  it('a link issued before the person registered a passkey no longer signs in', async () => {
+  it('a link issued before passkey registration still returns the original person', async () => {
     await startEmailSignIn('ada@example.com');
     const token = tokenFromMail('ada@example.com', 'verify_email');
     await startEmailSignIn('ada@example.com');
     const second = tokenFromMail('ada@example.com', 'verify_email');
     const { userId } = await consumeEmailLink(token);
     await createCredential(userId);
-    await expect(consumeEmailLink(second)).rejects.toMatchObject({ status: 401 });
+    expect(await consumeEmailLink(second)).toMatchObject({ userId });
+    expect(await prisma.user.count()).toBe(1);
+  });
+
+  it('preserves same-site return paths but does not put external redirects into mail', async () => {
+    const next = '/dashboard/invoices?store=mer_example&mode=live';
+    await startEmailSignIn('ada@example.com', next);
+    expect(new URL(memoryMailer().sent.at(-1)!.data.url!).searchParams.get('next')).toBe(next);
+    for (const bad of [
+      'https://evil.example',
+      '//evil.example',
+      '/\\evil.example',
+      '/\n/evil.example',
+    ]) {
+      await startEmailSignIn('ada@example.com', bad);
+      expect(new URL(memoryMailer().sent.at(-1)!.data.url!).searchParams.has('next')).toBe(false);
+    }
   });
 
   it('magic_link_single_use_and_expires_15min', async () => {

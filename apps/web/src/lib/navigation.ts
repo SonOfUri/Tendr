@@ -2,7 +2,14 @@
 
 /** `next` if it is a same-site path (`/…`, not `//…`), else `fallback`. */
 export function safeNext(next: string | null | undefined, fallback = '/dashboard'): string {
-  if (!next || !next.startsWith('/') || next.startsWith('//') || next.includes('\\')) {
+  if (
+    !next ||
+    next.length > 2048 ||
+    !next.startsWith('/') ||
+    next.startsWith('//') ||
+    next.includes('\\') ||
+    [...next].some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)
+  ) {
     return fallback;
   }
   return next;

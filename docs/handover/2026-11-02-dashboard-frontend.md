@@ -118,6 +118,34 @@ holds a login credential; they must still be distinct credentials and keys.
 
 ## Session, context and permissions
 
+### Email sign-in fallback (9 November 2026)
+
+`/login` offers both a login passkey and an email link. `POST /v1/auth/email/start` accepts
+`{email,next?}`; email is trimmed/lower-cased and `next` is an optional same-site path (max 2,048
+characters). Both new and existing people receive the same 202 `{ok:true}` response. A verified
+existing person receives `login_link` even when they already have active login passkeys. New or
+unverified people receive `verify_email`. Links remain one-use with a 15-minute lifetime.
+
+`POST /v1/auth/email/verify` with `{token}` returns the existing user ID, `hasPasskey`, CSRF token
+and session cookies. The unique normalized email lookup prevents a second account from being
+created for a returning person. Email verification creates a session with **no passkey step-up**.
+It does not replace login keys, create a new business/wallet or revoke the person's other sessions.
+
+The verification page waits for an explicit click, removes the token/return path from the address
+bar, and skips registration for `hasPasskey:true`. New people still complete their first login
+passkey setup. Same-site `next` travels in the emailed URL, preserving store/mode deep links even
+in another tab/device; external URLs and browser-normalized redirect tricks are rejected/ignored.
+Connect and pending-invite routing keep their existing precedence.
+
+Native wallet signing remains separate. Existing sensitive-action checks are unchanged: adding or
+revoking login keys, team changes and native payout routes still require login-passkey step-up;
+submitting a native transfer also requires its wallet-passkey signature. Email access alone cannot
+recover a lost wallet key or authorize spending. Do not describe an email session as fully stepped up.
+The selected business/mode remains a per-tab preference; a fresh browser starts in Test mode.
+
+Regression coverage: magic-link identity, expiry/replay, return URLs, returning-user verification,
+new-person setup, two sessions reading the same live wallet, and rejection of protected writes.
+
 Use `api()` for dashboard requests. It sends `credentials: 'include'`, `Tendr-Merchant`,
 `Tendr-Livemode` and, on mutations, `Tendr-CSRF`. `GET /v1/me` uses `{ store: false }` and returns
 session data and the CSRF token. Keep the in-memory CSRF response handling: the API and app are

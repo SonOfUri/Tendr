@@ -5,7 +5,14 @@ import { buildApp } from '../app.js';
 import { registrationOptions, verifyRegistration } from '../auth/webauthn.js';
 import { prisma } from '../lib/prisma.js';
 import { SoftAuthenticator } from '../test/authenticator.js';
-import { dashHeaders, loginAs, memoryMailer, type Login } from '../test/dashboard.js';
+import {
+  dashHeaders,
+  loginAs,
+  memoryMailer,
+  responseCookies,
+  tokenFromMail,
+  type Login,
+} from '../test/dashboard.js';
 import { createMerchant, createRow, createUser, resetDb } from '../test/helpers.js';
 
 async function personWithPasskey() {
@@ -181,13 +188,59 @@ describe('dashboard step-up and hardening', () => {
     expect(live[0]!.passkeyVerifiedAt).not.toBeNull();
   });
 
-  it('a person with a passkey cannot get an email login, and the answer looks the same', async () => {
-    const { user } = await personWithPasskey();
+  it('email fallback restores the existing account without granting passkey step-up or changing keys', async () => {
+    const { user, cred } = await personWithPasskey();
+    const merchant = await createMerchant();
+    await createRow('MerchantUser', merchant.id, false, { userId: user.id, role: 'owner' });
+    const originalSession = await loginAs(user.id);
+    const peopleBefore = await prisma.user.count();
     const known = await post('/v1/auth/email/start', {}, { email: user.email });
     const unknown = await post('/v1/auth/email/start', {}, { email: 'fresh@example.com' });
     expect([known.statusCode, unknown.statusCode]).toEqual([202, 202]);
     expect(known.json()).toEqual(unknown.json());
-    expect(memoryMailer().sent.map((x) => x.to)).toEqual(['fresh@example.com']);
+    expect(memoryMailer().sent.map((x) => x.to)).toEqual([user.email, 'fresh@example.com']);
+    const token = tokenFromMail(user.email, 'login_link');
+    const verified = await post('/v1/auth/email/verify', {}, { token });
+    expect(verified.statusCode).toBe(200);
+    expect(verified.json()).toMatchObject({ user: { id: user.id }, hasPasskey: true });
+    const cookies = responseCookies(verified.headers['set-cookie']);
+    const login: Login = {
+      token: cookies.tendr_session!,
+      csrf: cookies.tendr_csrf!,
+      userId: user.id,
+    };
+    expect(login.token).not.toBe(originalSession.token);
+    const me = await app.inject({ url: '/v1/me', headers: dashHeaders(login) });
+    expect(me.statusCode).toBe(200);
+    expect(me.json()).toMatchObject({
+      user: { id: user.id },
+      stores: [{ id: merchant.id }],
+      passkeys: [{ id: cred.id }],
+    });
+    expect(
+      (await app.inject({ url: '/v1/me', headers: dashHeaders(originalSession) })).statusCode,
+    ).toBe(200);
+    const sessions = await prisma.dashboardSession.findMany({ where: { userId: user.id } });
+    expect(sessions.filter((s) => s.passkeyVerifiedAt === null)).toHaveLength(1);
+    expectStepUp(await post('/v1/auth/passkeys/register/options', dashHeaders(login)));
+    expectStepUp(
+      await app.inject({
+        method: 'DELETE',
+        url: `/v1/auth/passkeys/${cred.id}`,
+        headers: dashHeaders(login),
+      }),
+    );
+    expectStepUp(
+      await post('/v1/team/invites', dashHeaders(login, { merchantId: merchant.id }), {
+        email: 'another@example.com',
+        role: 'owner',
+      }),
+    );
+    expect((await post('/v1/auth/email/verify', {}, { token })).statusCode).toBe(401);
+    expect(await prisma.user.count()).toBe(peopleBefore);
+    expect(
+      await prisma.webauthnCredential.count({ where: { userId: user.id, revokedAt: null } }),
+    ).toBe(1);
   });
 
   it('passkey login sessions start stepped up; revoking a passkey ends other sessions', async () => {

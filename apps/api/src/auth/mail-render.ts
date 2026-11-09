@@ -53,8 +53,9 @@ const COPY: Record<MailTemplate, (d: Data) => Copy> = {
   login_link: (d) => ({
     subject: 'Your Tendr sign-in link',
     lines: [
-      'Use this link to sign in to Tendr.',
+      'Use this link to sign in to your existing Tendr account, including on another device.',
       ...link('Sign in', d.url),
+      'This link does not approve a payment or replace your wallet passkey.',
       'The link works once and expires soon. If you did not ask for it, ignore this email.',
     ],
   }),

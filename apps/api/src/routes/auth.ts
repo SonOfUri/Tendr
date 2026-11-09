@@ -102,8 +102,11 @@ async function startSession(reply: FastifyReply, userId: string, passkeyVerified
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post('/v1/auth/email/start', { config: { auth: 'public' } }, async (req, reply) => {
-    const { email } = z.object({ email: EmailSchema }).strict().parse(req.body);
-    await startEmailSignIn(email);
+    const { email, next } = z
+      .object({ email: EmailSchema, next: z.string().max(2048).optional() })
+      .strict()
+      .parse(req.body);
+    await startEmailSignIn(email, next);
     // Same answer whether or not the person exists.
     return reply.status(202).send({ ok: true });
   });
@@ -113,7 +116,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       .object({ token: z.string().min(1).max(256) })
       .strict()
       .parse(req.body);
-    // Only for a person with no active passkey (signup / first-passkey bootstrap).
+    // Email proves account access, never a passkey assertion or wallet authorization.
     const { userId } = await consumeEmailLink(token);
     return startSession(reply, userId, false);
   });

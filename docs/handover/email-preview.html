@@ -39,7 +39,7 @@
 <header><div class="eyebrow">Tendr · frontend handover · 2026-11-09</div>
 <h1>Transactional email inventory</h1>
 <p>23 template keys · 29 synthetic cases · no emails sent</p>
-<p class="notice"><strong>Current plain-text baseline, not an HTML email design.</strong> These cards show the current renderer output and supplied copy. Production does not yet send designed HTML. All recipients, IDs and links are synthetic; action URLs are displayed as text.</p>
+<p class="notice"><strong>Current plain-text baseline, not an HTML email design.</strong> These cards show the plain-text renderer output and supplied copy. They do not preview the HTML email layout available on deploy. All recipients, IDs and links are synthetic; action URLs are displayed as text.</p>
 <p>Use the AI, invoice and email delivery brief alongside this gallery. Expand each payload to see which fields exist today. Regenerate with <code>node --import tsx docs/handover/preview-email-fixtures.mts</code>.</p>
 </header>
 <nav aria-label="Email scenarios"><a href="#verify-email">verify-email</a>
@@ -93,13 +93,14 @@ The link works once and expires soon. If you did not ask for it, ignore this ema
 </article>
 <article id="login-link" aria-labelledby="login-link-title">
   <div class="case-heading"><h2 id="login-link-title">login-link</h2><a href="#top">Back to index</a></div>
-  <p class="scenario">Verified person without an active login passkey finishes sign-in.</p>
+  <p class="scenario">Verified person signs into the existing account on another device, with or without an available login passkey. Email access does not authorize wallet transfers.</p>
   <dl><dt>Template</dt><dd><code>login_link</code></dd>
   <dt>Recipient</dt><dd>returning-person@example.com</dd>
   <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
-  <div class="message"><h3>Your Tendr sign-in link</h3><pre>Use this link to sign in to Tendr.
+  <div class="message"><h3>Your Tendr sign-in link</h3><pre>Use this link to sign in to your existing Tendr account, including on another device.
 Sign in:
-https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID
+https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID&amp;next=%2Fdashboard%2Finvoices%3Fstore%3Dmer_example%26mode%3Dlive
+This link does not approve a payment or replace your wallet passkey.
 The link works once and expires soon. If you did not ask for it, ignore this email.
 
 -- Tendr</pre></div>
@@ -107,7 +108,7 @@ The link works once and expires soon. If you did not ask for it, ignore this ema
   &quot;to&quot;: &quot;returning-person@example.com&quot;,
   &quot;template&quot;: &quot;login_link&quot;,
   &quot;data&quot;: {
-    &quot;url&quot;: &quot;https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID&quot;
+    &quot;url&quot;: &quot;https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID&amp;next=%2Fdashboard%2Finvoices%3Fstore%3Dmer_example%26mode%3Dlive&quot;
   }
 }</pre></details>
 </article>

@@ -124,7 +124,7 @@ const html = `<!doctype html>
 <header><div class="eyebrow">Tendr · frontend handover · ${escape(input.reviewed_at)}</div>
 <h1>Transactional email inventory</h1>
 <p>${templates.size} template keys · ${input.fixtures.length} synthetic cases · no emails sent</p>
-<p class="notice"><strong>Current plain-text baseline, not an HTML email design.</strong> These cards show the current renderer output and supplied copy. Production does not yet send designed HTML. All recipients, IDs and links are synthetic; action URLs are displayed as text.</p>
+<p class="notice"><strong>Current plain-text baseline, not an HTML email design.</strong> These cards show the plain-text renderer output and supplied copy. They do not preview the HTML email layout available on deploy. All recipients, IDs and links are synthetic; action URLs are displayed as text.</p>
 <p>Use the AI, invoice and email delivery brief alongside this gallery. Expand each payload to see which fields exist today. Regenerate with <code>node --import tsx docs/handover/preview-email-fixtures.mts</code>.</p>
 </header>
 <nav aria-label="Email scenarios">${navigation}</nav>
