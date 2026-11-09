@@ -7,7 +7,13 @@ import { loadEnv } from '../env.js';
 import { fakeNearClient, resetNearClients } from '../near/client.js';
 import { SoftAuthenticator } from '../test/authenticator.js';
 import { createMerchant, createUser, createRow, resetDb, setLiveMode } from '../test/helpers.js';
-import { dashHeaders, loginAs, type Login } from '../test/dashboard.js';
+import {
+  dashHeaders,
+  loginAs,
+  responseCookies,
+  tokenFromMail,
+  type Login,
+} from '../test/dashboard.js';
 import { registrationOptions, verifyRegistration } from '../auth/webauthn.js';
 import {
   HttpOneClick,
@@ -224,6 +230,62 @@ describe('native passkey wallet API', () => {
     const second = await activate();
     expect(second.nearAccountId).not.toBe(first.json().accountId);
     expect(await prisma.merchantAccount.count({ where: { merchantId: previous } })).toBe(1);
+  });
+
+  it('email login on another device keeps the existing live wallet without signing authority', async () => {
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: login.userId } });
+    const loginKey = new SoftAuthenticator();
+    await verifyRegistration(user, loginKey.create(await registrationOptions(user)), 'Laptop');
+    login = await loginAs(user.id);
+    const account = await activate();
+    const peopleBefore = await prisma.user.count();
+    expect((await post('/v1/auth/email/start', { email: user.email }, {})).statusCode).toBe(202);
+    const verified = await post(
+      '/v1/auth/email/verify',
+      {
+        token: tokenFromMail(user.email, 'login_link'),
+      },
+      {},
+    );
+    expect(verified.statusCode).toBe(200);
+    expect(verified.json()).toMatchObject({ user: { id: user.id }, hasPasskey: true });
+    const cookies = responseCookies(verified.headers['set-cookie']);
+    const second: Login = {
+      userId: user.id,
+      token: cookies.tendr_session!,
+      csrf: cookies.tendr_csrf!,
+    };
+    expect(second.token).not.toBe(login.token);
+    const secondHeaders = dashHeaders(second, { merchantId, livemode: true });
+    for (const sessionHeaders of [headers(), secondHeaders]) {
+      const view = await app.inject({ method: 'GET', url: '/v1/account', headers: sessionHeaders });
+      expect(view.statusCode).toBe(200);
+      expect(view.json()).toMatchObject({
+        livemode: true,
+        account: { id: account.id, nearAccountId: account.nearAccountId, status: 'active' },
+        nativeWallet: { ownerUserId: user.id },
+      });
+      const balances = await app.inject({
+        method: 'GET',
+        url: '/v1/account/balances',
+        headers: sessionHeaders,
+      });
+      expect(balances.statusCode).toBe(200);
+      expect(balances.json().accountId).toBe(account.nearAccountId);
+    }
+    for (const path of [
+      `${base}/passkey/options`,
+      `${base}/payouts`,
+      `${base}/payouts/npay_example/submit`,
+    ]) {
+      const denied = await post(path, {}, secondHeaders);
+      expect(denied.statusCode).toBe(401);
+      expect(denied.json().error.code).toBe('STEP_UP_REQUIRED');
+    }
+    expect(await prisma.user.count()).toBe(peopleBefore);
+    expect(await prisma.merchantAccount.count({ where: { merchantId, livemode: true } })).toBe(1);
+    expect(await prisma.nativeWallet.count({ where: { merchantId, livemode: true } })).toBe(1);
+    expect(submit).not.toHaveBeenCalled();
   });
 
   it('allows a login authenticator to create distinct wallets for multiple stores', async () => {

@@ -9,7 +9,7 @@ import { AuthCta } from '@/components/login/AuthCta';
 import { AuthStage } from '@/components/login/AuthStage';
 import { api, errorMessage } from '@/lib/api';
 import { loadConnectParams, takeConnectWaiting } from '@/lib/connect';
-import { takePendingInvite } from '@/lib/navigation';
+import { safeNext, takePendingInvite } from '@/lib/navigation';
 import { registerPasskey, type SessionStart } from '@/lib/webauthn';
 
 type Step = 'confirm' | 'passkey' | 'done' | 'connect-elsewhere';
@@ -19,6 +19,7 @@ function Verify() {
   const params = useSearchParams();
   // Read once, then dropped from the address bar so it is not kept in history or referrers.
   const [token] = useState(() => params.get('token'));
+  const [next] = useState(() => safeNext(params.get('next')));
   const [step, setStep] = useState<Step>('confirm');
   const [email, setEmail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -44,7 +45,7 @@ function Verify() {
     setStep('done');
     // A new person lands on business naming (the dashboard sends anyone with no business there), or
     // back on the invite they came from.
-    router.replace(takePendingInvite() ?? '/dashboard');
+    router.replace(takePendingInvite() ?? next);
   }
 
   // Confirming needs a click: mail scanners that open links must not use up the link.
@@ -84,10 +85,10 @@ function Verify() {
   if (!token) {
     return (
       <>
-        <p className="login-panel-eyebrow">Sign up</p>
+        <p className="login-panel-eyebrow">Email verification</p>
         <h1>This link is incomplete</h1>
         <p className="login-panel-lead">
-          Open the link from your email again, or <Link href="/signup">ask for a new one</Link>.
+          Open the link from your email again, or <Link href="/login">ask for a new one</Link>.
         </p>
       </>
     );
@@ -106,16 +107,28 @@ function Verify() {
     );
   }
 
-  if (step === 'passkey' || step === 'done') {
+  if (step === 'done') {
+    return (
+      <>
+        <p className="login-panel-eyebrow">Signed in</p>
+        <h1>You’re signed in</h1>
+        <p className="login-panel-lead">Opening your account…</p>
+      </>
+    );
+  }
+
+  if (step === 'passkey') {
     return (
       <>
         <p className="login-panel-eyebrow">Step 2 of 3</p>
         <h1>Create your passkey</h1>
         <div className="login-panel-copy">
+          <p>{email ? <strong>{email}</strong> : 'Your email'} is confirmed.</p>
           <p>
-            {email ? <strong>{email}</strong> : 'Your email'} is confirmed.
+            Now make a passkey: it is a quick way to sign in and confirm sensitive account changes.
+            Your live wallet uses a separate wallet passkey to approve transfers. You can also sign
+            in with an email link.
           </p>
-          <p>Now make a passkey. It is how you sign in and approve money leaving your business.</p>
           <p>
             Your device asks for Face ID, Touch ID, Windows Hello or its PIN. There is no password
             to remember.
@@ -129,7 +142,7 @@ function Verify() {
           </span>
         </p>
         {error && <Alert tone="danger">{error}</Alert>}
-        <AuthCta onClick={createPasskey} disabled={busy || step === 'done'}>
+        <AuthCta onClick={createPasskey} disabled={busy}>
           {busy ? 'Waiting for your device…' : 'Create my passkey'}
         </AuthCta>
       </>
@@ -138,12 +151,14 @@ function Verify() {
 
   return (
     <>
-      <p className="login-panel-eyebrow">Sign up</p>
+      <p className="login-panel-eyebrow">Email verification</p>
       <h1>Confirm your email</h1>
-      <p className="login-panel-lead">One click and you’re in. Then you’ll create your passkey.</p>
+      <p className="login-panel-lead">
+        Confirm to open your account. New accounts will finish passkey setup.
+      </p>
       {error && (
         <Alert tone="danger">
-          {error} <Link href="/signup">Ask for a new link</Link>.
+          {error} <Link href="/login">Ask for a new link</Link>.
         </Alert>
       )}
       <AuthCta onClick={confirm} disabled={busy}>

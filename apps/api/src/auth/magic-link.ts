@@ -1,8 +1,6 @@
-// Email magic links: verifying a new person's email (signup) and bootstrapping their first
-// passkey. A link creates a session ONLY for a person with no active passkey; anyone with a
-// passkey signs in with it, so a mailbox alone never opens an account that has one.
-// Losing every passkey is not solved by email: a signer recovers through the recovery kit
-// (Task 12, `start_recovery`), which replaces the signer set on chain.
+// Email magic links verify signup and sign returning people into their existing account on any
+// device. Email sessions are NOT passkey-stepped-up: key changes and protected actions retain
+// their separate checks. A login link cannot recover or replace a native wallet's signing key.
 //
 // A link carries 32 random bytes (base64url); only `sha256(token)` is stored in `email_tokens`.
 // Links are single-use and live 15 minutes. Using a link creates the person on first use (one
@@ -26,18 +24,14 @@ export function newLinkToken(): { raw: string; hash: string } {
   return { raw, hash: sha256(raw) };
 }
 
-const hasActivePasskey = async (userId: string) =>
-  (await prisma.webauthnCredential.count({ where: { userId, revokedAt: null } })) > 0;
-
 /**
- * Sends a sign-in link: `login_link` to a verified person with no passkey yet, `verify_email` to
- * anyone new. A person with an active passkey gets nothing (they log in with the passkey). The
- * caller learns nothing about which case applied.
+ * Sends `login_link` to a verified person, including those with passkeys, and `verify_email` to
+ * anyone new. The caller learns nothing about which case applied. `next` is a same-site path;
+ * it travels in the email so opening the link in another tab/device preserves the destination.
  */
-export async function startEmailSignIn(rawEmail: string): Promise<void> {
+export async function startEmailSignIn(rawEmail: string, next?: string): Promise<void> {
   const email = EmailSchema.parse(rawEmail);
   const user = await prisma.user.findUnique({ where: { email } });
-  if (user && (await hasActivePasskey(user.id))) return;
   const purpose = user?.emailVerifiedAt ? 'login' : 'verify';
   const { raw, hash } = newLinkToken();
   await prisma.emailToken.create({
@@ -51,6 +45,14 @@ export async function startEmailSignIn(rawEmail: string): Promise<void> {
   });
   const url = new URL('/verify', env().WEB_URL);
   url.searchParams.set('token', raw);
+  if (
+    next?.startsWith('/') &&
+    !next.startsWith('//') &&
+    !next.includes('\\') &&
+    ![...next].some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)
+  ) {
+    url.searchParams.set('next', next);
+  }
   await getMailer().send({
     to: email,
     template: purpose === 'login' ? 'login_link' : 'verify_email',
@@ -60,8 +62,7 @@ export async function startEmailSignIn(rawEmail: string): Promise<void> {
 
 /**
  * Consumes a verify/login link and returns the person, creating them on first use. Throws 401
- * for an unknown, used or expired link, and for a person who has registered a passkey since the
- * link was sent.
+ * for an unknown, used or expired link. Registering a passkey does not change the email's person.
  */
 export async function consumeEmailLink(token: string): Promise<{ userId: string; email: string }> {
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw unauthorized('Invalid or expired link');
@@ -83,6 +84,5 @@ export async function consumeEmailLink(token: string): Promise<{ userId: string;
           updated_at = EXCLUDED.updated_at
     RETURNING id`;
   const userId = users[0]!.id;
-  if (await hasActivePasskey(userId)) throw unauthorized('Sign in with your passkey');
   return { userId, email };
 }

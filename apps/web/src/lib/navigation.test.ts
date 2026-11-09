@@ -9,6 +9,9 @@ describe('safeNext', () => {
     expect(safeNext('//evil.example')).toBe('/dashboard');
     expect(safeNext('https://evil.example')).toBe('/dashboard');
     expect(safeNext('/\\evil.example')).toBe('/dashboard');
+    expect(safeNext('/\n/evil.example')).toBe('/dashboard');
+    expect(safeNext('/\t/evil.example')).toBe('/dashboard');
+    expect(safeNext('/' + 'a'.repeat(2048))).toBe('/dashboard');
     expect(safeNext(null)).toBe('/dashboard');
   });
 });

@@ -15,12 +15,12 @@
     },
     {
       "id": "login-link",
-      "scenario": "Verified person without an active login passkey finishes sign-in.",
+      "scenario": "Verified person signs into the existing account on another device, with or without an available login passkey. Email access does not authorize wallet transfers.",
       "message": {
         "to": "returning-person@example.com",
         "template": "login_link",
         "data": {
-          "url": "https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID"
+          "url": "https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID&next=%2Fdashboard%2Finvoices%3Fstore%3Dmer_example%26mode%3Dlive"
         }
       }
     },

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { Alert } from '@tendr/ui';
+import { EmailSignInForm } from '@/components/auth/EmailSignInForm';
 import { AuthCta } from '@/components/login/AuthCta';
 import { AuthStage } from '@/components/login/AuthStage';
 import { toast } from '@/components/toast';
@@ -36,8 +37,7 @@ function Login() {
       <p className="login-panel-eyebrow">Merchant access</p>
       <h1>Sign in to Tendr</h1>
       <p className="login-panel-lead">
-        Use your passkey — Face ID, Touch ID, Windows Hello, or your device PIN. If it lives on your
-        phone, your browser can show a code to scan.
+        Use your login passkey or verify your email to access your existing account on this device.
       </p>
 
       {error && <Alert tone="danger">{error}</Alert>}
@@ -46,11 +46,19 @@ function Login() {
         {busy ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
       </AuthCta>
 
+      <p className="login-panel-lead">Or sign in with email</p>
+      <EmailSignInForm
+        next={next}
+        disabled={busy}
+        className="login-panel-form"
+        SubmitButton={AuthCta}
+      />
+
       <p className="login-panel-foot">
         New to Tendr? <Link href="/signup">Create an account</Link>
       </p>
       <p className="login-panel-foot login-panel-foot--muted">
-        Lost every passkey? <Link href="/recover">Use your recovery kit</Link>
+        Recovering a shared contract account? <Link href="/recover">Use your recovery kit</Link>
       </p>
     </AuthStage>
   );
