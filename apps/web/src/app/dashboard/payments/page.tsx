@@ -15,7 +15,7 @@ import {
   Panel,
   Select,
 } from '@/components/dashboard/ui';
-import { formatAmount } from '@/lib/assets';
+import { formatTokenAmount } from '@/lib/assets';
 import { api } from '@/lib/api';
 import { PAYMENT_STATUSES, type PaymentList, type PaymentSummary } from '@/lib/payments';
 
@@ -185,7 +185,12 @@ function PaymentsContent() {
                       ) : null}
                     </td>
                     <td>
-                      {formatAmount(p.received.asset, p.received.amount, context.livemode)}
+                      {formatTokenAmount(
+                        p.received.asset,
+                        p.received.amount,
+                        context.livemode,
+                        p.received,
+                      )}
                       {p.source.chain ? (
                         <div className="dash-muted dash-small">on {p.source.chain}</div>
                       ) : null}

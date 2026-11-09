@@ -37,9 +37,26 @@ export interface PaymentSummary {
   /** The payer's note from the link's page; plain text. */
   payer_note?: string | null;
   order: { amount: string; currency: string };
-  source: { asset: string; chain: string | null };
-  received: { asset: string; amount: string };
-  settlement: { asset: string; chain: string; amount_out: string | null };
+  source: {
+    asset: string;
+    chain: string | null;
+    /** From the 1Click catalog when known. */
+    symbol?: string | null;
+    decimals?: number | null;
+  };
+  received: {
+    asset: string;
+    amount: string;
+    symbol?: string | null;
+    decimals?: number | null;
+  };
+  settlement: {
+    asset: string;
+    chain: string;
+    amount_out: string | null;
+    symbol?: string | null;
+    decimals?: number | null;
+  };
   is_late: boolean;
   held_reason: string | null;
   created_at: string;

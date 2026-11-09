@@ -18,7 +18,7 @@ import { InfoTip } from '@/components/dashboard/InfoTip';
 import { OverviewSkeleton } from '@/components/dashboard/Skeleton';
 import { ErrorState } from '@/components/dashboard/ui';
 import { useLoad } from '@/components/dashboard/common';
-import { assetInfo, chainLabel, formatAmount, formatUnits } from '@/lib/assets';
+import { assetInfo, chainLabel, formatAmount, formatTokenAmount, formatUnits } from '@/lib/assets';
 import { api, type Balances } from '@/lib/api';
 import type { PaymentList, PaymentStatus, PaymentSummary } from '@/lib/payments';
 
@@ -182,10 +182,20 @@ function shortPayLabel(id: string): string {
   return `${t.slice(0, 4)}…${t.slice(-4)}`;
 }
 
-function shortReceived(text: string, max = 22): string {
+function shortReceived(text: string, max = 28): string {
   const t = text.trim();
   if (t.length <= max) return t;
   return `${t.slice(0, Math.max(6, max - 5))}…`;
+}
+
+/** Merchant-facing reference: order ref, payer note, or the payment link id. */
+function referenceLabel(p: PaymentSummary): string {
+  const ref = p.external_ref?.trim();
+  if (ref) return ref;
+  const note = p.payer_note?.trim();
+  if (note) return note.length > 32 ? `${note.slice(0, 30)}…` : note;
+  if (p.payment_link_id) return shortPayLabel(p.payment_link_id);
+  return '—';
 }
 
 function CopyIconButton({ value, label }: { value: string; label: string }) {
@@ -677,11 +687,13 @@ export default function OverviewPage() {
             </thead>
             <tbody>
                 {shown.slice(0, 8).map((p) => {
-                  const received = formatAmount(p.received.asset, p.received.amount, livemode);
-                  const receivedCopy =
-                    p.received.amount && p.received.asset
-                      ? `${p.received.amount} ${p.received.asset}`
-                      : received;
+                  const received = formatTokenAmount(
+                    p.received.asset,
+                    p.received.amount,
+                    livemode,
+                    p.received,
+                  );
+                  const ref = referenceLabel(p);
                   return (
                     <tr key={p.id}>
                       <td>
@@ -696,7 +708,9 @@ export default function OverviewPage() {
                           <CopyIconButton value={p.id} label="Copy payment id" />
                         </span>
                       </td>
-                      <td className="ov-muted">{p.external_ref || '—'}</td>
+                      <td className="ov-muted" title={ref !== '—' ? ref : undefined}>
+                        {ref}
+                      </td>
                       <td>
                         {p.order.amount} {p.order.currency}
                       </td>
@@ -705,7 +719,7 @@ export default function OverviewPage() {
                           <span className="ov-received" title={received}>
                             {shortReceived(received)}
                           </span>
-                          <CopyIconButton value={receivedCopy} label="Copy received amount" />
+                          <CopyIconButton value={received} label="Copy received amount" />
                         </span>
                       </td>
                       <td>

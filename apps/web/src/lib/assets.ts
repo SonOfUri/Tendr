@@ -57,6 +57,29 @@ export function formatAmount(asset: string, raw: string, livemode: boolean): str
 }
 
 /**
+ * Format a payment received/settlement amount. Prefers API-provided catalog symbol/decimals
+ * (so bridged / HOT assets read as `1.00 USDC` instead of a raw nep245 id).
+ */
+export function formatTokenAmount(
+  asset: string,
+  raw: string,
+  livemode: boolean,
+  meta?: { symbol?: string | null; decimals?: number | null } | null,
+): string {
+  if (
+    meta &&
+    typeof meta.symbol === 'string' &&
+    meta.symbol.length > 0 &&
+    typeof meta.decimals === 'number' &&
+    Number.isInteger(meta.decimals) &&
+    meta.decimals >= 0 &&
+    meta.decimals <= 24
+  ) {
+    return `${formatUnits(raw, meta.decimals)} ${meta.symbol}`;
+  }
+  return formatAmount(asset, raw, livemode);
+}
+/**
  * The NEP-141 token contract of a PoA (same-token) withdrawal: the asset's own contract. Null for
  * assets that are not NEP-141 tokens (they cannot be withdrawn as the same token from here).
  */

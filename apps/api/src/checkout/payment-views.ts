@@ -16,6 +16,8 @@ import { networkFeeView } from '../gas/quote-fee.js';
 import { refundView } from './review.js';
 import { revenueLines } from './revenue.js';
 import { sessionRefs } from './session-refs.js';
+import { tokenList } from './tokens.js';
+import type { TokenInfo } from './oneclick/types.js';
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 const dec = (d: Prisma.Decimal | null) => (d ? d.toFixed() : null);
@@ -74,7 +76,15 @@ const include = {
 
 type Row = Prisma.PaymentGetPayload<{ include: typeof include }>;
 
-function summary(p: Row) {
+/** Display fields for an amount when the 1Click catalog knows the asset. */
+function tokenDisplay(assetId: string, catalog: Map<string, TokenInfo>) {
+  const t = catalog.get(assetId);
+  return t ? { symbol: t.symbol, decimals: t.decimals } : { symbol: null, decimals: null };
+}
+
+function summary(p: Row, catalog: Map<string, TokenInfo> = new Map()) {
+  const origin = tokenDisplay(p.quote.originAssetId, catalog);
+  const dest = tokenDisplay(p.session.destAsset, catalog);
   return {
     id: p.id,
     livemode: p.livemode,
@@ -82,18 +92,48 @@ function summary(p: Row) {
     session_id: p.sessionId,
     ...sessionRefs(p.session),
     order: { amount: p.session.amount.toFixed(), currency: p.session.amountCurrency },
-    source: { asset: p.quote.originAssetId, chain: p.senderChain },
-    received: { asset: p.quote.originAssetId, amount: p.amountReceived.toFixed(0) },
+    source: {
+      asset: p.quote.originAssetId,
+      chain: p.senderChain,
+      symbol: origin.symbol,
+      decimals: origin.decimals,
+    },
+    received: {
+      asset: p.quote.originAssetId,
+      amount: p.amountReceived.toFixed(0),
+      symbol: origin.symbol,
+      decimals: origin.decimals,
+    },
     settlement: {
       asset: p.session.destAsset,
       chain: p.session.destChain,
       amount_out: units(p.amountOut),
+      symbol: dest.symbol,
+      decimals: dest.decimals,
     },
     is_late: p.isLate,
     held_reason: p.heldReason,
     created_at: p.createdAt.toISOString(),
     settled_at: iso(p.settledAt),
   };
+}
+
+/** Cached 1Click catalog for this mode (and live as a fallback in test). Never throws. */
+async function catalogFor(livemode: boolean): Promise<Map<string, TokenInfo>> {
+  try {
+    const primary = await tokenList(livemode);
+    if (livemode || primary.size > 0) return primary;
+  } catch {
+    /* fall through */
+  }
+  if (!livemode) {
+    try {
+      return await tokenList(true);
+    } catch {
+      /* ignore */
+    }
+  }
+  return new Map();
 }
 
 export async function listPayments(db: ScopedDb, query: z.infer<typeof PaymentListQuerySchema>) {
@@ -112,13 +152,13 @@ export async function listPayments(db: ScopedDb, query: z.infer<typeof PaymentLi
     ...(query.starting_after ? { cursor: { id: query.starting_after }, skip: 1 } : {}),
   });
   const page = rows.slice(0, query.limit);
+  const catalog = await catalogFor(page[0]?.livemode ?? true);
   return {
-    payments: page.map(summary),
+    payments: page.map((p) => summary(p, catalog)),
     has_more: rows.length > query.limit,
     next_cursor: rows.length > query.limit ? (page[page.length - 1]?.id ?? null) : null,
   };
 }
-
 /** API names of the revenue sources (the dashboard's fee lines). */
 const FEE_KIND: Readonly<Record<string, Exclude<FeeKind, 'other'>>> = {
   app_fee: 'tendr_fee',
@@ -150,10 +190,11 @@ export interface FeeLine {
 export async function getPayment(db: ScopedDb, id: string) {
   const p = await db.payment.findFirst({ where: { id }, include });
   if (!p) throw notFound('Payment not found');
-  const [entries, refunds, claim] = await Promise.all([
+  const [entries, refunds, claim, catalog] = await Promise.all([
     db.revenueEntry.findMany({ where: { paymentId: p.id }, orderBy: { createdAt: 'asc' } }),
     db.refund.findMany({ where: { paymentId: p.id }, orderBy: { createdAt: 'asc' } }),
     db.settlementClaim.findFirst({ where: { paymentId: p.id } }),
+    catalogFor(p.livemode),
   ]);
   // Settlement lines only (`reference = ''`): a shopper-paid fee leg (`gas_reimbursement` with
   // the submission as reference) is Tendr's revenue from the shopper, not a fee on the store.
@@ -189,7 +230,7 @@ export async function getPayment(db: ScopedDb, id: string) {
     };
   });
   return {
-    ...summary(p),
+    ...summary(p, catalog),
     fee_payer: feePayerFromDb(p.session.feePayer),
     gas_payer: gasPayerFromDb(p.session.gasSponsor),
     fee_bps: p.session.feeBps,

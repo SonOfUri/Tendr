@@ -15,8 +15,30 @@ const LIVE: Readonly<Record<string, RegisteredAsset>> = {
   },
   'nep141:usdt.tether-token.near': { symbol: 'USDT', decimals: 6 },
   'nep141:wrap.near': { symbol: 'wNEAR', decimals: 24 },
+  // Bridged natives / stables (1Click omft) — common checkout origin assets.
+  'nep141:base.omft.near': { symbol: 'ETH', decimals: 18 },
+  'nep141:eth.omft.near': { symbol: 'ETH', decimals: 18 },
+  'nep141:arb.omft.near': { symbol: 'ETH', decimals: 18 },
+  'nep141:op.omft.near': { symbol: 'ETH', decimals: 18 },
+  'nep141:bsc.omft.near': { symbol: 'BNB', decimals: 18 },
+  'nep141:avax.omft.near': { symbol: 'AVAX', decimals: 18 },
+  'nep141:pol.omft.near': { symbol: 'POL', decimals: 18 },
+  'nep141:sol.omft.near': { symbol: 'SOL', decimals: 9 },
+  'nep141:btc.omft.near': { symbol: 'BTC', decimals: 8 },
+  'nep141:tron.omft.near': { symbol: 'TRX', decimals: 6 },
+  'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near': {
+    symbol: 'USDC',
+    decimals: 6,
+  },
+  'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near': {
+    symbol: 'USDC',
+    decimals: 6,
+  },
+  'nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near': {
+    symbol: 'USDT',
+    decimals: 6,
+  },
 };
-
 const TEST: Readonly<Record<string, RegisteredAsset>> = {
   // Testnet stand-ins used with the mock intents verifier (and the dashboard e2e).
   'nep141:usdc.fakes.testnet': { symbol: 'USDC', decimals: 6 },

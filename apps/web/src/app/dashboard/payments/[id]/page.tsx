@@ -7,7 +7,7 @@ import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useLoad } from '@/components/dashboard/common';
 import { ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
-import { chainLabel, formatAmount } from '@/lib/assets';
+import { chainLabel, formatAmount, formatTokenAmount } from '@/lib/assets';
 import { api } from '@/lib/api';
 import {
   explorerTxUrl,
@@ -41,8 +41,11 @@ export default function PaymentPage() {
   }
   const p = detail.data;
   const lm = context.livemode;
-  const amount = (asset: string, raw: string | null) =>
-    raw === null ? '—' : formatAmount(asset, raw, lm);
+  const amount = (
+    asset: string,
+    raw: string | null,
+    meta?: { symbol?: string | null; decimals?: number | null } | null,
+  ) => (raw === null ? '—' : formatTokenAmount(asset, raw, lm, meta));
 
   return (
     <>
@@ -55,7 +58,11 @@ export default function PaymentPage() {
         description={
           <span className="dash-mono">
             {p.id} · session {p.session_id}
-            {p.external_ref ? ` · order ${p.external_ref}` : ''}
+            {p.external_ref
+              ? ` · order ${p.external_ref}`
+              : p.payment_link_id
+                ? ` · link ${p.payment_link_id}`
+                : ''}
           </span>
         }
       />
@@ -77,7 +84,7 @@ export default function PaymentPage() {
           <div>
             <dt>Received</dt>
             <dd>
-              {amount(p.received.asset, p.received.amount)}
+              {amount(p.received.asset, p.received.amount, p.received)}
               {p.quote.amount_in_usd && (
                 <span className="dash-muted"> ({formatUsd(p.quote.amount_in_usd)} at quote)</span>
               )}
@@ -86,7 +93,14 @@ export default function PaymentPage() {
           <div>
             <dt>Source</dt>
             <dd>
-              <span className="dash-mono">{p.source.asset}</span>
+              {p.source.symbol ? (
+                <>
+                  {p.source.symbol}
+                  <span className="dash-muted dash-small"> ({p.source.asset})</span>
+                </>
+              ) : (
+                <span className="dash-mono">{p.source.asset}</span>
+              )}
               {p.source.chain && <> on {chainLabel(p.source.chain)}</>}
             </dd>
           </div>
