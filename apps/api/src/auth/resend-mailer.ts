@@ -19,7 +19,7 @@ export class ResendMailer implements Mailer {
   }
 
   async send(msg: MailMessage): Promise<void> {
-    const { subject, text } = renderMail(msg);
+    const { subject, text, html } = renderMail(msg);
     let res: Response;
     try {
       res = await this.fetchFn(RESEND_URL, {
@@ -28,7 +28,7 @@ export class ResendMailer implements Mailer {
           Authorization: `Bearer ${this.apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ from: this.from, to: [msg.to], subject, text }),
+        body: JSON.stringify({ from: this.from, to: [msg.to], subject, text, html }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
     } catch (err) {

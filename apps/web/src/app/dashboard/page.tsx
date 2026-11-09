@@ -15,6 +15,7 @@ import {
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { TokenLogo } from '@/components/dashboard/asset-logos';
 import { InfoTip } from '@/components/dashboard/InfoTip';
+import { AiInsightsPanel } from '@/components/dashboard/AiInsightsPanel';
 import { OverviewSkeleton } from '@/components/dashboard/Skeleton';
 import { ErrorState } from '@/components/dashboard/ui';
 import { useLoad } from '@/components/dashboard/common';
@@ -641,6 +642,12 @@ export default function OverviewPage() {
             )}
           </div>
         </article>
+
+        {store && context ? (
+          <div className="ov-insights">
+            <AiInsightsPanel merchantId={store.id} livemode={context.livemode} />
+          </div>
+        ) : null}
 
         <article className="ov-card ov-card--list">
           <header className="ov-card-head">

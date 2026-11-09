@@ -2,7 +2,7 @@
 // session client secret as `Authorization: Bearer <secret>`. The secret goes in that header only:
 // never in a URL, a body, a cookie or web storage. Requests carry no cookies (`credentials:
 // 'omit'`) and no referrer. Errors use the API's `{ error: { code, message, details? } }` envelope.
-import type { ShopperTheme } from '@tendr/contracts';
+import type { AssistantAnswer, RouteRecommendations, ShopperTheme } from '@tendr/contracts';
 import type { FeeMode, GaslessApi, GaslessMethod } from '@/lib/wallets/gasless/index';
 
 export class CheckoutApiError extends Error {
@@ -222,6 +222,10 @@ export interface CheckoutClient extends GaslessApi {
   refundAddress(input: RefundAddressInput): Promise<RefundAddressResult>;
   /** Test mode only. */
   simulate(scenario: SimulateScenario): Promise<unknown>;
+  aiAssistant(question: string): Promise<AssistantAnswer>;
+  aiRecommendations(
+    assets: { asset_id: string; balance?: string }[],
+  ): Promise<RouteRecommendations>;
 }
 
 export function createCheckoutClient(opts: {
@@ -248,6 +252,8 @@ export function createCheckoutClient(opts: {
     gaslessPrepare: (input) => post('gasless/prepare', input),
     gaslessSubmit: (body) => post('gasless/submit', body),
     gaslessSubmission: (id) => get(`gasless/submissions/${encodeURIComponent(id)}`),
+    aiAssistant: (question) => post('ai/assistant', { question }),
+    aiRecommendations: (assets) => post('ai/recommendations', { assets }),
   };
 }
 

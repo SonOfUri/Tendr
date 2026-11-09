@@ -25,6 +25,7 @@ import type { DemoCheckoutBootstrap, DemoSlug } from '@/lib/demo';
 import { buildDemoUiQuote } from '@/lib/demo-ui-checkout';
 import { DemoAssetModal } from './DemoAssetModal';
 import { DemoStatusCard } from './DemoStatusCard';
+import { CheckoutAiFab } from '@/components/checkout/CheckoutAiFab';
 import { DemoTendrAiFab } from './DemoTendrAiFab';
 import { DemoTransferDetails } from './DemoTransferDetails';
 
@@ -482,15 +483,28 @@ export function DemoCheckoutPanel({
             />
 
             {!assetPickerOpen ? (
-              <DemoTendrAiFab
-                options={assetOptions}
-                amountLabel={amountUsd}
-                skin={skin}
-                onPickRoute={(id) => {
-                  setTokenId(id);
-                  setPhase('pay');
-                }}
-              />
+              uiOnly ? (
+                <DemoTendrAiFab
+                  options={assetOptions}
+                  amountLabel={amountUsd}
+                  skin={skin}
+                  onPickRoute={(id) => {
+                    setTokenId(id);
+                    setPhase('pay');
+                  }}
+                />
+              ) : (
+                <CheckoutAiFab
+                  client={client}
+                  sessionId={sessionId}
+                  options={assetOptions}
+                  amountLabel={amountUsd}
+                  onPickRoute={(id) => {
+                    setTokenId(id);
+                    setPhase('pay');
+                  }}
+                />
+              )
             ) : null}
 
             <div className="demo-pay-methods" role="tablist" aria-label="Payment method">

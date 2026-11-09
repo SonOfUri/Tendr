@@ -147,7 +147,10 @@ describe('renderMail', () => {
       subject: '[Test] You got paid',
       text: 'body\nline',
     });
-    expect(out).toEqual({ subject: '[Test] You got paid', text: 'body\nline' });
+    expect(out.subject).toBe('[Test] You got paid');
+    expect(out.text).toBe('body\nline');
+    expect(out.html).toContain('body');
+    expect(out.html).toContain('banner-gif.webp');
   });
 
   it('marks test-mode notices in the subject', () => {

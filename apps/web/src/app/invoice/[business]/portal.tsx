@@ -106,11 +106,11 @@ export function InvoicePortal({ business }: { business: string }) {
         <p className={styles.brand}>
           Tendr <span>INVOICES</span>
         </p>
-        {error && (
+        {error && (invoice || sent || data) ? (
           <p role="alert" className={styles.error}>
             {error}
           </p>
-        )}
+        ) : null}
         {invoice ? (
           <>
             <p className={styles.eyebrow}>{INVOICE_STATUS[invoice.status]}</p>
@@ -349,8 +349,19 @@ export function InvoicePortal({ business }: { business: string }) {
               </button>
             </form>
           </>
+        ) : error ? (
+          <div className={styles.stateBlock}>
+            <h1>Invoice page unavailable</h1>
+            <p>
+              {/paused|disabled|not accepting/i.test(error)
+                ? 'This business has paused new invoices. Ask them to enable their invoice page, then try again.'
+                : /expired|invalid|replaced/i.test(error)
+                  ? 'This email link is no longer valid. Request a new verification email by submitting the same reference again, or ask the business for help.'
+                  : error}
+            </p>
+          </div>
         ) : (
-          !error && <p role="status">Loading business…</p>
+          <p role="status">Loading business…</p>
         )}
         <p className={styles.footer}>Payments approved by the business. Powered by Tendr.</p>
       </div>

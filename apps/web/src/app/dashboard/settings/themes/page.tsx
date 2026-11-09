@@ -21,9 +21,13 @@ export default function ThemesPage() {
   const { store, uiPreview } = useDashboard();
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [siteUrl, setSiteUrl] = useState('');
   const [siteName, setSiteName] = useState('');
   const [name, setName] = useState('');
+  const [aiName, setAiName] = useState('');
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiKey, setAiKey] = useState(() => crypto.randomUUID());
   const [from, setFrom] = useState<'blank' | string>('blank');
   const action = useAction();
 
@@ -66,6 +70,27 @@ export default function ThemesPage() {
     );
     if (!created) return;
     router.push(`/dashboard/settings/themes/${created.id}`);
+  }
+
+  async function onGenerate(e: React.FormEvent) {
+    e.preventDefault();
+    const key = aiKey;
+    const created = await action.run(() =>
+      api<{ theme: ThemeObject }>('/v1/ai/themes', {
+        method: 'POST',
+        json: { name: aiName.trim(), prompt: aiPrompt.trim() },
+        headers: { 'Idempotency-Key': key },
+      }),
+    );
+    if (!created?.theme) {
+      // Keep the same idempotency key on recoverable failure so retries replay.
+      return;
+    }
+    setAiKey(crypto.randomUUID());
+    setAiName('');
+    setAiPrompt('');
+    setGenerating(false);
+    router.push(`/dashboard/settings/themes/${created.theme.id}`);
   }
 
   async function remove(theme: ThemeObject) {
@@ -124,15 +149,28 @@ export default function ThemesPage() {
                 onClick={() => {
                   setImporting((v) => !v);
                   setCreating(false);
+                  setGenerating(false);
                   action.setError(null);
                 }}
               >
                 {importing ? 'Cancel' : 'From website'}
               </Button>
               <Button
+                variant="secondary"
+                onClick={() => {
+                  setGenerating((v) => !v);
+                  setCreating(false);
+                  setImporting(false);
+                  action.setError(null);
+                }}
+              >
+                {generating ? 'Cancel' : 'Generate with AI'}
+              </Button>
+              <Button
                 onClick={() => {
                   setCreating((v) => !v);
                   setImporting(false);
+                  setGenerating(false);
                   action.setError(null);
                 }}
               >
@@ -153,6 +191,49 @@ export default function ThemesPage() {
         </Panel>
       ) : (
         <>
+          {generating && canWrite ? (
+            <Panel title="Generate with Tendr AI">
+              <form className="stack" onSubmit={(e) => void onGenerate(e)}>
+                <p className="dash-muted dash-small">
+                  Creates an unpublished draft from your prompt. Review and publish separately —
+                  AI never publishes for you.
+                </p>
+                <label className="field">
+                  <span>Name</span>
+                  <input
+                    required
+                    maxLength={80}
+                    value={aiName}
+                    onChange={(e) => {
+                      setAiName(e.target.value);
+                      setAiKey(crypto.randomUUID());
+                    }}
+                    placeholder="Checkout look"
+                  />
+                </label>
+                <label className="field">
+                  <span>Prompt</span>
+                  <textarea
+                    required
+                    maxLength={2000}
+                    rows={4}
+                    value={aiPrompt}
+                    onChange={(e) => {
+                      setAiPrompt(e.target.value);
+                      setAiKey(crypto.randomUUID());
+                    }}
+                    placeholder="Clean black-and-white checkout with a bold wordmark…"
+                  />
+                </label>
+                <div className="actions">
+                  <Button type="submit" disabled={action.busy}>
+                    {action.busy ? 'Generating…' : 'Generate draft'}
+                  </Button>
+                </div>
+              </form>
+            </Panel>
+          ) : null}
+
           {importing && canWrite ? (
             <Panel title="Create from website">
               <form className="stack" onSubmit={(e) => void onImport(e)}>

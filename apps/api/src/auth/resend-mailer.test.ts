@@ -36,7 +36,9 @@ describe('ResendMailer', () => {
     expect(headers.Authorization).toBe(`Bearer ${KEY}`);
     expect(headers['Content-Type']).toBe('application/json');
     const body = JSON.parse(init.body as string);
-    expect(Object.keys(body).sort()).toEqual(['from', 'subject', 'text', 'to']);
+    expect(Object.keys(body).sort()).toEqual(['from', 'html', 'subject', 'text', 'to']);
+    expect(typeof body.html).toBe('string');
+    expect(body.html).toContain('banner-gif.webp');
     expect(body.from).toBe('Tendr <no-reply@usetendr.tech>');
     expect(body.to).toEqual(['a@b.co']);
     expect(body.text).toContain(msg.data.url);

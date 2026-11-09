@@ -168,6 +168,13 @@
   color: #a6271c;
   border-radius: 8px;
 }
+.stateBlock {
+  display: grid;
+  gap: 12px;
+}
+.stateBlock h1 {
+  margin-bottom: 0;
+}
 @media (max-width: 560px) {
   .shell {
     padding: 16px 10px;

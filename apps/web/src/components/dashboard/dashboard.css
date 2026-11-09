@@ -4901,3 +4901,207 @@ html[data-appearance='light'] .dash-app .demo-asset-trigger {
   border-color: rgba(0, 0, 0, 0.14);
 }
 
+/* Connected sites */
+.conn-supported {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 0.85rem;
+  margin: -0.25rem 0 0.15rem;
+}
+
+.conn-supported-label {
+  color: var(--tendr-muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.conn-supported-logos {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.conn-supported-logos img {
+  display: block;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 8px;
+  background: #fff;
+  padding: 0.2rem;
+  box-sizing: border-box;
+}
+
+.conn-grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(16.5rem, 1fr));
+}
+
+.conn-card {
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+  padding: 1.05rem 1.1rem 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #141414;
+}
+
+html[data-appearance='light'] .conn-card {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+.conn-card--revoked {
+  opacity: 0.72;
+}
+
+.conn-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.conn-card-logo {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.conn-card-logo img {
+  width: 1.65rem;
+  height: 1.65rem;
+  object-fit: contain;
+}
+
+.conn-card-fallback {
+  font-weight: 700;
+  color: #161616;
+}
+
+.conn-card-meta {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.conn-card-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: -0.02em;
+}
+
+.conn-card-platform {
+  color: var(--tendr-muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.conn-card-facts {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.conn-card-facts > div {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.conn-card-facts dt {
+  margin: 0;
+  color: var(--tendr-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.conn-card-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.86rem;
+}
+
+.conn-card-url {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tendr-muted);
+  font-size: 0.75rem;
+}
+
+.conn-card-actions,
+.conn-card-confirm {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.ov-insights {
+  grid-column: 1 / -1;
+}
+
+.ai-insight-grid {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+}
+
+.ai-insight-metric {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.7rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ai-insight-metric span {
+  color: var(--tendr-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.ai-insight-metric strong {
+  font-family: var(--tendr-font-display);
+  font-size: 1.15rem;
+  letter-spacing: -0.03em;
+}
+
+html[data-appearance='light'] .ai-insight-metric {
+  background: #f7f7f7;
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+.ai-insight-explain {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.ai-insight-explain ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--tendr-muted);
+}
+
+html[data-appearance='light'] .ai-insight-explain {
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+

@@ -69,7 +69,9 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
       />
       {data.error && <ErrorState message={data.error} onRetry={() => void data.reload()} />}
       {!data.data ? (
-        <p role="status">Loading invoices…</p>
+        <p className="dash-muted" role="status">
+          Loading invoices…
+        </p>
       ) : (
         <>
           <Panel title="Your invoice page">
@@ -106,7 +108,25 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
           <Panel title="Inbox">
             <div className="stack">
               {!data.data.inbox.invoices.length && (
-                <p>No verified invoices yet. Share your invoice page with a contractor.</p>
+                <div className="stack">
+                  <p>
+                    No verified invoices yet. Only invoices confirmed from the contractor’s email
+                    link appear here.
+                  </p>
+                  {data.data.settings.enabled ? (
+                    <p className="dash-muted">
+                      Share{' '}
+                      <a href={data.data.settings.url} target="_blank" rel="noreferrer">
+                        {data.data.settings.url}
+                      </a>{' '}
+                      with a contractor to get started.
+                    </p>
+                  ) : (
+                    <p className="dash-muted">
+                      Enable your invoice page above so contractors can submit.
+                    </p>
+                  )}
+                </div>
               )}
               {data.data.inbox.invoices.map((i) => (
                 <button

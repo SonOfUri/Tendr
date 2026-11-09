@@ -1710,6 +1710,69 @@ wui-card,
   animation: demo-tendrai-panel-in 0.22s ease-out;
 }
 
+.checkout-ai-help {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.55rem;
+}
+
+.checkout-ai-answer {
+  display: grid;
+  gap: 0.45rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.checkout-ai-answer ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--demo-muted, #5c6270);
+}
+
+.checkout-ai-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.checkout-ai-suggestions button {
+  appearance: none;
+  border: 1px solid var(--demo-panel-border, #e8e8e8);
+  background: var(--demo-chip, #f4f5f8);
+  color: inherit;
+  border-radius: 999px;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.checkout-ai-ask {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.4rem;
+}
+
+.checkout-ai-ask input {
+  min-width: 0;
+  border: 1px solid var(--demo-panel-border, #e8e8e8);
+  border-radius: 12px;
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  background: #fff;
+  color: inherit;
+}
+
+.checkout-ai-ask button {
+  appearance: none;
+  border: none;
+  border-radius: 12px;
+  padding: 0.55rem 0.85rem;
+  background: #161616;
+  color: #fff;
+  font-weight: 650;
+  cursor: pointer;
+}
+
 @keyframes demo-tendrai-panel-in {
   from {
     opacity: 0;

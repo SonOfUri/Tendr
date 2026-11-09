@@ -3,6 +3,7 @@
 // with the action link on its own line and no HTML. Test-mode notices are marked `[Test]` like
 // the store notices are (jobs/payment-notices.ts).
 import type { MailMessage, MailTemplate } from './mailer.js';
+import { renderMailHtml } from './mail-html.js';
 
 type Data = Record<string, string>;
 type Copy = { subject: string; lines: string[] };
@@ -206,14 +207,20 @@ function missingLinks(data: Data, text: string): string[] {
   return Object.values(data).filter((v) => isUrl(v) && !text.includes(v));
 }
 
-export function renderMail(msg: MailMessage): { subject: string; text: string } {
-  if (msg.subject && msg.text) return { subject: msg.subject, text: msg.text };
-  const copy = COPY[msg.template](msg.data);
-  const body = copy.lines.join('\n');
-  const extra = missingLinks(msg.data, body);
-  const test = msg.data.livemode === 'false';
+export function renderMail(msg: MailMessage): { subject: string; text: string; html: string } {
+  const rendered = (() => {
+    if (msg.subject && msg.text) return { subject: msg.subject, text: msg.text };
+    const copy = COPY[msg.template](msg.data);
+    const body = copy.lines.join('\n');
+    const extra = missingLinks(msg.data, body);
+    const test = msg.data.livemode === 'false';
+    return {
+      subject: test ? `[Test] ${copy.subject}` : copy.subject,
+      text: [body, ...(extra.length ? ['', ...extra] : []), '', '-- Tendr'].join('\n'),
+    };
+  })();
   return {
-    subject: test ? `[Test] ${copy.subject}` : copy.subject,
-    text: [body, ...(extra.length ? ['', ...extra] : []), '', '-- Tendr'].join('\n'),
+    ...rendered,
+    html: renderMailHtml({ subject: rendered.subject, text: rendered.text }),
   };
 }
