@@ -4377,57 +4377,157 @@ html[data-appearance='light'] .dash-info-tip-bubble {
 
 .wallet-balances {
   display: grid;
-  gap: 0.65rem;
-  grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr));
+  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(15.5rem, 1fr));
 }
 
 .wallet-bal-card {
+  appearance: none;
   display: grid;
-  gap: 0.55rem;
-  padding: 0.95rem 1rem;
-  border-radius: 16px;
-  border: 1px solid var(--tendr-border);
-  background: rgba(255, 255, 255, 0.03);
+  gap: 1rem;
+  min-width: 0;
+  padding: 1.05rem 1.1rem 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #141414;
   text-align: left;
   color: inherit;
   cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.wallet-bal-card:hover:not(:disabled),
+.wallet-bal-card:focus-visible {
+  border-color: rgba(255, 255, 255, 0.35);
+  outline: none;
 }
 
 html[data-appearance='light'] .wallet-bal-card {
   background: #fff;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+html[data-appearance='light'] .wallet-bal-card:hover:not(:disabled),
+html[data-appearance='light'] .wallet-bal-card:focus-visible {
+  border-color: rgba(0, 0, 0, 0.28);
 }
 
 .wallet-bal-card[data-selected='true'] {
   border-color: #f5f5f5;
+  background: #1c1c1c;
   box-shadow: inset 0 0 0 1px #f5f5f5;
 }
 
 html[data-appearance='light'] .wallet-bal-card[data-selected='true'] {
   border-color: #161616;
+  background: #f7f7f7;
   box-shadow: inset 0 0 0 1px #161616;
 }
 
-.wallet-bal-top {
+.wallet-bal-card:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wallet-bal-head {
   display: flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.wallet-bal-mark {
+  position: relative;
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.wallet-bal-chain-badge {
+  position: absolute;
+  right: -0.2rem;
+  bottom: -0.2rem;
+  display: grid;
+  place-items: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 999px;
+  border: 2px solid #141414;
+  background: #0a0a0a;
+  overflow: hidden;
+}
+
+html[data-appearance='light'] .wallet-bal-chain-badge {
+  border-color: #fff;
+  background: #fff;
+}
+
+.wallet-bal-card[data-selected='true'] .wallet-bal-chain-badge {
+  border-color: #1c1c1c;
+}
+
+html[data-appearance='light'] .wallet-bal-card[data-selected='true'] .wallet-bal-chain-badge {
+  border-color: #f7f7f7;
+}
+
+.wallet-bal-meta {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
 }
 
 .wallet-bal-sym {
   font-weight: 700;
   letter-spacing: -0.02em;
-}
-
-.wallet-bal-amt {
-  font-family: var(--tendr-font-display);
-  font-size: 1.2rem;
-  font-weight: 700;
-  letter-spacing: -0.03em;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .wallet-bal-chain {
   font-size: 0.78rem;
   color: var(--tendr-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wallet-bal-values {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.wallet-bal-amt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--tendr-font-display);
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.wallet-bal-amt-sym {
+  font-size: 0.78em;
+  font-weight: 650;
+  color: var(--tendr-muted);
+}
+
+.wallet-bal-usd {
+  flex: 0 0 auto;
+  color: var(--tendr-muted);
+  font-size: 0.88rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .wallet-swap {

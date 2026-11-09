@@ -15,12 +15,14 @@ import {
   api,
   errorMessage,
   type AccountView,
+  type BalanceRow,
   type Balances,
   type GoLiveStatus,
   type StoreContext,
 } from '@/lib/api';
 import type { Token } from '@/lib/checkout/api';
 import { buildDemoAssetOptions } from '@/lib/demo-assets';
+import { formatUsd } from '@/lib/payments';
 import { toast } from '@/components/toast';
 import { withStepUp } from '@/lib/webauthn';
 import {
@@ -267,13 +269,19 @@ export function NativeWalletPanel({
     isOwner && (!data.view.nativeWallet || data.view.nativeWallet.ownerUserId === userId);
   const catalogOptions = buildDemoAssetOptions(toCheckoutTokens(data.tokens));
 
-  function tokenMeta(id: string): { symbol: string; decimals: number; chain: string } {
+  function tokenMeta(id: string, row?: BalanceRow): { symbol: string; decimals: number; chain: string } {
     const token = data!.tokens.find((t) => t.asset === id);
-    if (token) return { symbol: token.symbol, decimals: token.decimals, chain: token.chain };
+    if (token) {
+      return {
+        symbol: row?.symbol?.trim() || token.symbol,
+        decimals: typeof row?.decimals === 'number' ? row.decimals : token.decimals,
+        chain: token.chain,
+      };
+    }
     const info = assetInfo(id, true);
     return {
-      symbol: info.symbol,
-      decimals: info.decimals,
+      symbol: row?.symbol?.trim() || info.symbol,
+      decimals: typeof row?.decimals === 'number' ? row.decimals : info.decimals,
       chain: id.startsWith('nep141:') ? 'near' : '',
     };
   }
@@ -433,8 +441,10 @@ export function NativeWalletPanel({
             {funded.length ? (
               <div className="wallet-balances" role="listbox" aria-label="Balances">
                 {funded.map((b) => {
-                  const meta = tokenMeta(b.asset);
+                  const meta = tokenMeta(b.asset, b);
                   const selected = asset === b.asset;
+                  const amount = formatUnits(b.amount, meta.decimals);
+                  const usd = formatUsd(b.amount_usd ?? null);
                   return (
                     <button
                       key={b.asset}
@@ -446,14 +456,28 @@ export function NativeWalletPanel({
                       disabled={busy || Boolean(proposalId)}
                       onClick={() => selectBalance(b.asset)}
                     >
-                      <div className="wallet-bal-top">
-                        <TokenLogo symbol={meta.symbol} assetId={b.asset} size={22} />
-                        <span className="wallet-bal-sym">{meta.symbol}</span>
+                      <div className="wallet-bal-head">
+                        <span className="wallet-bal-mark">
+                          <TokenLogo symbol={meta.symbol} assetId={b.asset} size={36} />
+                          {meta.chain ? (
+                            <span className="wallet-bal-chain-badge" title={chainLabel(meta.chain)}>
+                              <ChainLogo chain={meta.chain} size={15} />
+                            </span>
+                          ) : null}
+                        </span>
+                        <div className="wallet-bal-meta">
+                          <span className="wallet-bal-sym">{meta.symbol}</span>
+                          {meta.chain ? (
+                            <span className="wallet-bal-chain">{chainLabel(meta.chain)}</span>
+                          ) : null}
+                        </div>
                       </div>
-                      <div className="wallet-bal-amt">{formatUnits(b.amount, meta.decimals)}</div>
-                      {meta.chain ? (
-                        <div className="wallet-bal-chain">{chainLabel(meta.chain)}</div>
-                      ) : null}
+                      <div className="wallet-bal-values">
+                        <span className="wallet-bal-amt" title={`${amount} ${meta.symbol}`}>
+                          {amount} <span className="wallet-bal-amt-sym">{meta.symbol}</span>
+                        </span>
+                        <span className="wallet-bal-usd">{usd}</span>
+                      </div>
                     </button>
                   );
                 })}
