@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>Tendr email inventory — current text baseline</title>
+<style>
+  * { box-sizing: border-box; }
+  html { scroll-behavior: auto; }
+  body { margin: 0; background: #f2f3f5; color: #17191c; font: 16px/1.6 system-ui, sans-serif; }
+  main { max-width: 1000px; margin: auto; padding: 36px 24px 80px; }
+  h1 { font-size: clamp(26px, 5vw, 38px); line-height: 1.2; margin: 10px 0 16px; }
+  h2 { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
+  h3 { margin: 0 0 20px; font-size: 20px; line-height: 1.4; }
+  a { color: #164eaa; text-underline-offset: 3px; }
+  a:focus-visible, summary:focus-visible { outline: 3px solid #164eaa; outline-offset: 3px; }
+  .eyebrow { font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 12px; }
+  .notice { padding: 16px 20px; border-left: 4px solid #657087; background: #fff; }
+  nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 40px; }
+  nav a { padding: 6px 10px; border: 1px solid #ccd1d9; border-radius: 5px; background: white; font-size: 13px; overflow-wrap: anywhere; }
+  article { background: #fff; border: 1px solid #d7dbe2; border-radius: 10px; padding: 24px; margin: 24px 0; scroll-margin-top: 20px; }
+  .case-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+  .case-heading a { flex-shrink: 0; font-size: 13px; }
+  .scenario { color: #4c5665; }
+  dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 6px 16px; font-size: 14px; }
+  dt { font-weight: 600; } dd { margin: 0; overflow-wrap: anywhere; }
+  .message { border-top: 1px solid #e1e4e9; margin-top: 20px; padding-top: 24px; }
+  pre { font: 14px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  details { background: #f5f6f8; padding: 14px; margin-top: 24px; border-radius: 6px; }
+  details pre { margin-top: 16px; font-size: 12px; }
+  summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+  footer { font-size: 13px; color: #4c5665; }
+  @media (max-width: 520px) { main { padding: 20px 12px 40px; } article { padding: 16px; } .case-heading { flex-direction: column; gap: 4px; } dl { grid-template-columns: 86px minmax(0, 1fr); gap: 6px; } }
+  @media print { body { background: white; } nav, details, .case-heading a { display: none; } main { max-width: none; padding: 0; } article { break-inside: avoid; } }
+</style>
+</head>
+<body><main id="top">
+<header><div class="eyebrow">Tendr · frontend handover · 2026-11-09</div>
+<h1>Transactional email inventory</h1>
+<p>23 template keys · 29 synthetic cases · no emails sent</p>
+<p class="notice"><strong>Current plain-text baseline, not an HTML email design.</strong> These cards show the current renderer output and supplied copy. Production does not yet send designed HTML. All recipients, IDs and links are synthetic; action URLs are displayed as text.</p>
+<p>Use the AI, invoice and email delivery brief alongside this gallery. Expand each payload to see which fields exist today. Regenerate with <code>node --import tsx docs/handover/preview-email-fixtures.mts</code>.</p>
+</header>
+<nav aria-label="Email scenarios"><a href="#verify-email">verify-email</a>
+<a href="#login-link">login-link</a>
+<a href="#invite">invite</a>
+<a href="#invoice-verify">invoice-verify</a>
+<a href="#invoice-submitted">invoice-submitted</a>
+<a href="#invoice-payment-review">invoice-payment-review</a>
+<a href="#invoice-paid">invoice-paid</a>
+<a href="#invoice-declined">invoice-declined</a>
+<a href="#payment-received-live">payment-received-live</a>
+<a href="#refund-sent-live">refund-sent-live</a>
+<a href="#payment-received-test">payment-received-test</a>
+<a href="#refund-sent-test">refund-sent-test</a>
+<a href="#refund-needs-address">refund-needs-address</a>
+<a href="#payment-held">payment-held</a>
+<a href="#payment-screening-unresolved">payment-screening-unresolved</a>
+<a href="#refund-needs-review">refund-needs-review</a>
+<a href="#notification-email-verify">notification-email-verify</a>
+<a href="#notification-email-change-requested">notification-email-change-requested</a>
+<a href="#notification-email-changed">notification-email-changed</a>
+<a href="#notification-email-cleared">notification-email-cleared</a>
+<a href="#hook-failed">hook-failed</a>
+<a href="#proposal-needs-approval">proposal-needs-approval</a>
+<a href="#timelock-started">timelock-started</a>
+<a href="#proposal-executed">proposal-executed</a>
+<a href="#recovery-started">recovery-started</a>
+<a href="#recovery-executes-soon">recovery-executes-soon</a>
+<a href="#recovery-register-link">recovery-register-link</a>
+<a href="#recovery-session-opened">recovery-session-opened</a>
+<a href="#recovery-passkey-registered">recovery-passkey-registered</a></nav>
+<article id="verify-email" aria-labelledby="verify-email-title">
+  <div class="case-heading"><h2 id="verify-email-title">verify-email</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">New person confirms their email; single-use 15-minute link.</p>
+  <dl><dt>Template</dt><dd><code>verify_email</code></dd>
+  <dt>Recipient</dt><dd>new-person@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>Confirm your email for Tendr</h3><pre>Confirm your email address to finish setting up Tendr.
+Confirm your email:
+https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID
+The link works once and expires soon. If you did not ask for it, ignore this email.
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;new-person@example.com&quot;,
+  &quot;template&quot;: &quot;verify_email&quot;,
+  &quot;data&quot;: {
+    &quot;url&quot;: &quot;https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID&quot;
+  }
+}</pre></details>
+</article>
+<article id="login-link" aria-labelledby="login-link-title">
+  <div class="case-heading"><h2 id="login-link-title">login-link</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Verified person without an active login passkey finishes sign-in.</p>
+  <dl><dt>Template</dt><dd><code>login_link</code></dd>
+  <dt>Recipient</dt><dd>returning-person@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>Your Tendr sign-in link</h3><pre>Use this link to sign in to Tendr.
+Sign in:
+https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID
+The link works once and expires soon. If you did not ask for it, ignore this email.
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;returning-person@example.com&quot;,
+  &quot;template&quot;: &quot;login_link&quot;,
+  &quot;data&quot;: {
+    &quot;url&quot;: &quot;https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID&quot;
+  }
+}</pre></details>
+</article>
+<article id="invite" aria-labelledby="invite-title">
+  <div class="case-heading"><h2 id="invite-title">invite</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Invited member signs in with this email before accepting the offered role.</p>
+  <dl><dt>Template</dt><dd><code>invite</code></dd>
+  <dt>Recipient</dt><dd>member@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>You are invited to Northstar Studio on Tendr</h3><pre>You were invited to join Northstar Studio on Tendr as viewer.
+Accept the invite:
+https://app.tendr.invalid/invite/EXAMPLE_NOT_VALID
+If you did not expect this, ignore this email.
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;member@example.com&quot;,
+  &quot;template&quot;: &quot;invite&quot;,
+  &quot;data&quot;: {
+    &quot;url&quot;: &quot;https://app.tendr.invalid/invite/EXAMPLE_NOT_VALID&quot;,
+    &quot;storeName&quot;: &quot;Northstar Studio&quot;,
+    &quot;role&quot;: &quot;viewer&quot;
+  }
+}</pre></details>
+</article>
+<article id="invoice-verify" aria-labelledby="invoice-verify-title">
+  <div class="case-heading"><h2 id="invoice-verify-title">invoice-verify</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Contractor reviews immutable terms before explicit verification. Payload has no item rows or total.</p>
+  <dl><dt>Template</dt><dd><code>invoice_verify</code></dd>
+  <dt>Recipient</dt><dd>contractor@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>Verify your invoice for Tendr</h3><pre>You requested to invoice Northstar Studio.
+Review and confirm your invoice using the link below. It expires in 24 hours.
+Review invoice:
+https://app.tendr.invalid/invoice/northstar-studio#token=EXAMPLE_NOT_VALID
+Keep this private link to check payment status after verification. If you did not request it, ignore this email.
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;contractor@example.com&quot;,
+  &quot;template&quot;: &quot;invoice_verify&quot;,
+  &quot;data&quot;: {
+    &quot;business&quot;: &quot;Northstar Studio&quot;,
+    &quot;url&quot;: &quot;https://app.tendr.invalid/invoice/northstar-studio#token=EXAMPLE_NOT_VALID&quot;
+  }
+}</pre></details>
+</article>
+<article id="invoice-submitted" aria-labelledby="invoice-submitted-title">
+  <div class="case-heading"><h2 id="invoice-submitted-title">invoice-submitted</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Owner notice: submitted. Current handler supplies prebuilt copy and empty data.</p>
+  <dl><dt>Template</dt><dd><code>invoice_notice</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>New contractor invoice</h3><pre>Invoice DESIGN-2026-014 for Northstar Studio is awaiting your review.
+
+Open your Tendr dashboard and select this business:
+https://app.tendr.invalid/dashboard/invoices
+
+Only your wallet passkey can approve a payment.</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;invoice_notice&quot;,
+  &quot;data&quot;: {},
+  &quot;subject&quot;: &quot;New contractor invoice&quot;,
+  &quot;text&quot;: &quot;Invoice DESIGN-2026-014 for Northstar Studio is awaiting your review.\n\nOpen your Tendr dashboard and select this business:\nhttps://app.tendr.invalid/dashboard/invoices\n\nOnly your wallet passkey can approve a payment.&quot;
+}</pre></details>
+</article>
+<article id="invoice-payment-review" aria-labelledby="invoice-payment-review-title">
+  <div class="case-heading"><h2 id="invoice-payment-review-title">invoice-payment-review</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Owner notice: payment-review. Current handler supplies prebuilt copy and empty data.</p>
+  <dl><dt>Template</dt><dd><code>invoice_notice</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>Invoice payment needs review</h3><pre>Invoice DESIGN-2026-014 for Northstar Studio needs a payment receipt review.
+
+Open your Tendr dashboard and select this business:
+https://app.tendr.invalid/dashboard/invoices
+
+Only your wallet passkey can approve a payment.</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;invoice_notice&quot;,
+  &quot;data&quot;: {},
+  &quot;subject&quot;: &quot;Invoice payment needs review&quot;,
+  &quot;text&quot;: &quot;Invoice DESIGN-2026-014 for Northstar Studio needs a payment receipt review.\n\nOpen your Tendr dashboard and select this business:\nhttps://app.tendr.invalid/dashboard/invoices\n\nOnly your wallet passkey can approve a payment.&quot;
+}</pre></details>
+</article>
+<article id="invoice-paid" aria-labelledby="invoice-paid-title">
+  <div class="case-heading"><h2 id="invoice-paid-title">invoice-paid</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Contractor notice: paid. No fresh access URL; original private link is retained.</p>
+  <dl><dt>Template</dt><dd><code>invoice_notice</code></dd>
+  <dt>Recipient</dt><dd>contractor@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>Your invoice has been paid</h3><pre>Invoice DESIGN-2026-014 for Northstar Studio has been paid to the wallet you specified.
+
+Use the private link in your verification email to review the details.</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;contractor@example.com&quot;,
+  &quot;template&quot;: &quot;invoice_notice&quot;,
+  &quot;data&quot;: {},
+  &quot;subject&quot;: &quot;Your invoice has been paid&quot;,
+  &quot;text&quot;: &quot;Invoice DESIGN-2026-014 for Northstar Studio has been paid to the wallet you specified.\n\nUse the private link in your verification email to review the details.&quot;
+}</pre></details>
+</article>
+<article id="invoice-declined" aria-labelledby="invoice-declined-title">
+  <div class="case-heading"><h2 id="invoice-declined-title">invoice-declined</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Contractor notice: declined. No fresh access URL; original private link is retained.</p>
+  <dl><dt>Template</dt><dd><code>invoice_notice</code></dd>
+  <dt>Recipient</dt><dd>contractor@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>Your invoice was declined</h3><pre>Invoice DESIGN-2026-014 for Northstar Studio was declined by the business.
+
+Use the private link in your verification email to review the details.</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;contractor@example.com&quot;,
+  &quot;template&quot;: &quot;invoice_notice&quot;,
+  &quot;data&quot;: {},
+  &quot;subject&quot;: &quot;Your invoice was declined&quot;,
+  &quot;text&quot;: &quot;Invoice DESIGN-2026-014 for Northstar Studio was declined by the business.\n\nUse the private link in your verification email to review the details.&quot;
+}</pre></details>
+</article>
+<article id="payment-received-live" aria-labelledby="payment-received-live-title">
+  <div class="case-heading"><h2 id="payment-received-live-title">payment-received-live</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Store receipt, live. Untrusted multi-line note is plain text; retain exact amounts and mode.</p>
+  <dl><dt>Template</dt><dd><code>payment_received</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>You got paid 124.5 USDC for order ORDER-1042</h3><pre>Northstar Studio received 124.5 USDC for order ORDER-1042.
+Note from the payer:
+&gt; For the design sprint
+&gt; Please include &lt;draft&gt; &amp; final files.
+
+Order total: 125.00 USD
+Paid with: 125 USDC on Base
+Network fee: paid by the shopper
+
+Fees:
+- Tendr fee: $0.50
+
+Transaction: https://explorer.tendr.invalid/tx/EXAMPLE_PAYMENT
+See the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=live</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;payment_received&quot;,
+  &quot;data&quot;: {
+    &quot;store_name&quot;: &quot;Northstar Studio&quot;,
+    &quot;livemode&quot;: &quot;true&quot;,
+    &quot;payment_id&quot;: &quot;pay_example&quot;,
+    &quot;external_ref&quot;: &quot;ORDER-1042&quot;,
+    &quot;payment_link_title&quot;: &quot;Design sprint&quot;,
+    &quot;payer_note&quot;: &quot;For the design sprint\nPlease include &lt;draft&gt; &amp; final files.&quot;,
+    &quot;amount_received&quot;: &quot;124.5&quot;,
+    &quot;settlement_symbol&quot;: &quot;USDC&quot;,
+    &quot;order_total&quot;: &quot;125.00 USD&quot;,
+    &quot;original_amount&quot;: &quot;&quot;,
+    &quot;fx_rate&quot;: &quot;&quot;,
+    &quot;fx_source&quot;: &quot;&quot;,
+    &quot;fx_as_of&quot;: &quot;&quot;,
+    &quot;paid_with&quot;: &quot;125 USDC on Base&quot;,
+    &quot;network_fee&quot;: &quot;paid by the shopper&quot;,
+    &quot;fees&quot;: &quot;Tendr fee: $0.50&quot;,
+    &quot;tx_hash&quot;: &quot;EXAMPLE_PAYMENT&quot;,
+    &quot;tx_url&quot;: &quot;https://explorer.tendr.invalid/tx/EXAMPLE_PAYMENT&quot;,
+    &quot;dashboard_url&quot;: &quot;https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=live&quot;
+  },
+  &quot;subject&quot;: &quot;You got paid 124.5 USDC for order ORDER-1042&quot;,
+  &quot;text&quot;: &quot;Northstar Studio received 124.5 USDC for order ORDER-1042.\nNote from the payer:\n&gt; For the design sprint\n&gt; Please include &lt;draft&gt; &amp; final files.\n\nOrder total: 125.00 USD\nPaid with: 125 USDC on Base\nNetwork fee: paid by the shopper\n\nFees:\n- Tendr fee: $0.50\n\nTransaction: https://explorer.tendr.invalid/tx/EXAMPLE_PAYMENT\nSee the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=live&quot;
+}</pre></details>
+</article>
+<article id="refund-sent-live" aria-labelledby="refund-sent-live-title">
+  <div class="case-heading"><h2 id="refund-sent-live-title">refund-sent-live</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Confirmed merchant refund, live. Recipient is the store notice address, not the shopper. NEAR execution transaction.</p>
+  <dl><dt>Template</dt><dd><code>refund_sent</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>Refund sent: 24.9 USDC for order ORDER-1042</h3><pre>Northstar Studio sent 24.9 USDC to your customer&#39;s Base address for order ORDER-1042 (refund from your store).
+Your refund reference: RETURN-1042
+Network fee: 0.1 USDC
+
+Transaction: https://explorer.tendr.invalid/near/EXAMPLE_REFUND
+See the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=live</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;refund_sent&quot;,
+  &quot;data&quot;: {
+    &quot;store_name&quot;: &quot;Northstar Studio&quot;,
+    &quot;livemode&quot;: &quot;true&quot;,
+    &quot;refund_id&quot;: &quot;ref_example&quot;,
+    &quot;payment_id&quot;: &quot;pay_example&quot;,
+    &quot;external_ref&quot;: &quot;ORDER-1042&quot;,
+    &quot;refund_external_ref&quot;: &quot;RETURN-1042&quot;,
+    &quot;reason&quot;: &quot;merchant&quot;,
+    &quot;amount_to_customer&quot;: &quot;24.9&quot;,
+    &quot;network_fee&quot;: &quot;0.1&quot;,
+    &quot;symbol&quot;: &quot;USDC&quot;,
+    &quot;tx_hash&quot;: &quot;EXAMPLE_REFUND&quot;,
+    &quot;tx_url&quot;: &quot;https://explorer.tendr.invalid/near/EXAMPLE_REFUND&quot;,
+    &quot;dashboard_url&quot;: &quot;https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=live&quot;
+  },
+  &quot;subject&quot;: &quot;Refund sent: 24.9 USDC for order ORDER-1042&quot;,
+  &quot;text&quot;: &quot;Northstar Studio sent 24.9 USDC to your customer&#39;s Base address for order ORDER-1042 (refund from your store).\nYour refund reference: RETURN-1042\nNetwork fee: 0.1 USDC\n\nTransaction: https://explorer.tendr.invalid/near/EXAMPLE_REFUND\nSee the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=live&quot;
+}</pre></details>
+</article>
+<article id="payment-received-test" aria-labelledby="payment-received-test-title">
+  <div class="case-heading"><h2 id="payment-received-test-title">payment-received-test</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Store receipt, test. Untrusted multi-line note is plain text; retain exact amounts and mode.</p>
+  <dl><dt>Template</dt><dd><code>payment_received</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>[Test] You got paid 124.5 USDC for order ORDER-1042</h3><pre>Northstar Studio received 124.5 USDC for order ORDER-1042.
+Note from the payer:
+&gt; For the design sprint
+&gt; Please include &lt;draft&gt; &amp; final files.
+This is a test payment: no real money moved.
+
+Order total: 125.00 USD
+Paid with: 125 USDC on Base
+Network fee: paid by the shopper
+
+Fees:
+- Tendr fee: $0.50
+
+Transaction: https://explorer.tendr.invalid/tx/EXAMPLE_PAYMENT
+See the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=test</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;payment_received&quot;,
+  &quot;data&quot;: {
+    &quot;store_name&quot;: &quot;Northstar Studio&quot;,
+    &quot;livemode&quot;: &quot;false&quot;,
+    &quot;payment_id&quot;: &quot;pay_example&quot;,
+    &quot;external_ref&quot;: &quot;ORDER-1042&quot;,
+    &quot;payment_link_title&quot;: &quot;Design sprint&quot;,
+    &quot;payer_note&quot;: &quot;For the design sprint\nPlease include &lt;draft&gt; &amp; final files.&quot;,
+    &quot;amount_received&quot;: &quot;124.5&quot;,
+    &quot;settlement_symbol&quot;: &quot;USDC&quot;,
+    &quot;order_total&quot;: &quot;125.00 USD&quot;,
+    &quot;original_amount&quot;: &quot;&quot;,
+    &quot;fx_rate&quot;: &quot;&quot;,
+    &quot;fx_source&quot;: &quot;&quot;,
+    &quot;fx_as_of&quot;: &quot;&quot;,
+    &quot;paid_with&quot;: &quot;125 USDC on Base&quot;,
+    &quot;network_fee&quot;: &quot;paid by the shopper&quot;,
+    &quot;fees&quot;: &quot;Tendr fee: $0.50&quot;,
+    &quot;tx_hash&quot;: &quot;EXAMPLE_PAYMENT&quot;,
+    &quot;tx_url&quot;: &quot;https://explorer.tendr.invalid/tx/EXAMPLE_PAYMENT&quot;,
+    &quot;dashboard_url&quot;: &quot;https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=test&quot;
+  },
+  &quot;subject&quot;: &quot;[Test] You got paid 124.5 USDC for order ORDER-1042&quot;,
+  &quot;text&quot;: &quot;Northstar Studio received 124.5 USDC for order ORDER-1042.\nNote from the payer:\n&gt; For the design sprint\n&gt; Please include &lt;draft&gt; &amp; final files.\nThis is a test payment: no real money moved.\n\nOrder total: 125.00 USD\nPaid with: 125 USDC on Base\nNetwork fee: paid by the shopper\n\nFees:\n- Tendr fee: $0.50\n\nTransaction: https://explorer.tendr.invalid/tx/EXAMPLE_PAYMENT\nSee the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=test&quot;
+}</pre></details>
+</article>
+<article id="refund-sent-test" aria-labelledby="refund-sent-test-title">
+  <div class="case-heading"><h2 id="refund-sent-test-title">refund-sent-test</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Confirmed merchant refund, test. Recipient is the store notice address, not the shopper. NEAR execution transaction.</p>
+  <dl><dt>Template</dt><dd><code>refund_sent</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>[Test] Refund sent: 24.9 USDC for order ORDER-1042</h3><pre>Northstar Studio sent 24.9 USDC to your customer&#39;s Base address for order ORDER-1042 (refund from your store).
+This is a test refund: no real money moved.
+Your refund reference: RETURN-1042
+Network fee: 0.1 USDC
+
+Transaction: https://explorer.tendr.invalid/near/EXAMPLE_REFUND
+See the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=test</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;refund_sent&quot;,
+  &quot;data&quot;: {
+    &quot;store_name&quot;: &quot;Northstar Studio&quot;,
+    &quot;livemode&quot;: &quot;false&quot;,
+    &quot;refund_id&quot;: &quot;ref_example&quot;,
+    &quot;payment_id&quot;: &quot;pay_example&quot;,
+    &quot;external_ref&quot;: &quot;ORDER-1042&quot;,
+    &quot;refund_external_ref&quot;: &quot;RETURN-1042&quot;,
+    &quot;reason&quot;: &quot;merchant&quot;,
+    &quot;amount_to_customer&quot;: &quot;24.9&quot;,
+    &quot;network_fee&quot;: &quot;0.1&quot;,
+    &quot;symbol&quot;: &quot;USDC&quot;,
+    &quot;tx_hash&quot;: &quot;EXAMPLE_REFUND&quot;,
+    &quot;tx_url&quot;: &quot;https://explorer.tendr.invalid/near/EXAMPLE_REFUND&quot;,
+    &quot;dashboard_url&quot;: &quot;https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=test&quot;
+  },
+  &quot;subject&quot;: &quot;[Test] Refund sent: 24.9 USDC for order ORDER-1042&quot;,
+  &quot;text&quot;: &quot;Northstar Studio sent 24.9 USDC to your customer&#39;s Base address for order ORDER-1042 (refund from your store).\nThis is a test refund: no real money moved.\nYour refund reference: RETURN-1042\nNetwork fee: 0.1 USDC\n\nTransaction: https://explorer.tendr.invalid/near/EXAMPLE_REFUND\nSee the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=test&quot;
+}</pre></details>
+</article>
+<article id="refund-needs-address" aria-labelledby="refund-needs-address-title">
+  <div class="case-heading"><h2 id="refund-needs-address-title">refund-needs-address</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Shopper supplies a return address in checkout, never by replying to the email.</p>
+  <dl><dt>Template</dt><dd><code>refund_needs_address</code></dd>
+  <dt>Recipient</dt><dd>shopper@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>Where should Northstar Studio send your refund?</h3><pre>Northstar Studio is returning 24.9 USDC to you through Tendr, and needs an address to send it to.
+Give a refund address:
+https://pay.tendr.invalid/ses_example/refund-address?t=EXAMPLE_NOT_VALID
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;shopper@example.com&quot;,
+  &quot;template&quot;: &quot;refund_needs_address&quot;,
+  &quot;data&quot;: {
+    &quot;merchant_name&quot;: &quot;Northstar Studio&quot;,
+    &quot;amount&quot;: &quot;24.9 USDC&quot;,
+    &quot;refund_id&quot;: &quot;ref_example&quot;,
+    &quot;refund_address_url&quot;: &quot;https://pay.tendr.invalid/ses_example/refund-address?t=EXAMPLE_NOT_VALID&quot;
+  }
+}</pre></details>
+</article>
+<article id="payment-held" aria-labelledby="payment-held-title">
+  <div class="case-heading"><h2 id="payment-held-title">payment-held</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Contract-account signers receive the server-provided hold notice. Not emitted as a passed screening check.</p>
+  <dl><dt>Template</dt><dd><code>payment_held</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>A Tendr payment is on hold</h3><pre>Payment pay_example (ORDER-1042) is on hold: sanctions.
+These funds came from a sanctioned address. Tendr cannot freeze them; you are responsible for not using them; get legal advice.
+Review it:
+https://app.tendr.invalid/dashboard/review
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;payment_held&quot;,
+  &quot;data&quot;: {
+    &quot;payment_id&quot;: &quot;pay_example&quot;,
+    &quot;session_id&quot;: &quot;ses_example&quot;,
+    &quot;external_ref&quot;: &quot;ORDER-1042&quot;,
+    &quot;livemode&quot;: &quot;true&quot;,
+    &quot;url&quot;: &quot;https://app.tendr.invalid/dashboard/review&quot;,
+    &quot;held_reason&quot;: &quot;sanctions&quot;,
+    &quot;notice&quot;: &quot;These funds came from a sanctioned address. Tendr cannot freeze them; you are responsible for not using them; get legal advice.&quot;
+  }
+}</pre></details>
+</article>
+<article id="payment-screening-unresolved" aria-labelledby="payment-screening-unresolved-title">
+  <div class="case-heading"><h2 id="payment-screening-unresolved-title">payment-screening-unresolved</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Screening has not completed; no claim that an address is sanctioned.</p>
+  <dl><dt>Template</dt><dd><code>payment_screening_unresolved</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>A Tendr payment needs review</h3><pre>Screening could not finish for payment pay_example (ORDER-1042) after 3 attempts.
+Review it:
+https://app.tendr.invalid/dashboard/review
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;payment_screening_unresolved&quot;,
+  &quot;data&quot;: {
+    &quot;payment_id&quot;: &quot;pay_example&quot;,
+    &quot;session_id&quot;: &quot;ses_example&quot;,
+    &quot;external_ref&quot;: &quot;ORDER-1042&quot;,
+    &quot;livemode&quot;: &quot;true&quot;,
+    &quot;url&quot;: &quot;https://app.tendr.invalid/dashboard/review&quot;,
+    &quot;attempts&quot;: &quot;3&quot;
+  }
+}</pre></details>
+</article>
+<article id="refund-needs-review" aria-labelledby="refund-needs-review-title">
+  <div class="case-heading"><h2 id="refund-needs-review-title">refund-needs-review</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Signers review a refund; not a sent receipt.</p>
+  <dl><dt>Template</dt><dd><code>refund_needs_review</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>A Tendr refund needs review</h3><pre>Refund ref_example for payment pay_example needs review: Destination receipt needs review.
+Review it:
+https://app.tendr.invalid/dashboard/review
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;refund_needs_review&quot;,
+  &quot;data&quot;: {
+    &quot;payment_id&quot;: &quot;pay_example&quot;,
+    &quot;session_id&quot;: &quot;ses_example&quot;,
+    &quot;external_ref&quot;: &quot;ORDER-1042&quot;,
+    &quot;livemode&quot;: &quot;true&quot;,
+    &quot;url&quot;: &quot;https://app.tendr.invalid/dashboard/review&quot;,
+    &quot;refund_id&quot;: &quot;ref_example&quot;,
+    &quot;proposal_id&quot;: &quot;prop_example&quot;,
+    &quot;review_reason&quot;: &quot;Destination receipt needs review&quot;
+  }
+}</pre></details>
+</article>
+<article id="notification-email-verify" aria-labelledby="notification-email-verify-title">
+  <div class="case-heading"><h2 id="notification-email-verify-title">notification-email-verify</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Pending new mailbox confirms a single-use 24-hour link; current delivery continues until then.</p>
+  <dl><dt>Template</dt><dd><code>notification_email_verify</code></dd>
+  <dt>Recipient</dt><dd>notices@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>Confirm the email for Northstar Studio on tendr</h3><pre>Someone asked for payment and refund notices for Northstar Studio to be sent to notices@example.com.
+
+Confirm this address: https://app.tendr.invalid/settings/notification-email/verify?token=EXAMPLE_NOT_VALID
+
+The link works once and expires in 24 hours. Nothing is sent here until you confirm.
+If you did not expect this, ignore this email.</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;notices@example.com&quot;,
+  &quot;template&quot;: &quot;notification_email_verify&quot;,
+  &quot;data&quot;: {
+    &quot;store_name&quot;: &quot;Northstar Studio&quot;,
+    &quot;email&quot;: &quot;notices@example.com&quot;,
+    &quot;url&quot;: &quot;https://app.tendr.invalid/settings/notification-email/verify?token=EXAMPLE_NOT_VALID&quot;
+  },
+  &quot;subject&quot;: &quot;Confirm the email for Northstar Studio on tendr&quot;,
+  &quot;text&quot;: &quot;Someone asked for payment and refund notices for Northstar Studio to be sent to notices@example.com.\n\nConfirm this address: https://app.tendr.invalid/settings/notification-email/verify?token=EXAMPLE_NOT_VALID\n\nThe link works once and expires in 24 hours. Nothing is sent here until you confirm.\nIf you did not expect this, ignore this email.&quot;
+}</pre></details>
+</article>
+<article id="notification-email-change-requested" aria-labelledby="notification-email-change-requested-title">
+  <div class="case-heading"><h2 id="notification-email-change-requested-title">notification-email-change-requested</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Previous destination/owners are notified. No CTA URL is provided.</p>
+  <dl><dt>Template</dt><dd><code>notification_email_change_requested</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>A new notification email was requested for Northstar Studio</h3><pre>A change of notification email to n***@example.com was requested from WooCommerce site connection.
+If this wasn&#39;t you, disconnect the site or contact support.
+
+Payment and refund notices for Northstar Studio keep coming here until the new address is
+confirmed from a link sent to it.</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;notification_email_change_requested&quot;,
+  &quot;data&quot;: {
+    &quot;store_name&quot;: &quot;Northstar Studio&quot;,
+    &quot;masked_new_email&quot;: &quot;n***@example.com&quot;,
+    &quot;requested_from&quot;: &quot;WooCommerce site connection&quot;
+  },
+  &quot;subject&quot;: &quot;A new notification email was requested for Northstar Studio&quot;,
+  &quot;text&quot;: &quot;A change of notification email to n***@example.com was requested from WooCommerce site connection.\nIf this wasn&#39;t you, disconnect the site or contact support.\n\nPayment and refund notices for Northstar Studio keep coming here until the new address is\nconfirmed from a link sent to it.&quot;
+}</pre></details>
+</article>
+<article id="notification-email-changed" aria-labelledby="notification-email-changed-title">
+  <div class="case-heading"><h2 id="notification-email-changed-title">notification-email-changed</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Previous recipients are notified of the verified new destination.</p>
+  <dl><dt>Template</dt><dd><code>notification_email_changed</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>Notices for Northstar Studio now go to notices@example.com</h3><pre>Payment and refund notices for Northstar Studio on tendr now go to notices@example.com.
+
+If you did not make this change, sign in to your tendr dashboard and set the address
+under Settings → Checkout, and check your connected sites.</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;notification_email_changed&quot;,
+  &quot;data&quot;: {
+    &quot;store_name&quot;: &quot;Northstar Studio&quot;,
+    &quot;new_email&quot;: &quot;notices@example.com&quot;
+  },
+  &quot;subject&quot;: &quot;Notices for Northstar Studio now go to notices@example.com&quot;,
+  &quot;text&quot;: &quot;Payment and refund notices for Northstar Studio on tendr now go to notices@example.com.\n\nIf you did not make this change, sign in to your tendr dashboard and set the address\nunder Settings → Checkout, and check your connected sites.&quot;
+}</pre></details>
+</article>
+<article id="notification-email-cleared" aria-labelledby="notification-email-cleared-title">
+  <div class="case-heading"><h2 id="notification-email-cleared-title">notification-email-cleared</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Previous recipients are notified of owner-email fallback.</p>
+  <dl><dt>Template</dt><dd><code>notification_email_changed</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>Notices for Northstar Studio now go to the store owners&#39; emails</h3><pre>Payment and refund notices for Northstar Studio on tendr now go to the store owners&#39; emails.
+
+If you did not make this change, sign in to your tendr dashboard and set the address
+under Settings → Checkout, and check your connected sites.</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;notification_email_changed&quot;,
+  &quot;data&quot;: {
+    &quot;store_name&quot;: &quot;Northstar Studio&quot;,
+    &quot;new_email&quot;: &quot;&quot;
+  },
+  &quot;subject&quot;: &quot;Notices for Northstar Studio now go to the store owners&#39; emails&quot;,
+  &quot;text&quot;: &quot;Payment and refund notices for Northstar Studio on tendr now go to the store owners&#39; emails.\n\nIf you did not make this change, sign in to your tendr dashboard and set the address\nunder Settings → Checkout, and check your connected sites.&quot;
+}</pre></details>
+</article>
+<article id="hook-failed" aria-labelledby="hook-failed-title">
+  <div class="case-heading"><h2 id="hook-failed-title">hook-failed</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Contract callback failed after retries; payment is already settled. Not a failed-payment email.</p>
+  <dl><dt>Template</dt><dd><code>hook_failed</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Handler-supplied subject/text (synthetic example)</dd></dl>
+  <div class="message"><h3>Your contract was not notified of the payment for order ORDER-1042</h3><pre>Tendr could not call onTendrDeposit on your contract example-contract.near (near) for order ORDER-1042.
+The payment itself is settled: the funds are in your contract.
+We tried 12 times over 3 days. Last error: Contract rejected the callback
+
+Once your contract accepts the call again, resend it: POST /v1/payments/pay_example/hook/resend
+See the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=live</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;hook_failed&quot;,
+  &quot;data&quot;: {
+    &quot;store_name&quot;: &quot;Northstar Studio&quot;,
+    &quot;livemode&quot;: &quot;true&quot;,
+    &quot;payment_id&quot;: &quot;pay_example&quot;,
+    &quot;external_ref&quot;: &quot;ORDER-1042&quot;,
+    &quot;contract&quot;: &quot;example-contract.near&quot;,
+    &quot;chain&quot;: &quot;near&quot;,
+    &quot;attempts&quot;: &quot;12&quot;,
+    &quot;last_error&quot;: &quot;Contract rejected the callback&quot;,
+    &quot;dashboard_url&quot;: &quot;https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=live&quot;
+  },
+  &quot;subject&quot;: &quot;Your contract was not notified of the payment for order ORDER-1042&quot;,
+  &quot;text&quot;: &quot;Tendr could not call onTendrDeposit on your contract example-contract.near (near) for order ORDER-1042.\nThe payment itself is settled: the funds are in your contract.\nWe tried 12 times over 3 days. Last error: Contract rejected the callback\n\nOnce your contract accepts the call again, resend it: POST /v1/payments/pay_example/hook/resend\nSee the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&amp;mode=live&quot;
+}</pre></details>
+</article>
+<article id="proposal-needs-approval" aria-labelledby="proposal-needs-approval-title">
+  <div class="case-heading"><h2 id="proposal-needs-approval-title">proposal-needs-approval</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Contract account only: current signers review an action before signing.</p>
+  <dl><dt>Template</dt><dd><code>proposal_needs_approval</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>A Tendr account change needs your approval</h3><pre>A change to your Tendr account needs your approval: Require 2 signer approvals (takes effect 24 h after approval).
+Review and approve:
+https://app.tendr.invalid/dashboard/approvals/prop_example
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;proposal_needs_approval&quot;,
+  &quot;data&quot;: {
+    &quot;kind&quot;: &quot;set_threshold&quot;,
+    &quot;summary&quot;: &quot;Require 2 signer approvals (takes effect 24 h after approval)&quot;,
+    &quot;proposalId&quot;: &quot;prop_example&quot;,
+    &quot;livemode&quot;: &quot;true&quot;,
+    &quot;url&quot;: &quot;https://app.tendr.invalid/dashboard/approvals/prop_example&quot;,
+    &quot;threshold&quot;: &quot;2&quot;
+  }
+}</pre></details>
+</article>
+<article id="timelock-started" aria-labelledby="timelock-started-title">
+  <div class="case-heading"><h2 id="timelock-started-title">timelock-started</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Contract account only: approved change is still waiting; cancellation deadline must remain visible.</p>
+  <dl><dt>Template</dt><dd><code>timelock_started</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>A Tendr account change is waiting out its delay</h3><pre>This change is approved and takes effect at 2026-11-11T15:00:00.000Z: Require 2 signer approvals (takes effect 24 h after approval).
+If you did not expect it, cancel it before then.
+Review or cancel:
+https://app.tendr.invalid/dashboard/approvals/prop_example
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;timelock_started&quot;,
+  &quot;data&quot;: {
+    &quot;kind&quot;: &quot;set_threshold&quot;,
+    &quot;summary&quot;: &quot;Require 2 signer approvals (takes effect 24 h after approval)&quot;,
+    &quot;proposalId&quot;: &quot;prop_example&quot;,
+    &quot;livemode&quot;: &quot;true&quot;,
+    &quot;readyAt&quot;: &quot;2026-11-11T15:00:00.000Z&quot;,
+    &quot;cancelUrl&quot;: &quot;https://app.tendr.invalid/dashboard/approvals/prop_example&quot;,
+    &quot;threshold&quot;: &quot;2&quot;
+  }
+}</pre></details>
+</article>
+<article id="proposal-executed" aria-labelledby="proposal-executed-title">
+  <div class="case-heading"><h2 id="proposal-executed-title">proposal-executed</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Contract account only: completed tense, no approve-again action.</p>
+  <dl><dt>Template</dt><dd><code>proposal_executed</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>A change on your Tendr account was carried out</h3><pre>This approved change was carried out: Require 2 signer approvals.
+Details:
+https://app.tendr.invalid/dashboard/approvals/prop_example
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;proposal_executed&quot;,
+  &quot;data&quot;: {
+    &quot;kind&quot;: &quot;set_threshold&quot;,
+    &quot;summary&quot;: &quot;Require 2 signer approvals (takes effect 24 h after approval)&quot;,
+    &quot;proposalId&quot;: &quot;prop_example&quot;,
+    &quot;livemode&quot;: &quot;true&quot;,
+    &quot;url&quot;: &quot;https://app.tendr.invalid/dashboard/approvals/prop_example&quot;,
+    &quot;threshold&quot;: &quot;2&quot;
+  }
+}</pre></details>
+</article>
+<article id="recovery-started" aria-labelledby="recovery-started-title">
+  <div class="case-heading"><h2 id="recovery-started-title">recovery-started</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Contract recovery starts; current signers can review/cancel before execution.</p>
+  <dl><dt>Template</dt><dd><code>recovery_started</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>Account recovery was started on your Tendr store</h3><pre>Someone started recovery on your Tendr account. It completes at 2026-11-12T15:00:00.000Z.
+If you did not expect this, cancel it now.
+Review or cancel:
+https://app.tendr.invalid/dashboard/recovery
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;recovery_started&quot;,
+  &quot;data&quot;: {
+    &quot;recoveryId&quot;: &quot;rec_example&quot;,
+    &quot;executesAt&quot;: &quot;2026-11-12T15:00:00.000Z&quot;,
+    &quot;livemode&quot;: &quot;true&quot;,
+    &quot;cancelUrl&quot;: &quot;https://app.tendr.invalid/dashboard/recovery&quot;,
+    &quot;newSignerIds&quot;: &quot;usr_example&quot;
+  }
+}</pre></details>
+</article>
+<article id="recovery-executes-soon" aria-labelledby="recovery-executes-soon-title">
+  <div class="case-heading"><h2 id="recovery-executes-soon-title">recovery-executes-soon</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Contract recovery reminder, scheduled 24 hours before execution while pending.</p>
+  <dl><dt>Template</dt><dd><code>recovery_executes_soon</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>Account recovery on your Tendr store completes soon</h3><pre>Recovery on your Tendr account completes at 2026-11-12T15:00:00.000Z.
+If you did not expect this, cancel it now.
+Review or cancel:
+https://app.tendr.invalid/dashboard/recovery
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;recovery_executes_soon&quot;,
+  &quot;data&quot;: {
+    &quot;recoveryId&quot;: &quot;rec_example&quot;,
+    &quot;executesAt&quot;: &quot;2026-11-12T15:00:00.000Z&quot;,
+    &quot;livemode&quot;: &quot;true&quot;,
+    &quot;cancelUrl&quot;: &quot;https://app.tendr.invalid/dashboard/recovery&quot;
+  }
+}</pre></details>
+</article>
+<article id="recovery-register-link" aria-labelledby="recovery-register-link-title">
+  <div class="case-heading"><h2 id="recovery-register-link-title">recovery-register-link</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Requesting person registers a recovery passkey using a single-use 15-minute link.</p>
+  <dl><dt>Template</dt><dd><code>recovery_register_link</code></dd>
+  <dt>Recipient</dt><dd>recovering-person@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>Register a new passkey for Tendr</h3><pre>Use this link to register a new passkey for Northstar Studio on Tendr.
+Register a passkey:
+https://app.tendr.invalid/recover/passkey?token=EXAMPLE_NOT_VALID
+The link works once and expires soon. If you did not ask for it, ignore this email.
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;recovering-person@example.com&quot;,
+  &quot;template&quot;: &quot;recovery_register_link&quot;,
+  &quot;data&quot;: {
+    &quot;store&quot;: &quot;Northstar Studio&quot;,
+    &quot;url&quot;: &quot;https://app.tendr.invalid/recover/passkey?token=EXAMPLE_NOT_VALID&quot;
+  }
+}</pre></details>
+</article>
+<article id="recovery-session-opened" aria-labelledby="recovery-session-opened-title">
+  <div class="case-heading"><h2 id="recovery-session-opened-title">recovery-session-opened</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Security alert to the person and current signers. No CTA URL is present.</p>
+  <dl><dt>Template</dt><dd><code>recovery_session_opened</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>A recovery session was opened on your Tendr store</h3><pre>recovering-person@example.com (usr_example) opened a recovery session on your Tendr account at 2026-11-09T15:00:00.000Z.
+If this was not expected, sign in to Tendr and review your account.
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;recovery_session_opened&quot;,
+  &quot;data&quot;: {
+    &quot;person&quot;: &quot;recovering-person@example.com (usr_example)&quot;,
+    &quot;at&quot;: &quot;2026-11-09T15:00:00.000Z&quot;
+  }
+}</pre></details>
+</article>
+<article id="recovery-passkey-registered" aria-labelledby="recovery-passkey-registered-title">
+  <div class="case-heading"><h2 id="recovery-passkey-registered-title">recovery-passkey-registered</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Security alert to the person and current signers. No CTA URL is present.</p>
+  <dl><dt>Template</dt><dd><code>recovery_passkey_registered</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>A passkey was registered through Tendr recovery</h3><pre>recovering-person@example.com (usr_example) registered a new passkey through recovery on your Tendr account at 2026-11-09T15:00:00.000Z.
+If this was not expected, sign in to Tendr and review your account.
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;recovery_passkey_registered&quot;,
+  &quot;data&quot;: {
+    &quot;person&quot;: &quot;recovering-person@example.com (usr_example)&quot;,
+    &quot;at&quot;: &quot;2026-11-09T15:00:00.000Z&quot;
+  }
+}</pre></details>
+</article>
+<footer>Generated from email-design-fixtures.json and apps/api/src/auth/mail-render.ts. This file has no scripts, tracking, external fonts or network assets.</footer>
+</main></body></html>

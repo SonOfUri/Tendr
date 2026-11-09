@@ -1,0 +1,467 @@
+{
+  "reviewed_at": "2026-11-09",
+  "description": "Synthetic design inputs for current MailMessage contracts. Reserved domains, fake IDs and unusable tokens only. Supplied subject/text examples mirror current handler copy; renderer fallback examples use renderMail. This is not an HTML delivery implementation.",
+  "fixtures": [
+    {
+      "id": "verify-email",
+      "scenario": "New person confirms their email; single-use 15-minute link.",
+      "message": {
+        "to": "new-person@example.com",
+        "template": "verify_email",
+        "data": {
+          "url": "https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID"
+        }
+      }
+    },
+    {
+      "id": "login-link",
+      "scenario": "Verified person without an active login passkey finishes sign-in.",
+      "message": {
+        "to": "returning-person@example.com",
+        "template": "login_link",
+        "data": {
+          "url": "https://app.tendr.invalid/verify?token=EXAMPLE_NOT_VALID"
+        }
+      }
+    },
+    {
+      "id": "invite",
+      "scenario": "Invited member signs in with this email before accepting the offered role.",
+      "message": {
+        "to": "member@example.com",
+        "template": "invite",
+        "data": {
+          "url": "https://app.tendr.invalid/invite/EXAMPLE_NOT_VALID",
+          "storeName": "Northstar Studio",
+          "role": "viewer"
+        }
+      }
+    },
+    {
+      "id": "invoice-verify",
+      "scenario": "Contractor reviews immutable terms before explicit verification. Payload has no item rows or total.",
+      "message": {
+        "to": "contractor@example.com",
+        "template": "invoice_verify",
+        "data": {
+          "business": "Northstar Studio",
+          "url": "https://app.tendr.invalid/invoice/northstar-studio#token=EXAMPLE_NOT_VALID"
+        }
+      }
+    },
+    {
+      "id": "invoice-submitted",
+      "scenario": "Owner notice: submitted. Current handler supplies prebuilt copy and empty data.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "invoice_notice",
+        "data": {},
+        "subject": "New contractor invoice",
+        "text": "Invoice DESIGN-2026-014 for Northstar Studio is awaiting your review.\n\nOpen your Tendr dashboard and select this business:\nhttps://app.tendr.invalid/dashboard/invoices\n\nOnly your wallet passkey can approve a payment."
+      }
+    },
+    {
+      "id": "invoice-payment-review",
+      "scenario": "Owner notice: payment-review. Current handler supplies prebuilt copy and empty data.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "invoice_notice",
+        "data": {},
+        "subject": "Invoice payment needs review",
+        "text": "Invoice DESIGN-2026-014 for Northstar Studio needs a payment receipt review.\n\nOpen your Tendr dashboard and select this business:\nhttps://app.tendr.invalid/dashboard/invoices\n\nOnly your wallet passkey can approve a payment."
+      }
+    },
+    {
+      "id": "invoice-paid",
+      "scenario": "Contractor notice: paid. No fresh access URL; original private link is retained.",
+      "message": {
+        "to": "contractor@example.com",
+        "template": "invoice_notice",
+        "data": {},
+        "subject": "Your invoice has been paid",
+        "text": "Invoice DESIGN-2026-014 for Northstar Studio has been paid to the wallet you specified.\n\nUse the private link in your verification email to review the details."
+      }
+    },
+    {
+      "id": "invoice-declined",
+      "scenario": "Contractor notice: declined. No fresh access URL; original private link is retained.",
+      "message": {
+        "to": "contractor@example.com",
+        "template": "invoice_notice",
+        "data": {},
+        "subject": "Your invoice was declined",
+        "text": "Invoice DESIGN-2026-014 for Northstar Studio was declined by the business.\n\nUse the private link in your verification email to review the details."
+      }
+    },
+    {
+      "id": "payment-received-live",
+      "scenario": "Store receipt, live. Untrusted multi-line note is plain text; retain exact amounts and mode.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "payment_received",
+        "data": {
+          "store_name": "Northstar Studio",
+          "livemode": "true",
+          "payment_id": "pay_example",
+          "external_ref": "ORDER-1042",
+          "payment_link_title": "Design sprint",
+          "payer_note": "For the design sprint\nPlease include <draft> & final files.",
+          "amount_received": "124.5",
+          "settlement_symbol": "USDC",
+          "order_total": "125.00 USD",
+          "original_amount": "",
+          "fx_rate": "",
+          "fx_source": "",
+          "fx_as_of": "",
+          "paid_with": "125 USDC on Base",
+          "network_fee": "paid by the shopper",
+          "fees": "Tendr fee: $0.50",
+          "tx_hash": "EXAMPLE_PAYMENT",
+          "tx_url": "https://explorer.tendr.invalid/tx/EXAMPLE_PAYMENT",
+          "dashboard_url": "https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&mode=live"
+        },
+        "subject": "You got paid 124.5 USDC for order ORDER-1042",
+        "text": "Northstar Studio received 124.5 USDC for order ORDER-1042.\nNote from the payer:\n> For the design sprint\n> Please include <draft> & final files.\n\nOrder total: 125.00 USD\nPaid with: 125 USDC on Base\nNetwork fee: paid by the shopper\n\nFees:\n- Tendr fee: $0.50\n\nTransaction: https://explorer.tendr.invalid/tx/EXAMPLE_PAYMENT\nSee the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&mode=live"
+      }
+    },
+    {
+      "id": "refund-sent-live",
+      "scenario": "Confirmed merchant refund, live. Recipient is the store notice address, not the shopper. NEAR execution transaction.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "refund_sent",
+        "data": {
+          "store_name": "Northstar Studio",
+          "livemode": "true",
+          "refund_id": "ref_example",
+          "payment_id": "pay_example",
+          "external_ref": "ORDER-1042",
+          "refund_external_ref": "RETURN-1042",
+          "reason": "merchant",
+          "amount_to_customer": "24.9",
+          "network_fee": "0.1",
+          "symbol": "USDC",
+          "tx_hash": "EXAMPLE_REFUND",
+          "tx_url": "https://explorer.tendr.invalid/near/EXAMPLE_REFUND",
+          "dashboard_url": "https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&mode=live"
+        },
+        "subject": "Refund sent: 24.9 USDC for order ORDER-1042",
+        "text": "Northstar Studio sent 24.9 USDC to your customer's Base address for order ORDER-1042 (refund from your store).\nYour refund reference: RETURN-1042\nNetwork fee: 0.1 USDC\n\nTransaction: https://explorer.tendr.invalid/near/EXAMPLE_REFUND\nSee the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&mode=live"
+      }
+    },
+    {
+      "id": "payment-received-test",
+      "scenario": "Store receipt, test. Untrusted multi-line note is plain text; retain exact amounts and mode.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "payment_received",
+        "data": {
+          "store_name": "Northstar Studio",
+          "livemode": "false",
+          "payment_id": "pay_example",
+          "external_ref": "ORDER-1042",
+          "payment_link_title": "Design sprint",
+          "payer_note": "For the design sprint\nPlease include <draft> & final files.",
+          "amount_received": "124.5",
+          "settlement_symbol": "USDC",
+          "order_total": "125.00 USD",
+          "original_amount": "",
+          "fx_rate": "",
+          "fx_source": "",
+          "fx_as_of": "",
+          "paid_with": "125 USDC on Base",
+          "network_fee": "paid by the shopper",
+          "fees": "Tendr fee: $0.50",
+          "tx_hash": "EXAMPLE_PAYMENT",
+          "tx_url": "https://explorer.tendr.invalid/tx/EXAMPLE_PAYMENT",
+          "dashboard_url": "https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&mode=test"
+        },
+        "subject": "[Test] You got paid 124.5 USDC for order ORDER-1042",
+        "text": "Northstar Studio received 124.5 USDC for order ORDER-1042.\nNote from the payer:\n> For the design sprint\n> Please include <draft> & final files.\nThis is a test payment: no real money moved.\n\nOrder total: 125.00 USD\nPaid with: 125 USDC on Base\nNetwork fee: paid by the shopper\n\nFees:\n- Tendr fee: $0.50\n\nTransaction: https://explorer.tendr.invalid/tx/EXAMPLE_PAYMENT\nSee the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&mode=test"
+      }
+    },
+    {
+      "id": "refund-sent-test",
+      "scenario": "Confirmed merchant refund, test. Recipient is the store notice address, not the shopper. NEAR execution transaction.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "refund_sent",
+        "data": {
+          "store_name": "Northstar Studio",
+          "livemode": "false",
+          "refund_id": "ref_example",
+          "payment_id": "pay_example",
+          "external_ref": "ORDER-1042",
+          "refund_external_ref": "RETURN-1042",
+          "reason": "merchant",
+          "amount_to_customer": "24.9",
+          "network_fee": "0.1",
+          "symbol": "USDC",
+          "tx_hash": "EXAMPLE_REFUND",
+          "tx_url": "https://explorer.tendr.invalid/near/EXAMPLE_REFUND",
+          "dashboard_url": "https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&mode=test"
+        },
+        "subject": "[Test] Refund sent: 24.9 USDC for order ORDER-1042",
+        "text": "Northstar Studio sent 24.9 USDC to your customer's Base address for order ORDER-1042 (refund from your store).\nThis is a test refund: no real money moved.\nYour refund reference: RETURN-1042\nNetwork fee: 0.1 USDC\n\nTransaction: https://explorer.tendr.invalid/near/EXAMPLE_REFUND\nSee the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&mode=test"
+      }
+    },
+    {
+      "id": "refund-needs-address",
+      "scenario": "Shopper supplies a return address in checkout, never by replying to the email.",
+      "message": {
+        "to": "shopper@example.com",
+        "template": "refund_needs_address",
+        "data": {
+          "merchant_name": "Northstar Studio",
+          "amount": "24.9 USDC",
+          "refund_id": "ref_example",
+          "refund_address_url": "https://pay.tendr.invalid/ses_example/refund-address?t=EXAMPLE_NOT_VALID"
+        }
+      }
+    },
+    {
+      "id": "payment-held",
+      "scenario": "Contract-account signers receive the server-provided hold notice. Not emitted as a passed screening check.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "payment_held",
+        "data": {
+          "payment_id": "pay_example",
+          "session_id": "ses_example",
+          "external_ref": "ORDER-1042",
+          "livemode": "true",
+          "url": "https://app.tendr.invalid/dashboard/review",
+          "held_reason": "sanctions",
+          "notice": "These funds came from a sanctioned address. Tendr cannot freeze them; you are responsible for not using them; get legal advice."
+        }
+      }
+    },
+    {
+      "id": "payment-screening-unresolved",
+      "scenario": "Screening has not completed; no claim that an address is sanctioned.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "payment_screening_unresolved",
+        "data": {
+          "payment_id": "pay_example",
+          "session_id": "ses_example",
+          "external_ref": "ORDER-1042",
+          "livemode": "true",
+          "url": "https://app.tendr.invalid/dashboard/review",
+          "attempts": "3"
+        }
+      }
+    },
+    {
+      "id": "refund-needs-review",
+      "scenario": "Signers review a refund; not a sent receipt.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "refund_needs_review",
+        "data": {
+          "payment_id": "pay_example",
+          "session_id": "ses_example",
+          "external_ref": "ORDER-1042",
+          "livemode": "true",
+          "url": "https://app.tendr.invalid/dashboard/review",
+          "refund_id": "ref_example",
+          "proposal_id": "prop_example",
+          "review_reason": "Destination receipt needs review"
+        }
+      }
+    },
+    {
+      "id": "notification-email-verify",
+      "scenario": "Pending new mailbox confirms a single-use 24-hour link; current delivery continues until then.",
+      "message": {
+        "to": "notices@example.com",
+        "template": "notification_email_verify",
+        "data": {
+          "store_name": "Northstar Studio",
+          "email": "notices@example.com",
+          "url": "https://app.tendr.invalid/settings/notification-email/verify?token=EXAMPLE_NOT_VALID"
+        },
+        "subject": "Confirm the email for Northstar Studio on tendr",
+        "text": "Someone asked for payment and refund notices for Northstar Studio to be sent to notices@example.com.\n\nConfirm this address: https://app.tendr.invalid/settings/notification-email/verify?token=EXAMPLE_NOT_VALID\n\nThe link works once and expires in 24 hours. Nothing is sent here until you confirm.\nIf you did not expect this, ignore this email."
+      }
+    },
+    {
+      "id": "notification-email-change-requested",
+      "scenario": "Previous destination/owners are notified. No CTA URL is provided.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "notification_email_change_requested",
+        "data": {
+          "store_name": "Northstar Studio",
+          "masked_new_email": "n***@example.com",
+          "requested_from": "WooCommerce site connection"
+        },
+        "subject": "A new notification email was requested for Northstar Studio",
+        "text": "A change of notification email to n***@example.com was requested from WooCommerce site connection.\nIf this wasn't you, disconnect the site or contact support.\n\nPayment and refund notices for Northstar Studio keep coming here until the new address is\nconfirmed from a link sent to it."
+      }
+    },
+    {
+      "id": "notification-email-changed",
+      "scenario": "Previous recipients are notified of the verified new destination.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "notification_email_changed",
+        "data": {
+          "store_name": "Northstar Studio",
+          "new_email": "notices@example.com"
+        },
+        "subject": "Notices for Northstar Studio now go to notices@example.com",
+        "text": "Payment and refund notices for Northstar Studio on tendr now go to notices@example.com.\n\nIf you did not make this change, sign in to your tendr dashboard and set the address\nunder Settings → Checkout, and check your connected sites."
+      }
+    },
+    {
+      "id": "notification-email-cleared",
+      "scenario": "Previous recipients are notified of owner-email fallback.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "notification_email_changed",
+        "data": {
+          "store_name": "Northstar Studio",
+          "new_email": ""
+        },
+        "subject": "Notices for Northstar Studio now go to the store owners' emails",
+        "text": "Payment and refund notices for Northstar Studio on tendr now go to the store owners' emails.\n\nIf you did not make this change, sign in to your tendr dashboard and set the address\nunder Settings → Checkout, and check your connected sites."
+      }
+    },
+    {
+      "id": "hook-failed",
+      "scenario": "Contract callback failed after retries; payment is already settled. Not a failed-payment email.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "hook_failed",
+        "data": {
+          "store_name": "Northstar Studio",
+          "livemode": "true",
+          "payment_id": "pay_example",
+          "external_ref": "ORDER-1042",
+          "contract": "example-contract.near",
+          "chain": "near",
+          "attempts": "12",
+          "last_error": "Contract rejected the callback",
+          "dashboard_url": "https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&mode=live"
+        },
+        "subject": "Your contract was not notified of the payment for order ORDER-1042",
+        "text": "Tendr could not call onTendrDeposit on your contract example-contract.near (near) for order ORDER-1042.\nThe payment itself is settled: the funds are in your contract.\nWe tried 12 times over 3 days. Last error: Contract rejected the callback\n\nOnce your contract accepts the call again, resend it: POST /v1/payments/pay_example/hook/resend\nSee the payment: https://app.tendr.invalid/dashboard/payments/pay_example?store=mer_example&mode=live"
+      }
+    },
+    {
+      "id": "proposal-needs-approval",
+      "scenario": "Contract account only: current signers review an action before signing.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "proposal_needs_approval",
+        "data": {
+          "kind": "set_threshold",
+          "summary": "Require 2 signer approvals (takes effect 24 h after approval)",
+          "proposalId": "prop_example",
+          "livemode": "true",
+          "url": "https://app.tendr.invalid/dashboard/approvals/prop_example",
+          "threshold": "2"
+        }
+      }
+    },
+    {
+      "id": "timelock-started",
+      "scenario": "Contract account only: approved change is still waiting; cancellation deadline must remain visible.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "timelock_started",
+        "data": {
+          "kind": "set_threshold",
+          "summary": "Require 2 signer approvals (takes effect 24 h after approval)",
+          "proposalId": "prop_example",
+          "livemode": "true",
+          "readyAt": "2026-11-11T15:00:00.000Z",
+          "cancelUrl": "https://app.tendr.invalid/dashboard/approvals/prop_example",
+          "threshold": "2"
+        }
+      }
+    },
+    {
+      "id": "proposal-executed",
+      "scenario": "Contract account only: completed tense, no approve-again action.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "proposal_executed",
+        "data": {
+          "kind": "set_threshold",
+          "summary": "Require 2 signer approvals (takes effect 24 h after approval)",
+          "proposalId": "prop_example",
+          "livemode": "true",
+          "url": "https://app.tendr.invalid/dashboard/approvals/prop_example",
+          "threshold": "2"
+        }
+      }
+    },
+    {
+      "id": "recovery-started",
+      "scenario": "Contract recovery starts; current signers can review/cancel before execution.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "recovery_started",
+        "data": {
+          "recoveryId": "rec_example",
+          "executesAt": "2026-11-12T15:00:00.000Z",
+          "livemode": "true",
+          "cancelUrl": "https://app.tendr.invalid/dashboard/recovery",
+          "newSignerIds": "usr_example"
+        }
+      }
+    },
+    {
+      "id": "recovery-executes-soon",
+      "scenario": "Contract recovery reminder, scheduled 24 hours before execution while pending.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "recovery_executes_soon",
+        "data": {
+          "recoveryId": "rec_example",
+          "executesAt": "2026-11-12T15:00:00.000Z",
+          "livemode": "true",
+          "cancelUrl": "https://app.tendr.invalid/dashboard/recovery"
+        }
+      }
+    },
+    {
+      "id": "recovery-register-link",
+      "scenario": "Requesting person registers a recovery passkey using a single-use 15-minute link.",
+      "message": {
+        "to": "recovering-person@example.com",
+        "template": "recovery_register_link",
+        "data": {
+          "store": "Northstar Studio",
+          "url": "https://app.tendr.invalid/recover/passkey?token=EXAMPLE_NOT_VALID"
+        }
+      }
+    },
+    {
+      "id": "recovery-session-opened",
+      "scenario": "Security alert to the person and current signers. No CTA URL is present.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "recovery_session_opened",
+        "data": {
+          "person": "recovering-person@example.com (usr_example)",
+          "at": "2026-11-09T15:00:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "recovery-passkey-registered",
+      "scenario": "Security alert to the person and current signers. No CTA URL is present.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "recovery_passkey_registered",
+        "data": {
+          "person": "recovering-person@example.com (usr_example)",
+          "at": "2026-11-09T15:00:00.000Z"
+        }
+      }
+    }
+  ]
+}
