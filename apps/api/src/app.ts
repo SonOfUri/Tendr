@@ -141,7 +141,13 @@ export async function buildApp(opts: BuildAppOptions = {}) {
       ) {
         cb(null, { origin: [checkoutOrigin], credentials: false });
       } else {
-        cb(null, { origin: origins, credentials: true });
+        // Dashboard writes also use PUT, PATCH and DELETE. CORS defaults to GET/HEAD/POST,
+        // which makes the browser reject those requests before authentication can run.
+        cb(null, {
+          origin: origins,
+          credentials: true,
+          methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
+        });
       }
     },
   });
