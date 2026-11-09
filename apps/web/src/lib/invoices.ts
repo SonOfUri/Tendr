@@ -4,6 +4,8 @@ export interface InvoiceView {
   email: string;
   reference: string;
   description: string;
+  /** Integer token units; missing on older API versions. */
+  items?: { description: string; amount: string }[];
   dueDate: string | null;
   destination: string;
   destinationAsset: string;

@@ -1,5 +1,7 @@
 'use client';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { invoiceBreakdown, MAX_INVOICE_ITEMS } from '@tendr/contracts';
+import { InvoiceBreakdown } from '@/components/InvoiceBreakdown';
 import { publicEnv } from '@/lib/env';
 import { formatUnits, chainLabel } from '@/lib/assets';
 import { INVOICE_STATUS, type InvoiceView } from '@/lib/invoices';
@@ -13,10 +15,28 @@ export function InvoicePortal({ business }: { business: string }) {
   const [token, setToken] = useState('');
   const [chain, setChain] = useState('');
   const [asset, setAsset] = useState('');
+  const [items, setItems] = useState([{ id: 0, description: '', amount: '' }]);
+  const nextItemId = useRef(1);
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState('');
   const base = `${publicEnv.apiBaseUrl}/v1/invoices/public/${encodeURIComponent(business)}`;
+  const receivingToken = data?.tokens.find((t) => t.assetId === asset);
+  const total = (() => {
+    if (!receivingToken) return { amount: '0', error: '' };
+    const entered = items.filter((item) => item.amount !== '');
+    if (!entered.length) return { amount: '0', error: '' };
+    try {
+      return { amount: invoiceBreakdown(entered, receivingToken.decimals).amount, error: '' };
+    } catch (e) {
+      return { amount: '0', error: (e as Error).message };
+    }
+  })();
+  function changeItem(id: number, field: 'description' | 'amount', value: string) {
+    setItems((current) =>
+      current.map((item) => (item.id === id ? { ...item, [field]: value } : item)),
+    );
+  }
   async function request<T>(path = '', body?: unknown): Promise<T> {
     const res = await fetch(`${base}${path}`, {
       method: body ? 'POST' : 'GET',
@@ -72,8 +92,7 @@ export function InvoicePortal({ business }: { business: string }) {
         contractorName: form.get('name'),
         email: form.get('email'),
         reference: form.get('reference'),
-        description: form.get('description'),
-        amount: form.get('amount'),
+        items: items.map(({ description, amount }) => ({ description, amount })),
         destination: form.get('destination'),
         destinationAsset: asset,
         ...(form.get('dueDate') ? { dueDate: form.get('dueDate') } : {}),
@@ -106,8 +125,6 @@ export function InvoicePortal({ business }: { business: string }) {
               </dd>
               <dt>Business</dt>
               <dd>{business}</dd>
-              <dt>For</dt>
-              <dd className={styles.description}>{invoice.description}</dd>
               {invoice.dueDate && (
                 <>
                   <dt>Due date</dt>
@@ -121,6 +138,7 @@ export function InvoicePortal({ business }: { business: string }) {
               <dt>Asset identifier</dt>
               <dd className={styles.address}>{invoice.destinationAsset}</dd>
             </dl>
+            <InvoiceBreakdown invoice={invoice} />
             {invoice.status === 'awaiting_verification' ? (
               <>
                 <p>
@@ -201,10 +219,6 @@ export function InvoicePortal({ business }: { business: string }) {
                   <input name="dueDate" type="date" />
                 </label>
               </div>
-              <label>
-                What is this invoice for?
-                <textarea name="description" required maxLength={2000} rows={3} />
-              </label>
               <div className={styles.row}>
                 <label>
                   Receiving network
@@ -243,16 +257,71 @@ export function InvoicePortal({ business }: { business: string }) {
                   </select>
                 </label>
               </div>
-              <label>
-                Amount to receive (in the selected token)
-                <input
-                  name="amount"
-                  inputMode="decimal"
-                  placeholder="100.00"
-                  required
-                  pattern="[0-9]+([.][0-9]+)?"
-                />
-              </label>
+              <fieldset className={styles.breakdown} disabled={busy}>
+                <legend>Payment breakdown</legend>
+                <p>List each service or expense. All amounts use the selected receiving token.</p>
+                {items.map((item, index) => (
+                  <div className={styles.lineItem} key={item.id}>
+                    <label>
+                      Description
+                      <input
+                        aria-label={`Item ${index + 1} description`}
+                        value={item.description}
+                        onChange={(e) => changeItem(item.id, 'description', e.target.value)}
+                        required
+                        maxLength={200}
+                        placeholder="e.g. Design work"
+                      />
+                    </label>
+                    <label>
+                      Amount{receivingToken ? ` (${receivingToken.symbol})` : ''}
+                      <input
+                        aria-label={`Item ${index + 1} amount`}
+                        value={item.amount}
+                        onChange={(e) => changeItem(item.id, 'amount', e.target.value)}
+                        inputMode="decimal"
+                        required
+                        maxLength={70}
+                        pattern="[0-9]+([.][0-9]+)?"
+                        placeholder="0.00"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className={styles.secondary}
+                      aria-label={`Remove item ${index + 1}`}
+                      disabled={items.length === 1}
+                      onClick={() => setItems((current) => current.filter((i) => i.id !== item.id))}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className={styles.secondary}
+                  disabled={items.length >= MAX_INVOICE_ITEMS}
+                  onClick={() => {
+                    const id = nextItemId.current++;
+                    setItems((current) => [...current, { id, description: '', amount: '' }]);
+                  }}
+                >
+                  Add line item
+                </button>
+                {total.error && (
+                  <p role="alert" className={styles.error}>
+                    {total.error}
+                  </p>
+                )}
+                <div className={styles.totalRow}>
+                  <strong>Total</strong>
+                  <output aria-label="Invoice total" aria-live="polite">
+                    {receivingToken && !total.error
+                      ? `${formatUnits(total.amount, receivingToken.decimals)} ${receivingToken.symbol}`
+                      : '—'}
+                  </output>
+                </div>
+              </fieldset>
               <label>
                 Receiving wallet address
                 <input
@@ -267,7 +336,15 @@ export function InvoicePortal({ business }: { business: string }) {
                 Use a wallet on the selected network. Addresses requiring a memo or destination tag
                 are not supported. The business covers the quoted transfer cost.
               </p>
-              <button type="submit" disabled={busy || !asset}>
+              <button
+                type="submit"
+                disabled={
+                  busy ||
+                  !asset ||
+                  !!total.error ||
+                  items.some((item) => !item.description.trim() || !item.amount)
+                }
+              >
                 {busy ? 'Sending…' : 'Email me a verification link'}
               </button>
             </form>
