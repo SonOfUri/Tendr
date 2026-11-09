@@ -112,7 +112,7 @@ export default function PaymentPage() {
           </div>
           <div>
             <dt>Settled to you</dt>
-            <dd>{amount(p.settlement.asset, p.settlement.amount_out)}</dd>
+            <dd>{amount(p.settlement.asset, p.settlement.amount_out, p.settlement)}</dd>
           </div>
           <div>
             <dt>Fees paid by</dt>
@@ -125,7 +125,7 @@ export default function PaymentPage() {
             <div>
               <dt>Overpaid</dt>
               <dd>
-                {amount(p.received.asset, p.overpaid_amount)}
+                {amount(p.received.asset, p.overpaid_amount, p.received)}
                 {p.kept_small_overpayment && ' (worth under $1: kept)'}
               </dd>
             </div>
