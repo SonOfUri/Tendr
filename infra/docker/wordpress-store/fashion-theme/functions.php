@@ -14,6 +14,7 @@ add_action( 'init', function () {
 add_filter( 'storefront_customizer_google_font_families', '__return_empty_array' );
 add_filter( 'loop_shop_columns', function () { return 3; } );
 add_filter( 'loop_shop_per_page', function () { return 12; } );
+add_filter( 'woocommerce_gallery_image_size', function () { return 'full'; } );
 add_filter( 'woocommerce_output_related_products_args', function ( $args ) {
     $args['posts_per_page'] = 3;
     $args['columns'] = 3;
