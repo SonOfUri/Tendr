@@ -79,7 +79,7 @@ const LINK_ASSET =
  * demo, legal pages, route handlers) is passed through untouched, as before.
  */
 const POLICY_PATH =
-  /^\/(?:dashboard(?:\/.*)?|signup|login|verify|invite(?:\/.*)?|recover(?:\/.*)?|pay(?:\/.*)?|preview\/theme(?:\/.*)?|connect|settings\/notification-email\/verify|settings\/api-console|settings\/local-mail)$/;
+  /^\/(?:dashboard(?:\/.*)?|signup|login|verify|invite(?:\/.*)?|recover(?:\/.*)?|pay(?:\/.*)?|invoice(?:\/.*)?|preview\/theme(?:\/.*)?|connect|settings\/notification-email\/verify|settings\/api-console|settings\/local-mail)$/;
 
 /** One-time auth parameters and private local testing tools must never be cached. */
 const NO_STORE_PATHS = [
@@ -137,6 +137,12 @@ export async function middleware(request: NextRequest) {
     response = NextResponse.rewrite(target, { request: { headers: requestHeaders } });
   }
   response.headers.set('Content-Security-Policy', csp);
+  if (pathname.startsWith('/invoice/')) {
+    response.headers.set('Cache-Control', 'no-store');
+    response.headers.set('Referrer-Policy', 'no-referrer');
+    response.headers.set('X-Frame-Options', 'DENY');
+    response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+  }
   if (checkout) {
     // next.config.ts sets these for `/pay/*` by the public path; a root-form URL doesn't match it.
     response.headers.set('X-Content-Type-Options', 'nosniff');

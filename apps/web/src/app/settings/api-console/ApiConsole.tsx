@@ -29,6 +29,7 @@ import {
   type ConsoleRequest,
 } from '@/lib/api-console/request';
 import styles from './console.module.css';
+import { invoicePayoutStep } from '@/lib/api-console/invoice-flow';
 import { nativePasskeyStep } from '@/lib/api-console/native-passkey';
 
 interface Result {
@@ -91,7 +92,8 @@ export default function ApiConsole({ localMail = false }: { localMail?: boolean 
     setEndpoint(e);
     setMethod(e.method);
     setPath(e.path);
-    setParams({});
+    const business = me?.stores.find((store) => store.id === merchantId)?.slug;
+    setParams(e.path.includes(':business') && business ? { business } : {});
     setQuery(e.path.includes('/payment_links/public/') ? 'mode=test' : '');
     setBody(exampleBody(e));
     setAuth(defaultAuth(e));
@@ -289,6 +291,24 @@ export default function ApiConsole({ localMail = false }: { localMail?: boolean 
     );
   }
 
+  function prepareInvoiceChallenge() {
+    if (!result) return;
+    const next = invoicePayoutStep(result.request.path, result.data);
+    const definition = endpoints.find(
+      (e) => e.id === 'POST /v1/account/native/payouts/:id/challenge',
+    );
+    if (!next || !definition) return;
+    select(definition);
+    setParams({ id: next.payoutId });
+    setMerchantId(result.request.merchantId);
+    setLivemode(result.request.livemode);
+    setAuth('session');
+    setStoreHeaders(true);
+    setNotice(
+      'Wallet challenge prepared for the reviewed invoice payout. Press Send request to fetch it, then use the wallet passkey helper. Nothing has been signed or submitted yet.',
+    );
+  }
+
   function clearSensitive() {
     setPath(endpoint.path);
     setBearer('');
@@ -306,6 +326,10 @@ export default function ApiConsole({ localMail = false }: { localMail?: boolean 
     setNotice('Inputs and responses cleared. Your browser session remains signed in.');
   }
 
+  const invoiceNext =
+    result && result.status >= 200 && result.status < 300
+      ? invoicePayoutStep(result.request.path, result.data)
+      : null;
   const responseData = object(result?.data);
   const canSign = Boolean(
     result &&
@@ -328,7 +352,10 @@ export default function ApiConsole({ localMail = false }: { localMail?: boolean 
           <h1>API console</h1>
           <p>{endpoints.length} endpoints. Pick a request, fill it in, inspect the response.</p>
         </div>
-        <Link href="/dashboard">Open dashboard ↗</Link>
+        <div className={styles.row}>
+          <Link href="/dashboard">Open dashboard ↗</Link>
+          <Link href="/dashboard/invoices">Invoices ↗</Link>
+        </div>
       </header>
       <div className={styles.target}>
         <strong>API</strong> <code>{publicEnv.apiBaseUrl}</code>
@@ -704,6 +731,11 @@ export default function ApiConsole({ localMail = false }: { localMail?: boolean 
                   >
                     Copy response
                   </button>
+                  {invoiceNext && (
+                    <button disabled={busy} onClick={prepareInvoiceChallenge}>
+                      Prepare wallet challenge
+                    </button>
+                  )}
                   {canSign && (
                     <button disabled={busy} onClick={() => void helper(preparePasskey)}>
                       Use passkey and prepare verification

@@ -425,6 +425,7 @@ const EnvSchema = z
      * Base URL of the hosted checkout page; a session's `url` is
      * `${CHECKOUT_BASE_URL}/{id}#cs={client_secret}` (root of the pay host). No trailing slash needed.
      */
+    INVOICE_BASE_URL: z.preprocess(blankAsUnset, z.string().url().optional()),
     CHECKOUT_BASE_URL: z.preprocess(
       blankAsUnset,
       z
@@ -600,6 +601,9 @@ const EnvSchema = z
       const publicOrigins: [string, string][] = [
         ['CHECKOUT_BASE_URL', e.CHECKOUT_BASE_URL],
         ['WEB_URL', e.WEB_URL],
+        ...(e.INVOICE_BASE_URL
+          ? [['INVOICE_BASE_URL', e.INVOICE_BASE_URL] as [string, string]]
+          : []),
         ['API_BASE_URL', e.API_BASE_URL],
         ...e.CORS_ORIGINS.split(',')
           .map((s) => s.trim())
@@ -748,6 +752,7 @@ const EnvSchema = z
   })
   .transform((e) => ({
     ...e,
+    INVOICE_BASE_URL: e.INVOICE_BASE_URL ?? `${e.WEB_URL.replace(/\/$/, '')}/invoice`,
     API_HOST: e.API_HOST ?? (e.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
     WORKER_HEALTH_HOST:
       e.WORKER_HEALTH_HOST ?? (e.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),

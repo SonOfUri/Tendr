@@ -23,6 +23,7 @@ export const PER_MODE_MODELS = [
   'MerchantAccount',
   'NativeWallet',
   'NativePayout',
+  'Invoice',
   'AccountProposal',
   'AccountApproval',
   'RecoveryRequest',

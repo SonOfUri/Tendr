@@ -59,6 +59,7 @@ export const KNOWN_TOP_LEVEL_PATHS: readonly string[] = [
   ...PAY_SERVED,
   ...APP_PATHS,
   'pay',
+  'invoice',
   'demo',
   'api',
 ];

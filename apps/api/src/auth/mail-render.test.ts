@@ -21,6 +21,11 @@ const review = {
 
 /** The real `data` keys of each template, read from its call site. */
 const DATA: Record<MailTemplate, Record<string, string>> = {
+  invoice_notice: { message: 'Invoice update', url: 'https://app.example.com/dashboard/invoices' },
+  invoice_verify: {
+    url: 'https://invoice.example.com/business#token=secret',
+    business: 'Business',
+  },
   verify_email: { url: 'https://app.usetendr.tech/verify?token=a' },
   login_link: { url: 'https://app.usetendr.tech/verify?token=b' },
   invite: {

@@ -29,6 +29,19 @@ const carriedOut = (summary: string) =>
     .replace(/ — do not approve unless you expected this\)$/, ')');
 
 const COPY: Record<MailTemplate, (d: Data) => Copy> = {
+  invoice_notice: (d) => ({
+    subject: 'Invoice update on Tendr',
+    lines: [one(d.message), ...link('Review invoices', d.url)],
+  }),
+  invoice_verify: (d) => ({
+    subject: 'Verify your invoice for Tendr',
+    lines: [
+      `You requested to invoice ${one(d.business)}.`,
+      'Review and confirm your invoice using the link below. It expires in 24 hours.',
+      ...link('Review invoice', d.url),
+      'Keep this private link to check payment status after verification. If you did not request it, ignore this email.',
+    ],
+  }),
   verify_email: (d) => ({
     subject: 'Confirm your email for Tendr',
     lines: [

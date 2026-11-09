@@ -14,6 +14,8 @@ import { log } from '../lib/logger.js';
 import { ResendMailer } from './resend-mailer.js';
 
 export const MailTemplateValues = [
+  'invoice_verify',
+  'invoice_notice',
   'verify_email',
   'login_link',
   'invite',

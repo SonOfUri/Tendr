@@ -762,3 +762,46 @@ AI risk/brand-impersonation detection, registered-agent budgets/allowlists/appro
 and MCP are still planned. Paid-plan entitlements and
 production model-quality evaluation are also outstanding. This slice introduces no automated
 payment authority and makes no changes to the existing screening policy.
+
+## Contractor invoices (9 November 2026)
+
+This is an **accounts-payable** flow: a contractor invoices a Tendr business, and the business pays from its existing live native wallet to the contractor's external wallet. It is separate from customer checkout/payment links. The owner enables the page in **Dashboard → Invoices**. `INVOICE_BASE_URL=https://invoice.usetendr.tech` produces `/<merchant slug>`; without this setting, local development uses `WEB_URL/invoice/<slug>`. The slug is the existing business slug.
+
+Contractors need no Tendr login. They enter their name, email, invoice reference, description, optional due date, receiving network/token, wallet and a decimal token amount. The public API sends a private verification link on the existing app host (`WEB_URL/invoice/<slug>`) with a random token in its URL fragment. The established app host also provides a working fallback entry page while the invoice subdomain awaits DNS; email verification never depends on the optional subdomain. Reading the link does not submit the invoice: the contractor must review the immutable terms and press **Verify email & send invoice**. Verification expires after 24 hours. Only the token hash is stored. Keep tokens out of URLs sent to the API, analytics, logs and persisted browser storage. Verified invoices become visible in the business inbox. The owner gets an email notice; paid/declined notices go to the verified contractor email.
+
+Public routes use no cookies, no Tendr account headers, and no credentials. All responses are `no-store`:
+
+| Method and path                             | Input / response                                                                                                                                                                                                                                    |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/invoices/public/:business`         | Business name/slug and current supported tokens (`assetId`, `blockchain`, `symbol`, `decimals`). 404 while paused/unavailable. Never exposes invoices or balances.                                                                                  |
+| `POST /v1/invoices/public/:business`        | Strict JSON: `contractorName`, `email`, `reference`, `description`, optional `dueDate` (`YYYY-MM-DD`), `destinationAsset`, `destination`, `amount` (decimal **token units**, string). Returns 202 `{accepted:true}` without an invoice ID or token. |
+| `POST /v1/invoices/public/:business/status` | `{token}` from email; returns that one invoice.                                                                                                                                                                                                     |
+| `POST /v1/invoices/public/:business/verify` | `{token}`; publishes the invoice after email verification. Idempotent after verification.                                                                                                                                                           |
+
+Amounts in invoice **responses** are integer base-unit strings with explicit `symbol`/`decimals`. Do not use JavaScript floating point. Invoice totals are denominated in the receiving token, not a fiat FX estimate. Only external chains supported by the destination validator are listed (EVM, NEAR, Solana, Bitcoin and Tron families); memo/tag destinations are not supported. Reference is unique per normalized contractor email, business and mode. Repeating an unverified reference resends verification for the **original** details and invalidates its previous link. Once verified, use the original private email link; repeating the submission does not create another invoice. To correct terms, the business declines the old invoice and the contractor submits a new reference.
+
+Dashboard routes require the usual cookie session, merchant/mode headers, CSRF for writes and `Idempotency-Key` on POSTs. Reads require `account:read`; mutations require `security:propose`, step-up, and the actual native wallet owner. Invoicing/payment is live-only; the test dashboard displays an explanation.
+
+| Method and path                | Purpose                                                                                                                                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/invoices/settings`    | `{enabled,url}`                                                                                                                                                                                   |
+| `PUT /v1/invoices/settings`    | `{enabled:boolean}`; active native wallet required. Pausing stops new submissions/verification, not existing payments/status reads.                                                               |
+| `GET /v1/invoices?cursor=...`  | `{invoices,nextCursor}`; 50 newest verified invoices per page.                                                                                                                                    |
+| `GET /v1/invoices/:id`         | Invoice details, latest payout and its provider receipt.                                                                                                                                          |
+| `POST /v1/invoices/:id/reject` | Declines an unpaid invoice and invalidates any unsigned quote.                                                                                                                                    |
+| `POST /v1/invoices/:id/payout` | `{asset}`: choose a source token from the merchant's wallet balances. Destination and amount are taken from the immutable invoice, never the request. Returns a native payout, **not a payment**. |
+
+Payment flow: create the invoice payout, display its debit (`asset`, `amount`), invoice receiving amount/token/chain and full destination, then use `signPayout(context,payout)` from `src/lib/native-wallet.ts`. This calls the existing `/v1/account/native/payouts/:id/challenge` and `/submit` routes. Login step-up and the wallet passkey are separate. The backend uses 1Click `EXACT_OUTPUT`: the quote fixes the receiving amount and includes the input required for fees/slippage. No invoice fees are added by Tendr in this release. See the [provider's swap-type semantics](https://docs.agentsonintents.com/integration/distribution-channels/1click-api/swap-types). Never show a submitted signature as paid.
+
+Invoice states:
+
+- `awaiting_verification`: private draft, absent from the merchant inbox.
+- `open`: awaiting owner approval; an unsigned quote may exist. Failed/refunded payouts return here only after reconciliation permits a retry.
+- `processing`: signature durably saved; awaiting provider confirmation. Disable rejection and additional payment attempts.
+- `paid`: provider SUCCESS, destination transaction present, and delivered amount covers the invoice.
+- `payment_review`: provider SUCCESS receipt is missing/short on the delivered amount. Do not retry or mark paid; operator review is required.
+- `rejected`: terminal; cannot pay.
+
+Quote requests racing for the same invoice reuse one active payout. An expired unsigned quote is invalidated before replacement; rejected invoices invalidate their unsigned quotes. Signed unknown outcomes reuse the identical signed intent, never a new nonce. A partial unique DB index forbids simultaneous active/successful attempts. Money, screening, key ownership and passkey checks remain those of native withdrawals. Successful payment receipts expose real destination transaction hashes. Invoices do not make blockchain transfers private.
+
+Deployment: apply migration `20261109120000_invoices` before starting the updated API/worker. Configure `INVOICE_BASE_URL` on API, worker and web (including web build). Attach `invoice.usetendr.tech` to Railway's existing **web** service and publish Railway's requested DNS records. The invoice origin and existing app origin (for the `/invoice/<slug>` fallback) are allowed on public invoice APIs without cookies; never add it to dashboard CORS. Do not change WebAuthn origins for this subdomain: contractors do not sign, and owners sign on the existing dashboard. Existing businesses remain opted out until their wallet owner enables the page. PDF export, attachments, itemized tax calculations, recurring invoices, partial payment and batch payment are outside this first release.

@@ -13,6 +13,7 @@ import { isShopperPath } from '@/lib/hosts';
  */
 export function HideOnCheckout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  if (pathname?.startsWith('/invoice/')) return null;
   if (pathname && isShopperPath(pathname)) return null;
   if (pathname === '/' || pathname === '/demo' || pathname?.startsWith('/demo/')) return null;
   return <>{children}</>;

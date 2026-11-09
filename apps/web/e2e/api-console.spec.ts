@@ -6,6 +6,42 @@ import routes from '../src/lib/api-console/routes.json';
 const API = `http://localhost:${process.env.API_CONSOLE_API_PORT ?? 4300}`;
 const MAIL = resolve(__dirname, '../../api/.mail');
 
+const invoiceFixture = {
+  id: 'bill_console',
+  contractorName: 'Console Contractor',
+  email: 'contractor@example.com',
+  reference: 'INV-CONSOLE-1',
+  description: 'Design services',
+  amount: '1000000',
+  decimals: 6,
+  symbol: 'USDC',
+  destination: 'contractor.near',
+  destinationChain: 'near',
+  destinationAsset: 'nep141:usdc.near',
+  status: 'open',
+  dueDate: null,
+  verifiedAt: '2026-11-09T00:00:00Z',
+  createdAt: '2026-11-09T00:00:00Z',
+  paidAt: null,
+  payout: null,
+};
+function invoiceQuote() {
+  return {
+    id: 'npay_console',
+    invoiceId: invoiceFixture.id,
+    status: 'awaiting_signature',
+    asset: 'nep141:usdc.near',
+    amount: '1200000',
+    destination: invoiceFixture.destination,
+    destinationAsset: invoiceFixture.destinationAsset,
+    destinationChain: 'near',
+    expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    proposalId: null,
+    intentHash: null,
+    quote: { quote: { amountOut: invoiceFixture.amount } },
+  };
+}
+
 async function choose(page: Page, method: string, path: string) {
   await page.getByLabel('Find an endpoint').fill(path);
   await page
@@ -33,6 +69,201 @@ test.beforeEach(async ({ context, page }) => {
   );
   await page.goto('/settings/api-console');
   await expect(page.getByRole('heading', { name: 'API console', exact: true })).toBeVisible();
+});
+
+test('invoice API helper preserves the reviewed payout and store without signing or sending it', async ({
+  page,
+}) => {
+  const requests: string[] = [];
+  await page.route(`${API}/v1/**`, async (route) => {
+    requests.push(route.request().url());
+    await route.fulfill({ status: 201, json: invoiceQuote() });
+  });
+  await choose(page, 'POST', '/v1/invoices/:id/payout');
+  await page.getByLabel('Path parameter id', { exact: true }).fill(invoiceFixture.id);
+  await page.getByLabel('Merchant ID', { exact: true }).fill('mer_invoice');
+  await page.getByRole('combobox', { name: /^Mode/ }).selectOption('true');
+  await page
+    .getByRole('textbox', { name: 'JSON body', exact: true })
+    .fill(JSON.stringify({ asset: 'nep141:usdc.near' }));
+  const response = await send(page, 'POST', `/v1/invoices/${invoiceFixture.id}/payout`, 201);
+  expect((await response.request().allHeaders())['tendr-livemode']).toBe('true');
+  // Editing the composer after the response must not change the quote's owner or mode.
+  await page.getByLabel('Merchant ID', { exact: true }).fill('mer_other');
+  await page.getByRole('combobox', { name: /^Mode/ }).selectOption('false');
+  await page.getByRole('button', { name: 'Prepare wallet challenge', exact: true }).click();
+  await expect(page.getByLabel('API path', { exact: true })).toHaveValue(
+    '/v1/account/native/payouts/:id/challenge',
+  );
+  await expect(page.getByLabel('Path parameter id', { exact: true })).toHaveValue('npay_console');
+  await expect(page.getByLabel('Merchant ID', { exact: true })).toHaveValue('mer_invoice');
+  await expect(page.getByRole('combobox', { name: /^Mode/ })).toHaveValue('true');
+  await expect(page.getByRole('status')).toContainText('Nothing has been signed or submitted yet');
+  expect(requests).toEqual([`${API}/v1/invoices/${invoiceFixture.id}/payout`]);
+});
+
+test('invoice dashboard reviews live quotes, shows failures and clears approval when changing mode', async ({
+  page,
+}) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (err) => {
+    pageErrors.push(err.message);
+  });
+  const requests: { method: string; path: string }[] = [];
+  let failQuote = true;
+  await page.route(`${API}/v1/**`, async (route) => {
+    const req = route.request();
+    const path = new URL(req.url()).pathname;
+    requests.push({ method: req.method(), path });
+    if (path === '/v1/me')
+      return route.fulfill({
+        json: {
+          user: {
+            id: 'usr_console',
+            email: 'owner@example.com',
+            emailVerifiedAt: '2026-11-09T00:00:00Z',
+          },
+          stores: [
+            {
+              id: 'mer_invoice',
+              name: 'Invoice Business',
+              slug: 'invoice-business',
+              role: 'owner',
+            },
+          ],
+          passkeys: [{ id: 'pk_console' }],
+          csrfToken: 'console-csrf',
+        },
+      });
+    if (path === '/v1/account/recovery') return route.fulfill({ json: { recovery: null } });
+    expect((await req.allHeaders())['tendr-merchant']).toBe('mer_invoice');
+    expect((await req.allHeaders())['tendr-livemode']).toBe('true');
+    if (path === '/v1/invoices/settings')
+      return route.fulfill({
+        json: { enabled: true, url: 'https://invoice.usetendr.tech/invoice-business' },
+      });
+    if (path === '/v1/invoices')
+      return route.fulfill({ json: { invoices: [invoiceFixture], nextCursor: null } });
+    if (path === '/v1/account/balances')
+      return route.fulfill({
+        json: { balances: [{ asset: 'nep141:usdc.near', amount: '10000000' }] },
+      });
+    if (path === '/v1/payment_links/settlement-options')
+      return route.fulfill({
+        json: {
+          tokens: [{ asset: 'nep141:usdc.near', decimals: 6, symbol: 'USDC', chain: 'near' }],
+        },
+      });
+    if (path === `/v1/invoices/${invoiceFixture.id}/payout`) {
+      expect(req.postDataJSON()).toEqual({ asset: 'nep141:usdc.near' });
+      expect((await req.allHeaders())['tendr-csrf']).toBe('console-csrf');
+      if (failQuote) {
+        failQuote = false;
+        return route.fulfill({
+          status: 409,
+          json: {
+            error: { code: 'QUOTE_UNAVAILABLE', message: 'Quote unavailable. Please retry.' },
+          },
+        });
+      }
+      return route.fulfill({ status: 201, json: invoiceQuote() });
+    }
+    throw new Error(`Unexpected invoice request: ${req.method()} ${path}`);
+  });
+  await page.goto('/dashboard/invoices');
+  await expect(page.getByText('Invoices require the live API', { exact: false })).toBeVisible();
+  expect(requests.some((r) => r.path.startsWith('/v1/invoices'))).toBe(false);
+  await page.getByRole('button', { name: 'Live', exact: true }).click();
+  await expect(
+    page.getByRole('link', { name: 'Open contractor form in this console' }),
+  ).toHaveAttribute('href', '/invoice/invoice-business');
+  await page.getByRole('button', { name: /INV-CONSOLE-1 · Console Contractor/ }).click();
+  await page.getByRole('combobox', { name: /^Pay from/ }).selectOption('nep141:usdc.near');
+  await page.getByRole('button', { name: 'Review payment quote', exact: true }).click();
+  await expect.poll(() => pageErrors).toEqual([]);
+  await expect(page.getByText('Quote unavailable. Please retry.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Review payment quote', exact: true }).click();
+  await expect(page.getByText('You authorize up to', { exact: false })).toContainText('1.2 USDC');
+  await expect(
+    page.getByRole('button', { name: 'Settle invoice with wallet passkey' }),
+  ).toBeVisible();
+  await expect(page.getByText('Receiving wallet:', { exact: false })).toContainText(
+    'contractor.near',
+  );
+  await page.getByRole('button', { name: 'Test', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Settle invoice with wallet passkey' }),
+  ).toHaveCount(0);
+  await page.getByRole('button', { name: 'Live', exact: true }).click();
+  await page.getByRole('button', { name: /INV-CONSOLE-1 · Console Contractor/ }).click();
+  await expect(
+    page.getByRole('button', { name: 'Review payment quote', exact: true }),
+  ).toBeDisabled();
+  expect(requests.filter((r) => r.method === 'POST')).toEqual([
+    { method: 'POST', path: `/v1/invoices/${invoiceFixture.id}/payout` },
+    { method: 'POST', path: `/v1/invoices/${invoiceFixture.id}/payout` },
+  ]);
+});
+
+test('invoice contractor form selects receiving assets and confirms email without a Tendr session', async ({
+  page,
+  context,
+}) => {
+  const publicPath = '/v1/invoices/public/invoice-business';
+  let submitted = false;
+  let verified = false;
+  await context.addCookies([{ name: 'console_session_probe', value: 'must-not-send', url: API }]);
+  await page.route(`${API}/v1/**`, async (route) => {
+    const req = route.request();
+    const path = new URL(req.url()).pathname;
+    expect(path.startsWith(publicPath)).toBe(true);
+    const headers = await req.allHeaders();
+    expect(headers.cookie).toBeUndefined();
+    expect(headers.authorization).toBeUndefined();
+    expect(headers['tendr-merchant']).toBeUndefined();
+    if (req.method() === 'GET')
+      return route.fulfill({
+        json: {
+          business: { name: 'Invoice Business', slug: 'invoice-business' },
+          tokens: [
+            { assetId: 'nep141:usdc.near', symbol: 'USDC', decimals: 6, blockchain: 'near' },
+          ],
+        },
+      });
+    if (path === publicPath) {
+      expect(req.postDataJSON()).toMatchObject({
+        amount: '1.00',
+        destinationAsset: 'nep141:usdc.near',
+        destination: 'contractor.near',
+      });
+      submitted = true;
+      return route.fulfill({ status: 202, json: { ok: true } });
+    }
+    expect(req.postDataJSON()).toEqual({ token: 'private-console-token' });
+    if (path === `${publicPath}/verify`) verified = true;
+    return route.fulfill({
+      json: { ...invoiceFixture, status: verified ? 'open' : 'awaiting_verification' },
+    });
+  });
+  await page.goto('/invoice/invoice-business');
+  await page.getByLabel('Your name or business', { exact: true }).fill('Console Contractor');
+  await page.getByLabel('Email', { exact: true }).fill('contractor@example.com');
+  await page.getByLabel('Invoice reference', { exact: true }).fill('INV-CONSOLE-1');
+  await page.getByLabel('What is this invoice for?', { exact: true }).fill('Design services');
+  await page.getByRole('combobox', { name: /^Receiving network/ }).selectOption('near');
+  await page.getByRole('combobox', { name: /^Receiving token/ }).selectOption('nep141:usdc.near');
+  await page.getByLabel('Amount to receive (in the selected token)', { exact: true }).fill('1.00');
+  await page.getByLabel('Receiving wallet address', { exact: true }).fill('contractor.near');
+  await page.getByRole('button', { name: 'Email me a verification link' }).click();
+  await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
+  expect(submitted).toBe(true);
+  await page.goto('/invoice/invoice-business#token=private-console-token');
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Verify email & send invoice' })).toBeVisible();
+  expect(verified).toBe(false);
+  await page.getByRole('button', { name: 'Verify email & send invoice' }).click();
+  await expect(page.getByText('Awaiting payment', { exact: true })).toBeVisible();
+  expect(verified).toBe(true);
 });
 
 test('catalog, real health, auth failures, token isolation, and clearing', async ({ page }) => {

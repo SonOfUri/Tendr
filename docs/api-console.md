@@ -168,3 +168,45 @@ npm run test:api-console --workspace=@tendr/web
 ```
 
 Browser tests use the isolated console stack and create their own test account. They cover the catalog, real API responses, authentication isolation, email/passkey signup, store-scoped writes, multipart upload, preview, and the live-mode guard. The dashboard payment-link flow also checks create retries after a lost response, editing, archive/restore, public checkout/QR URLs, store/mode isolation, and mobile width. They keep trace/video/screenshots off because responses can contain temporary credentials. The console uses the signing-page CSP, denies framing, and returns `Cache-Control: no-store`.
+
+## Contractor invoices
+
+Open **Invoices** in the test dashboard (`/dashboard/invoices`) or use the **invoices** group in
+`/settings/api-console`. The dashboard includes the verified invoice inbox, enable/pause control,
+quote review, decline action, and wallet-passkey settlement. **Open contractor form in this
+console** opens `/invoice/<business-slug>` in a separate tab, using the same API as your console.
+This is also usable before `invoice.usetendr.tech` has its DNS record.
+
+Invoicing is **live-only**. Use `npm run dev:console:live` and the dedicated Chrome window to test
+against the deployed API. Select Live and an active native wallet's business. The ordinary local
+simulator keeps live writes disabled; this change does not enable mainnet access there. Production
+verification emails arrive in your real mailbox. Their links use `app.usetendr.tech/invoice/<slug>`;
+in the dedicated live-console Chrome window, that page is served by your local frontend.
+
+For the raw API flow:
+
+1. Load your session, choose your merchant and **Live**, then send
+   `PUT /v1/invoices/settings` with `{ "enabled": true }`. Step up if required.
+2. Read `GET /v1/invoices/public/:business` without credentials to get the business and supported
+   receiving tokens. Public invoice calls always address the live business and do not use the
+   console's merchant/mode headers.
+3. Submit `POST /v1/invoices/public/:business` using the editable example. Enter an email you can
+   access, a unique reference, the receiving token's `assetId`, an external wallet on its network,
+   and an amount in decimal token units. Submission sends a real email when using the live API.
+4. Review and confirm through the email link, or paste only its `#token=` value into the console's
+   public `/status` and `/verify` request bodies. Verification tokens stay in page memory; do not
+   include them in query strings, screenshots, or shared logs.
+5. Read `GET /v1/invoices` as the business owner. Set `:id` to the verified invoice's `bill_...` ID.
+   `POST /v1/invoices/:id/payout` accepts only the source asset from your wallet balances. The
+   invoice supplies the receiving amount and destination; review all returned quote fields.
+6. Click **Prepare wallet challenge** on that response. This only fills in
+   `POST /v1/account/native/payouts/:id/challenge` with the returned `npay_...` ID and preserves
+   the reviewed merchant/mode. Click **Send request**, use the existing passkey helper, then
+   explicitly send the prepared `/submit` request to authorize the transfer. This uses the wallet
+   passkey, not the login passkey. Do not submit unless you intend to move real funds.
+7. Refresh the invoice or payout. `processing` is not paid. Wait for `paid`, or review a reported
+   failure; never create a duplicate payment while the outcome is uncertain.
+
+The API catalog includes all ten invoice routes, with separate contractor and owner authentication,
+request examples, and notes. Source asset choices on the dashboard reflect the actual returned
+quote, including when the backend reuses an existing unsigned payout.

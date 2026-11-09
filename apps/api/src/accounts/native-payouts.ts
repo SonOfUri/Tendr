@@ -1,4 +1,4 @@
-import type { Prisma, NativePayout } from '@prisma/client';
+import type { Prisma, NativePayout, Invoice } from '@prisma/client';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
 import { z } from 'zod';
 import {
@@ -15,6 +15,7 @@ import type { ScopeContext } from '../db/scoped.js';
 import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
+import { lockInvoice } from '../invoices/invoices.js';
 import { newId } from '../lib/ids.js';
 import { assertLiveModeOpen } from '../lib/live-mode.js';
 import { log } from '../lib/logger.js';
@@ -41,6 +42,7 @@ export const NativePayoutInput = z.union([
     .object({ asset, amount, destinationAsset: asset, destination: z.string().min(2).max(128) })
     .strict(),
   z.object({ proposalId: z.string().min(1).max(64) }).strict(),
+  z.object({ invoiceId: z.string().min(1).max(64), asset }).strict(),
 ]);
 type Input = z.infer<typeof NativePayoutInput>;
 type Provider = {
@@ -74,6 +76,7 @@ function payoutView(p: NativePayout) {
     destinationChain: p.destinationChain,
     destination: p.destination,
     proposalId: p.proposalId,
+    invoiceId: p.invoiceId,
     quote: p.quote,
     intentHash: p.intentHash,
     providerStatus: p.providerStatus,
@@ -116,7 +119,14 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
   assertLiveModeOpen();
   const wallet = await ownedNativeWallet(actor);
   let request: { asset: string; amount: string; destinationAsset: string; destination: string };
+  let invoice: Invoice | null = null;
   let proposalId: string | null = null;
+  if ('invoiceId' in input) {
+    invoice = await prisma.invoice.findFirst({ where: { id: input.invoiceId, ...scope(actor) } });
+    if (!invoice) throw notFound('Invoice not found');
+    if (invoice.status !== 'open' || !invoice.verifiedAt)
+      throw conflict('This invoice is not payable');
+  }
   if ('proposalId' in input) {
     proposalId = input.proposalId;
     const existing = await prisma.nativePayout.findFirst({
@@ -165,14 +175,27 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
       destinationAsset: action.refund.asset,
       destination: action.refund.destination,
     };
+  } else if ('invoiceId' in input && invoice) {
+    request = {
+      asset: input.asset,
+      amount: invoice.amount,
+      destinationAsset: invoice.destinationAsset,
+      destination: invoice.destination,
+    };
   } else {
-    request = input;
+    request = input as Exclude<Input, { proposalId: string } | { invoiceId: string }>;
   }
   NativePayoutInput.parse(request);
   const [, destination] = await Promise.all([
     tokenInfo(true, request.asset),
     tokenInfo(true, request.destinationAsset),
   ]);
+  if (
+    invoice &&
+    (invoice.destinationChain !== destination.blockchain ||
+      invoice.decimals !== destination.decimals)
+  )
+    throw conflict('The invoice token metadata has changed; review this invoice before payment');
   if (!isValidAddress(destination.blockchain, request.destination))
     throw new AppError('VALIDATION_ERROR', 'Invalid destination address for this token chain', 400);
   // Refunds never reinterpret a NEAR wrapped-token address as an external-chain destination.
@@ -196,22 +219,10 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
     }
   }
   await screen(actor, request.destination, destination.blockchain);
-  const balances = await nearClient(true).view<string[]>(
-    env().INTENTS_CONTRACT_LIVE,
-    'mt_batch_balance_of',
-    { account_id: wallet.account.nearAccountId, token_ids: [request.asset] },
-  );
-  if (
-    !Array.isArray(balances) ||
-    !/^\d+$/.test(balances[0] ?? '') ||
-    BigInt(balances[0]!) < BigInt(request.amount)
-  ) {
-    throw conflict('The wallet has insufficient available balance');
-  }
   const provider = deps.provider();
   const quote = await provider.quote({
     dry: false,
-    swapType: 'EXACT_INPUT',
+    swapType: invoice ? 'EXACT_OUTPUT' : 'EXACT_INPUT',
     slippageTolerance: env().CHECKOUT_SLIPPAGE_BPS,
     originAsset: request.asset,
     depositType: 'INTENTS',
@@ -226,16 +237,35 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
   if (
     !quote.quote.depositAddress ||
     quote.quote.depositMemo ||
-    quote.quote.amountIn !== request.amount ||
+    !amount.safeParse(quote.quote.amountIn).success ||
+    (invoice
+      ? quote.quote.amountOut !== invoice.amount
+      : quote.quote.amountIn !== request.amount) ||
     !amount.safeParse(quote.quote.amountOut).success ||
-    !amount.safeParse(quote.quote.minAmountOut).success ||
-    BigInt(quote.quote.minAmountOut!) > BigInt(quote.quote.amountOut)
+    (!invoice && !amount.safeParse(quote.quote.minAmountOut).success) ||
+    (quote.quote.minAmountOut !== undefined &&
+      (!amount.safeParse(quote.quote.minAmountOut).success ||
+        BigInt(quote.quote.minAmountOut) > BigInt(quote.quote.amountOut) ||
+        (invoice !== null && BigInt(quote.quote.minAmountOut) < BigInt(invoice.amount))))
   ) {
     throw new AppError(
       'PROVIDER_UNAVAILABLE',
       'The provider returned an unsupported payout quote',
       503,
     );
+  }
+  if (invoice) request.amount = quote.quote.amountIn;
+  const balances = await nearClient(true).view<string[]>(
+    env().INTENTS_CONTRACT_LIVE,
+    'mt_batch_balance_of',
+    { account_id: wallet.account.nearAccountId, token_ids: [request.asset] },
+  );
+  if (
+    !Array.isArray(balances) ||
+    !/^\d+$/.test(balances[0] ?? '') ||
+    BigInt(balances[0]!) < BigInt(request.amount)
+  ) {
+    throw conflict('The wallet has insufficient available balance');
   }
   const payload = await provider.generateIntent(
     wallet.account.nearAccountId,
@@ -249,6 +279,28 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
     amount: request.amount,
   });
   const payout = await tenantTransaction(actor, async (tx) => {
+    if (invoice) {
+      const current = await lockInvoice(tx, actor, invoice.id);
+      if (current.status !== 'open' || !current.verifiedAt)
+        throw conflict('This invoice is no longer payable');
+      await tx.nativePayout.updateMany({
+        where: {
+          ...scope(actor),
+          invoiceId: invoice.id,
+          status: 'awaiting_signature',
+          expiresAt: { lte: new Date() },
+        },
+        data: { status: 'expired' },
+      });
+      const existing = await tx.nativePayout.findFirst({
+        where: {
+          ...scope(actor),
+          invoiceId: invoice.id,
+          status: { in: ['awaiting_signature', 'submitting', 'submitted', 'completed'] },
+        },
+      });
+      if (existing) return existing;
+    }
     if (proposalId) {
       await tx.$queryRaw`SELECT id FROM account_proposals WHERE id = ${proposalId} AND merchant_id = ${actor.merchantId} AND livemode = ${actor.livemode} FOR UPDATE`;
       const p = await tx.accountProposal.findFirst({
@@ -264,6 +316,7 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
         ...scope(actor),
         accountId: wallet.accountId,
         proposalId,
+        invoiceId: invoice?.id ?? null,
         ...request,
         destinationChain: destination.blockchain,
         depositAddress: quote.quote.depositAddress!,
@@ -322,6 +375,21 @@ export async function submitNativePayout(
     amount: p.amount,
   });
   await tenantTransaction(actor, async (tx) => {
+    if (p.invoiceId) {
+      const invoice = await lockInvoice(tx, actor, p.invoiceId);
+      if (invoice.status !== 'open') throw conflict('This invoice is no longer payable');
+      const changed = await tx.invoice.updateMany({
+        where: { id: p.invoiceId, ...scope(actor), status: 'open' },
+        data: { status: 'processing' },
+      });
+      if (changed.count !== 1) throw conflict('This invoice was already submitted');
+      await recordEvent(tx, actor, {
+        aggregateType: 'invoice',
+        aggregateId: p.invoiceId,
+        type: 'invoice.processing',
+        payload: { payoutId: id, ownerUserId: actor.userId },
+      });
+    }
     // Refund cancellation and approval serialize on the same proposal row.
     if (p.proposalId) {
       const locked = await tx.accountProposal.updateMany({
@@ -357,6 +425,7 @@ async function finish(
   providerStatus: StatusResponse,
 ) {
   await tenantTransaction(p, async (tx) => {
+    const invoice = p.invoiceId ? await lockInvoice(tx, p, p.invoiceId) : null;
     const changed = await tx.nativePayout.updateMany({
       where: { id: p.id, ...scope(p), status: { in: [...open] } },
       data: { status, providerStatus: json(providerStatus), claimedAt: null },
@@ -368,6 +437,25 @@ async function finish(
       type: `native_payout.${status}`,
       payload: { intentHash: p.intentHash },
     });
+    if (invoice) {
+      const delivered = providerStatus.swapDetails.amountOut;
+      const paid =
+        status === 'completed' &&
+        amount.safeParse(delivered).success &&
+        BigInt(delivered!) >= BigInt(invoice.amount);
+      // An incomplete SUCCESS receipt is never permission to pay again.
+      const invoiceStatus = status === 'completed' ? (paid ? 'paid' : 'payment_review') : 'open';
+      await tx.invoice.updateMany({
+        where: { id: invoice.id, ...scope(p), status: 'processing' },
+        data: { status: invoiceStatus, paidAt: paid ? new Date() : null },
+      });
+      await recordEvent(tx, p, {
+        aggregateType: 'invoice',
+        aggregateId: invoice.id,
+        type: `invoice.${invoiceStatus}`,
+        payload: { payoutId: p.id },
+      });
+    }
     if (p.proposalId) {
       const txHash = providerStatus.swapDetails.destinationChainTxHashes[0]?.hash ?? null;
       await tx.accountProposal.updateMany({

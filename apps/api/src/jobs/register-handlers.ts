@@ -16,6 +16,7 @@ import { registerHookHandlers } from '../hooks/hooks.js';
 import { registerProductImageHandler } from '../themes/product-images.js';
 import { registerAccountHandlers } from './account-notices.js';
 import { registerNotificationEmailNotices } from './notification-email-notices.js';
+import { registerInvoiceNotices } from './invoice-notices.js';
 import { registerPaymentNotices } from './payment-notices.js';
 import { registerReviewNotices } from './review-notices.js';
 import { registerEventHandler } from './handlers.js';
@@ -67,3 +68,5 @@ registerHookHandlers();
 // Product images (checkout themes spec §6): a new session's line-item images are fetched safely,
 // re-encoded and cached on the asset origin; shoppers see only the cached copies.
 registerProductImageHandler();
+
+registerInvoiceNotices();

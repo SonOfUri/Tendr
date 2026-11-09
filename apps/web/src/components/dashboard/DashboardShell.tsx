@@ -291,6 +291,7 @@ const NAV: { href: string; label: string }[] = [
   { href: '/dashboard/wallet', label: 'Live wallet' },
   { href: '/dashboard/payments', label: 'Payments' },
   { href: '/dashboard/payment-links', label: 'Payment links' },
+  { href: '/dashboard/invoices', label: 'Invoices' },
   { href: '/dashboard/review', label: 'Review' },
   { href: '/dashboard/approvals', label: 'Approvals' },
   { href: '/dashboard/withdraw', label: 'Withdraw' },

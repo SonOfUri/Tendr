@@ -50,7 +50,12 @@ describe('native passkey wallet API', () => {
   let lastQuote: QuoteRequest;
   const submit = vi.fn(async (_signed: NativeSignedIntent) => 'intent-hash');
   const generate = vi.fn(async (signer: string, deposit: string) =>
-    transfer(signer, deposit, lastQuote.originAsset, lastQuote.amount),
+    transfer(
+      signer,
+      deposit,
+      lastQuote.originAsset,
+      lastQuote.swapType === 'EXACT_OUTPUT' ? '1050000' : lastQuote.amount,
+    ),
   );
   const screen = vi.fn(screenPayoutAddress);
   const headers = () => dashHeaders(login, { merchantId, livemode: true });
@@ -91,11 +96,11 @@ describe('native passkey wallet API', () => {
             correlationId: 'quote-1',
             quote: {
               depositAddress: randomBytes(32).toString('hex'),
-              amountIn: req.amount,
-              amountOut: '990000',
+              amountIn: req.swapType === 'EXACT_OUTPUT' ? '1050000' : req.amount,
+              amountOut: req.swapType === 'EXACT_OUTPUT' ? req.amount : '990000',
               amountInUsd: '1',
               amountOutUsd: '0.99',
-              minAmountOut: '980000',
+              minAmountOut: req.swapType === 'EXACT_OUTPUT' ? req.amount : '980000',
             },
           };
         },
@@ -650,5 +655,168 @@ describe('native passkey wallet API', () => {
       (args as { token_ids: string[] }).token_ids.map(() => '10'),
     );
     expect((await getBalances(merchantId, true)).balances.map((b) => b.asset)).toContain(BASE);
+  });
+  async function bill(status: 'open' | 'awaiting_verification' = 'open') {
+    return createRow('Invoice', merchantId, true, {
+      status,
+      verifiedAt: status === 'open' ? new Date() : null,
+      amount: '1000000',
+      destinationAsset: BASE,
+      destination: DEST,
+      destinationChain: 'base',
+    });
+  }
+  const invoiceQuote = (id: string) => post(`/v1/invoices/${id}/payout`, { asset: USDC });
+
+  it('quotes the exact invoice output and serializes concurrent attempts', async () => {
+    await activate();
+    const invoice = await bill();
+    const results = await Promise.all([invoiceQuote(invoice.id), invoiceQuote(invoice.id)]);
+    for (const r of results) expect(r.statusCode, r.body).toBe(201);
+    expect(results[0]!.json().id).toBe(results[1]!.json().id);
+    expect(results[0]!.json()).toMatchObject({
+      amount: '1050000',
+      destination: DEST,
+      destinationAsset: BASE,
+      invoiceId: invoice.id,
+    });
+    expect(lastQuote).toMatchObject({
+      swapType: 'EXACT_OUTPUT',
+      amount: '1000000',
+      recipient: DEST,
+    });
+    expect(await prisma.nativePayout.count({ where: { invoiceId: invoice.id } })).toBe(1);
+    expect(
+      (
+        await post(`/v1/invoices/${invoice.id}/payout`, {
+          asset: USDC,
+          amount: '1',
+          destination: 'attacker.near',
+        })
+      ).statusCode,
+    ).toBe(400);
+  });
+
+  it('keeps an uncertain invoice payment locked, retries the same signature, and records confirmed delivery', async () => {
+    await activate();
+    const invoice = await bill();
+    const q = (await invoiceQuote(invoice.id)).json();
+    const challenge = (await post(`${base}/payouts/${q.id}/challenge`)).json();
+    const response = auth.get(challenge.options);
+    submit.mockRejectedValueOnce(new Error('Timeout after acceptance'));
+    expect((await post(`${base}/payouts/${q.id}/submit`, { response })).statusCode).toBe(202);
+    expect(await prisma.invoice.findUnique({ where: { id: invoice.id } })).toMatchObject({
+      status: 'processing',
+      paidAt: null,
+    });
+    expect((await invoiceQuote(invoice.id)).statusCode).toBe(409);
+    expect((await post(`/v1/invoices/${invoice.id}/reject`)).statusCode).toBe(409);
+    await pollNativePayouts();
+    expect(submit.mock.calls[0]![0]).toEqual(submit.mock.calls[1]![0]);
+    status = {
+      status: 'SUCCESS',
+      swapDetails: {
+        amountOut: '1000000',
+        originChainTxHashes: [],
+        destinationChainTxHashes: [{ hash: 'invoice-tx' }],
+      },
+    };
+    await pollNativePayouts();
+    expect(await prisma.invoice.findUnique({ where: { id: invoice.id } })).toMatchObject({
+      status: 'paid',
+      paidAt: expect.any(Date),
+    });
+    expect((await invoiceQuote(invoice.id)).statusCode).toBe(409);
+    expect(
+      await prisma.event.count({ where: { aggregateId: invoice.id, type: 'invoice.paid' } }),
+    ).toBe(1);
+  });
+
+  it('never treats an incomplete receipt as paid or permits another attempt', async () => {
+    await activate();
+    const invoice = await bill();
+    const q = (await invoiceQuote(invoice.id)).json();
+    const challenge = (await post(`${base}/payouts/${q.id}/challenge`)).json();
+    await post(`${base}/payouts/${q.id}/submit`, { response: auth.get(challenge.options) });
+    status = {
+      status: 'SUCCESS',
+      swapDetails: {
+        amountOut: '900000',
+        originChainTxHashes: [],
+        destinationChainTxHashes: [{ hash: 'short-tx' }],
+      },
+    };
+    await pollNativePayouts();
+    expect(await prisma.invoice.findUnique({ where: { id: invoice.id } })).toMatchObject({
+      status: 'payment_review',
+      paidAt: null,
+    });
+    expect((await invoiceQuote(invoice.id)).statusCode).toBe(409);
+  });
+
+  it('invalidates an expired quote before replacement and a declined invoice before signing', async () => {
+    await activate();
+    const invoice = await bill();
+    const q = (await invoiceQuote(invoice.id)).json();
+    await prisma.nativePayout.update({
+      where: { id: q.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    const fresh = (await invoiceQuote(invoice.id)).json();
+    expect(fresh.id).not.toBe(q.id);
+    expect((await post(`${base}/payouts/${q.id}/challenge`)).statusCode).toBe(409);
+    const challenge = (await post(`${base}/payouts/${fresh.id}/challenge`)).json();
+    expect((await post(`/v1/invoices/${invoice.id}/reject`)).statusCode).toBe(200);
+    await post(`${base}/payouts/${fresh.id}/submit`, { response: auth.get(challenge.options) });
+    expect(submit).not.toHaveBeenCalled();
+    expect(await prisma.invoice.findUnique({ where: { id: invoice.id } })).toMatchObject({
+      status: 'rejected',
+    });
+  });
+
+  it('requires verified invoices, the right merchant and mode, owner role, step-up and sufficient quoted balance', async () => {
+    await activate();
+    const draft = await bill('awaiting_verification');
+    expect((await invoiceQuote(draft.id)).statusCode).toBe(409);
+    const invoice = await bill();
+    const other = await createMerchant();
+    const foreign = await createRow('Invoice', other.id, true, {
+      status: 'open',
+      verifiedAt: new Date(),
+    });
+    expect((await invoiceQuote(foreign.id)).statusCode).toBe(404);
+    const testHeaders = dashHeaders(login, { merchantId, livemode: false });
+    expect(
+      (await app.inject({ method: 'GET', url: `/v1/invoices/${invoice.id}`, headers: testHeaders }))
+        .statusCode,
+    ).toBe(404);
+    expect(
+      (await post(`/v1/invoices/${invoice.id}/payout`, { asset: USDC }, testHeaders)).statusCode,
+    ).toBe(409);
+    const admin = await createUser();
+    await createRow('MerchantUser', merchantId, false, { userId: admin.id, role: 'admin' });
+    expect(
+      (
+        await post(
+          `/v1/invoices/${invoice.id}/payout`,
+          { asset: USDC },
+          dashHeaders(await loginAs(admin.id), { merchantId, livemode: true }),
+        )
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await post(
+          `/v1/invoices/${invoice.id}/payout`,
+          { asset: USDC },
+          dashHeaders(await loginAs(login.userId, { stepUp: false }), {
+            merchantId,
+            livemode: true,
+          }),
+        )
+      ).statusCode,
+    ).toBe(401);
+    fakeNearClient(true).scriptView('intents.near', 'mt_batch_balance_of', () => ['1000000']);
+    expect((await invoiceQuote(invoice.id)).statusCode).toBe(409);
   });
 });

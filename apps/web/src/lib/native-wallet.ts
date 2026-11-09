@@ -16,6 +16,7 @@ export interface NativePayout {
   destinationChain: string;
   destination: string;
   proposalId: string | null;
+  invoiceId?: string | null;
   expiresAt: string;
   intentHash: string | null;
   quote: { quote: { amountOut: string; minAmountOut?: string } };
@@ -61,6 +62,7 @@ export async function signPayout(
     'destination',
     'destinationAsset',
     'destinationChain',
+    'invoiceId',
   ] as const)
     if (challenge[key] !== reviewed[key])
       throw new Error('The payout changed. Reload and review it before signing.');

@@ -476,8 +476,8 @@ describe('scoped data access', () => {
       });
       // Both Prisma extensions expose this read surface; avoid comparing their full recursive types.
       for (const db of [
-        scopedDb({ merchantId: a.id, livemode: true }),
-        readOnlyDb({ merchantId: a.id, livemode: true }),
+        scopedDb({ merchantId: a.id, livemode: true }) as unknown as AnyDb,
+        readOnlyDb({ merchantId: a.id, livemode: true }) as unknown as AnyDb,
       ] as unknown as AnyDb[]) {
         expect((await db.event.findMany({})).map((e: { id: string }) => e.id)).toEqual([own.id]);
         expect(await db.event.findUnique({ where: { id: other.id } })).toBeNull();

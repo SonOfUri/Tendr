@@ -38,6 +38,7 @@ export type IdPrefix =
   | 'inv'
   | 'nwal'
   | 'npay'
+  | 'bill'
   | 'macc'
   | 'prop'
   | 'appr'
