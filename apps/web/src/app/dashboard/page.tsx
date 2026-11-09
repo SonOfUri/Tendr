@@ -13,6 +13,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
+import { TokenLogo } from '@/components/dashboard/asset-logos';
 import { InfoTip } from '@/components/dashboard/InfoTip';
 import { OverviewSkeleton } from '@/components/dashboard/Skeleton';
 import { ErrorState } from '@/components/dashboard/ui';
@@ -101,20 +102,34 @@ function approxMoney(amount: bigint, currency: string): { short: string; full: s
   };
 }
 
+function shortAssetId(asset: string): string {
+  const t = asset.trim();
+  if (t.length <= 22) return t;
+  return `${t.slice(0, 10)}…${t.slice(-8)}`;
+}
+
 function approxAssetAmount(
   asset: string,
   raw: string,
   livemode: boolean,
-): { short: string; full: string; tip: boolean } {
+): { short: string; full: string; tip: boolean; label: string } {
   const full = formatAmount(asset, raw, livemode);
   const info = assetInfo(asset, livemode);
-  if (!info.known) return { short: full, full, tip: false };
+  if (!info.known) {
+    return {
+      short: `${raw} units`,
+      full,
+      tip: true,
+      label: shortAssetId(asset),
+    };
+  }
   const units = formatUnits(raw, info.decimals);
   const approx = approxDecimal(units);
   return {
     short: `${approx.short} ${info.symbol}`,
     full: `${approx.full} ${info.symbol}`,
     tip: approx.truncated,
+    label: info.symbol,
   };
 }
 
@@ -201,7 +216,7 @@ function CopyIconButton({ value, label }: { value: string; label: string }) {
 
 export default function OverviewPage() {
   const { store, context } = useDashboard();
-  const [range, setRange] = useState<Range>(30);
+  const [range, setRange] = useState<Range>(7);
   const [metric, setMetric] = useState<Metric>('volume');
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [walletOpen, setWalletOpen] = useState(false);
@@ -307,7 +322,7 @@ export default function OverviewPage() {
   return (
     <div className="ov">
       <section className="ov-hero" aria-label="Balances and volume">
-        <article className="ov-stat">
+        <article className="ov-stat ov-stat--wallet">
           <p className="ov-kicker">Wallet balance</p>
           <div className="ov-stat-foot">
             <div className="ov-figure-row">
@@ -331,12 +346,22 @@ export default function OverviewPage() {
             {walletOpen ? (
               <ul className="ov-assets">
                 {balances.map((b) => {
+                  const info = assetInfo(b.asset, livemode);
                   const row = approxAssetAmount(b.asset, b.amount, livemode);
                   return (
                     <li key={b.asset}>
-                      <span>{assetInfo(b.asset, livemode).symbol}</span>
-                      <strong>
-                        {row.short}
+                      <span className="ov-assets-left">
+                        <TokenLogo
+                          symbol={info.known ? info.symbol : row.label}
+                          assetId={b.asset}
+                          size={22}
+                        />
+                        <span className="ov-assets-name" title={b.asset}>
+                          {row.label}
+                        </span>
+                      </span>
+                      <strong className="ov-assets-amt" title={row.full}>
+                        <span>{row.short}</span>
                         {row.tip ? <InfoTip text={row.full} label="Full asset balance" /> : null}
                       </strong>
                     </li>
@@ -344,7 +369,7 @@ export default function OverviewPage() {
                 })}
               </ul>
             ) : null}
-      </div>
+          </div>
         </article>
 
         <article className="ov-stat">

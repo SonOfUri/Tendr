@@ -153,48 +153,83 @@ export default function AccountHomePage() {
   const goLiveComplete = Boolean(live) && checklist.ok && !liveModeBlocked;
   const livePayoutPending = Boolean(live) && checklist.missing.includes('payout');
 
-  const steps: GoLiveStep[] = [
-    {
-      id: 'passkey',
-      tone: 'passkey',
-      label: 'Your passkey',
-      detail: 'You sign in and approve with it.',
-      done: true,
-    },
-    {
-      id: 'second_key',
-      tone: 'second',
-      label: 'A second key',
-      detail: `${checklist.signerCount} signer${checklist.signerCount === 1 ? '' : 's'}${
-        checklist.recoveryKeySet ? ' and a recovery kit' : ', no recovery kit yet'
-      }.`,
-      done: !checklist.missing.includes('second_key'),
-      href: '/dashboard/onboarding/second-key',
-      action: 'Add one',
-    },
-    {
-      id: 'threshold',
-      tone: 'rule',
-      label: 'Approval rule',
-      detail: 'One signer’s approval moves money to start with; you can require more later.',
-      done: !checklist.missing.includes('threshold'),
-      href: '/dashboard/security#approval-rule',
-      action: 'Set the rule',
-    },
-    {
-      id: 'payout',
-      tone: 'payout',
-      label: livePayoutPending ? 'Live payout' : 'Approve payout',
-      detail: livePayoutPending
-        ? 'Choose where live payments settle, then approve with your passkey.'
-        : 'Choose the default settlement token and approve it — payment links need this.',
-      done: !checklist.missing.includes('payout'),
-      href: nativeLive ? '/dashboard/wallet' : '/dashboard/settings/payout',
-      action: 'Set payout',
-    },
-  ];
+  const walletActive = home.live.account?.status === 'active';
+  const steps: GoLiveStep[] = nativeLive
+    ? [
+        {
+          id: 'passkey',
+          tone: 'passkey',
+          label: 'Your passkey',
+          detail: 'You sign in and approve with it.',
+          done: true,
+        },
+        {
+          id: 'wallet_passkey',
+          tone: 'second',
+          label: 'Wallet passkey',
+          detail: walletActive
+            ? 'Live wallet is active. Withdrawals and settlement use this passkey.'
+            : home.live.nativeWallet
+              ? 'Finish activation with the wallet passkey. That does not move any money.'
+              : 'Create the wallet passkey, then activate. Activation does not move any money.',
+          done: !checklist.missing.includes('wallet_passkey'),
+          href: walletActive ? '/dashboard/wallet' : undefined,
+          action: 'Open wallet',
+        },
+        {
+          id: 'payout',
+          tone: 'payout',
+          label: 'Default settlement',
+          detail:
+            'Choose the default settlement token on the wallet page — payment links need this.',
+          done: !checklist.missing.includes('payout'),
+          href: '/dashboard/wallet',
+          action: 'Set settlement',
+        },
+      ]
+    : [
+        {
+          id: 'passkey',
+          tone: 'passkey',
+          label: 'Your passkey',
+          detail: 'You sign in and approve with it.',
+          done: true,
+        },
+        {
+          id: 'second_key',
+          tone: 'second',
+          label: 'A second key',
+          detail: `${checklist.signerCount} signer${checklist.signerCount === 1 ? '' : 's'}${
+            checklist.recoveryKeySet ? ' and a recovery kit' : ', no recovery kit yet'
+          }.`,
+          done: !checklist.missing.includes('second_key'),
+          href: '/dashboard/onboarding/second-key',
+          action: 'Add one',
+        },
+        {
+          id: 'threshold',
+          tone: 'rule',
+          label: 'Approval rule',
+          detail: 'One signer’s approval moves money to start with; you can require more later.',
+          done: !checklist.missing.includes('threshold'),
+          href: '/dashboard/security#approval-rule',
+          action: 'Set the rule',
+        },
+        {
+          id: 'payout',
+          tone: 'payout',
+          label: livePayoutPending ? 'Live payout' : 'Approve payout',
+          detail: livePayoutPending
+            ? 'Choose where live payments settle, then approve with your passkey.'
+            : 'Choose the default settlement token and approve it — payment links need this.',
+          done: !checklist.missing.includes('payout'),
+          href: '/dashboard/settings/payout',
+          action: 'Set payout',
+        },
+      ];
 
   const currentIndex = steps.findIndex((s) => !s.done);
+  const needsWalletSetup = nativeLive && checklist.missing.includes('wallet_passkey');
 
   return (
     <>
@@ -279,16 +314,7 @@ export default function AccountHomePage() {
       </div>
 
       <Panel title="Go live">
-        {nativeLive ? (
-          <NativeWalletSetup
-            view={home.live}
-            status={home.goLive}
-            store={{ merchantId: store.id, livemode: true }}
-            userId={me.user.id}
-            isOwner={isOwner}
-            onDone={() => void load()}
-          />
-        ) : goLiveComplete && live ? (
+        {goLiveComplete && live ? (
           <div className="dash-golive-ready">
             <span className="dash-golive-ready-mark" aria-hidden>
               <CircleCheck size={22} strokeWidth={1.85} />
@@ -299,6 +325,13 @@ export default function AccountHomePage() {
               </strong>
               <p className="dash-muted dash-small">
                 <CopyableId value={live.nearAccountId} label="Copy account id" />
+                {nativeLive ? (
+                  <>
+                    {' '}
+                    · Settlement and withdrawals are on the{' '}
+                    <Link href="/dashboard/wallet">wallet page</Link>.
+                  </>
+                ) : null}
               </p>
             </div>
           </div>
@@ -310,7 +343,7 @@ export default function AccountHomePage() {
                 when live mode is enabled.
               </Alert>
             ) : null}
-            {live && live.status !== 'active' ? (
+            {live && live.status !== 'active' && !nativeLive ? (
               <div className="dash-golive-ready" style={{ marginBottom: '1rem' }}>
                 <span className="dash-golive-ready-mark" aria-hidden>
                   <CircleCheck size={22} strokeWidth={1.85} />
@@ -376,8 +409,20 @@ export default function AccountHomePage() {
                 );
               })}
             </ol>
+            {needsWalletSetup ? (
+              <div className="dash-golive-wallet-setup">
+                <NativeWalletSetup
+                  view={home.live}
+                  status={home.goLive}
+                  store={{ merchantId: store.id, livemode: true }}
+                  userId={me.user.id}
+                  isOwner={isOwner}
+                  onDone={() => void load()}
+                />
+              </div>
+            ) : null}
             <div className="dash-golive-actions">
-              {!live && isOwner ? (
+              {!nativeLive && !live && isOwner ? (
                 <Button
                   disabled={!checklist.ok || busy}
                   onClick={() =>
@@ -389,14 +434,16 @@ export default function AccountHomePage() {
                   {busy ? 'Working…' : 'Go live'}
                 </Button>
               ) : null}
-              {!live && !isOwner ? (
+              {!nativeLive && !live && !isOwner ? (
                 <p className="dash-muted dash-small">Only the business owner can go live.</p>
               ) : null}
               {!checklist.ok ? (
                 <p className="dash-muted dash-small">
-                  {livePayoutPending
-                    ? 'Approve live payout to finish.'
-                    : 'Finish the steps to go live.'}
+                  {needsWalletSetup
+                    ? 'Activate the wallet passkey to continue.'
+                    : livePayoutPending || checklist.missing.includes('payout')
+                      ? 'Set default settlement on the wallet page to finish.'
+                      : 'Finish the steps to go live.'}
                 </p>
               ) : null}
             </div>
@@ -405,6 +452,13 @@ export default function AccountHomePage() {
       </Panel>
     </>
   );
+}
+
+/** Truncate long intents asset ids for narrow cards; full id stays on `title`. */
+function shortAssetId(asset: string): string {
+  const t = asset.trim();
+  if (t.length <= 28) return t;
+  return `${t.slice(0, 14)}…${t.slice(-10)}`;
 }
 
 function AccountCard({
@@ -449,12 +503,18 @@ function AccountCard({
           <ul className="dash-balance-list">
             {balances.balances.map((b) => {
               const info = assetInfo(b.asset, livemode);
+              const label = info.known ? info.symbol : shortAssetId(b.asset);
+              const amount = info.known
+                ? formatAmount(b.asset, b.amount, livemode)
+                : `${b.amount} units`;
               return (
                 <li key={b.asset} className="dash-balance-row">
-                  <span className="dash-muted dash-small" title={b.asset}>
-                    {info.known ? info.symbol : b.asset}
+                  <span className="dash-balance-asset dash-muted dash-small" title={b.asset}>
+                    {label}
                   </span>
-                  <strong>{formatAmount(b.asset, b.amount, livemode)}</strong>
+                  <strong className="dash-balance-amt" title={formatAmount(b.asset, b.amount, livemode)}>
+                    {amount}
+                  </strong>
                 </li>
               );
             })}

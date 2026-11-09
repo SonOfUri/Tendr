@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import type { LinkSettlementOptions } from '@tendr/contracts';
 import { Alert, Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
-import { CircleCheck } from 'lucide-react';
+import { ArrowDown, CircleCheck } from 'lucide-react';
 import { ChainLogo, TokenLogo } from '@/components/dashboard/asset-logos';
 import { DemoAssetModal } from '@/components/demo/DemoAssetModal';
 import '@/components/demo/demo-playground.css';
@@ -388,39 +388,6 @@ export function NativeWalletPanel({
               You can view this wallet. Only its owner can change settlement or authorize payouts.
             </Alert>
           ) : null}
-          <Panel title="Balances">
-            {funded.length ? (
-              <div className="wallet-balances" role="listbox" aria-label="Balances">
-                {funded.map((b) => {
-                  const meta = tokenMeta(b.asset);
-                  const selected = asset === b.asset;
-                  return (
-                    <button
-                      key={b.asset}
-                      type="button"
-                      role="option"
-                      aria-selected={selected}
-                      className="wallet-bal-card"
-                      data-selected={selected ? 'true' : 'false'}
-                      disabled={busy || Boolean(proposalId)}
-                      onClick={() => selectBalance(b.asset)}
-                    >
-                      <div className="wallet-bal-top">
-                        <TokenLogo symbol={meta.symbol} assetId={b.asset} size={22} />
-                        <span className="wallet-bal-sym">{meta.symbol}</span>
-                      </div>
-                      <div className="wallet-bal-amt">{formatUnits(b.amount, meta.decimals)}</div>
-                      {meta.chain ? (
-                        <div className="wallet-bal-chain">{chainLabel(meta.chain)}</div>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="dash-muted">No funds received yet.</p>
-            )}
-          </Panel>
           {!proposalId ? (
             <Panel title="Default settlement token">
               <div className="stack dash-demo-asset-field">
@@ -462,6 +429,39 @@ export function NativeWalletPanel({
               </div>
             </Panel>
           ) : null}
+          <Panel title="Balances">
+            {funded.length ? (
+              <div className="wallet-balances" role="listbox" aria-label="Balances">
+                {funded.map((b) => {
+                  const meta = tokenMeta(b.asset);
+                  const selected = asset === b.asset;
+                  return (
+                    <button
+                      key={b.asset}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      className="wallet-bal-card"
+                      data-selected={selected ? 'true' : 'false'}
+                      disabled={busy || Boolean(proposalId)}
+                      onClick={() => selectBalance(b.asset)}
+                    >
+                      <div className="wallet-bal-top">
+                        <TokenLogo symbol={meta.symbol} assetId={b.asset} size={22} />
+                        <span className="wallet-bal-sym">{meta.symbol}</span>
+                      </div>
+                      <div className="wallet-bal-amt">{formatUnits(b.amount, meta.decimals)}</div>
+                      {meta.chain ? (
+                        <div className="wallet-bal-chain">{chainLabel(meta.chain)}</div>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="dash-muted">No funds received yet.</p>
+            )}
+          </Panel>
           {mine ? (
             <Panel title={proposalId ? 'Refund quote' : 'Withdraw'}>
               {proposalId ? (
@@ -471,57 +471,100 @@ export function NativeWalletPanel({
                 </p>
               ) : (
                 <>
-                  <div className="stack dash-demo-asset-field">
-                    <label className="field">
-                      <span>Asset to withdraw</span>
-                      {withdrawOptions.length ? (
-                        <DemoAssetModal
-                          options={withdrawOptions}
-                          value={withdrawValue}
-                          disabled={busy}
-                          onChange={(id) => selectBalance(id)}
+                  <div className="wallet-swap dash-demo-asset-field">
+                    <div className="wallet-swap-leg">
+                      <div className="wallet-swap-leg-head">
+                        <span>You send</span>
+                        {asset ? (
+                          <span className="wallet-swap-bal">
+                            Bal{' '}
+                            {formatUnits(
+                              data.balances.balances.find((b) => b.asset === asset)?.amount ?? '0',
+                              tokenMeta(asset).decimals,
+                            )}{' '}
+                            {tokenMeta(asset).symbol}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="wallet-swap-row">
+                        <input
+                          className="wallet-swap-amount"
+                          value={amount}
+                          disabled={busy || !asset}
+                          inputMode="decimal"
+                          placeholder="0.0"
+                          aria-label="Amount to send"
+                          onChange={(e) => {
+                            setAmount(e.target.value);
+                            setPct(null);
+                          }}
                         />
-                      ) : (
-                        <p className="dash-muted dash-small">
-                          No funded balances yet. Receive a payment first, then pick what to send.
-                        </p>
-                      )}
-                    </label>
-                    <label className="field">
-                      <span>Token and chain to receive</span>
-                      <DemoAssetModal
-                        options={catalogOptions}
-                        value={destinationValue}
-                        disabled={busy || catalogOptions.length === 0}
-                        onChange={setDestinationAsset}
-                      />
-                    </label>
-                  </div>
-                  <label className="field">
-                    <span>Amount to send{asset ? ` (${tokenMeta(asset).symbol})` : ''}</span>
-                    <input
-                      value={amount}
-                      disabled={busy || !asset}
-                      inputMode="decimal"
-                      onChange={(e) => {
-                        setAmount(e.target.value);
-                        setPct(null);
-                      }}
-                    />
-                  </label>
-                  <div className="wallet-pct" role="group" aria-label="Amount percentage">
-                    {PCTS.map((n) => (
+                        {withdrawOptions.length ? (
+                          <DemoAssetModal
+                            options={withdrawOptions}
+                            value={withdrawValue}
+                            disabled={busy}
+                            onChange={(id) => selectBalance(id)}
+                          />
+                        ) : (
+                          <p className="dash-muted dash-small wallet-swap-empty">No funded assets</p>
+                        )}
+                      </div>
+                      <div className="wallet-pct" role="group" aria-label="Amount percentage">
+                        {PCTS.map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            disabled={busy || !asset}
+                            aria-pressed={pct === n}
+                            onClick={() => applyPct(n)}
+                          >
+                            {n === 100 ? 'Max' : `${n}%`}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="wallet-swap-mid">
                       <button
-                        key={n}
                         type="button"
-                        disabled={busy || !asset}
-                        aria-pressed={pct === n}
-                        onClick={() => applyPct(n)}
+                        className="wallet-swap-flip"
+                        aria-label="Swap send and receive assets"
+                        disabled={
+                          busy ||
+                          !(asset || withdrawValue) ||
+                          !(destinationAsset || destinationValue)
+                        }
+                        onClick={() => {
+                          const from = asset || withdrawValue;
+                          const to = destinationAsset || destinationValue;
+                          if (!from || !to) return;
+                          const canSendTo = withdrawOptions.some((o) =>
+                            o.chainVariants.some((v) => v.assetId === to),
+                          );
+                          if (canSendTo) selectBalance(to);
+                          setDestinationAsset(from);
+                        }}
                       >
-                        {n === 100 ? 'Max' : `${n}%`}
+                        <ArrowDown size={18} strokeWidth={2.25} aria-hidden />
                       </button>
-                    ))}
+                    </div>
+
+                    <div className="wallet-swap-leg">
+                      <div className="wallet-swap-leg-head">
+                        <span>You receive</span>
+                      </div>
+                      <div className="wallet-swap-row wallet-swap-row--receive">
+                        <DemoAssetModal
+                          options={catalogOptions}
+                          value={destinationValue}
+                          disabled={busy || catalogOptions.length === 0}
+                          onChange={setDestinationAsset}
+                        />
+                      </div>
+                    </div>
                   </div>
+
                   <label className="field">
                     <span>Destination address</span>
                     <input
@@ -529,6 +572,7 @@ export function NativeWalletPanel({
                       disabled={busy}
                       spellCheck={false}
                       autoComplete="off"
+                      placeholder="Address on the receive network"
                       onChange={(e) => setDestination(e.target.value)}
                     />
                   </label>

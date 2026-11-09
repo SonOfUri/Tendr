@@ -179,15 +179,39 @@ body:has(.dash-app) .site-footer {
   border-radius: 6px;
 }
 
+.site-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem 1rem;
+  flex-wrap: nowrap;
+  min-width: 0;
+  width: 100%;
+}
+
 .site-footer-brand {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.site-footer-tagline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .site-footer-links {
-  margin-left: auto;
+  margin-left: 0;
+  flex: 0 0 auto;
   white-space: nowrap;
+}
+
+.site-footer .theme-menu {
+  flex: 0 0 auto;
 }
 
 .nav {
@@ -310,23 +334,27 @@ body:has(.dash-app) .site-footer {
 }
 
 .site-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem 1.5rem;
-  flex-wrap: wrap;
+  display: grid;
+  gap: 0.75rem;
   border-top: 1px solid var(--tendr-border);
   padding: 2rem 0 3rem;
   color: var(--tendr-muted);
   font-size: 0.9rem;
+  min-width: 0;
+  width: 100%;
 }
 
 .site-footer p {
   margin: 0;
 }
 
-.site-footer .muted {
-  flex-basis: 100%;
+.site-footer-note {
+  margin: 0;
+}
+
+body:has(.login-screen) .site-footer-note,
+body:has(.auth-shell) .site-footer-note {
+  display: none;
 }
 
 /* ─── Sign-in and dashboard ─────────────────────────────────────────────── */
@@ -375,10 +403,7 @@ body:has(.login-screen) .site-footer {
   padding-bottom: 0.65rem;
   border-top-color: rgba(0, 0, 0, 0.1);
   color: #5c5c5c;
-}
-
-body:has(.login-screen) .site-footer .muted {
-  display: none;
+  gap: 0;
 }
 
 body:has(.login-screen) .site-footer .tendr-logo {
