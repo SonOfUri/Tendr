@@ -30,6 +30,7 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,mdx,yml,yaml,css}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,mdx,yml,yaml,css}\"",
     "dev:wordpress": "node scripts/dev-wordpress.mjs",
+    "dev:wordpress:style": "node scripts/style-wordpress.mjs",
     "dev:shopify": "node scripts/dev-shopify.mjs"
   },
   "devDependencies": {

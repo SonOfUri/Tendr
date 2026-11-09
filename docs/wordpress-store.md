@@ -17,6 +17,44 @@ The first run installs WordPress 7.1.3, PHP 8.3, WooCommerce 11.2.1 (the plugin'
 the Storefront theme and Tendr 0.3.0 from the local release ZIP. It creates a **$1 virtual product**,
 enables pretty permalinks and guest checkout, and uses USD. Subsequent starts retain orders,
 products, configuration and Tendr connections. The Tendr plugin is refreshed from this checkout.
+An existing active theme is retained on restart.
+
+## Fashion concept storefront
+
+The local store now has an optional **unofficial Zara-inspired concept**: editorial homepage,
+six original concept clothing products, thirty size variations, search, category navigation,
+and styled product/cart/checkout pages. It uses a Storefront child theme; WooCommerce and Tendr
+continue to process carts and payments.
+
+To apply or reapply it to an initialized local store:
+
+```bash
+npm run dev:wordpress:style
+```
+
+The command updates the six `TENDR-FASHION-*` products and its own pages, reuses imported images,
+and selects the child theme. It retains existing orders and Tendr credentials/mode. Reapplying
+resets these demo products to their seeded descriptions, prices and sizes. The original $1 item
+remains purchasable through the footer but is hidden from the fashion catalog.
+
+Theme source: [`infra/docker/wordpress-store/fashion-theme`](../infra/docker/wordpress-store/fashion-theme).
+The Compose services mount it read-only, so edit the repository rather than the WordPress theme
+editor. Product seeding lives in [`fashion-setup.php`](../infra/docker/wordpress-store/fashion-setup.php).
+The original imagery was generated with the built-in image tool; all seven optimized assets and
+their exact [prompt set](../infra/docker/wordpress-store/fashion-theme/assets/prompts.json) are
+committed with the theme. This is a concept catalog, not official Zara inventory or photography.
+
+All fashion variations are virtual demo items so they can exercise checkout without inventing a
+fulfillment service. Nothing ships. The storefront and checkout state this explicitly; Live
+payment mode still moves real funds. The styling command does not connect, change mode, or pay.
+
+A private database backup from before the initial makeover is retained in
+`.keyvault/wordpress-store/backups/before-fashion-2026-11-09.sql`. Do not publish it.
+
+Preview checks cover desktop/mobile layouts, six catalog products, size selection, adding to the
+bag, cart/checkout rendering, search and category navigation. No payment is submitted by these checks.
+
+## Local access and credentials
 
 - Initial storefront: `http://localhost:8894`.
 - Admin: `http://localhost:8894/wp-admin/`, username `tendradmin`.

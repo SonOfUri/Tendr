@@ -1,0 +1,40 @@
+{
+  "description": "Original generated imagery for an explicitly unofficial Zara-inspired concept. These are not official Zara products, photography, or prices. Optimized WebP derivatives of the generated PNGs.",
+  "images": [
+    {
+      "asset": "assets/hero.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: photorealistic-natural. Asset type: wide hero campaign photograph for an explicitly unofficial Zara-inspired clothing demo. Create an elegant high-fashion editorial photograph, landscape 3:2 composition. Two adult fashion models, a Black woman with short natural hair wearing a flowing chocolate-brown long-sleeve maxi dress, and a man with dark hair wearing a sand-colored relaxed overshirt and wide black trousers. Full body or almost full body, standing slightly apart in a sunlit minimal Mediterranean courtyard, textured warm ivory plaster wall, soft stone floor, late afternoon shadows. Sophisticated quiet luxury, realistic cloth folds, high-end analogue film texture, subdued colors, no saturation. Models on the right two-thirds, open textured wall on the left third for separate website text. Art direction feels like a contemporary European fashion editorial. No text, no logos, no watermark, no jewelry branding."
+    },
+    {
+      "asset": "assets/knit.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photograph for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Show exactly one garment, whole item centered with generous negative space, front view, invisible mannequin or neatly arranged natural drape. Seamless pale warm-gray #eeede8 studio background and soft diffused daylight. Crisp realistic fabric texture and subtle shadow. No person, no hangers, no props, no text, no logos, no watermark. Product: an ivory heavyweight ribbed wool-blend crewneck sweater, relaxed boxy silhouette, long sleeves, tactile cable-free knit, folded cuffs."
+    },
+    {
+      "asset": "assets/overshirt.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photograph for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Show exactly one garment, whole item centered with generous negative space, front view, invisible mannequin or neatly arranged natural drape. Seamless pale warm-gray #eeede8 studio background and soft diffused daylight. Crisp realistic fabric texture and subtle shadow. No person, no hangers, no props, no text, no logos, no watermark. Product: a sand-beige textured linen-cotton overshirt, relaxed collar, long sleeves, button front and two patch chest pockets, subtle tortoiseshell buttons."
+    },
+    {
+      "asset": "assets/trousers.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photograph for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Show exactly one garment, whole item centered with generous negative space, front view, invisible mannequin or neatly arranged natural drape. Seamless pale warm-gray #eeede8 studio background and soft diffused daylight. Crisp realistic fabric texture and subtle shadow. No person, no hangers, no props, no text, no logos, no watermark. Product: a pair of black tailored wide-leg trousers with double pleats, structured waistband, full length, understated fashion silhouette."
+    },
+    {
+      "asset": "assets/dress.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photograph for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Show exactly one garment, whole item centered with generous negative space, front view, invisible mannequin or neatly arranged natural drape. Seamless pale warm-gray #eeede8 studio background and soft diffused daylight. Crisp realistic fabric texture and subtle shadow. No person, no hangers, no props, no text, no logos, no watermark. Product: a chocolate-brown flowing long-sleeve jersey maxi dress with asymmetric gathered waist and round neckline, elegant sculptural drape."
+    },
+    {
+      "asset": "assets/coat.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photograph for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Show exactly one garment, whole item centered with generous negative space, front view, invisible mannequin or neatly arranged natural drape. Seamless pale warm-gray #eeede8 studio background and soft diffused daylight. Crisp realistic fabric texture and subtle shadow. No person, no hangers, no props, no text, no logos, no watermark. Product: a camel oversized wool long coat, wide notched lapels, double-breasted dark brown buttons, long sleeves, understated luxury."
+    },
+    {
+      "asset": "assets/tee.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photograph for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Show exactly one garment, whole item centered with generous negative space, front view, invisible mannequin or neatly arranged natural drape. Seamless pale warm-gray #eeede8 studio background and soft diffused daylight. Crisp realistic fabric texture and subtle shadow. No person, no hangers, no props, no text, no logos, no watermark. Product: an off-white heavyweight cotton short-sleeve T-shirt, boxy relaxed cut, sturdy ribbed crew neckline, plain and impeccably constructed."
+    }
+  ]
+}

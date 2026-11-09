@@ -36,6 +36,7 @@ services:
     environment: *wordpress-env
     volumes:
       - wordpress:/var/www/html
+      - ./wordpress-store/fashion-theme:/var/www/html/wp-content/themes/tendr-fashion:ro
     depends_on:
       db:
         condition: service_healthy
@@ -61,6 +62,8 @@ services:
       - ../../apps/woocommerce/dist:/opt/tendr-dist:ro
       - ./wordpress-store/setup.php:/opt/tendr-setup.php:ro
       - ./wordpress-store/wp-cli.yml:/var/www/html/wp-cli.yml:ro
+      - ./wordpress-store/fashion-theme:/var/www/html/wp-content/themes/tendr-fashion:ro
+      - ./wordpress-store/fashion-setup.php:/opt/tendr-fashion-setup.php:ro
     depends_on:
       wordpress:
         condition: service_healthy

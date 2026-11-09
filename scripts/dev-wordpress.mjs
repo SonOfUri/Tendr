@@ -110,7 +110,8 @@ if (process.argv.includes('--stop')) {
     '--activate',
     '--force',
   );
-  wp('theme', 'install', 'storefront', '--activate');
+  wp('theme', 'install', 'storefront');
+  if (installed.status !== 0) wp('theme', 'activate', 'storefront');
   wp('rewrite', 'structure', '/%postname%/', '--hard');
   wp('eval-file', '/opt/tendr-setup.php');
   console.log(`Store: ${saved.siteUrl}\nAdmin: ${saved.siteUrl}/wp-admin/`);
