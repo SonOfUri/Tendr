@@ -15,13 +15,16 @@ vi.mock('@/lib/api', async (original) => ({
   api: vi.fn(),
 }));
 vi.mock('@/lib/webauthn', () => ({ registerPasskey: vi.fn() }));
+vi.mock('@/lib/navigation', async (original) => ({
+  ...(await original<typeof import('@/lib/navigation')>()),
+  takePendingInvite: () => null,
+}));
 vi.mock('@/lib/connect', () => ({
   loadConnectParams: () => null,
   takeConnectWaiting: () => false,
 }));
 beforeEach(() => {
   vi.clearAllMocks();
-  localStorage.clear();
   search.value =
     'token=example&next=' + encodeURIComponent('/dashboard/invoices?store=mer_example&mode=live');
 });
