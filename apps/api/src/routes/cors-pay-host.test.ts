@@ -103,4 +103,40 @@ describe('pay-host CORS', () => {
     });
     expect(pay.headers['access-control-allow-credentials']).toBeUndefined();
   });
+
+  it.each([
+    { method: 'PUT', url: '/v1/invoices/settings' },
+    { method: 'PATCH', url: '/v1/payment_links/plink_example' },
+    { method: 'DELETE', url: '/v1/api_keys/key_example' },
+  ])(
+    '$method dashboard mutations pass browser preflight only for dashboard origins',
+    async ({ method, url }) => {
+      const headers = {
+        'access-control-request-method': method,
+        'access-control-request-headers': 'content-type,tendr-csrf,tendr-livemode,tendr-merchant',
+      };
+      const response = await app.inject({
+        method: 'OPTIONS',
+        url,
+        headers: { ...headers, origin: APP },
+      });
+      expect(response.statusCode).toBe(204);
+      expect(response.headers['access-control-allow-origin']).toBe(APP);
+      expect(response.headers['access-control-allow-credentials']).toBe('true');
+      expect(String(response.headers['access-control-allow-methods']).split(/\s*,\s*/)).toContain(
+        method,
+      );
+      expect(String(response.headers['access-control-allow-headers']).split(/\s*,\s*/)).toEqual(
+        expect.arrayContaining(['content-type', 'tendr-csrf', 'tendr-livemode', 'tendr-merchant']),
+      );
+      for (const origin of [PAY, 'https://invoice.usetendr.tech', 'https://untrusted.example']) {
+        const blocked = await app.inject({
+          method: 'OPTIONS',
+          url,
+          headers: { ...headers, origin },
+        });
+        expect(blocked.headers['access-control-allow-origin']).toBeUndefined();
+      }
+    },
+  );
 });
