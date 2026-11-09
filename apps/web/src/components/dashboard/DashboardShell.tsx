@@ -18,6 +18,7 @@ import {
   Globe,
   KeyRound,
   LayoutDashboard,
+  LineChart,
   Link2,
   LogOut,
   PanelLeft,
@@ -105,6 +106,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Overview',
     items: [
       { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
+      { href: '/dashboard/insights', label: 'Insights', icon: LineChart },
       { href: '/dashboard/account', label: 'Account', icon: Building2 },
     ],
   },

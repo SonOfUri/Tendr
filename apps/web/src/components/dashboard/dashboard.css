@@ -5049,10 +5049,6 @@ html[data-appearance='light'] .conn-card {
   gap: 0.65rem;
 }
 
-.ov-insights {
-  grid-column: 1 / -1;
-}
-
 .ai-insight-grid {
   display: grid;
   gap: 0.65rem;
