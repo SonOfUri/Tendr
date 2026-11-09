@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { Button } from '@tendr/ui';
+import { InvoiceBreakdown } from '@/components/InvoiceBreakdown';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import { PageHeader, Panel, ErrorState } from '@/components/dashboard/ui';
@@ -168,9 +169,7 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                 <p>
                   From {invoice.contractorName} ({invoice.email}) · Email verified
                 </p>
-                <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                  {invoice.description}
-                </p>
+                <InvoiceBreakdown invoice={invoice} />
                 <p>Receiving network: {chainLabel(invoice.destinationChain)}</p>
                 <p style={{ overflowWrap: 'anywhere' }}>
                   Receiving wallet: <code>{invoice.destination}</code>
