@@ -1,10 +1,17 @@
 # Tendr dashboard frontend handover
 
-Updated **7 November 2026**. Audience: the developer building the merchant dashboard in `apps/web`.
+Updated **9 November 2026** (AI, invoice and email-design review). Audience: the developer building the merchant dashboard in `apps/web`.
 This is the current entry point for frontend work. It supersedes the deployment assumptions and
 "missing screens" lists in earlier versions of this handover. The filename is retained for existing links.
 
 ## Start here
+
+Start with the [AI, invoice and email delivery brief](2026-11-09-ai-invoices-email-design.md)
+for screen states, design requirements, acceptance criteria and the full transactional email inventory.
+The [offline email gallery](email-preview.html) shows synthetic examples of all 23 current templates.
+The detailed API contracts remain below. AI and invoice backend code is present on both branches;
+AI API integration into the product UI and designed HTML email delivery remain frontend/backend work.
+Current emails are plain text.
 
 The live backend supports native passkey wallets, payment links, incoming payments, withdrawals,
 settlement selection and API-key management. **The merchant reports successfully receiving a live
@@ -13,10 +20,10 @@ flows when integrating them into the redesigned dashboard.
 
 There are two frontend implementations to reconcile:
 
-| Branch / audited revision              | What to use it for                                                                                                                                                                                                           |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `origin/deploy` at `04cd49c`           | Implementation baseline: redesigned dashboard and auth screens, payment-link list/detail/editor, theme list/editor, shared UI components, API-key page and deployed backend. Railway builds this branch.                     |
-| `origin/test/api-console` at `fc4fee9` | Working functional references: native-wallet setup, settlement and withdrawals; native refund approvals; capability guards; per-link settlement selector; isolated API console and local frontend connected to the live API. |
+| Branch / audited revision | What to use it for |
+| --- | --- |
+| `origin/deploy` at `24543c8` | Implementation baseline and Railway deployment branch: redesigned dashboard, native wallets/payouts, settlement selectors, API keys, AI APIs and invoice flow. Preserve its current design and payment behavior. |
+| `origin/test/api-console` at `f1bb3dd` | Functional reference and isolated API workbench, including AI routes and itemized invoices. Use this for integration examples and local test scenarios. |
 
 The revisions above identify code reviewed for this handover, not a requirement to reset a newer
 checkout. Fetch before starting and review any subsequent changes. `main` is not the deployment baseline.
@@ -26,14 +33,16 @@ git fetch origin
 git switch -c feat/dashboard origin/deploy
 ```
 
-Keep the redesigned shell and existing editors from `deploy`. Port the native-wallet and settlement
-behavior from the console branch into that design. A wholesale replacement with the console
-frontend would lose the richer payment-link/theme editors and the redesigned navigation.
+Keep the redesigned shell, existing editors and integrated native-wallet/settlement behavior from
+`deploy`. Use console examples where useful, preserving the richer payment-link/theme editors and
+production navigation. The earlier native-wallet porting checklist has been completed in this baseline.
 Submit a PR against `deploy`; pushing directly to that branch can deploy immediately.
 
 ## Current live status and evidence
 
-Configuration was read from the Railway API and worker on 7 November; no credentials are included here.
+The configuration snapshot below was read from Railway on **7 November**; it is historical evidence,
+not a fresh configuration audit. AI activation is recorded separately on 8 November. The public app
+and invoice-host notes were checked on 9 November. No credentials are included here.
 
 | Area                     | Current state and frontend implication                                                                                                                                                                                                                                                            |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -43,7 +52,7 @@ Configuration was read from the Railway API and worker on 7 November; no credent
 | Screening                | `SCREENING_MODE=disabled`, an operator-selected hackathon configuration. Live funds are **not sanctions-screened**. Do not label skipped screening as a passed check; existing held payments remain held.                                                                                         |
 | Gas sponsorship / sweeps | `GASLESS_LIVE_ENABLED=false`, `FEE_SWEEP_ENABLED=false`. Do not promise active gasless sponsorship or automatic sweeps from a saved preference alone.                                                                                                                                             |
 | API / checkout           | `https://api.usetendr.tech` and `https://pay.usetendr.tech`. API readiness and the new authenticated API-key route were checked on 7 November. Shopper links stay on the pay host.                                                                                                                |
-| Public dashboard         | Configured origin is `https://app.usetendr.tech`, RP ID `usetendr.tech`. On 7 November the public domain returned Vercel `DEPLOYMENT_NOT_FOUND`, even though Railway's web deployment succeeded. Public dashboard DNS/hosting is an outstanding operator task.                                    |
+| Public dashboard         | Configured origin is `https://app.usetendr.tech`, RP ID `usetendr.tech`. The public app host now serves the Railway frontend; the earlier Vercel failure is resolved. The separate `invoice.usetendr.tech` host still needs DNS/hosting correction; use the app-host invoice fallback.                                    |
 | Working live console     | A dedicated Chrome profile maps the app origin to a loopback frontend while calling the real API. This is how the functional console is used; it does not establish that the public app domain works. See development setup below.                                                                |
 | Infrastructure           | HODL workspace, Railway `tendr` project; API, worker, web, Postgres, Redis. API/worker use `KEYVAULT_DRIVER=env`; assets use `ASSET_STORE_DRIVER=s3` with API-served assets. Native wallet onboarding does not require GCP billing, funding `tendr.near`, or deploying a per-store NEAR contract. |
 
@@ -52,21 +61,24 @@ a successful deployment or a UI preview is not evidence that a payment executed.
 
 ## Delivery checklist: what actually needs work
 
-| Priority | Work                                                            | Existing code / completion requirement                                                                                                                                                                                                                                                 |
-| -------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1        | Integrate native wallet setup and account capabilities          | `deploy` still has contract-oriented onboarding/checklist controls. Port `NativeWallet.tsx`, `lib/native-wallet.ts`, the native fields in `lib/api.ts`, and account-home integration from the console branch. Show create, resume activation, active and non-owner states.             |
-| 1        | Integrate live withdrawals and default settlement               | Add `/dashboard/wallet` or integrate its behavior into the existing wallet/withdraw/payout screens. Dispatch using `account.kind`; preserve the contract flow for contract accounts. Review and sign the exact native payout, then track its outcome.                                  |
-| 1        | Integrate native refund approval and capability guards          | Port native handling in approvals list/detail and the shell's `AccountCapabilityGate`. Hide or explain unavailable contract-only actions, including on direct navigation. Keep login roles separate from wallet ownership.                                                             |
-| 1        | Add per-link settlement selection to the redesigned link editor | Backend and console selector exist. `deploy`'s `payment-link-types.ts` and `payment-link-form.ts` currently omit settlement fields. Add default/custom selection without dropping its fee/gas/theme overrides, totals or linked payments.                                              |
-| 2        | Finish presentation and regression coverage                     | API-key management is now implemented on both branches. Refine it with the existing design, preserving its permissions, context isolation and one-time secret handling. Exercise payments, webhooks, settings and team flows with real API data.                                       |
-| 2        | Extend themes only where required                               | Theme list/editor already exists on `deploy`: presets, website brand import, basic branding, logo upload, custom CSS, validation, preview, publish/default. Advanced block/success-block/font editing and connected-store brand import UI are additional work; backend support exists. |
-| Operator | Restore public dashboard origin                                 | Correct the app domain's hosting/DNS before public-browser acceptance. Do not change production RP ID or widen CORS to work around it.                                                                                                                                                 |
+| Priority | Work | Existing code / completion requirement |
+| --- | --- | --- |
+| 1 | Integrate the four AI surfaces | Wire checkout help, route comparison, merchant insights and theme generation to their existing APIs. Follow the new brief's loading/error/context and explicit-publish rules; demo responses are not the integration. |
+| 1 | Refine the invoice experience | Public submission/verification, itemized totals and owner inbox/payment already work. Deliver complete mobile, empty, expired, non-owner, processing and payment-review states while preserving exact amount and passkey behavior. |
+| 1 | Design transactional emails and integrate rendering | Cover all 23 template keys and invoice outcome variants. Resend currently receives plain text; HTML needs renderer/provider changes and richer structured invoice data if the design includes item tables. Use the fixture gallery and brief. |
+| 2 | Preserve wallet and payment flows | Native onboarding, payout/withdrawal, capability guards, refund approval and per-link settlement are already integrated on `deploy`. Regression-check store/mode changes, owner checks, signing cancellation and pending outcomes. |
+| 2 | Finish presentation and regression coverage | Preserve API-key one-time secrets, permissions and context isolation. Exercise payments, webhooks, settings and team flows against real response shapes. |
+| 2 | Extend themes where required | Existing presets, brand import, logo upload, CSS, validation, preview and publish/default remain the baseline. Review advanced block/font editing against current code before estimating additional work. |
+| Operator | Finish the custom invoice host | Verify Railway's requested DNS records for `invoice.usetendr.tech`; keep `https://app.usetendr.tech/invoice/<slug>` available. Preserve the established dashboard RP ID and CORS. |
 
-General refunds from an ordinary settled-payment detail, dashboard analytics/time series, global
-payment search and CSV export still need explicit backend/product contracts where no matching
-endpoint exists. Do not invent figures from a single page of records. Shopify is not implemented;
-WooCommerce source exists but its public ZIP release was still unpublished on 7 November.
-Neither is a prerequisite for the native dashboard work.
+Use existing backend contracts for analytics and overview metrics; the AI insight report is a
+bounded cohort report, not an arbitrary time series. Before adding global search, export or a new
+refund flow, locate the matching current route or agree on its contract. Do not invent figures
+from a single page of records. Integration-specific setup remains in the
+[Shopify pilot guide on `test/api-console`](https://github.com/SonOfUri/Tendr/blob/test/api-console/docs/shopify-connector.md)
+and [WooCommerce specification](../superpowers/specs/2026-10-26-woocommerce-plugin-design.md).
+The Shopify pilot guide/code is not part of the audited `deploy` baseline. Earlier pilot/release
+observations are not current release guarantees.
 
 ## Source map and branch-specific references
 
@@ -83,12 +95,13 @@ changing a request; some API fields use snake_case and native-wallet fields use 
 | `apps/web/src/lib/webauthn.ts`                                            | Login-passkey registration, sign-in, step-up and contract challenge signing.                                                                                                                                   |
 | `apps/web/src/lib/payments.ts`, `assets.ts`, `asset-registry.ts`          | Payment/refund types, exact amount formatting, known token metadata and explorer links. Provider catalogs supplement the static registry.                                                                      |
 | `apps/web/src/lib/proposals.ts`, `actions.ts`                             | Existing contract proposal creation, signing, cancellation and action summaries.                                                                                                                               |
-| `apps/web/src/lib/payment-link-types.ts`, `payment-link-form.ts`          | Redesigned link DTO/form logic on `deploy`; extend with settlement fields.                                                                                                                                     |
+| `apps/web/src/lib/payment-link-types.ts`, `payment-link-form.ts`          | Redesigned link DTO/form logic on `deploy`, including default/custom settlement fields.                                                                                                                                     |
 | `apps/web/src/lib/themes.ts`                                              | Theme draft state, validation mapping and editor helpers on `deploy`.                                                                                                                                          |
 | `apps/web/src/components/dashboard/ui.tsx`, `Select.tsx`, `dashboard.css` | Redesigned dashboard primitives and responsive monochrome styling on `deploy`; use these with shared `packages/ui`.                                                                                            |
 | `apps/web/src/app/dashboard/api-keys/`                                    | Working create/list/revoke page and component tests on both branches.                                                                                                                                          |
 
-Native references **on `origin/test/api-console`**, principally commit `85ccc73`:
+Native functional references originated on `test/api-console` (principally `85ccc73`) and are now
+integrated into `deploy`; use its current versions:
 
 - `apps/web/src/components/dashboard/NativeWallet.tsx` and `NativeWallet.test.tsx`.
 - `apps/web/src/lib/native-wallet.ts`: `registerWallet`, `activateWallet`, `signPayout`.
@@ -97,8 +110,7 @@ Native references **on `origin/test/api-console`**, principally commit `85ccc73`
   `approvals/page.tsx`, `approvals/[id]/page.tsx`, and the shell capability guard.
 - `apps/web/src/app/dashboard/payment-links/SettlementSelector.tsx`, `PaymentLinkForm.tsx`,
   and `apps/web/src/lib/dashboard-payment-links.ts` for per-link settlement behavior.
-- `docs/api-console.md` and the console launchers; these files/scripts are not present on the
-  audited `deploy` revision. Read that document from the console branch.
+- `docs/api-console.md` and the console launchers are available on both audited branches.
 
 The backend same-authenticator registration fix is already on both branches (`4b6e431` on console,
 `acac4fa` on deploy). A wallet credential may be created on the same device/authenticator that
@@ -183,7 +195,7 @@ route; external withdrawal addresses belong to the selected destination chain.
    If interrupted after registration, call `POST /v1/account/native/activate/options` and resume;
    do not register another wallet against the existing account.
 
-Reuse `registerWallet`/`activateWallet` from the console reference; its activation helper requests
+Reuse the integrated `registerWallet`/`activateWallet` helpers. The activation helper requests
 fresh options. Activation proves ownership with an empty intent and a read-only mainnet simulation;
 it does not transfer money. The challenge expires after five minutes.
 
@@ -453,7 +465,7 @@ npm run dev:web
 
 Open `http://localhost:3000/signup`. Local verification links appear in `apps/api/.mail/*.json`.
 Use `localhost` consistently. `npm run dev` starts separate API/worker processes and therefore is
-not the appropriate launcher for shared in-memory fake-chain state. The audited `deploy` helper
+not the appropriate launcher for shared in-memory fake-chain state. This `e2e:serve` setup
 has no console checkpoint restoration; use disposable local fixtures after simulator restarts.
 Memory assets are served through the local proxy and disappear on restart.
 
@@ -464,37 +476,35 @@ native-mainnet simulator.
 
 ### Inspect the working console
 
-In a separate checkout of `origin/test/api-console`, use `npm run dev:console`. It runs web 3300,
+Use `npm run dev:console` on either audited branch; keep separate checkouts when comparing the two frontends. It runs web 3300,
 API 4300, isolated `tendr_api_console` database, Redis DB 8, local mail inbox and checkpointed fake
 state. It removes production provider credentials and disables live money. Read `docs/api-console.md`
-on that branch for setup, the 133-route workbench and database/state backup behavior.
+for setup, the generated API workbench and database/state backup behavior. Regenerate its catalog
+after route changes; older route counts in setup notes are not a coverage guarantee.
 
 ### Local frontend with the live API
 
-The console branch has `npm run dev:console:live`. It serves only the frontend at loopback port
+Both audited branches have `npm run dev:console:live`. It serves only the frontend at loopback port
 3343 and opens a dedicated Chrome window at `https://app.usetendr.tech/dashboard`, with that host
 mapped locally. API calls still reach Railway and move real funds when a person signs a live action.
-This bypass applies only inside that Chrome profile; it does not change public DNS or fix the
-public Vercel error. Reopen with `npm run dev:console:live -- --open`.
+This mapping applies only inside that Chrome profile; it does not change public DNS. Reopen with `npm run dev:console:live -- --open`.
 
 Configuration lives in ignored `.keyvault/live-console.json`; the deployment owner supplies it
 privately. It contains web settings, including the server-only `WEB_INTERNAL_TOKEN`. Do not copy
 wallet credentials, Railway tokens, database/provider secrets or another person's Chrome profile.
 Each developer signs in using their own account and an appropriate store role.
 
-These commands are not yet in `deploy`. To use this same harness for the redesigned feature branch,
-port the launcher and its environment/Next-config support from console commit `98520e4`, preserving
-the feature branch's design and existing config. Keep the loopback binding, exact certificate pin,
+Use the existing launcher and Next configuration on your feature branch. Keep the loopback binding, exact certificate pin,
 separate browser profile, isolated build directory, skip-dotenv behavior and production RP/origin.
 It must not be turned into a public console deployment. Do not point a plain localhost frontend
 at production: the deployed CORS, RP ID and cookies require the approved app origin.
 
 ## Verification and acceptance
 
-This document was checked against both branch revisions, API routes/schemas and the live
-configuration. API-key route/component/browser checks passed in the preceding implementation.
-The merchant's receipt/withdrawal report is recorded above; no broader funded-flow certification
-is implied. Public DNS restoration and the native UI merge remain incomplete.
+This documentation review checked both branch revisions and the AI, invoice and mail routes/schemas.
+The earlier live configuration observations and merchant receipt/withdrawal report are dated above.
+This review did not send mail, invoke a production model or move funds. The native UI merge is present
+in the current baseline; the custom invoice host remains an operator item.
 
 From the feature branch, run checks for changed code:
 
@@ -506,12 +516,12 @@ npm run build --workspace=@tendr/web
 npm run test:e2e --workspace=@tendr/web -- merchant-accounts.spec.ts
 ```
 
-Add native component coverage when porting `NativeWallet.test.tsx`, plus regression coverage for
+Maintain the existing native component coverage and add regression coverage for
 mode/store switching during pending requests. Existing useful tests include `lib/api.test.ts`,
 `lib/payment-link-form.test.ts`, `lib/themes.test.ts` and `app/dashboard/api-keys/page.test.tsx` on
 `deploy`. Use `checkout.spec.ts`, `payment-links.spec.ts`, `themes.spec.ts` for affected public flows.
 The console's `npm run test:api-console --workspace=@tendr/web` uses its own launcher and covers
-real local browser signup, links and API keys. Do not assume that command exists on `deploy`.
+real local browser signup, links and API keys; it is also present on the audited `deploy` revision.
 
 Standard Playwright uses an isolated test database, fake API/worker and virtual authenticator;
 default web/API/store ports are 3100/4100/3200. Keep real credentials and funds out of these suites.
@@ -544,8 +554,19 @@ Historical runbook readiness notes must be rechecked against the current status 
 
 ## AI APIs
 
-Added on `test/api-console` on 7 November 2026; ported to `deploy` on 8 November 2026. This covers checkout assistance, quote previews,
-merchant insights and theme drafts, not the complete AI roadmap or production activation.
+Implemented on both audited branches; originated on `test/api-console` on 7 November 2026.
+Use the [AI delivery brief](2026-11-09-ai-invoices-email-design.md#ai-screens-states-and-interactions)
+for product interactions and acceptance criteria. This covers checkout assistance, quote previews,
+merchant insights and theme drafts; risk detection and agent/MCP payments remain separate work.
+**Production activation — 8 November 2026:** the Railway API in the HODL workspace now uses
+NEAR AI Cloud with `z-ai/glm-5.3-flash`. Backend deployment commit: `f30fe51` on `deploy`.
+The saved key is configured as the API service's server-only `NEARAI_API_KEY`. The three
+synthetic checks (checkout assistant, merchant insights, full theme validation) passed from
+inside the production API container; the public health check returned 200 and unauthenticated
+AI requests returned 401 with `Cache-Control: no-store`. The check created no orders, payments
+or saved themes. API, worker and web deployed successfully. These are operational smoke checks,
+not a broad model-quality evaluation. Attestation verification and E2EE remain unimplemented.
+
 The two checkout routes use the current checkout's
 `Authorization: Bearer <client_secret>` and return `Cache-Control: no-store`. Dashboard cookies,
 merchant API keys and client-supplied session/account IDs cannot substitute for that credential.
@@ -751,6 +772,9 @@ payment authority and makes no changes to the existing screening policy.
 
 ## Contractor invoices (9 November 2026)
 
+Use the [invoice delivery brief](2026-11-09-ai-invoices-email-design.md#invoices-contractor-and-merchant-journeys)
+for screen states, complete contractor/owner journeys and the design acceptance matrix.
+
 This is an **accounts-payable** flow: a contractor invoices a Tendr business, and the business pays from its existing live native wallet to the contractor's external wallet. It is separate from customer checkout/payment links. The owner enables the page in **Dashboard → Invoices**. `INVOICE_BASE_URL=https://invoice.usetendr.tech` produces `/<merchant slug>`; without this setting, local development uses `WEB_URL/invoice/<slug>`. The slug is the existing business slug.
 
 Contractors need no Tendr login. They enter their name, email, invoice reference, optional due date, receiving network/token, wallet and a payment breakdown. Each line has a description and decimal token amount; the displayed total is calculated automatically. The public API sends a private verification link on the existing app host (`WEB_URL/invoice/<slug>`) with a random token in its URL fragment. The established app host also provides a working fallback entry page while the invoice subdomain awaits DNS; email verification never depends on the optional subdomain. Reading the link does not submit the invoice: the contractor must review the immutable terms and press **Verify email & send invoice**. Verification expires after 24 hours. Only the token hash is stored. Keep tokens out of URLs sent to the API, analytics, logs and persisted browser storage. Verified invoices become visible in the business inbox. The owner gets an email notice; paid/declined notices go to the verified contractor email.
@@ -791,3 +815,15 @@ Invoice states:
 Quote requests racing for the same invoice reuse one active payout. An expired unsigned quote is invalidated before replacement; rejected invoices invalidate their unsigned quotes. Signed unknown outcomes reuse the identical signed intent, never a new nonce. A partial unique DB index forbids simultaneous active/successful attempts. Money, screening, key ownership and passkey checks remain those of native withdrawals. Successful payment receipts expose real destination transaction hashes. Invoices do not make blockchain transfers private.
 
 Deployment: apply migrations `20261109120000_invoices` and `20261109150000_invoice_items` before starting the updated API/worker. Configure `INVOICE_BASE_URL` on API, worker and web (including web build). Attach `invoice.usetendr.tech` to Railway's existing **web** service and publish Railway's requested DNS records. The invoice origin and existing app origin (for the `/invoice/<slug>` fallback) are allowed on public invoice APIs without cookies; never add it to dashboard CORS. Do not change WebAuthn origins for this subdomain: contractors do not sign, and owners sign on the existing dashboard. Existing businesses remain opted out until their wallet owner enables the page. PDF export, attachments, automatic tax calculations, recurring invoices, partial payment and batch payment are outside this first release.
+
+## Transactional email design (9 November 2026)
+
+The [email delivery contract](2026-11-09-ai-invoices-email-design.md#email-design-and-delivery-contract)
+contains all 23 template keys, actual triggers/recipients, data fields, links, expiry rules and the
+four invoice-notice outcomes. Use the [offline preview gallery](email-preview.html) and
+[synthetic fixtures](email-design-fixtures.json) for design work without real email or credentials.
+
+Production currently sends **subject + plain text only**. Designed HTML needs a server renderer
+and `ResendMailer` integration with a text alternative. Several handlers supply their own copy,
+and invoice notices currently supply `data: {}` plus subject/text; richer invoice summaries need
+structured backend fields. The brief distinguishes this implementation work from what exists today.
