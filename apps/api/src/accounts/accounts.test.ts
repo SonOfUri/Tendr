@@ -799,8 +799,20 @@ describe('merchant accounts', () => {
       expect(first).toEqual({
         accountId: 'acme-coffee.tendr.testnet',
         balances: [
-          { asset: 'nep141:usdc.test', amount: '340282366920938463463374607431768211455' },
-          { asset: 'nep141:wrap.testnet', amount: '5' },
+          {
+            asset: 'nep141:usdc.test',
+            amount: '340282366920938463463374607431768211455',
+            symbol: null,
+            decimals: null,
+            amount_usd: null,
+          },
+          {
+            asset: 'nep141:wrap.testnet',
+            amount: '5',
+            symbol: null,
+            decimals: null,
+            amount_usd: null,
+          },
         ],
       });
       const views = () => test.calls.filter((c) => c.kind === 'view');

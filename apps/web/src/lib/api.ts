@@ -249,9 +249,17 @@ export interface AccountView {
   nativeWallet?: { ownerUserId: string; credentialId: string; publicKey: string } | null;
 }
 
+export interface BalanceRow {
+  asset: string;
+  amount: string;
+  symbol?: string | null;
+  decimals?: number | null;
+  amount_usd?: string | null;
+}
+
 export interface Balances {
   accountId: string | null;
-  balances: { asset: string; amount: string }[];
+  balances: BalanceRow[];
 }
 
 export interface GoLiveStatus {

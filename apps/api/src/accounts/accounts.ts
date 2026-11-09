@@ -46,6 +46,7 @@ import {
 import { FundingCapError, ProvisionRequestError } from '../near/provision.js';
 import { NotBroadcastError } from '../near/rpc.js';
 import { createDraft, type ProposalView } from './proposals.js';
+import { tokenList } from '../checkout/tokens.js';
 
 /** Recorded with a `provisioning` row; its job provisions the account. */
 export const PROVISION_REQUESTED = 'merchant_account.provision_requested';
@@ -55,6 +56,8 @@ export const PROVISION_HANDLER = 'provision-merchant-account';
 export const BALANCES_TTL_SECONDS = 15;
 /** Most assets one balance read asks the intents contract about. */
 const MAX_BALANCE_ASSETS = 100;
+/** Fixed-point scale for multiplying token amounts by a USD price. */
+const USD_PRICE_SCALE = 8;
 const MAX_FAILURE_LEN = 500;
 
 const invalid = (message: string, details?: unknown) =>
@@ -1120,7 +1123,34 @@ export async function accountView(ctx: ScopeContext) {
 }
 
 export const balancesCacheKey = (merchantId: string, livemode: boolean) =>
-  `balances:${merchantId}:${livemode ? 'live' : 'test'}`;
+  `balances:v2:${merchantId}:${livemode ? 'live' : 'test'}`;
+
+/**
+ * `raw` (token base units) × `priceUsd` → a decimal USD string. Null when inputs are unusable.
+ * Uses fixed-point BigInt math so large balances never go through IEEE floats.
+ */
+export function tokenAmountUsd(
+  raw: string,
+  decimals: number,
+  priceUsd: string,
+): string | null {
+  if (!/^\d{1,39}$/.test(raw) || !Number.isInteger(decimals) || decimals < 0 || decimals > 24) {
+    return null;
+  }
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(priceUsd.trim());
+  if (!m) return null;
+  const price =
+    BigInt(m[1]!) * 10n ** BigInt(USD_PRICE_SCALE) +
+    BigInt((m[2] ?? '').padEnd(USD_PRICE_SCALE, '0').slice(0, USD_PRICE_SCALE));
+  if (price === 0n && raw !== '0') return null;
+  const usdScaled = (BigInt(raw) * price) / 10n ** BigInt(decimals);
+  const whole = usdScaled / 10n ** BigInt(USD_PRICE_SCALE);
+  const frac = (usdScaled % 10n ** BigInt(USD_PRICE_SCALE))
+    .toString()
+    .padStart(USD_PRICE_SCALE, '0')
+    .replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : whole.toString();
+}
 
 /** Asset ids named in an action JSON (`asset`, `dest_asset` fields). */
 function assetsIn(v: unknown, out: Set<string>): void {
@@ -1137,9 +1167,20 @@ function assetsIn(v: unknown, out: Set<string>): void {
   }
 }
 
+export interface BalanceRow {
+  asset: string;
+  amount: string;
+  /** 1Click catalog symbol when known. */
+  symbol: string | null;
+  /** 1Click catalog decimals when known. */
+  decimals: number | null;
+  /** Approximate USD value at the catalog price when known. */
+  amount_usd: string | null;
+}
+
 export interface Balances {
   accountId: string | null;
-  balances: { asset: string; amount: string }[];
+  balances: BalanceRow[];
 }
 
 /**
@@ -1192,11 +1233,14 @@ export async function getBalances(merchantId: string, livemode: boolean): Promis
 
   let balances: Balances['balances'] = [];
   if (tokenIds.length > 0) {
-    const amounts = await nearClient(livemode).view<unknown>(
-      intentsContractFor(livemode),
-      'mt_batch_balance_of',
-      { account_id: account.nearAccountId, token_ids: tokenIds },
-    );
+    const [amounts, catalog] = await Promise.all([
+      nearClient(livemode).view<unknown>(
+        intentsContractFor(livemode),
+        'mt_batch_balance_of',
+        { account_id: account.nearAccountId, token_ids: tokenIds },
+      ),
+      tokenList(livemode).catch(() => new Map()),
+    ]);
     if (
       !Array.isArray(amounts) ||
       amounts.length !== tokenIds.length ||
@@ -1204,7 +1248,20 @@ export async function getBalances(merchantId: string, livemode: boolean): Promis
     ) {
       throw new Error('mt_batch_balance_of returned an unexpected result');
     }
-    balances = tokenIds.map((asset, i) => ({ asset, amount: amounts[i] as string }));
+    balances = tokenIds.map((asset, i) => {
+      const amount = amounts[i] as string;
+      const t = catalog.get(asset);
+      return {
+        asset,
+        amount,
+        symbol: t?.symbol ?? null,
+        decimals: t?.decimals ?? null,
+        amount_usd:
+          t?.priceUsd !== undefined && t.decimals !== undefined
+            ? tokenAmountUsd(amount, t.decimals, t.priceUsd)
+            : null,
+      };
+    });
   }
   const out: Balances = { accountId: account.nearAccountId, balances };
   try {

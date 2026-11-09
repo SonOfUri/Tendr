@@ -19,8 +19,8 @@ import { OverviewSkeleton } from '@/components/dashboard/Skeleton';
 import { ErrorState } from '@/components/dashboard/ui';
 import { useLoad } from '@/components/dashboard/common';
 import { assetInfo, chainLabel, formatAmount, formatTokenAmount, formatUnits } from '@/lib/assets';
-import { api, type Balances } from '@/lib/api';
-import type { PaymentList, PaymentStatus, PaymentSummary } from '@/lib/payments';
+import { api, type BalanceRow, type Balances } from '@/lib/api';
+import { formatUsd, type PaymentList, type PaymentStatus, type PaymentSummary } from '@/lib/payments';
 
 type Range = 7 | 30;
 type Metric = 'volume' | 'count';
@@ -108,28 +108,60 @@ function shortAssetId(asset: string): string {
 }
 
 function approxAssetAmount(
-  asset: string,
-  raw: string,
+  row: BalanceRow,
   livemode: boolean,
-): { short: string; full: string; tip: boolean; label: string } {
-  const full = formatAmount(asset, raw, livemode);
-  const info = assetInfo(asset, livemode);
-  if (!info.known) {
+): { short: string; full: string; tip: boolean; label: string; usd: string | null } {
+  const full = formatTokenAmount(row.asset, row.amount, livemode, row);
+  const info = assetInfo(row.asset, livemode);
+  const label =
+    (typeof row.symbol === 'string' && row.symbol) ||
+    (info.known ? info.symbol : shortAssetId(row.asset));
+  const known =
+    info.known ||
+    (typeof row.symbol === 'string' &&
+      row.symbol.length > 0 &&
+      typeof row.decimals === 'number' &&
+      row.decimals >= 0);
+  if (!known) {
     return {
-      short: `${raw} units`,
+      short: `${row.amount} units`,
       full,
       tip: true,
-      label: shortAssetId(asset),
+      label,
+      usd: row.amount_usd ?? null,
     };
   }
-  const units = formatUnits(raw, info.decimals);
+  const decimals = typeof row.decimals === 'number' ? row.decimals : info.decimals;
+  const units = formatUnits(row.amount, decimals);
   const approx = approxDecimal(units);
   return {
-    short: `${approx.short} ${info.symbol}`,
-    full: `${approx.full} ${info.symbol}`,
+    short: `${approx.short} ${label}`,
+    full: `${approx.full} ${label}`,
     tip: approx.truncated,
-    label: info.symbol,
+    label,
+    usd: row.amount_usd ?? null,
   };
+}
+
+/** Sum balance USD strings with fixed-point cents so the hero total never uses floats. */
+function sumUsd(rows: BalanceRow[]): string | null {
+  let cents = 0n;
+  let any = false;
+  for (const row of rows) {
+    const v = row.amount_usd?.trim();
+    if (!v) continue;
+    const m = /^(\d+)(?:\.(\d+))?$/.exec(v);
+    if (!m) continue;
+    any = true;
+    const frac = (m[2] ?? '').padEnd(3, '0');
+    let c = BigInt(m[1]!) * 100n + BigInt(frac.slice(0, 2));
+    if (Number(frac[2] ?? '0') >= 5) c += 1n;
+    cents += c;
+  }
+  if (!any) return null;
+  const whole = (cents / 100n).toString();
+  const rest = (cents % 100n).toString().padStart(2, '0');
+  return `${whole}.${rest}`;
 }
 
 function changePill(today: bigint, yesterday: bigint): { text: string; up: boolean } {
@@ -228,7 +260,7 @@ export default function OverviewPage() {
   const [range, setRange] = useState<Range>(7);
   const [metric, setMetric] = useState<Metric>('volume');
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [walletOpen, setWalletOpen] = useState(false);
+  const [walletOpen, setWalletOpen] = useState(true);
   const [hovered, setHovered] = useState<number | null>(null);
 
   const livemode = context?.livemode ?? false;
@@ -314,7 +346,6 @@ export default function OverviewPage() {
   if (!data.data) return <OverviewSkeleton />;
 
   const balances = data.data.balances.balances.filter((b) => b.amount !== '0');
-  const lead = balances[0];
   const shown = selectedDay ? view.byDay.find((d) => d.key === selectedDay)?.rows ?? [] : view.inRange;
   const recent = view.inRange.slice(0, 4);
   const activeDay =
@@ -322,7 +353,8 @@ export default function OverviewPage() {
     (selectedDay ? view.byDay.find((d) => d.key === selectedDay) : null) ??
     view.byDay[view.byDay.length - 1];
   const delta = changePill(view.todayVolume, view.yesterdayVolume);
-  const leadAmt = lead ? approxAssetAmount(lead.asset, lead.amount, livemode) : null;
+  const walletUsd = sumUsd(balances);
+  const walletUsdLabel = walletUsd ? formatUsd(walletUsd) : balances.length === 0 ? '$0.00' : '—';
   const revenueAmt = approxMoney(view.todayVolume, view.currency);
   const caption = activeDay
     ? `${dayLabel(activeDay.key)} · ${showMoney(activeDay.volume, view.currency)} · ${activeDay.count} payment${activeDay.count === 1 ? '' : 's'}${selectedDay ? ' · click the day again to clear' : ''}`
@@ -335,43 +367,43 @@ export default function OverviewPage() {
           <p className="ov-kicker">Wallet balance</p>
           <div className="ov-stat-foot">
             <div className="ov-figure-row">
-              <p className="ov-figure ov-figure--xl">{leadAmt ? leadAmt.short : '0'}</p>
-              {leadAmt?.tip ? <InfoTip text={leadAmt.full} label="Full wallet balance" /> : null}
+              <p className="ov-figure ov-figure--xl">{walletUsdLabel}</p>
             </div>
             <p className="ov-sub">
-              {balances.length > 1
-                ? `${balances.length - 1} more asset${balances.length === 2 ? '' : 's'}`
-                : lead
-                  ? assetInfo(lead.asset, livemode).symbol
-                  : context.livemode
-                    ? 'No live balance yet'
-                    : 'No test balance yet'}
+              {balances.length === 0
+                ? context.livemode
+                  ? 'No live balance yet'
+                  : 'No test balance yet'
+                : `${balances.length} asset${balances.length === 1 ? '' : 's'}`}
             </p>
-            {balances.length > 1 ? (
-              <button type="button" className="ov-text-btn" onClick={() => setWalletOpen((v) => !v)}>
-                {walletOpen ? 'Hide assets' : 'Show assets'}
-              </button>
-            ) : null}
-            {walletOpen ? (
+            <div className="ov-wallet-actions">
+              {balances.length > 0 ? (
+                <button type="button" className="ov-text-btn" onClick={() => setWalletOpen((v) => !v)}>
+                  {walletOpen ? 'Hide assets' : 'Show assets'}
+                </button>
+              ) : null}
+              <Link href="/dashboard/wallet" className="ov-text-link">
+                Open wallet
+              </Link>
+            </div>
+            {walletOpen && balances.length > 0 ? (
               <ul className="ov-assets">
                 {balances.map((b) => {
-                  const info = assetInfo(b.asset, livemode);
-                  const row = approxAssetAmount(b.asset, b.amount, livemode);
+                  const row = approxAssetAmount(b, livemode);
                   return (
                     <li key={b.asset}>
                       <span className="ov-assets-left">
-                        <TokenLogo
-                          symbol={info.known ? info.symbol : row.label}
-                          assetId={b.asset}
-                          size={22}
-                        />
+                        <TokenLogo symbol={row.label} assetId={b.asset} size={22} />
                         <span className="ov-assets-name" title={b.asset}>
                           {row.label}
                         </span>
                       </span>
-                      <strong className="ov-assets-amt" title={row.full}>
-                        <span>{row.short}</span>
-                        {row.tip ? <InfoTip text={row.full} label="Full asset balance" /> : null}
+                      <strong className="ov-assets-amt">
+                        <span className="ov-assets-token" title={row.full}>
+                          {row.short}
+                          {row.tip ? <InfoTip text={row.full} label="Full asset balance" /> : null}
+                        </span>
+                        <span className="ov-assets-usd">{formatUsd(row.usd)}</span>
                       </strong>
                     </li>
                   );
