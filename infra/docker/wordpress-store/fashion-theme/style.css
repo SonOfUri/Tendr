@@ -568,6 +568,9 @@ a.fashion-button:hover {
 .single-product div.product .woocommerce-product-gallery img {
   background: #eeede8;
 }
+.single-product div.product .woocommerce-product-gallery .wp-post-image {
+  width: 100%;
+}
 .product_meta {
   font-size: 11px;
   padding-top: 22px;
