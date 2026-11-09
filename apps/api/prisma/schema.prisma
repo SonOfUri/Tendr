@@ -513,6 +513,8 @@ model WebauthnChallenge {
 // ─── Merchant domain ────────────────────────────────────────────────────────
 
 model Merchant {
+  invoicesEnabled                 Boolean             @default(false) @map("invoices_enabled")
+  invoices                        Invoice[]
   walletChallenges                WebauthnChallenge[]
   id                              String              @id
   name                            String
@@ -1998,6 +2000,8 @@ model NativePayout {
   merchantId       String             @map("merchant_id")
   livemode         Boolean
   accountId        String             @map("account_id")
+  invoiceId        String?            @map("invoice_id")
+  invoice          Invoice?           @relation(fields: [invoiceId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
   proposalId       String?            @unique @map("proposal_id")
   asset            String
   amount           String
@@ -2024,4 +2028,47 @@ model NativePayout {
   @@index([status, updatedAt])
   @@index([merchantId, livemode])
   @@map("native_payouts")
+}
+
+/// Contractor-submitted payable. Amount and destination are immutable after email verification.
+enum InvoiceStatus {
+  awaiting_verification
+  open
+  processing
+  paid
+  rejected
+  payment_review
+
+  @@map("invoice_status")
+}
+
+model Invoice {
+  id                 String        @id
+  merchantId         String        @map("merchant_id")
+  livemode           Boolean
+  contractorName     String        @map("contractor_name")
+  email              String
+  reference          String
+  description        String
+  dueDate            String?       @map("due_date")
+  destinationAsset   String        @map("destination_asset")
+  destinationChain   String        @map("destination_chain")
+  destination        String
+  amount             String
+  symbol             String
+  decimals           Int
+  status             InvoiceStatus @default(awaiting_verification)
+  accessTokenHash    String        @unique @map("access_token_hash")
+  verifyExpiresAt    DateTime      @map("verify_expires_at")
+  verifiedAt         DateTime?     @map("verified_at")
+  paidAt             DateTime?     @map("paid_at")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+  merchant           Merchant      @relation(fields: [merchantId], references: [id])
+  payouts            NativePayout[]
+
+  @@unique([id, merchantId, livemode])
+  @@unique([merchantId, livemode, email, reference])
+  @@index([merchantId, livemode, status, createdAt])
+  @@map("invoices")
 }

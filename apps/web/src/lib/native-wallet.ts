@@ -19,6 +19,7 @@ export interface NativePayout {
   destinationChain: string;
   destination: string;
   proposalId: string | null;
+  invoiceId?: string | null;
   expiresAt: string;
   intentHash: string | null;
   quote: { quote: { amountOut: string; minAmountOut?: string } };
@@ -81,6 +82,7 @@ export async function signPayout(store: StoreContext, payout: NativePayout): Pro
   );
   const same =
     challenge.id === payout.id &&
+    challenge.invoiceId === payout.invoiceId &&
     challenge.asset === payout.asset &&
     challenge.amount === payout.amount &&
     challenge.destination === payout.destination &&

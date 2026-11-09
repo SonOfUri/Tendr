@@ -561,6 +561,105 @@
     "scope": "sessions:write"
   },
   {
+    "id": "GET /v1/invoices/public/:business",
+    "method": "GET",
+    "path": "/v1/invoices/public/:business",
+    "group": "invoices",
+    "source": "apps/api/src/routes/invoices.ts",
+    "line": 33,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/invoices/public/:business",
+    "method": "POST",
+    "path": "/v1/invoices/public/:business",
+    "group": "invoices",
+    "source": "apps/api/src/routes/invoices.ts",
+    "line": 36,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/invoices/public/:business/status",
+    "method": "POST",
+    "path": "/v1/invoices/public/:business/status",
+    "group": "invoices",
+    "source": "apps/api/src/routes/invoices.ts",
+    "line": 41,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/invoices/public/:business/verify",
+    "method": "POST",
+    "path": "/v1/invoices/public/:business/verify",
+    "group": "invoices",
+    "source": "apps/api/src/routes/invoices.ts",
+    "line": 44,
+    "principals": ["public"]
+  },
+  {
+    "id": "GET /v1/invoices/settings",
+    "method": "GET",
+    "path": "/v1/invoices/settings",
+    "group": "invoices",
+    "source": "apps/api/src/routes/invoices.ts",
+    "line": 47,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "PUT /v1/invoices/settings",
+    "method": "PUT",
+    "path": "/v1/invoices/settings",
+    "group": "invoices",
+    "source": "apps/api/src/routes/invoices.ts",
+    "line": 50,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/invoices",
+    "method": "GET",
+    "path": "/v1/invoices",
+    "group": "invoices",
+    "source": "apps/api/src/routes/invoices.ts",
+    "line": 56,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "GET /v1/invoices/:id",
+    "method": "GET",
+    "path": "/v1/invoices/:id",
+    "group": "invoices",
+    "source": "apps/api/src/routes/invoices.ts",
+    "line": 63,
+    "principals": ["dashboard_user"],
+    "permission": "account:read"
+  },
+  {
+    "id": "POST /v1/invoices/:id/reject",
+    "method": "POST",
+    "path": "/v1/invoices/:id/reject",
+    "group": "invoices",
+    "source": "apps/api/src/routes/invoices.ts",
+    "line": 66,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/invoices/:id/payout",
+    "method": "POST",
+    "path": "/v1/invoices/:id/payout",
+    "group": "invoices",
+    "source": "apps/api/src/routes/invoices.ts",
+    "line": 69,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
     "id": "GET /v1/ai/insights",
     "method": "GET",
     "path": "/v1/ai/insights",

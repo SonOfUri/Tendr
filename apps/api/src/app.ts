@@ -10,6 +10,7 @@ import { closeClient, closeRedis, createRedis, getRedis, whenReady } from './lib
 import { AppError, prismaErrorFor } from './lib/errors.js';
 import { log } from './lib/logger.js';
 import { PAYMASTER_URL_PREFIX } from './relayer/evm/pimlico.js';
+import { invoiceRoutes, INVOICE_PUBLIC_PREFIX } from './routes/invoices.js';
 import { nativeAccountRoutes } from './routes/native-accounts.js';
 import { checkoutAiRoutes } from './routes/checkout-ai.js';
 import { merchantAiRoutes } from './routes/merchant-ai.js';
@@ -124,6 +125,11 @@ export async function buildApp(opts: BuildAppOptions = {}) {
           credentials: false,
           methods: ['POST'],
           allowedHeaders: ['content-type'],
+        });
+      } else if (url.startsWith(INVOICE_PUBLIC_PREFIX)) {
+        cb(null, {
+          origin: [new URL(env().INVOICE_BASE_URL).origin, new URL(env().WEB_URL).origin],
+          credentials: false,
         });
       } else if (
         url.startsWith(CHECKOUT_CLIENT_PREFIX) ||
@@ -254,6 +260,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(proposalRoutes);
   await app.register(accountRoutes);
   await app.register(nativeAccountRoutes);
+  await app.register(invoiceRoutes);
   await app.register(recoveryRoutes);
   await app.register(checkoutSessionRoutes);
   await app.register(checkoutAiRoutes);

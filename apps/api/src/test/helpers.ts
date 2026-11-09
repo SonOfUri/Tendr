@@ -467,6 +467,27 @@ const builders: Record<MerchantOwnedModel, Builder> = {
         ...o,
       },
     }),
+  Invoice: async (merchantId, livemode, o) =>
+    prisma.invoice.create({
+      data: {
+        id: newId('bill'),
+        merchantId,
+        livemode,
+        contractorName: 'Contractor',
+        email: unique('contractor') + '@example.com',
+        reference: 'INV-1',
+        description: 'Services',
+        destinationAsset: 'nep141:usdc.test',
+        destinationChain: 'near',
+        destination: 'owner.near',
+        amount: '100',
+        symbol: 'USDC',
+        decimals: 6,
+        accessTokenHash: sha256(unique('invoice-token')),
+        verifyExpiresAt: new Date(Date.now() + 3600000),
+        ...o,
+      },
+    }),
   NativeWallet: async (merchantId, livemode, o) => {
     const account =
       (await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } })) ??

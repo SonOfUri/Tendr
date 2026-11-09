@@ -112,6 +112,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Money',
     items: [
       { href: '/dashboard/payments', label: 'Payments', icon: CreditCard },
+      { href: '/dashboard/invoices', label: 'Invoices', icon: CreditCard },
       { href: '/dashboard/payment-links', label: 'Payment links', icon: Link2 },
       { href: '/dashboard/review', label: 'Review', icon: SearchCheck },
       { href: '/dashboard/approvals', label: 'Approvals', icon: CheckCircle2 },

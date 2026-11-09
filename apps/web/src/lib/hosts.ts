@@ -36,6 +36,10 @@ const PAY_SERVED = [
   'offline.html',
   'sw.js',
   'tendr-logo.png',
+  'tendr-logo-mark.png',
+  'tendr-appearance.js',
+  'favicon.png',
+  'apple-icon.png',
   'tendr-logo-black.png',
   'tendr-logo-on-black.png',
   'logo-white.png',
@@ -44,10 +48,7 @@ const PAY_SERVED = [
   'logo-with-watermark-dark.png',
   'onboarding-bg-image.png',
   'onboarding-bg-image-light.png',
-  'tendr-appearance.js',
-  'favicon.png',
   'favicon.ico',
-  'apple-icon.png',
   'robots.txt',
 ] as const;
 
@@ -71,6 +72,7 @@ export const KNOWN_TOP_LEVEL_PATHS: readonly string[] = [
   ...PAY_SERVED,
   ...APP_PATHS,
   'pay',
+  'invoice',
   'demo',
   'api',
 ];
@@ -144,12 +146,25 @@ export function routeForHost(input: {
   pathname: string;
   search: string;
   payOrigin: string | null;
+  invoiceOrigin?: string | null;
   appOrigin: string | null;
   landingUrl: string;
   /** NODE_ENV=development: the root forms also work on localhost. */
   dev?: boolean;
 }): HostRoute {
   const { host, pathname, search } = input;
+  const invoice = parseOrigin(input.invoiceOrigin ?? null);
+  if (invoice && sameHost(host, invoice)) {
+    const seg = firstSegment(pathname);
+    if (pathname === '/') return redirect(input.landingUrl);
+    if (isDemo(pathname)) return NOT_FOUND;
+    if (APP.has(seg) && input.appOrigin) return redirect(`${input.appOrigin}${pathname}${search}`);
+    if (PAY_SERVED.includes(seg as (typeof PAY_SERVED)[number]) || seg === 'tendr-appearance.js')
+      return NEXT;
+    if (/^\/[a-z0-9][a-z0-9-]*\/?$/.test(pathname) && !KNOWN.has(seg))
+      return { kind: 'rewrite', pathname: `/invoice${pathname}` };
+    return NOT_FOUND;
+  }
   const pay = parseOrigin(input.payOrigin);
   const app = parseOrigin(input.appOrigin);
   // Unknown hosts: behave as before.

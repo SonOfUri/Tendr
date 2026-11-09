@@ -258,3 +258,29 @@ describe('isShopperPath', () => {
     },
   );
 });
+
+describe('invoice host', () => {
+  const invoice = (pathname: string, host = 'invoice.usetendr.tech') =>
+    routeForHost({
+      host,
+      pathname,
+      search: '',
+      invoiceOrigin: 'https://invoice.usetendr.tech',
+      payOrigin: PAY,
+      appOrigin: APP,
+      landingUrl: LANDING,
+    });
+  it('routes business slugs to the private invoice surface', () => {
+    expect(invoice('/acme')).toEqual(rewrite('/invoice/acme'));
+    expect(invoice('/acme/')).toEqual(rewrite('/invoice/acme/'));
+    expect(invoice('/_next/static/chunk.js')).toEqual(next);
+    expect(invoice('/tendr-appearance.js')).toEqual(next);
+  });
+  it('keeps dashboards on the app origin and blocks checkout/demo paths', () => {
+    expect(invoice('/dashboard/invoices')).toEqual(redirect(`${APP}/dashboard/invoices`));
+    expect(invoice('/demo')).toEqual(notFound);
+    expect(invoice('/acme/coffee')).toEqual(notFound);
+    expect(invoice('/invoice/acme')).toEqual(notFound);
+    expect(invoice('/acme', 'unknown.example.com')).toEqual(next);
+  });
+});

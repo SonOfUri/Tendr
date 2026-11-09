@@ -79,7 +79,7 @@ const LINK_ASSET =
  * demo, legal pages, route handlers) is passed through untouched, as before.
  */
 const POLICY_PATH =
-  /^\/(?:dashboard(?:\/.*)?|signup|login|verify|invite(?:\/.*)?|recover(?:\/.*)?|pay(?:\/.*)?|preview\/theme(?:\/.*)?|connect|settings\/notification-email\/verify)$/;
+  /^\/(?:dashboard(?:\/.*)?|signup|login|verify|invite(?:\/.*)?|recover(?:\/.*)?|pay(?:\/.*)?|invoice(?:\/.*)?|preview\/theme(?:\/.*)?|connect|settings\/notification-email\/verify)$/;
 
 /** Pages whose responses carry one-time parameters (connect state, a verify token): never cached. */
 const NO_STORE_PATHS = ['/connect', '/settings/notification-email/verify'];
@@ -93,6 +93,7 @@ export async function middleware(request: NextRequest) {
     host: request.headers.get('host') ?? request.nextUrl.host,
     pathname: request.nextUrl.pathname,
     search: request.nextUrl.search,
+    invoiceOrigin: originOf(process.env.INVOICE_BASE_URL),
     payOrigin: originOf(process.env.CHECKOUT_BASE_URL),
     appOrigin: originOf(process.env.WEB_URL),
     landingUrl: LANDING_URL,
@@ -132,6 +133,12 @@ export async function middleware(request: NextRequest) {
     response = NextResponse.rewrite(target, { request: { headers: requestHeaders } });
   }
   response.headers.set('Content-Security-Policy', csp);
+  if (pathname.startsWith('/invoice/')) {
+    response.headers.set('Cache-Control', 'no-store');
+    response.headers.set('Referrer-Policy', 'no-referrer');
+    response.headers.set('X-Frame-Options', 'DENY');
+    response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+  }
   if (checkout) {
     // next.config.ts sets these for `/pay/*` by the public path; a root-form URL doesn't match it.
     response.headers.set('X-Content-Type-Options', 'nosniff');

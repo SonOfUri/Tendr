@@ -26,6 +26,7 @@ export const RESERVED_LINK_SLUGS: readonly string[] = [
   'edit',
   'api',
   'pay',
+  'invoice',
   'success',
   'cancel',
   'null',

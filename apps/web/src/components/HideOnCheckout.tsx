@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { isShopperPath } from '@/lib/hosts';
 
 /**
@@ -14,9 +14,15 @@ import { isShopperPath } from '@/lib/hosts';
  */
 export function HideOnCheckout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const [invoiceHost, setInvoiceHost] = useState(false);
+  useEffect(() => {
+    setInvoiceHost(window.location.hostname.startsWith('invoice.'));
+  }, []);
   if (pathname && isShopperPath(pathname)) return null;
   if (pathname === '/' || pathname === '/demo' || pathname?.startsWith('/demo/')) return null;
   // Merchant dashboard has its own app chrome (sidebar + top bar).
+  if (pathname?.startsWith('/invoice/')) return null;
+  if (invoiceHost) return null;
   if (pathname?.startsWith('/dashboard')) return null;
   return <>{children}</>;
 }
