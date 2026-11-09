@@ -104,9 +104,9 @@ body:not(:has(.pay)):not(:has(.tdr-theme)) button[style*='var(--tendr-indigo)']:
   color: #0a0a0a !important;
 }
 
-/* Alerts only — exclude toasts and demo checkout status chrome (timer / confirming / success). */
+/* Alerts only — exclude toasts, spinners, and demo checkout status chrome. */
 body:not(:has(.pay)):not(:has(.tdr-theme))
-  [role='status']:not(.tendr-toast):not(.demo-transfer-timer):not(.demo-status-card) {
+  [role='status']:not(.tendr-toast):not(.tendr-spinner):not(.dash-page-spinner):not(.demo-transfer-timer):not(.demo-status-card) {
   background: #181818 !important;
   color: #f5f5f5 !important;
 }
@@ -522,7 +522,7 @@ body:has(.login-screen) .site-footer .tendr-logo {
 }
 
 /* Alerts (shared component sets a navy fill inline). */
-.auth-shell [role='status']:not(.tendr-toast) {
+.auth-shell [role='status']:not(.tendr-toast):not(.tendr-spinner):not(.dash-page-spinner) {
   background: #181818 !important;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   border-right: 1px solid rgba(255, 255, 255, 0.08);
@@ -3640,7 +3640,7 @@ html[data-appearance='light']:not(:has(.pay)) button[style*='var(--tendr-indigo)
 }
 
 html[data-appearance='light']:not(:has(.pay))
-  [role='status']:not(.tendr-toast):not(.demo-transfer-timer):not(.demo-status-card) {
+  [role='status']:not(.tendr-toast):not(.tendr-spinner):not(.dash-page-spinner):not(.demo-transfer-timer):not(.demo-status-card) {
   background: #fff !important;
   color: #161616 !important;
 }

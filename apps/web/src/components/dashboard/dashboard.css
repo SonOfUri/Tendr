@@ -8,15 +8,21 @@ main:has(.dash-app) {
   padding: 0;
 }
 
-.dash-app [role='status'] {
+/* Alerts only ? spinners also use role=status and must stay unboxed. */
+.dash-app [role='status']:not(.tendr-spinner):not(.dash-page-spinner) {
   background: #181818 !important;
   color: #f5f5f5 !important;
 }
 
-html[data-appearance='light'] .dash-app [role='status'] {
+html[data-appearance='light'] .dash-app [role='status']:not(.tendr-spinner):not(.dash-page-spinner) {
   background: #fff !important;
   color: #161616 !important;
   border-color: rgba(0, 0, 0, 0.12) !important;
+}
+
+.dash-app .tendr-spinner,
+.dash-app .dash-page-spinner {
+  background: transparent !important;
 }
 
 .dash-app button[style*='var(--tendr-indigo)'] {
@@ -4426,7 +4432,7 @@ html[data-appearance='light'] .wallet-bal-card[data-selected='true'] {
 
 .wallet-swap {
   display: grid;
-  gap: 0;
+  gap: 1.15rem;
   position: relative;
 }
 
@@ -4520,8 +4526,8 @@ html[data-appearance='light'] .wallet-swap-leg {
 .wallet-swap-mid {
   display: grid;
   place-items: center;
-  height: 0;
   z-index: 1;
+  margin: -0.35rem 0;
 }
 
 .wallet-swap-flip {
@@ -4537,7 +4543,6 @@ html[data-appearance='light'] .wallet-swap-leg {
   background: #1a1a1a;
   color: #f5f5f5;
   cursor: pointer;
-  transform: translateY(-50%);
 }
 
 html[data-appearance='light'] .wallet-swap-flip {
