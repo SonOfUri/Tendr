@@ -2877,11 +2877,14 @@ html[data-appearance='light'] .biz-welcome-cta::after {
   background: none;
   border: none;
   padding: 0;
-  overflow: hidden;
+  /* Keep visible so InfoTip bubbles (positioned above the ?i?) are not clipped. */
+  overflow: visible;
 }
 
 .ov-stat--wallet {
-  z-index: 1;
+  /* Sit above the revenue/chart columns so wallet tips are not covered. */
+  position: relative;
+  z-index: 6;
 }
 
 .ov-stat-foot {
@@ -4208,6 +4211,12 @@ html[data-appearance='light'] .dash-asset-empty {
   align-items: center;
   margin-left: 0.35rem;
   vertical-align: middle;
+  z-index: 2;
+}
+
+.dash-info-tip:hover,
+.dash-info-tip:focus-within {
+  z-index: 40;
 }
 
 .dash-info-tip-btn {
@@ -4246,8 +4255,9 @@ html[data-appearance='light'] .dash-info-tip-btn:focus-visible {
 .dash-info-tip-bubble {
   position: absolute;
   left: 50%;
+  /* Anchor above the control; stay inside the viewport near the top edge. */
   bottom: calc(100% + 0.45rem);
-  z-index: 20;
+  z-index: 50;
   transform: translateX(-50%);
   min-width: max-content;
   max-width: min(18rem, 70vw);
@@ -4261,7 +4271,22 @@ html[data-appearance='light'] .dash-info-tip-btn:focus-visible {
   line-height: 1.35;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
   pointer-events: none;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Balance figure tip sits near the top of the card ? open below so it isn?t clipped. */
+.ov-figure-row .dash-info-tip-bubble {
+  bottom: auto;
+  top: calc(100% + 0.45rem);
+}
+
+/* Asset-row tips on the right: keep above, but right-align so they stay on-screen. */
+.ov-assets-amt .dash-info-tip-bubble {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 
 html[data-appearance='light'] .dash-info-tip-bubble {
