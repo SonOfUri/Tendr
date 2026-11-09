@@ -20,7 +20,10 @@ describe('invoice console flow', () => {
     }
     const create = invoices.find((e) => e.id === 'POST /v1/invoices/public/:business')!;
     expect(JSON.parse(exampleBody(create))).toMatchObject({
-      amount: '1.00',
+      items: [
+        { description: 'Contractor services', amount: '0.75' },
+        { description: 'Expenses', amount: '0.25' },
+      ],
       reference: 'CONSOLE-INV-001',
     });
     const pay = invoices.find((e) => e.id === 'POST /v1/invoices/:id/payout')!;

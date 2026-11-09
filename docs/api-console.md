@@ -192,7 +192,7 @@ For the raw API flow:
    console's merchant/mode headers.
 3. Submit `POST /v1/invoices/public/:business` using the editable example. Enter an email you can
    access, a unique reference, the receiving token's `assetId`, an external wallet on its network,
-   and an amount in decimal token units. Submission sends a real email when using the live API.
+   and `items: [{ "description": "Design", "amount": "0.75" }, { "description": "Expenses", "amount": "0.25" }]`. Amounts are decimal receiving-token units. The API calculates the total; omit a top-level amount or description. The form supports adding/removing rows and shows the running total. Submission sends a real email when using the live API.
 4. Review and confirm through the email link, or paste only its `#token=` value into the console's
    public `/status` and `/verify` request bodies. Verification tokens stay in page memory; do not
    include them in query strings, screenshots, or shared logs.

@@ -12,7 +12,11 @@ const invoiceFixture = {
   email: 'contractor@example.com',
   reference: 'INV-CONSOLE-1',
   description: 'Design services',
-  amount: '1000000',
+  amount: '300000',
+  items: [
+    { description: 'Design services', amount: '100000' },
+    { description: 'Materials', amount: '200000' },
+  ],
   decimals: 6,
   symbol: 'USDC',
   destination: 'contractor.near',
@@ -178,6 +182,8 @@ test('invoice dashboard reviews live quotes, shows failures and clears approval 
     page.getByRole('link', { name: 'Open contractor form in this console' }),
   ).toHaveAttribute('href', '/invoice/invoice-business');
   await page.getByRole('button', { name: /INV-CONSOLE-1 · Console Contractor/ }).click();
+  await expect(page.getByRole('table', { name: 'Payment breakdown' })).toContainText('Materials');
+  await expect(page.getByRole('table', { name: 'Payment breakdown' })).toContainText('0.3 USDC');
   await page.getByRole('combobox', { name: /^Pay from/ }).selectOption('nep141:usdc.near');
   await page.getByRole('button', { name: 'Review payment quote', exact: true }).click();
   await expect.poll(() => pageErrors).toEqual([]);
@@ -232,10 +238,15 @@ test('invoice contractor form selects receiving assets and confirms email withou
       });
     if (path === publicPath) {
       expect(req.postDataJSON()).toMatchObject({
-        amount: '1.00',
+        items: [
+          { description: 'Design services', amount: '0.10' },
+          { description: 'Materials', amount: '0.20' },
+        ],
         destinationAsset: 'nep141:usdc.near',
         destination: 'contractor.near',
       });
+      expect(req.postDataJSON()).not.toHaveProperty('amount');
+      expect(req.postDataJSON()).not.toHaveProperty('description');
       submitted = true;
       return route.fulfill({ status: 202, json: { ok: true } });
     }
@@ -249,10 +260,27 @@ test('invoice contractor form selects receiving assets and confirms email withou
   await page.getByLabel('Your name or business', { exact: true }).fill('Console Contractor');
   await page.getByLabel('Email', { exact: true }).fill('contractor@example.com');
   await page.getByLabel('Invoice reference', { exact: true }).fill('INV-CONSOLE-1');
-  await page.getByLabel('What is this invoice for?', { exact: true }).fill('Design services');
   await page.getByRole('combobox', { name: /^Receiving network/ }).selectOption('near');
   await page.getByRole('combobox', { name: /^Receiving token/ }).selectOption('nep141:usdc.near');
-  await page.getByLabel('Amount to receive (in the selected token)', { exact: true }).fill('1.00');
+  await page.getByLabel('Item 1 description', { exact: true }).fill('Design services');
+  await page.getByLabel('Item 1 amount', { exact: true }).fill('0.10');
+  await page.getByRole('button', { name: 'Add line item' }).click();
+  await page.getByLabel('Item 2 description', { exact: true }).fill('Materials');
+  await page.getByLabel('Item 2 amount', { exact: true }).fill('0.2000001');
+  await expect(page.getByText('Use at most 6 decimal places for this token')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Email me a verification link' })).toBeDisabled();
+  await page.getByLabel('Item 2 amount', { exact: true }).fill('0.20');
+  await expect(page.getByLabel('Invoice total', { exact: true })).toHaveText('0.3 USDC');
+  await page.getByRole('button', { name: 'Add line item' }).click();
+  await page.getByLabel('Item 3 description', { exact: true }).fill('Travel');
+  await page.getByLabel('Item 3 amount', { exact: true }).fill('10');
+  await expect(page.getByLabel('Invoice total', { exact: true })).toHaveText('10.3 USDC');
+  await page.getByRole('button', { name: 'Remove item 3', exact: true }).click();
+  await expect(page.getByLabel('Invoice total', { exact: true })).toHaveText('0.3 USDC');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
   await page.getByLabel('Receiving wallet address', { exact: true }).fill('contractor.near');
   await page.getByRole('button', { name: 'Email me a verification link' }).click();
   await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
@@ -260,6 +288,8 @@ test('invoice contractor form selects receiving assets and confirms email withou
   await page.goto('/invoice/invoice-business#token=private-console-token');
   await page.reload();
   await expect(page.getByRole('button', { name: 'Verify email & send invoice' })).toBeVisible();
+  await expect(page.getByRole('table', { name: 'Payment breakdown' })).toContainText('Materials');
+  await expect(page.getByRole('table', { name: 'Payment breakdown' })).toContainText('0.3 USDC');
   expect(verified).toBe(false);
   await page.getByRole('button', { name: 'Verify email & send invoice' }).click();
   await expect(page.getByText('Awaiting payment', { exact: true })).toBeVisible();

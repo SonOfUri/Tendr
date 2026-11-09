@@ -2,6 +2,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { Alert, Button } from '@tendr/ui';
+import { InvoiceBreakdown } from '@/components/InvoiceBreakdown';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import { api, type Balances, type StoreContext } from '@/lib/api';
@@ -224,9 +225,7 @@ function Inbox({
                 <p>
                   From {invoice.contractorName} ({invoice.email}) · Email verified
                 </p>
-                <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                  {invoice.description}
-                </p>
+                <InvoiceBreakdown invoice={invoice} />
                 <p>Receiving network: {chainLabel(invoice.destinationChain)}</p>
                 <p style={{ overflowWrap: 'anywhere' }}>
                   Receiving wallet: <code>{invoice.destination}</code>

@@ -36,8 +36,10 @@ const examples: Record<string, unknown> = {
     contractorName: 'Console contractor',
     email: 'your-email@example.com',
     reference: 'CONSOLE-INV-001',
-    description: 'Contractor services',
-    amount: '1.00',
+    items: [
+      { description: 'Contractor services', amount: '0.75' },
+      { description: 'Expenses', amount: '0.25' },
+    ],
     destinationAsset: 'copy-an-assetId-from-the-public-business-tokens',
     destination: 'paste-your-external-wallet-address',
   },
@@ -146,7 +148,7 @@ export function exampleBody(endpoint: Endpoint): string {
 
 export function endpointNote(endpoint: Endpoint): string {
   if (endpoint.path.startsWith('/v1/invoices/public/'))
-    return 'Contractor invoices are live-only, even though this is a test console. Public calls omit cookies and store headers. Read the business tokens first; submission amounts are decimal token units. On the live API, submission emails a private link. Copy its #token value into status/verify. No Tendr login is needed for the contractor. The local simulator keeps live writes disabled.';
+    return 'Contractor invoices are live-only, even though this is a test console. Public calls omit cookies and store headers. Read the business tokens first; send items with descriptions and decimal token amounts. The API calculates the total; do not send a separate amount. On the live API, submission emails a private link. Copy its #token value into status/verify. No Tendr login is needed for the contractor. The local simulator keeps live writes disabled.';
   if (endpoint.path.startsWith('/v1/invoices'))
     return 'Choose Browser session, your merchant, and Live mode. Enable the page in settings, then review verified invoices. Only the wallet owner with step-up can create a payout or decline an invoice. Payout takes the source asset only; amount and destination come from the invoice. Review its quote, prepare a native wallet challenge, then use the wallet passkey and explicitly submit. Quotes do not move funds; processing invoices must not be paid again.';
   if (endpoint.path.startsWith('/v1/account/native/'))
