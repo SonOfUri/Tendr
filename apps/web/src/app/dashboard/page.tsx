@@ -474,27 +474,34 @@ export default function OverviewPage() {
               const label = dayLabel(d.key);
               const barLabel =
                 metric === 'volume' ? showMoney(d.volume, view.currency) : `${d.count} payments`;
-              const on = hovered === i || d.key === activeDay?.key;
+              const selected = d.key === selectedDay;
+              const tipOn = hovered === i;
+              const lit = tipOn || selected || d.key === activeDay?.key;
               return (
                 <button
                   key={d.key}
                   type="button"
                   className="ov-bar-hit"
                   data-empty={value === 0n ? 'true' : 'false'}
-                  data-on={on ? 'true' : 'false'}
-                  aria-pressed={selectedDay === d.key}
+                  data-on={lit ? 'true' : 'false'}
+                  aria-pressed={selected}
                   aria-label={`${label}: ${barLabel}`}
                   onMouseEnter={() => setHovered(i)}
                   onFocus={() => setHovered(i)}
+                  onBlur={() => setHovered((cur) => (cur === i ? null : cur))}
                   onClick={() => setSelectedDay((cur) => (cur === d.key ? null : d.key))}
                 >
-                  {on ? (
+                  {tipOn ? (
                     <span className="ov-bar-tip" role="tooltip">
                       <strong>{barLabel}</strong>
                       <span>{label}</span>
                     </span>
                   ) : null}
-                  <span className="ov-bar" data-on={on ? 'true' : 'false'} data-empty={value === 0n ? 'true' : 'false'}>
+                  <span
+                    className="ov-bar"
+                    data-on={lit ? 'true' : 'false'}
+                    data-empty={value === 0n ? 'true' : 'false'}
+                  >
                     <span className="ov-bar-fill" style={{ height: `${fill}%` }} />
                   </span>
                 </button>
