@@ -1,4 +1,4 @@
-/* Dashboard app chrome — scoped so checkout / theme pay surfaces stay untouched.
+/* Dashboard app chrome ? scoped so checkout / theme pay surfaces stay untouched.
  * Monochrome brand surface: black / white / gray only (no indigo/cyan accents). */
 
 main:has(.dash-app) {
@@ -32,7 +32,7 @@ body:has(.dash-app) {
 }
 
 .dash-app {
-  /* Monochrome token override — stays inside .dash-app only */
+  /* Monochrome token override ? stays inside .dash-app only */
   --tendr-navy: #0a0a0a;
   --tendr-indigo: #f2f2f2;
   --tendr-white: #f5f5f5;
@@ -758,7 +758,7 @@ body:has(.dash-app) {
   display: none;
 }
 
-/* —— Page primitives —— */
+/* ?? Page primitives ?? */
 
 .dash-page-header {
   display: flex;
@@ -921,7 +921,7 @@ html[data-appearance='light'] .dash-copyable-id-btn:focus-visible {
   }
 }
 
-/* Stat tiles stay narrow even on large screens — always truncate there. */
+/* Stat tiles stay narrow even on large screens ? always truncate there. */
 .dash-stat .dash-copyable-id-full {
   display: none;
 }
@@ -2096,7 +2096,7 @@ html[data-appearance='light'] .dash-app {
 
 /*
  * Dark theme hardcodes near-white text (#f5f5f5 / #fff / #e8e8e8). Light appearance flips
- * the page background but those literals stay — invisible on white cards. Remap the common
+ * the page background but those literals stay ? invisible on white cards. Remap the common
  * content surfaces here so every page inherits readable ink without a per-widget chase.
  */
 html[data-appearance='light'] .dash-app a,
@@ -3395,22 +3395,59 @@ html[data-appearance='light'] .dash-app .dash-main .ov-pay-foot span {
   display: flex;
   align-items: flex-end;
   gap: 6px;
-  height: 148px;
+  height: 188px;
   margin-top: auto;
   overflow-x: auto;
-  padding-bottom: 0.1rem;
+  overflow-y: hidden;
+  padding: 2.75rem 0.15rem 0.1rem;
+  box-sizing: border-box;
 }
 
 .ov-bar-hit {
   appearance: none;
+  position: relative;
   flex: 1 0 8px;
   min-width: 8px;
+  height: 100%;
   padding: 0;
   border: none;
   background: transparent;
   display: flex;
   align-items: stretch;
   cursor: pointer;
+}
+
+.ov-bar-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.45rem);
+  z-index: 5;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 0.1rem;
+  min-width: max-content;
+  max-width: 9rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #161616;
+  color: #f5f5f5;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  text-align: center;
+}
+
+.ov-bar-tip strong {
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.ov-bar-tip span {
+  color: #b5b5b5;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .ov-bar {
@@ -3427,16 +3464,21 @@ html[data-appearance='light'] .dash-app .dash-main .ov-pay-foot span {
   );
 }
 
+.ov-bar[data-empty='true'] {
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .ov-bar-fill {
   display: block;
   width: 100%;
-  min-height: 18px;
+  min-height: 0;
   border-radius: 7px;
   background: #d0d0d0;
   position: relative;
+  transition: height 160ms ease, background 120ms ease;
 }
 
-.ov-bar-fill::before {
+.ov-bar:not([data-empty='true']) .ov-bar-fill::before {
   content: '';
   position: absolute;
   top: 3px;
@@ -3456,6 +3498,10 @@ html[data-appearance='light'] .dash-app .dash-main .ov-pay-foot span {
 .ov-bar-hit:focus-visible {
   outline: 2px solid #f5f5f5;
   outline-offset: 2px;
+}
+
+.ov-bar-hit[data-on='true'] {
+  z-index: 2;
 }
 
 .ov-chart-caption {
@@ -3786,11 +3832,15 @@ html[data-appearance='light'] .ov-bar {
   );
 }
 
+html[data-appearance='light'] .ov-bar[data-empty='true'] {
+  background: rgba(0, 0, 0, 0.04);
+}
+
 html[data-appearance='light'] .ov-bar-fill {
   background: #c8c8c8;
 }
 
-html[data-appearance='light'] .ov-bar-fill::before {
+html[data-appearance='light'] .ov-bar:not([data-empty='true']) .ov-bar-fill::before {
   background: #161616;
 }
 
@@ -3804,6 +3854,17 @@ html[data-appearance='light'] .ov-bar[data-on='true'] .ov-bar-fill::before,
 html[data-appearance='light'] .ov-bar-hit:hover .ov-bar-fill::before,
 html[data-appearance='light'] .ov-bar-hit:focus-visible .ov-bar-fill::before {
   background: #fff;
+}
+
+html[data-appearance='light'] .ov-bar-tip {
+  background: #fff;
+  color: #161616;
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+html[data-appearance='light'] .ov-bar-tip span {
+  color: #5e5e5e;
 }
 
 html[data-appearance='light'] .ov-status {
@@ -4013,139 +4074,19 @@ html[data-appearance='light'] .dash-asset-empty {
   color: #5e5e5e;
 }
 
-/* �� Skeletons & info tips �� */
-.dash-skel {
-  display: block;
-  background: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0.06) 0%,
-    rgba(255, 255, 255, 0.14) 50%,
-    rgba(255, 255, 255, 0.06) 100%
-  );
-  background-size: 200% 100%;
-  animation: dash-skel-shine 1.25s ease-in-out infinite;
-  border-radius: 8px;
-}
-
-html[data-appearance='light'] .dash-skel {
-  background: linear-gradient(
-    90deg,
-    rgba(0, 0, 0, 0.05) 0%,
-    rgba(0, 0, 0, 0.1) 50%,
-    rgba(0, 0, 0, 0.05) 100%
-  );
-  background-size: 200% 100%;
-}
-
-@keyframes dash-skel-shine {
-  0% { background-position: 100% 0; }
-  100% { background-position: -100% 0; }
-}
-
-.dash-skel-line {
-  height: 0.85rem;
-  margin: 0.35rem 0;
-}
-
-.dash-skel-circle {
-  border-radius: 999px;
-  flex: 0 0 auto;
-}
-
-.dash-skel-page {
+/* ?? Page spinner & info tips ?? */
+.dash-page-spinner {
   display: grid;
-  gap: 1.15rem;
+  place-items: center;
+  width: 100%;
+  min-height: min(28rem, 55dvh);
+  padding: 2rem;
+  box-sizing: border-box;
 }
 
-.dash-skel-page-head {
-  display: grid;
-  gap: 0.45rem;
-  max-width: 28rem;
-}
-
-.dash-skel-page-grid {
-  display: grid;
-  gap: 0.85rem;
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-}
-
-.dash-skel-card {
-  display: grid;
-  gap: 0.45rem;
-  padding: 1.1rem 1.15rem;
-  border-radius: 16px;
-  border: 1px solid var(--tendr-border);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-html[data-appearance='light'] .dash-skel-card {
-  background: #fff;
-}
-
-.dash-skel-card--tall {
-  gap: 0.85rem;
-}
-
-.dash-skel-card--chart {
-  min-height: 11rem;
-}
-
-.dash-skel-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.dash-skel-row .dash-skel-line:last-child {
-  margin-left: auto;
-}
-
-.dash-skel-ov-hero {
-  display: grid;
-  gap: 0.85rem;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-}
-
-.dash-skel-bars {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.35rem;
-  height: 7rem;
-  margin-top: 0.75rem;
-}
-
-.dash-skel-bar {
-  flex: 1 1 0;
-  min-width: 0;
-  border-radius: 6px 6px 2px 2px;
-}
-
-.dash-skel-shell {
-  display: grid;
-  grid-template-columns: 15rem 1fr;
-  gap: 1.25rem;
-  width: min(1080px, 100%);
-  padding: 1.5rem;
-}
-
-.dash-skel-shell-side {
-  min-height: 70vh;
-  border-radius: 16px;
-}
-
-.dash-skel-shell-main {
-  display: grid;
-  gap: 1rem;
-  align-content: start;
-}
-
-@media (max-width: 900px) {
-  .dash-skel-shell {
-    grid-template-columns: 1fr;
-  }
-  .dash-skel-shell-side {
-    display: none;
-  }
+.dash-loading-screen .dash-page-spinner {
+  min-height: 0;
+  padding: 0;
 }
 
 .dash-info-tip {

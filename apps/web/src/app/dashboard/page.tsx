@@ -400,25 +400,35 @@ export default function OverviewPage() {
           <div className="ov-chart" onMouseLeave={() => setHovered(null)}>
             {view.byDay.map((d, i) => {
               const value = metric === 'volume' ? d.volume : BigInt(d.count);
-              const wave = 64 + ((i * 13) % 32);
-              const track = view.peak === 0n ? wave : 100;
-              const fill = view.peak === 0n ? 46 : Math.max(28, Number((value * 100n) / view.peak));
+              // True scale vs peak: $0 stays empty; small days stay short vs big days.
+              const fill =
+                view.peak === 0n || value === 0n
+                  ? 0
+                  : Math.max(6, Number((value * 100n) / view.peak));
               const label = dayLabel(d.key);
               const barLabel =
                 metric === 'volume' ? showMoney(d.volume, view.currency) : `${d.count} payments`;
+              const on = hovered === i || d.key === activeDay?.key;
               return (
                 <button
                   key={d.key}
                   type="button"
                   className="ov-bar-hit"
+                  data-empty={value === 0n ? 'true' : 'false'}
+                  data-on={on ? 'true' : 'false'}
                   aria-pressed={selectedDay === d.key}
                   aria-label={`${label}: ${barLabel}`}
-                  style={{ height: `${track}%` }}
                   onMouseEnter={() => setHovered(i)}
                   onFocus={() => setHovered(i)}
                   onClick={() => setSelectedDay((cur) => (cur === d.key ? null : d.key))}
                 >
-                  <span className="ov-bar" data-on={d.key === activeDay?.key ? 'true' : 'false'}>
+                  {on ? (
+                    <span className="ov-bar-tip" role="tooltip">
+                      <strong>{barLabel}</strong>
+                      <span>{label}</span>
+                    </span>
+                  ) : null}
+                  <span className="ov-bar" data-on={on ? 'true' : 'false'} data-empty={value === 0n ? 'true' : 'false'}>
                     <span className="ov-bar-fill" style={{ height: `${fill}%` }} />
                   </span>
                 </button>

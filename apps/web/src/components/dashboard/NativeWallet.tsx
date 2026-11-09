@@ -2,11 +2,13 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import type { LinkSettlementOptions } from '@tendr/contracts';
 import { Alert, Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { CircleCheck } from 'lucide-react';
 import { ChainLogo, TokenLogo } from '@/components/dashboard/asset-logos';
-import { AssetGridPicker } from '@/components/dashboard/AssetGridPicker';
+import { DemoAssetModal } from '@/components/demo/DemoAssetModal';
+import '@/components/demo/demo-playground.css';
 import { Panel } from '@/components/dashboard/ui';
 import { assetInfo, chainLabel, formatAmount, formatUnits, parseUnits } from '@/lib/assets';
 import {
@@ -17,6 +19,8 @@ import {
   type GoLiveStatus,
   type StoreContext,
 } from '@/lib/api';
+import type { Token } from '@/lib/checkout/api';
+import { buildDemoAssetOptions } from '@/lib/demo-assets';
 import { toast } from '@/components/toast';
 import { withStepUp } from '@/lib/webauthn';
 import {
@@ -31,10 +35,22 @@ type WalletData = {
   status: GoLiveStatus;
   balances: Balances;
   tokens: SettlementToken[];
+  storeDefault: string | null;
   payouts: NativePayout[];
 };
 
 type SettlementToken = { asset: string; symbol: string; chain: string; decimals: number };
+
+function toCheckoutTokens(tokens: SettlementToken[]): Token[] {
+  return tokens.map((t) => ({
+    asset_id: t.asset,
+    symbol: t.symbol,
+    blockchain: t.chain,
+    decimals: t.decimals,
+    price_usd: null,
+    popular: false,
+  }));
+}
 
 const PCTS = [25, 50, 75, 100] as const;
 
@@ -146,19 +162,45 @@ export function NativeWalletPanel({
       view.account?.kind === 'native_intents' ||
       (!view.account && status.accountKind === 'native_intents');
     if (view.account?.kind === 'contract' || !native) {
-      setData({ view, status, balances, tokens: [], payouts: [] });
+      setData({ view, status, balances, tokens: [], storeDefault: null, payouts: [] });
       return;
     }
     const active = view.account?.status === 'active';
     const [options, history] = await Promise.all([
       active
-        ? api<{ tokens: SettlementToken[] }>('/v1/payment_links/settlement-options', { store })
-        : Promise.resolve({ tokens: [] as SettlementToken[] }),
+        ? api<LinkSettlementOptions>('/v1/payment_links/settlement-options', { store })
+        : Promise.resolve({
+            livemode: true,
+            tokens: [] as SettlementToken[],
+            chains: [] as string[],
+            store_default: null,
+          }),
       active
         ? api<{ payouts: NativePayout[] }>('/v1/account/native/payouts', { store })
         : Promise.resolve({ payouts: [] as NativePayout[] }),
     ]);
-    setData({ view, status, balances, tokens: options.tokens, payouts: history.payouts });
+    const storeDefault = options.store_default?.asset ?? null;
+    setData({
+      view,
+      status,
+      balances,
+      tokens: options.tokens,
+      storeDefault,
+      payouts: history.payouts,
+    });
+    // Hydrate pickers from the server. Only fill empty fields so in-progress edits survive polls.
+    if (storeDefault) {
+      setSettlement((prev) => prev || storeDefault);
+      setDestinationAsset((prev) => prev || storeDefault);
+    }
+    const firstFunded = balances.balances.find((b) => {
+      try {
+        return BigInt(b.amount) > 0n;
+      } catch {
+        return false;
+      }
+    });
+    if (firstFunded) setAsset((prev) => prev || firstFunded.asset);
   }
 
   useEffect(() => {
@@ -223,11 +265,7 @@ export function NativeWalletPanel({
   const active = data.view.account?.status === 'active';
   const mine =
     isOwner && (!data.view.nativeWallet || data.view.nativeWallet.ownerUserId === userId);
-  const tokenOptions = data.tokens.map((token) => ({
-    value: token.asset,
-    label: `${token.symbol} · ${chainLabel(token.chain)}`,
-    icon: <TokenLogo symbol={token.symbol} assetId={token.asset} />,
-  }));
+  const catalogOptions = buildDemoAssetOptions(toCheckoutTokens(data.tokens));
 
   function tokenMeta(id: string): { symbol: string; decimals: number; chain: string } {
     const token = data!.tokens.find((t) => t.asset === id);
@@ -267,12 +305,15 @@ export function NativeWalletPanel({
     setPct(n);
   }
 
-  async function quote() {
+  async function quote(fromAsset: string, toAsset: string) {
     await run(async () => {
-      const { decimals } = tokenMeta(asset);
-      const raw = asset ? parseUnits(amount, decimals) : null;
+      const { decimals } = tokenMeta(fromAsset);
+      const raw = fromAsset ? parseUnits(amount, decimals) : null;
       if (!proposalId && (raw === null || BigInt(raw) <= 0n)) {
         throw new Error('Enter a valid amount for the selected token.');
+      }
+      if (!proposalId && !toAsset) {
+        throw new Error('Choose the token and chain to receive.');
       }
       const payout = await withStepUp(() =>
         api<NativePayout>('/v1/account/native/payouts', {
@@ -281,9 +322,9 @@ export function NativeWalletPanel({
           json: proposalId
             ? { proposalId }
             : {
-                asset,
+                asset: fromAsset,
                 amount: raw ?? undefined,
-                destinationAsset,
+                destinationAsset: toAsset,
                 destination: destination.trim(),
               },
         }),
@@ -299,6 +340,35 @@ export function NativeWalletPanel({
       return false;
     }
   });
+  const withdrawOptions = buildDemoAssetOptions(
+    toCheckoutTokens(
+      funded.map((b) => {
+        const meta = tokenMeta(b.asset);
+        return {
+          asset: b.asset,
+          symbol: meta.symbol,
+          chain: meta.chain || 'near',
+          decimals: meta.decimals,
+        };
+      }),
+    ),
+  );
+  const settlementValue =
+    settlement && catalogOptions.some((o) => o.chainVariants.some((v) => v.assetId === settlement))
+      ? settlement
+      : data.storeDefault &&
+          catalogOptions.some((o) => o.chainVariants.some((v) => v.assetId === data.storeDefault))
+        ? data.storeDefault
+        : catalogOptions[0]?.chainVariants[0]?.assetId ?? catalogOptions[0]?.value ?? '';
+  const destinationValue =
+    destinationAsset &&
+    catalogOptions.some((o) => o.chainVariants.some((v) => v.assetId === destinationAsset))
+      ? destinationAsset
+      : catalogOptions[0]?.chainVariants[0]?.assetId ?? catalogOptions[0]?.value ?? '';
+  const withdrawValue =
+    asset && withdrawOptions.some((o) => o.chainVariants.some((v) => v.assetId === asset))
+      ? asset
+      : withdrawOptions[0]?.chainVariants[0]?.assetId ?? withdrawOptions[0]?.value ?? '';
 
   return (
     <div className="stack wallet-layout">
@@ -353,35 +423,37 @@ export function NativeWalletPanel({
           </Panel>
           {!proposalId ? (
             <Panel title="Default settlement token">
-              <label className="field">
-                <span>Settlement asset</span>
-                <AssetGridPicker
-                  ariaLabel="Settlement asset"
-                  title="Settlement token"
-                  value={settlement}
-                  disabled={!mine || busy}
-                  onChange={setSettlement}
-                  placeholder="Choose token and chain"
-                  options={tokenOptions}
-                />
-              </label>
+              <div className="stack dash-demo-asset-field">
+                <label className="field">
+                  <span>Settlement asset</span>
+                  <DemoAssetModal
+                    options={catalogOptions}
+                    value={settlementValue}
+                    disabled={!mine || busy || catalogOptions.length === 0}
+                    onChange={setSettlement}
+                  />
+                </label>
+              </div>
               <p className="dash-muted dash-small">
                 Payments credit this token inside your Intents wallet. A payment link can pick a
                 different token. This does not send funds to an outside address.
               </p>
               <div>
                 <Button
-                  disabled={!mine || busy || !settlement}
+                  disabled={!mine || busy || !(settlement || settlementValue)}
                   onClick={() =>
                     void run(async () => {
+                      const assetId = settlement || settlementValue;
                       await withStepUp(() =>
                         api('/v1/account/native/settlement', {
                           method: 'PUT',
-                          json: { asset: settlement },
+                          json: { asset: assetId },
                           store,
                         }),
                       );
+                      setSettlement(assetId);
                       setNotice('Default settlement updated.');
+                      await load();
                     })
                   }
                 >
@@ -399,6 +471,32 @@ export function NativeWalletPanel({
                 </p>
               ) : (
                 <>
+                  <div className="stack dash-demo-asset-field">
+                    <label className="field">
+                      <span>Asset to withdraw</span>
+                      {withdrawOptions.length ? (
+                        <DemoAssetModal
+                          options={withdrawOptions}
+                          value={withdrawValue}
+                          disabled={busy}
+                          onChange={(id) => selectBalance(id)}
+                        />
+                      ) : (
+                        <p className="dash-muted dash-small">
+                          No funded balances yet. Receive a payment first, then pick what to send.
+                        </p>
+                      )}
+                    </label>
+                    <label className="field">
+                      <span>Token and chain to receive</span>
+                      <DemoAssetModal
+                        options={catalogOptions}
+                        value={destinationValue}
+                        disabled={busy || catalogOptions.length === 0}
+                        onChange={setDestinationAsset}
+                      />
+                    </label>
+                  </div>
                   <label className="field">
                     <span>Amount to send{asset ? ` (${tokenMeta(asset).symbol})` : ''}</span>
                     <input
@@ -425,18 +523,6 @@ export function NativeWalletPanel({
                     ))}
                   </div>
                   <label className="field">
-                    <span>Token and chain to receive</span>
-                    <AssetGridPicker
-                      ariaLabel="Token and chain to receive"
-                      title="Token to receive"
-                      value={destinationAsset}
-                      disabled={busy}
-                      onChange={setDestinationAsset}
-                      placeholder="Choose token and chain"
-                      options={tokenOptions}
-                    />
-                  </label>
-                  <label className="field">
                     <span>Destination address</span>
                     <input
                       value={destination}
@@ -452,9 +538,15 @@ export function NativeWalletPanel({
                 <Button
                   disabled={
                     busy ||
-                    (!proposalId && (!asset || !amount || !destinationAsset || !destination.trim()))
+                    (!proposalId &&
+                      (!(asset || withdrawValue) ||
+                        !amount ||
+                        !(destinationAsset || destinationValue) ||
+                        !destination.trim()))
                   }
-                  onClick={() => void quote()}
+                  onClick={() =>
+                    void quote(asset || withdrawValue, destinationAsset || destinationValue)
+                  }
                 >
                   Get payout quote
                 </Button>

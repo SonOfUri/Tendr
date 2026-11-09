@@ -10,12 +10,15 @@ import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { DestinationBox, useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { EmptyState, ErrorState, PageHeader, Panel, Select } from '@/components/dashboard/ui';
 import { NativeWalletPanel } from '@/components/dashboard/NativeWallet';
+import { DemoAssetModal } from '@/components/demo/DemoAssetModal';
+import '@/components/demo/demo-playground.css';
 import { usableIn } from '@/lib/actions';
 import { api, type AccountView, type Balances, type SavedAddress } from '@/lib/api';
 import { assetInfo, chainLabel, formatAmount, parseUnits, poaTokenContract } from '@/lib/assets';
-import { AssetGridPicker } from '@/components/dashboard/AssetGridPicker';
-import { ChainLogo, TokenLogo } from '@/components/dashboard/asset-logos';
+import { ChainLogo } from '@/components/dashboard/asset-logos';
 import { chainId } from '@/lib/chain-logos';
+import type { Token } from '@/lib/checkout/api';
+import { buildDemoAssetOptions } from '@/lib/demo-assets';
 import { loadIntentsCatalog, type IntentsToken } from '@/lib/intents-catalog';
 import { toast } from '@/components/toast';
 import { draftProposal } from '@/lib/proposals';
@@ -117,18 +120,39 @@ function ContractWithdrawForm() {
   const balance = balances.find((b) => b.asset === asset);
   const decimals = chosen?.decimals ?? (info?.known ? info.decimals : 0);
   const tokenChoices = withdrawTokens(catalogTokens, balances, target?.chain ?? null, livemode);
+  const assetOptions = buildDemoAssetOptions(
+    tokenChoices.map(
+      (token): Token => ({
+        asset_id: token.asset,
+        symbol: token.symbol,
+        blockchain: token.chain,
+        decimals: token.decimals,
+        price_usd: null,
+        popular: false,
+      }),
+    ),
+  );
+  const assetValue =
+    asset && assetOptions.some((o) => o.chainVariants.some((v) => v.assetId === asset))
+      ? asset
+      : assetOptions[0]?.chainVariants[0]?.assetId ?? assetOptions[0]?.value ?? '';
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!target) return toast.error('Choose a saved address.');
     if (receive !== 'same') return toast.error('Different-token withdrawals are coming soon.');
-    const token = poaTokenContract(asset);
+    const assetId = asset || assetValue;
+    if (!assetId) return toast.error('Choose an asset to withdraw.');
+    const token = poaTokenContract(assetId);
     if (!token) return toast.error('This asset can’t be withdrawn from here yet.');
-    const raw = parseUnits(amount, decimals);
+    const chosenDecimals =
+      catalogTokens.find((t) => t.asset === assetId)?.decimals ??
+      (assetInfo(assetId, livemode).known ? assetInfo(assetId, livemode).decimals : 0);
+    const raw = parseUnits(amount, chosenDecimals);
     if (!raw || raw === '0') {
       return toast.error(
-        decimals > 0
-          ? `Enter an amount with at most ${decimals} decimal places.`
+        chosenDecimals > 0
+          ? `Enter an amount with at most ${chosenDecimals} decimal places.`
           : 'Enter a whole number of smallest units.',
       );
     }
@@ -136,7 +160,7 @@ function ContractWithdrawForm() {
     const p = await run(() =>
       draftProposal({
         withdraw: {
-          asset,
+          asset: assetId,
           amount: raw,
           saved_address_id: target.id,
           route: { poa: { token_contract: token } },
@@ -206,22 +230,22 @@ function ContractWithdrawForm() {
           </Alert>
         )}
 
-        <label className="field">
-          <span>Asset</span>
-          <AssetGridPicker
-            ariaLabel="Asset"
-            title="Token"
-            value={asset}
-            onChange={setAsset}
-            placeholder={catalog.data ? 'Choose a token' : 'Loading tokens…'}
-            disabled={!catalog.data}
-            options={tokenChoices.map((token) => ({
-              value: token.asset,
-              label: `${token.symbol} · ${chainLabel(token.chain)}`,
-              icon: <TokenLogo symbol={token.symbol} assetId={token.asset} />,
-            }))}
-          />
-        </label>
+        <div className="stack dash-demo-asset-field">
+          <label className="field">
+            <span>Asset</span>
+            {catalog.data && assetOptions.length ? (
+              <DemoAssetModal
+                options={assetOptions}
+                value={assetValue}
+                onChange={setAsset}
+              />
+            ) : (
+              <p className="dash-muted dash-small">
+                {catalog.data ? 'No withdrawable tokens for this address.' : 'Loading tokens…'}
+              </p>
+            )}
+          </label>
+        </div>
         {info && (
           <p className="dash-muted dash-small">
             {chosen
