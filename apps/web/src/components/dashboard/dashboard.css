@@ -3239,22 +3239,16 @@ html[data-appearance='light'] .dash-app .dash-main .ov-pay-foot span {
   color: inherit;
 }
 
-.ov-tone .ov-mix-bar {
-  background: rgba(255, 255, 255, 0.88);
-}
-
 .ov-mix {
   width: 100%;
 }
 
-.ov-mix.ov-mix--ghost li {
-  display: block;
-  width: 100%;
-  grid-template-columns: none;
+.ov-tone .ov-mix-track {
+  background: rgba(255, 255, 255, 0.22);
 }
 
-.ov-mix.ov-mix--ghost .ov-mix-bar {
-  height: 0.42rem;
+.ov-tone .ov-mix-bar {
+  background: rgba(255, 255, 255, 0.92);
 }
 
 .ov-card--chart,
@@ -3636,18 +3630,46 @@ html[data-appearance='light'] .dash-app .dash-main .ov-pay-foot span {
 
 .ov-mix li {
   display: grid;
-  grid-template-columns: 4.5rem minmax(0, 1fr) auto;
+  grid-template-columns: 4.5rem minmax(0, 1fr) 2.4rem;
   align-items: center;
   gap: 0.4rem;
   font-size: 0.75rem;
   color: #bdbdbd;
 }
 
-.ov-mix-bar {
+.ov-mix li > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-mix li > strong {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-mix-track {
   display: block;
+  width: 100%;
   height: 0.35rem;
   border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+}
+
+.ov-mix-bar {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
   background: #f2f2f2;
+}
+
+.ov-mix.ov-mix--ghost {
+  grid-template-columns: none;
+}
+
+.ov-mix.ov-mix--ghost li {
+  grid-template-columns: 1fr;
 }
 
 .ov-spark {
@@ -3875,8 +3897,12 @@ html[data-appearance='light'] .ov-tone-badge {
   color: #1c2030;
 }
 
+html[data-appearance='light'] .ov-tone .ov-mix-track {
+  background: rgba(28, 32, 48, 0.12);
+}
+
 html[data-appearance='light'] .ov-tone .ov-mix-bar {
-  background: rgba(28, 32, 48, 0.45);
+  background: rgba(28, 32, 48, 0.55);
 }
 
 html[data-appearance='light'] .ov-dots span {

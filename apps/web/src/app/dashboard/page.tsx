@@ -37,7 +37,6 @@ const STATUS_LABEL: Record<PaymentStatus, string> = {
 };
 
 const SCALE = 8;
-const MIX_DOTS = [38, 62, 28, 74, 46, 88, 34, 58, 42, 80, 30, 66, 48, 72, 36];
 
 function dayKey(d: Date): string {
   const y = d.getFullYear();
@@ -493,11 +492,40 @@ export default function OverviewPage() {
           <p className="ov-tone-label">Payment mix</p>
           <p className="ov-figure ov-figure--md">{view.inRange.length === 0 ? '—' : `${view.mix}%`}</p>
           <p className="ov-sub">{view.topChain ? `${view.topChain} share` : 'No chain mix yet'}</p>
-          <div className="ov-dots" aria-hidden>
-            {MIX_DOTS.map((height, i) => (
-              <span key={`dot-${i}`} style={{ height: `${height}%` }} />
-            ))}
-          </div>
+          {view.chainRows.length > 0 ? (
+            <ul className="ov-mix" aria-label="Payments by chain">
+              {view.chainRows.map(([chain, count]) => {
+                const pct = Math.round((count / view.inRange.length) * 100);
+                return (
+                  <li key={chain}>
+                    <span title={chain}>{chain}</span>
+                    <span className="ov-mix-track" aria-hidden>
+                      <span className="ov-mix-bar" style={{ width: `${Math.max(pct, 6)}%` }} />
+                    </span>
+                    <strong>{pct}%</strong>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <ul className="ov-mix ov-mix--ghost" aria-hidden>
+              <li>
+                <span className="ov-mix-track">
+                  <span className="ov-mix-bar" style={{ width: '72%' }} />
+                </span>
+              </li>
+              <li>
+                <span className="ov-mix-track">
+                  <span className="ov-mix-bar" style={{ width: '48%' }} />
+                </span>
+              </li>
+              <li>
+                <span className="ov-mix-track">
+                  <span className="ov-mix-bar" style={{ width: '28%' }} />
+                </span>
+              </li>
+            </ul>
+          )}
         </article>
 
         <article className="ov-card ov-tone ov-tone--rev">
