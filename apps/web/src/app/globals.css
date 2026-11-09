@@ -3025,13 +3025,18 @@ html[data-appearance='light'] .login-demos-mark--on-light {
 .login-panel {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: safe center;
   gap: 0.7rem;
   padding: clamp(1.15rem, 2.5vw, 2rem);
   background: #fff;
   color: #0a0a0a;
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+/* Long auth forms scroll without collapsing their copy or controls on small screens. */
+.login-panel > * {
+  flex-shrink: 0;
 }
 
 .login-panel-form {
