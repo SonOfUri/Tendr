@@ -98,6 +98,8 @@ describe('contractor invoice API', () => {
     expect(res.statusCode, res.body).toBe(202);
     expect(res.json()).toEqual({ accepted: true });
     const token = secret();
+    expect(new URL(mail.sent.at(-1)!.data.url!).origin).toBe(new URL(env().WEB_URL).origin);
+    expect(new URL(mail.sent.at(-1)!.data.url!).pathname).toBe('/invoice/business');
     const draft = await prisma.invoice.findFirstOrThrow();
     expect(draft.accessTokenHash).not.toBe(token);
     expect(draft.amount).toBe('100250000');

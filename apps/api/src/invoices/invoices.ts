@@ -133,11 +133,14 @@ export async function submitInvoice(slug: string, input: z.infer<typeof InvoiceI
     });
   });
   if (row) {
-    const url = `${invoiceUrl(business.slug)}#token=${raw}`;
+    // Keep email verification on the established app host, including while the optional
+    // invoice subdomain is awaiting DNS. This page still uses no dashboard credentials.
+    const url = new URL(`/invoice/${encodeURIComponent(business.slug)}`, env().WEB_URL);
+    url.hash = `token=${raw}`;
     await getMailer().send({
       to: input.email,
       template: 'invoice_verify',
-      data: { business: business.name, url },
+      data: { business: business.name, url: url.toString() },
     });
   }
   // No invoice id, token, email existence, or invoice status is disclosed to an unverified caller.
