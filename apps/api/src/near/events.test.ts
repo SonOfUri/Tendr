@@ -196,7 +196,7 @@ describe('NearRpc.txStatus', () => {
     });
     expect(calls[0]).toEqual({
       method: 'EXPERIMENTAL_tx_status',
-      params: { tx_hash: 'H', sender_account_id: INTENTS, wait_until: 'FINAL' },
+      params: { tx_hash: 'H', sender_account_id: INTENTS, wait_until: 'NONE' },
     });
     mode = 'unknown';
     await expect(rpc.txStatus('H', INTENTS)).resolves.toBeNull();

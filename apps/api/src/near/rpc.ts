@@ -360,10 +360,12 @@ export class NearRpc {
   ): Promise<TxStatusResult | null> {
     let o: FinalExecutionOutcome;
     try {
+      // NONE: we only look up already-finalized settlement txs; waiting for FINAL on a missing
+      // hash can hang the worker's poll job until the RPC deadline (and block the queue).
       o = await transport.request<FinalExecutionOutcome>('EXPERIMENTAL_tx_status', {
         tx_hash: hash,
         sender_account_id: accountId,
-        wait_until: 'FINAL',
+        wait_until: 'NONE',
       });
     } catch (err) {
       if (TX_NOT_ON_NODE.test(errorText(err)) || UNKNOWN_TX.test(errorText(err))) return null;
