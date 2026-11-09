@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import type { LinkSettlementOptions } from '@tendr/contracts';
 import { Alert, Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
-import { ArrowDown, CircleCheck } from 'lucide-react';
+import { ArrowDown, CircleCheck, RefreshCw } from 'lucide-react';
 import { ChainLogo, TokenLogo } from '@/components/dashboard/asset-logos';
 import { DemoAssetModal } from '@/components/demo/DemoAssetModal';
 import '@/components/demo/demo-playground.css';
@@ -678,12 +678,20 @@ export function NativeWalletPanel({
               ) : null}
             </Panel>
           ) : null}
-          <Panel title="Payout history">
-            <div>
-              <Button variant="secondary" disabled={busy} onClick={() => void load()}>
-                Refresh wallet
-              </Button>
-            </div>
+          <Panel
+            title="Payout history"
+            action={
+              <button
+                type="button"
+                className="dash-panel-icon-btn"
+                aria-label="Refresh payout history"
+                disabled={busy}
+                onClick={() => void load()}
+              >
+                <RefreshCw size={15} strokeWidth={2.25} aria-hidden data-spin={busy ? 'true' : 'false'} />
+              </button>
+            }
+          >
             {data.payouts.length ? (
               <div className="dash-table-wrap">
                 <table className="dash-table">

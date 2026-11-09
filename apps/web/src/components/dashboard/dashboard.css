@@ -829,6 +829,48 @@ body:has(.dash-app) {
   letter-spacing: -0.02em;
 }
 
+.dash-panel-icon-btn {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  margin: 0;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+  color: #f5f5f5;
+  cursor: pointer;
+}
+
+.dash-panel-icon-btn:hover:not(:disabled),
+.dash-panel-icon-btn:focus-visible {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.35);
+  outline: none;
+}
+
+.dash-panel-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dash-panel-icon-btn [data-spin='true'] {
+  animation: tendr-spin 0.8s linear infinite;
+}
+
+html[data-appearance='light'] .dash-panel-icon-btn {
+  color: #161616;
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+html[data-appearance='light'] .dash-panel-icon-btn:hover:not(:disabled),
+html[data-appearance='light'] .dash-panel-icon-btn:focus-visible {
+  color: #0a0a0a;
+  border-color: rgba(0, 0, 0, 0.28);
+}
+
 .dash-stat-grid {
   display: grid;
   gap: 0.85rem;
