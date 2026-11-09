@@ -1,5 +1,12 @@
 import type { Invoice, NativePayout, Prisma } from '@prisma/client';
 import { z } from 'zod';
+import {
+  InvoiceDecimalAmountSchema,
+  InvoiceItemsInputSchema,
+  invoiceAmountUnits,
+  invoiceBreakdown,
+  type InvoiceItem,
+} from '@tendr/contracts';
 import { EmailSchema, newLinkToken } from '../auth/magic-link.js';
 import { getMailer } from '../auth/mailer.js';
 import { ownedNativeWallet, type NativeActor } from '../accounts/native-accounts.js';
@@ -18,31 +25,32 @@ import { getRedis } from '../lib/redis.js';
 
 const scope = (ctx: ScopeContext) => ({ merchantId: ctx.merchantId, livemode: ctx.livemode });
 const text = (max: number) => z.string().trim().min(1).max(max);
-export const InvoiceInput = z
+const InvoiceBaseInput = z
   .object({
     contractorName: text(120),
     email: EmailSchema,
     reference: text(80),
-    description: text(2000),
     dueDate: z.string().date().optional(),
     destinationAsset: z.string().min(8).max(256).startsWith('nep141:'),
     destination: text(128),
-    // Decimal token units, never floating point or a fiat conversion.
-    amount: z.string().regex(/^(?:0|[1-9]\d{0,38})(?:\.\d{1,30})?$/),
   })
   .strict();
+// New clients send only the breakdown. Keep the original shape for already-open forms.
+// The strict union rejects requests that try to override the calculated total.
+export const InvoiceInput = z.union([
+  InvoiceBaseInput.extend({ items: InvoiceItemsInputSchema }).strict(),
+  InvoiceBaseInput.extend({ description: text(2000), amount: InvoiceDecimalAmountSchema }).strict(),
+]);
 export const InvoiceTokenInput = z
   .object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) })
   .strict();
 
 export function invoiceUnits(value: string, decimals: number): string {
-  const [whole, fraction = ''] = value.split('.');
-  if (fraction.length > decimals)
-    throw new AppError('VALIDATION_ERROR', 'Too many decimal places for this token', 400);
-  const units = BigInt(`${whole}${fraction.padEnd(decimals, '0')}`);
-  if (units <= 0n || units >= 1n << 128n)
-    throw new AppError('VALIDATION_ERROR', 'Invoice amount is out of range', 400);
-  return units.toString();
+  try {
+    return invoiceAmountUnits(value, decimals);
+  } catch (error) {
+    throw new AppError('VALIDATION_ERROR', (error as Error).message, 400);
+  }
 }
 
 export function invoiceUrl(slug: string): string {
@@ -106,7 +114,15 @@ export async function submitInvoice(slug: string, input: z.infer<typeof InvoiceI
       'Choose a supported receiving chain and valid external wallet address. Memo/tag destinations are not supported.',
       400,
     );
-  const amount = invoiceUnits(input.amount, token.decimals);
+  let breakdown;
+  try {
+    breakdown = invoiceBreakdown(
+      'items' in input ? input.items : [{ description: input.description, amount: input.amount }],
+      token.decimals,
+    );
+  } catch (error) {
+    throw new AppError('VALIDATION_ERROR', (error as Error).message, 400);
+  }
   const ctx = { merchantId: business.id, livemode: true };
   const { raw, hash } = newLinkToken();
   const row = await tenantTransaction(ctx, async (tx) => {
@@ -124,7 +140,9 @@ export async function submitInvoice(slug: string, input: z.infer<typeof InvoiceI
         id: newId('bill'),
         ...ctx,
         ...input,
-        amount,
+        amount: breakdown.amount,
+        items: breakdown.items,
+        description: breakdown.items.map((item) => item.description).join('\n'),
         destinationChain: token.blockchain,
         symbol: token.symbol,
         decimals: token.decimals,
@@ -156,6 +174,9 @@ export function invoiceView(row: WithPayouts) {
     email: row.email,
     reference: row.reference,
     description: row.description,
+    items: (row.items as InvoiceItem[] | null) ?? [
+      { description: row.description, amount: row.amount },
+    ],
     dueDate: row.dueDate,
     destination: row.destination,
     destinationAsset: row.destinationAsset,

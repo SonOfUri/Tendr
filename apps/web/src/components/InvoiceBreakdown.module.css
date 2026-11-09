@@ -1,0 +1,31 @@
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin: 16px 0;
+}
+.table caption {
+  text-align: left;
+  font-weight: 600;
+  padding: 0 0 12px;
+}
+.table th,
+.table td {
+  text-align: left;
+  padding: 10px 8px;
+  border-bottom: 1px solid #80808040;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.table th:last-child,
+.table td:last-child {
+  text-align: right;
+  width: 42%;
+  font-variant-numeric: tabular-nums;
+}
+.table td:first-child {
+  white-space: pre-wrap;
+}
+.table tfoot {
+  font-weight: 600;
+}

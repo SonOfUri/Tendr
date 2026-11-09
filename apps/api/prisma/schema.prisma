@@ -2050,6 +2050,7 @@ model Invoice {
   email              String
   reference          String
   description        String
+  items              Json?
   dueDate            String?       @map("due_date")
   destinationAsset   String        @map("destination_asset")
   destinationChain   String        @map("destination_chain")

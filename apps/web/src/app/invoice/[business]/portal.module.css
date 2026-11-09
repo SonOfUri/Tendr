@@ -75,6 +75,47 @@
   grid-template-columns: 1fr 1fr;
   gap: 16px;
 }
+.breakdown {
+  min-width: 0;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid #dedfd7;
+  border-radius: 10px;
+  display: grid;
+  gap: 16px;
+}
+.breakdown legend {
+  font-weight: 600;
+  padding: 0 6px;
+}
+.breakdown > p {
+  font-size: 13px;
+  margin: 0;
+}
+.lineItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(100px, 0.55fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+.card button.secondary {
+  background: #edf1e8;
+  color: #2d4820;
+  padding: 12px;
+  font-size: 13px;
+}
+.totalRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #dedfd7;
+}
+.totalRow output {
+  overflow-wrap: anywhere;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 .card button {
   background: #2d4820;
   color: white;
@@ -136,6 +177,11 @@
   }
   .row {
     grid-template-columns: 1fr;
+  }
+  .lineItem {
+    grid-template-columns: 1fr;
+    border-bottom: 1px solid #dedfd7;
+    padding-bottom: 16px;
   }
   .card h1 {
     font-size: 26px;

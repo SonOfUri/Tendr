@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { env, loadEnv } from '../env.js';
 import { buildApp } from '../app.js';
 import { prisma } from '../lib/prisma.js';
@@ -32,6 +33,20 @@ describe('contractor invoice API', () => {
     destination: DEST,
     dueDate: '2026-11-30',
   });
+  const itemInput = () => {
+    const legacy = input();
+    return {
+      contractorName: legacy.contractorName,
+      email: legacy.email,
+      reference: legacy.reference,
+      destinationAsset: legacy.destinationAsset,
+      destination: legacy.destination,
+      items: [
+        { description: 'Design work', amount: '0.10' },
+        { description: 'Materials', amount: '0.20' },
+      ],
+    };
+  };
   const post = (url: string, payload: object) =>
     app.inject({ method: 'POST', url, payload, remoteAddress: ip });
   const secret = () =>
@@ -145,6 +160,70 @@ describe('contractor invoice API', () => {
     });
     await post(BASE, body);
     expect(mail.sent).toHaveLength(2);
+  });
+
+  it('calculates and preserves itemized totals through resends, verification and the merchant inbox', async () => {
+    const body = itemInput();
+    const created = await post(BASE, body);
+    expect(created.statusCode, created.body).toBe(202);
+    const expected = {
+      amount: '300000',
+      items: [
+        { description: 'Design work', amount: '100000' },
+        { description: 'Materials', amount: '200000' },
+      ],
+    };
+    expect(await prisma.invoice.findFirstOrThrow()).toMatchObject(expected);
+    const first = secret();
+    expect((await post(`${BASE}/status`, { token: first })).json()).toMatchObject(expected);
+    await post(BASE, { ...body, items: [{ description: 'Changed', amount: '999' }] });
+    const fresh = secret();
+    expect(fresh).not.toBe(first);
+    expect((await post(`${BASE}/verify`, { token: fresh })).json()).toMatchObject({
+      ...expected,
+      status: 'open',
+    });
+    expect(
+      (await app.inject({ method: 'GET', url: '/v1/invoices', headers: headers() })).json()
+        .invoices[0],
+    ).toMatchObject(expected);
+    expect(await prisma.invoice.count()).toBe(1);
+  });
+
+  it('rejects overriding totals, invalid item counts, amounts and precision before storing a breakdown', async () => {
+    for (const patch of [
+      { amount: '999' },
+      { description: 'Override' },
+      { items: [] },
+      { items: Array.from({ length: 51 }, () => ({ description: 'Service', amount: '1' })) },
+      { items: [{ description: ' ', amount: '1' }] },
+      { items: [{ description: 'Service', amount: '0' }] },
+      { items: [{ description: 'Service', amount: '-1' }] },
+      { items: [{ description: 'Service', amount: '0.0000001' }] },
+      {
+        items: [
+          { description: 'Service', amount: '340282366920938463463374607431768' },
+          { description: 'Service', amount: '1' },
+        ],
+      },
+    ]) {
+      const res = await post(BASE, { ...itemInput(), ...patch });
+      expect(res.statusCode, res.body).toBe(400);
+    }
+    expect(await prisma.invoice.count()).toBe(0);
+    expect(mail.sent).toHaveLength(0);
+  });
+
+  it('shows legacy invoices as a single item without changing the payable total', async () => {
+    const legacy = input();
+    expect((await post(BASE, legacy)).statusCode).toBe(202);
+    // Existing rows have no items column value; rollout must preserve them and old clients.
+    await prisma.invoice.updateMany({ data: { items: Prisma.DbNull } });
+    expect((await post(`${BASE}/status`, { token: secret() })).json()).toMatchObject({
+      description: legacy.description,
+      amount: '100250000',
+      items: [{ description: legacy.description, amount: '100250000' }],
+    });
   });
 
   it('rejects expired verification, invalid addresses, excess precision, zero and unsupported assets', async () => {
