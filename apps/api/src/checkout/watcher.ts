@@ -331,7 +331,11 @@ async function pollQuote(q0: QuoteRow): Promise<PollResult> {
     await stopWatching(q0.id, now);
     return result('none', true);
   }
-  if (now.getTime() >= q0.createdAt.getTime() + WATCH_MAX_MS) {
+  const keepVerifying =
+    !!existing &&
+    (existing.status === 'PROCESSING' || existing.status === 'SCREENING_PENDING') &&
+    existing.oneclickStatus === 'SUCCESS';
+  if (!keepVerifying && now.getTime() >= q0.createdAt.getTime() + WATCH_MAX_MS) {
     await stopAfterWindow(q0.id, now);
     return result('none', true);
   }
@@ -430,6 +434,40 @@ async function scheduleNext(q: QuoteRow, now: Date, polled = true): Promise<void
 }
 
 /**
+ * Reopens watches that stopped after the 24 h window while 1Click already reported SUCCESS but
+ * Tendr never verified the destination transfer (RPC outage / non-archival GC). Clears
+ * `watchStoppedAt` so the next scan can poll again and settle.
+ */
+export async function resumeUnverifiedSuccessWatches(
+  now: Date = deps.now(),
+): Promise<number> {
+  const stuck = await prisma.payment.findMany({
+    where: {
+      status: { in: ['PROCESSING', 'SCREENING_PENDING'] },
+      oneclickStatus: 'SUCCESS',
+      quote: { watchStoppedAt: { not: null } },
+    },
+    take: 100,
+    select: { id: true, quoteId: true },
+  });
+  let n = 0;
+  for (const p of stuck) {
+    const r = await prisma.quote.updateMany({
+      where: { id: p.quoteId, watchStoppedAt: { not: null } },
+      data: { watchStoppedAt: null, watchNextAt: now },
+    });
+    if (r.count > 0) {
+      n++;
+      log('info', 'watcher: resumed unverified SUCCESS watch', {
+        paymentId: p.id,
+        quoteId: p.quoteId,
+      });
+    }
+  }
+  return n;
+}
+
+/**
  * Scheduled every 5 s: claims every due, still-watched deposit address (lease POLL_LEASE_MS, so
  * overlapping scans and workers never poll one address twice at once) and hands it to `enqueue`
  * (the worker adds a `poll-deposit` job). Quotes past the 24 h window are stopped here. Returns
@@ -439,6 +477,7 @@ export async function scanDueDeposits(
   enqueue: (job: { depositAddress: string; livemode: boolean }) => Promise<unknown>,
   now: Date = deps.now(),
 ): Promise<number> {
+  await resumeUnverifiedSuccessWatches(now);
   const due = await prisma.quote.findMany({
     where: {
       watchStoppedAt: null,
@@ -450,7 +489,17 @@ export async function scanDueDeposits(
   });
   let n = 0;
   for (const q of due) {
-    if (now.getTime() >= q.createdAt.getTime() + WATCH_MAX_MS) {
+    // Keep polling SUCCESS payments that still need receipt verification past the normal window;
+    // only stop fresh / non-SUCCESS quotes at WATCH_MAX_MS.
+    const payment = await prisma.payment.findFirst({
+      where: { quoteId: q.id },
+      select: { status: true, oneclickStatus: true },
+    });
+    const keepVerifying =
+      !!payment &&
+      (payment.status === 'PROCESSING' || payment.status === 'SCREENING_PENDING') &&
+      payment.oneclickStatus === 'SUCCESS';
+    if (!keepVerifying && now.getTime() >= q.createdAt.getTime() + WATCH_MAX_MS) {
       await stopAfterWindow(q.id, now);
       continue;
     }
@@ -1126,9 +1175,13 @@ async function destinationTxStatus(
 
 /**
  * Per-transfer verification of a `SUCCESS` (never balance deltas): an event in one of 1Click's
- * destination transactions crediting at least the quote's `amount_out` of the settlement asset to
+ * destination transactions crediting at least the delivered `amount_out` of the settlement asset to
  * the session's recipient, not claimed by another payment. Among several the smallest sufficient
  * one is taken (batched settlements: each payment takes its own event).
+ *
+ * Prefer 1Click's post-swap `amountOut` over the quote's estimate: solvers may undershoot the
+ * quoted out by slippage, and requiring the quote forever leaves SUCCESS payments stuck in
+ * PROCESSING even when the merchant was credited.
  */
 export async function verify(
   l: Loaded,
@@ -1136,7 +1189,9 @@ export async function verify(
   status: StatusResponse,
 ): Promise<VerifyResult> {
   const { quote: q, session, ctx } = l;
-  const required = toBig(q.amountOut);
+  const quoted = toBig(q.amountOut);
+  const reported = big(status.swapDetails.amountOut);
+  const required = reported > 0n ? reported : quoted;
   const hashes = status.swapDetails.destinationChainTxHashes.map((h) => h.hash);
   const blocked: string[] = [];
   const viaReceipts = async (opts: { intentsContract?: string; route: string }) => {

@@ -1186,7 +1186,7 @@ describe('payment watcher', () => {
     expect(statusSpy).not.toHaveBeenCalled();
   });
 
-  it('the 24 h stop raises payment.verification_timeout for an unverified SUCCESS', async () => {
+  it('keeps polling an unverified SUCCESS past 24 h (receipt lookup can recover)', async () => {
     setWatcherDeps({ now: clock, simulatedTx: async () => null });
     const s = await newSession();
     const q = await quote(s.client_secret);
@@ -1196,9 +1196,31 @@ describe('payment watcher', () => {
     expect((await paymentOf(q.id)).status).toBe('PROCESSING');
     offset = WATCH_MAX_MS + 60_000;
     const [r] = await poll(q.deposit_address);
-    expect(r!.stopped).toBe(true);
-    const [ev] = await eventsOf('payment.verification_timeout');
-    expect(ev!.aggregateId).toBe((await paymentOf(q.id)).id);
+    expect(r!.stopped).toBe(false);
+    expect(
+      (await prisma.quote.findUniqueOrThrow({ where: { id: q.id } })).watchStoppedAt,
+    ).toBeNull();
+    expect(await eventsOf('payment.verification_timeout')).toEqual([]);
+  });
+
+  it('resumeUnverifiedSuccessWatches reopens a stopped SUCCESS watch', async () => {
+    const { resumeUnverifiedSuccessWatches } = await import('./watcher.js');
+    setWatcherDeps({ now: clock, simulatedTx: async () => null });
+    const s = await newSession();
+    const q = await quote(s.client_secret);
+    await sim.simulate(q.deposit_address, 'exact');
+    fake.scriptTxStatus(simulatedDestinationTxHash(q.deposit_address), null);
+    await poll(q.deposit_address);
+    const pay = await paymentOf(q.id);
+    expect(pay.status).toBe('PROCESSING');
+    await prisma.quote.update({
+      where: { id: q.id },
+      data: { watchStoppedAt: clock(), watchNextAt: null },
+    });
+    expect(await resumeUnverifiedSuccessWatches(clock())).toBe(1);
+    const row = await prisma.quote.findUniqueOrThrow({ where: { id: q.id } });
+    expect(row.watchStoppedAt).toBeNull();
+    expect(row.watchNextAt).toEqual(clock());
   });
 
   it('worker jobs: the scan fans out one poll job per address; the poll job settles', async () => {

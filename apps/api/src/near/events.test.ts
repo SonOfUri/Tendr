@@ -203,4 +203,43 @@ describe('NearRpc.txStatus', () => {
     mode = 'down';
     await expect(rpc.txStatus('H', INTENTS)).rejects.toThrow('socket hang up');
   });
+
+  it('falls back to archival when the primary node does not know the tx', async () => {
+    const primary: RpcTransport = {
+      async request(): Promise<never> {
+        throw Object.assign(new Error('Timeout error'), { type: 'TIMEOUT_ERROR' });
+      },
+    };
+    const archival: RpcTransport = {
+      async request<T>(): Promise<T> {
+        return {
+          status: { SuccessValue: '' },
+          transaction: { hash: 'H', signer_id: 'intents.near', receiver_id: INTENTS, actions: [] },
+          transaction_outcome: {
+            id: 'H',
+            outcome: { logs: [], status: { SuccessValue: '' }, tokens_burnt: '1', gas_burnt: 1 },
+          },
+          receipts_outcome: [
+            {
+              id: 'r1',
+              outcome: {
+                logs: ['ok'],
+                status: { SuccessValue: '' },
+                executor_id: INTENTS,
+                tokens_burnt: '1',
+                gas_burnt: 1,
+              },
+            },
+          ],
+          receipts: [],
+        } as T;
+      },
+    };
+    const rpc = new NearRpc(primary, archival);
+    await expect(rpc.txStatus('H', INTENTS)).resolves.toMatchObject({
+      hash: 'H',
+      signerId: 'intents.near',
+      receipts: [{ receiptId: 'r1', executorId: INTENTS, logs: ['ok'], ok: true }],
+    });
+  });
 });

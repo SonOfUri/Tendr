@@ -98,6 +98,12 @@ function delegateSenders(actions: unknown[] | undefined): string[] {
 
 /** The node does not know the transaction (not yet, or wrong shard routing). */
 const UNKNOWN_TX = /\b(UNKNOWN_TRANSACTION|UnknownTransaction)\b/;
+/**
+ * Timeout / NOT_OBSERVED on a non-archival node usually means the tx is outside its retention
+ * window (or not routed yet). Treat as "unknown here" so callers can fall back to archival.
+ */
+const TX_NOT_ON_NODE =
+  /\b(UNKNOWN_TRANSACTION|UnknownTransaction|NOT_OBSERVED|TIMEOUT_ERROR|Timeout error|TimeoutError)\b/;
 
 /** A NEAR query answered with an error (e.g. unknown account, missing method, contract panic). */
 export class NearRpcError extends Error {
@@ -215,7 +221,11 @@ export function toTxResult(o: FinalExecutionOutcome, fallbackHash: string): TxRe
 }
 
 export class NearRpc {
-  constructor(private readonly transport: RpcTransport) {}
+  constructor(
+    private readonly transport: RpcTransport,
+    /** Optional archival node used when the primary does not know a transaction. */
+    private readonly archival: RpcTransport | null = null,
+  ) {}
 
   /** The current nonce of `publicKey` (`ed25519:…`) on `accountId`. */
   async accessKeyNonce(accountId: string, publicKey: string): Promise<bigint> {
@@ -334,17 +344,29 @@ export class NearRpc {
    * `EXPERIMENTAL_tx_status` of a final transaction: its signer, receiver and every receipt with
    * executor, logs and success. Null when the node does not know the transaction.
    * `accountId` (the sender, or else the receiver) routes the lookup to the right shard.
+   * When the primary RPC returns unknown/timeout and an archival transport is configured, retries
+   * there (settlement verification needs txs that free RPCs may have GC'd).
    */
   async txStatus(hash: string, accountId: string): Promise<TxStatusResult | null> {
+    const primary = await this.txStatusOn(this.transport, hash, accountId);
+    if (primary || !this.archival) return primary;
+    return this.txStatusOn(this.archival, hash, accountId);
+  }
+
+  private async txStatusOn(
+    transport: RpcTransport,
+    hash: string,
+    accountId: string,
+  ): Promise<TxStatusResult | null> {
     let o: FinalExecutionOutcome;
     try {
-      o = await this.transport.request<FinalExecutionOutcome>('EXPERIMENTAL_tx_status', {
+      o = await transport.request<FinalExecutionOutcome>('EXPERIMENTAL_tx_status', {
         tx_hash: hash,
         sender_account_id: accountId,
         wait_until: 'FINAL',
       });
     } catch (err) {
-      if (UNKNOWN_TX.test(errorText(err))) return null;
+      if (TX_NOT_ON_NODE.test(errorText(err)) || UNKNOWN_TX.test(errorText(err))) return null;
       throw err;
     }
     const predecessors = new Map(

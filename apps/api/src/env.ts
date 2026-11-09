@@ -86,6 +86,18 @@ const EnvSchema = z
     // Public rpc.mainnet.near.org is deprecated (HTTP -429). Prefer FastNear / listed providers.
     NEAR_RPC_URL_LIVE: z.string().url().default('https://free.rpc.fastnear.com'),
     NEAR_RPC_URL_TEST: z.string().url().default('https://rpc.testnet.fastnear.com'),
+    /**
+     * Archival fallback for `txStatus` when the primary node has GC'd the transaction (common after
+     * a few epochs on free/non-archival RPCs). Settlement verification needs receipt history.
+     */
+    NEAR_RPC_URL_LIVE_ARCHIVAL: z
+      .string()
+      .url()
+      .default('https://archival-rpc.mainnet.fastnear.com'),
+    NEAR_RPC_URL_TEST_ARCHIVAL: z
+      .string()
+      .url()
+      .default('https://archival-rpc.testnet.fastnear.com'),
     NEAR_PARENT_ACCOUNT_LIVE: z.string().min(1).default('tendr.near'),
     NEAR_PARENT_ACCOUNT_TEST: z.string().min(1).default('tendr.testnet'),
     INTENTS_CONTRACT_LIVE: z.string().min(1).default('intents.near'),

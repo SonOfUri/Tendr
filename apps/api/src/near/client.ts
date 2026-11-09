@@ -554,8 +554,11 @@ function build(livemode: boolean): { client: NearClient; fake?: FakeNearClient }
     });
     return { client: new CappedNearClient(fake, config, caps), fake };
   }
+  const primaryUrl = livemode ? e.NEAR_RPC_URL_LIVE : e.NEAR_RPC_URL_TEST;
+  const archivalUrl = livemode ? e.NEAR_RPC_URL_LIVE_ARCHIVAL : e.NEAR_RPC_URL_TEST_ARCHIVAL;
   const rpc = new NearRpc(
-    new JsonRpcTransport(livemode ? e.NEAR_RPC_URL_LIVE : e.NEAR_RPC_URL_TEST),
+    new JsonRpcTransport(primaryUrl),
+    archivalUrl !== primaryUrl ? new JsonRpcTransport(archivalUrl) : null,
   );
   const inner = new RpcNearClient({ rpc, kv: getKeyVault(), config });
   return { client: new CappedNearClient(inner, config, caps) };
@@ -586,8 +589,13 @@ export function relayerNearSender(livemode: boolean): RelayerNearSender {
   let s = relayerSenders.get(livemode);
   if (!s) {
     const e = env();
+    const primaryUrl = livemode ? e.NEAR_RPC_URL_LIVE : e.NEAR_RPC_URL_TEST;
+    const archivalUrl = livemode ? e.NEAR_RPC_URL_LIVE_ARCHIVAL : e.NEAR_RPC_URL_TEST_ARCHIVAL;
     s = new RelayerNearSender(
-      new NearRpc(new JsonRpcTransport(livemode ? e.NEAR_RPC_URL_LIVE : e.NEAR_RPC_URL_TEST)),
+      new NearRpc(
+        new JsonRpcTransport(primaryUrl),
+        archivalUrl !== primaryUrl ? new JsonRpcTransport(archivalUrl) : null,
+      ),
     );
     relayerSenders.set(livemode, s);
   }
