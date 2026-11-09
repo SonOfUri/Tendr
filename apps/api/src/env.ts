@@ -83,8 +83,9 @@ const EnvSchema = z
      */
     NEAR_FAKE_TIMELOCK_SECONDS: z.coerce.number().int().min(1).max(86_400).optional(),
     LIVE_ACCOUNT_DRIVER: z.enum(['contract', 'native_intents']).default('contract'),
-    NEAR_RPC_URL_LIVE: z.string().url().default('https://rpc.mainnet.near.org'),
-    NEAR_RPC_URL_TEST: z.string().url().default('https://rpc.testnet.near.org'),
+    // Public rpc.mainnet.near.org is deprecated (HTTP -429). Prefer FastNear / listed providers.
+    NEAR_RPC_URL_LIVE: z.string().url().default('https://free.rpc.fastnear.com'),
+    NEAR_RPC_URL_TEST: z.string().url().default('https://rpc.testnet.fastnear.com'),
     NEAR_PARENT_ACCOUNT_LIVE: z.string().min(1).default('tendr.near'),
     NEAR_PARENT_ACCOUNT_TEST: z.string().min(1).default('tendr.testnet'),
     INTENTS_CONTRACT_LIVE: z.string().min(1).default('intents.near'),
