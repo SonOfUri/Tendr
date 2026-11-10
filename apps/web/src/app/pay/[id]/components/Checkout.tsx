@@ -26,10 +26,7 @@ import { walletModalOpen } from '@/lib/wallets/modal-state';
 import { createDepositReporter, type PendingTx } from '@/lib/wallets/tx-store';
 import { TendrLogo } from '@/components/TendrLogo';
 import { toast } from '@/components/toast';
-import {
-  DemoCheckoutOpening,
-  DemoCheckoutPanel,
-} from '@/components/demo/DemoCheckoutPanel';
+import { DemoCheckoutOpening, DemoCheckoutPanel } from '@/components/demo/DemoCheckoutPanel';
 import { parseShopperThemeCached } from '@/lib/theme/parse';
 import { EmailPanel, NeedsAddressPanel } from './ActionPanels';
 import { successBackBlock } from './CheckoutCanvas';
@@ -89,6 +86,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   const [tokensFailed, setTokensFailed] = useState(false);
   // Framed by a registered store page: the × control can tell it to close.
   const [canClose, setCanClose] = useState(false);
+  const [modalEmbed, setModalEmbed] = useState(false);
   const pollerRef = useRef<Poller | null>(null);
   const bridgeRef = useRef<EmbedBridge | null>(null);
   // The wallet window opened from a framed checkout (`?wallet=1`, lib/wallets/popup.ts).
@@ -105,6 +103,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     setSecret(s);
     if (!s) setFatal('incomplete');
     setWalletWindow(isWalletWindow(window.location.search));
+    setModalEmbed(window.self !== window.top && isModalEmbed(window.location.search));
   }, [sessionId]);
 
   const client = useMemo(
@@ -349,14 +348,18 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     if (!secret || view || fatal) return;
     const t = window.setTimeout(() => {
-      toast.error("Checkout is taking too long. Go back and use Continue your payment.");
+      toast.error('Checkout is taking too long. Go back and use Continue your payment.');
     }, 12_000);
     return () => window.clearTimeout(t);
   }, [secret, view, fatal]);
 
   if (fatal || secret === null) {
     return (
-      <div className="hosted-pay-page" data-theme="light">
+      <div
+        className="hosted-pay-page"
+        data-theme="light"
+        data-embed={modalEmbed ? 'modal' : undefined}
+      >
         <div className="hosted-pay-edge">
           <section className="pay-section">
             <h1 className="pay-title">
@@ -378,7 +381,11 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   // undefined = boot/handoff not read yet; never treat null as "still checking".
   if (secret === undefined) {
     return (
-      <div className="hosted-pay-page" data-theme="light">
+      <div
+        className="hosted-pay-page"
+        data-theme="light"
+        data-embed={modalEmbed ? 'modal' : undefined}
+      >
         <div className="hosted-pay-edge">
           {connection === 'reconnecting' ? <Reconnecting /> : null}
           <CheckingScreen />
@@ -393,7 +400,11 @@ export function Checkout({ sessionId }: { sessionId: string }) {
 
   if (!view || !screen || !client) {
     return (
-      <div className="hosted-pay-page" data-theme="light">
+      <div
+        className="hosted-pay-page"
+        data-theme="light"
+        data-embed={modalEmbed ? 'modal' : undefined}
+      >
         {connection === 'reconnecting' ? <Reconnecting /> : null}
         <DemoCheckoutOpening
           productName="Checkout"
@@ -424,7 +435,11 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   });
 
   return (
-    <div className="hosted-pay-page" data-theme="light">
+    <div
+      className="hosted-pay-page"
+      data-theme="light"
+      data-embed={modalEmbed ? 'modal' : undefined}
+    >
       <p className="sr-only" role="status" aria-live="polite">
         {ANNOUNCE[screen.kind]}
       </p>
@@ -435,7 +450,11 @@ export function Checkout({ sessionId }: { sessionId: string }) {
           <div className="hosted-pay-edge">
             <section className="pay-section">
               <p className="muted">Payment options didn&apos;t load.</p>
-              <button type="button" className="pay-button pay-button-secondary" onClick={loadTokens}>
+              <button
+                type="button"
+                className="pay-button pay-button-secondary"
+                onClick={loadTokens}
+              >
                 Try again
               </button>
             </section>

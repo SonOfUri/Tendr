@@ -60,6 +60,24 @@
   width: min(400px, 100%);
 }
 
+/* The WooCommerce/embed modal has a wider desktop frame. Give its actual payment content
+   room as well; direct hosted links keep their existing compact presentation. */
+main:has(.hosted-pay-page[data-embed='modal']) {
+  width: 100%;
+}
+
+.hosted-pay-page[data-embed='modal'] {
+  padding: clamp(0.5rem, 2vw, 1.5rem);
+}
+
+.hosted-pay-page[data-embed='modal'] :is(.demo-checkout-card, .demo-status-card, .hosted-pay-edge) {
+  width: min(760px, 100%);
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  max-height: none;
+  padding: clamp(1.15rem, 3vw, 2rem);
+}
+
 .hosted-pay-edge {
   width: min(400px, 100%);
   background: var(--demo-panel);

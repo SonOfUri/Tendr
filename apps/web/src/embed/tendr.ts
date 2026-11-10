@@ -146,7 +146,7 @@ export function createTendr(win: Window, baseUrl: string): Tendr {
       overlay.setAttribute('aria-label', FRAME_TITLE);
       overlay.style.cssText =
         'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:flex-start;' +
-        'justify-content:center;overflow:auto;padding:16px;box-sizing:border-box;' +
+        'justify-content:center;overflow:auto;padding:64px 16px 24px;box-sizing:border-box;' +
         'background:rgba(5,8,18,.72)';
 
       let closed = false;
@@ -173,9 +173,11 @@ export function createTendr(win: Window, baseUrl: string): Tendr {
         hash < 0 ? '' : opts.sessionUrl.slice(hash)
       }`;
       const f = frame(opts, close, src);
-      // ~2× the original 480px modal; checkout content keeps its own width.
+      // Give desktop checkout room without covering the store edge or close control.
       f.iframe.style.width = '100%';
       f.iframe.style.maxWidth = '960px';
+      f.iframe.style.maxHeight = 'calc(100dvh - 88px)';
+      f.iframe.style.flexShrink = '0';
       f.iframe.style.borderRadius = '16px';
 
       // The overlay's own close control: it works even when the checkout cannot talk to this page
