@@ -3,8 +3,10 @@
 defined( 'ABSPATH' ) || exit;
 
 add_action( 'wp_enqueue_scripts', function () {
+    // Storefront also queues this file with the static theme version at priority 30.
+    wp_dequeue_style( 'storefront-child-style' );
     wp_enqueue_style( 'tendr-fashion', get_stylesheet_uri(), array( 'storefront-style' ), filemtime( get_stylesheet_directory() . '/style.css' ) );
-}, 30 );
+}, 40 );
 
 add_action( 'init', function () {
     remove_action( 'storefront_sidebar', 'storefront_get_sidebar', 10 );
@@ -12,6 +14,10 @@ add_action( 'init', function () {
     remove_action( 'storefront_after_footer', 'storefront_handheld_footer_bar', 999 );
 } );
 add_filter( 'storefront_customizer_google_font_families', '__return_empty_array' );
+add_filter( 'body_class', function ( $classes ) {
+    if ( is_cart() || is_checkout() ) { $classes[] = 'fashion-commerce-page'; }
+    return $classes;
+} );
 add_filter( 'loop_shop_columns', function () { return 3; } );
 add_filter( 'loop_shop_per_page', function () { return 12; } );
 add_filter( 'woocommerce_gallery_image_size', function () { return 'full'; } );

@@ -626,10 +626,33 @@ button.alt:hover,
 .wc-block-components-notice-banner {
   border-radius: 0;
 }
+/* Keep purchasing pages out of the text-column limit and Storefront's
+   wide-block breakout so both columns remain inside the page. */
+.fashion-commerce-page #content > .col-full,
+.fashion-commerce-page .storefront-breadcrumb > .col-full {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1280px;
+}
+.fashion-commerce-page .hentry .entry-content {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+.fashion-commerce-page #content .entry-content > .alignwide {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  margin-inline: 0;
+  padding-inline: 0;
+}
+.fashion-commerce-page .wc-block-components-sidebar-layout > * {
+  min-width: 0;
+}
 .page-template-default .entry-content {
   line-height: 1.8;
 }
-.page:not(.woocommerce-page) .entry-content {
+body.page:not(.woocommerce-page):not(.fashion-commerce-page) .entry-content {
   max-width: 780px;
 }
 .entry-content a:not(.button):not(.wc-block-components-button) {
