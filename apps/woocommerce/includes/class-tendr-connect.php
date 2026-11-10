@@ -510,6 +510,16 @@ final class Tendr_Connect {
 	}
 
 	/**
+	 * A domain, scheme or subdirectory move needs Connect again: the old connection still
+	 * holds the old checkout origin and webhook address. Keep its keys for the hand-over.
+	 */
+	public static function site_address_changed(): bool {
+		$connection = self::connection();
+		return null !== $connection
+			&& untrailingslashit( (string) ( $connection['site_url'] ?? '' ) ) !== untrailingslashit( home_url() );
+	}
+
+	/**
 	 * The current mode: 'test' or 'live'.
 	 */
 	public static function mode(): string {

@@ -34,11 +34,33 @@ class SettingsTest extends Tendr_Test_Case {
 		$this->assertStringContainsString( 'Corner Shop a', $html );
 		$this->assertStringContainsString( 'Test mode', $html );
 		$this->assertStringContainsString( 'action=tendr_disconnect', $html );
-		$this->assertStringNotContainsString( 'data-tendr-connect=', $html );
+		$this->assertStringContainsString( 'data-tendr-connect=', $html );
+		$this->assertStringContainsString( 'Reconnect to tendr', $html );
 		// C2: Disconnect posts the form with its own nonce; no GET link can disconnect.
 		$this->assertMatchesRegularExpression( '/<button[^>]*formmethod="post"[^>]*action=tendr_disconnect[^>]*data-tendr-disconnect/', $html );
 		$this->assertStringContainsString( 'name="tendr_disconnect_nonce"', $html );
-		$this->assertStringNotContainsString( '_wpnonce', $html );
+		$this->assertStringContainsString( '_wpnonce', $html, 'Reconnect uses a nonce-protected start URL' );
+	}
+
+	public function test_moved_site_keeps_its_credentials_but_requires_reconnect(): void {
+		$this->login_admin();
+		self::connect_locally();
+		$connection             = Tendr_Connect::connection();
+		$connection['site_url'] = 'https://previous-store.example';
+		update_option( Tendr_Connect::CONNECTION, $connection );
+
+		$this->assertTrue( Tendr_Connect::is_connected(), 'old keys must remain for the connection hand-over' );
+		$this->assertTrue( Tendr_Connect::site_address_changed() );
+		$this->assertStringContainsString( 'Your site address changed', Tendr_Settings::admin_notices_html() );
+		$html = Tendr_Settings::render();
+		$this->assertStringContainsString( 'Crypto checkout is paused', $html );
+		$this->assertStringContainsString( 'data-tendr-connect=', $html );
+		$this->assertFalse( ( new Tendr_Gateway() )->is_available() );
+
+		$connection['site_url'] = home_url() . '/';
+		update_option( Tendr_Connect::CONNECTION, $connection );
+		$this->assertFalse( Tendr_Connect::site_address_changed(), 'a trailing slash is not a move' );
+		$this->assertTrue( ( new Tendr_Gateway() )->is_available() );
 	}
 
 	public function test_a_site_wide_notice_says_test_mode_to_store_managers(): void {

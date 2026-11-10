@@ -3,7 +3,7 @@ Tags: woocommerce, payments, crypto, stablecoin, checkout
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.0
-Stable tag: 0.3.2
+Stable tag: 0.3.3
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -109,6 +109,10 @@ Sora source: https://github.com/sora-xor/sora-font
 Instrument Sans source: https://github.com/Instrument/instrument-sans
 
 == Changelog ==
+
+= 0.3.3 =
+* Restore Reconnect for connected stores, detect site address changes, and pause checkout until the connection has moved.
+* Fall back to the same hosted payment session when an embedded checkout fails to load.
 
 = 0.3.2 =
 * Removes the Tendr-hosted plugin updater for WordPress.org distribution.

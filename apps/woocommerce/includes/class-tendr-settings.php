@@ -58,6 +58,10 @@ final class Tendr_Settings {
 		if ( null !== $salts ) {
 			$html .= '<div class="notice notice-error"><p>' . esc_html( Tendr_Credentials::salt_message( $salts ) ) . '</p></div>';
 		}
+		if ( Tendr_Connect::is_connected() && Tendr_Connect::site_address_changed() ) {
+			$html .= '<div class="notice notice-error"><p>' . esc_html__( 'Your site address changed. Reconnect to tendr to update the checkout domain and payment notification address. Crypto checkout is paused until then.', 'tendr-pay-with-crypto' )
+				. ' <a href="' . esc_url( self::url() ) . '">' . esc_html__( 'Open tendr settings', 'tendr-pay-with-crypto' ) . '</a></p></div>';
+		}
 		if ( Tendr_Connect::is_connected() && 'test' === Tendr_Connect::mode() ) {
 			$html .= '<div class="notice notice-warning tendr-test-mode"><p><strong>' . esc_html__( 'tendr is in test mode.', 'tendr-pay-with-crypto' ) . '</strong> '
 				. esc_html__( 'Crypto payments are simulated and only store managers see the payment method.', 'tendr-pay-with-crypto' )
@@ -494,6 +498,9 @@ final class Tendr_Settings {
 		$blocker    = Tendr_Connect::blocker();
 
 		if ( null !== $connection && 'ok' === $status ) {
+			if ( Tendr_Connect::site_address_changed() ) {
+				$html .= self::notice( 'error', __( 'Your site address changed. Reconnect to the same tendr store to update the checkout domain and payment notifications. Crypto checkout is paused until you reconnect. Reconnecting starts in Test mode; switch back to Live after checking the connection.', 'tendr-pay-with-crypto' ) );
+			}
 			if ( null !== $blocker ) {
 				$html .= self::notice( 'error', __( 'Payment updates cannot reach this site:', 'tendr-pay-with-crypto' ) . ' ' . $blocker->get_error_message(), self::fix_link( $blocker ) );
 			}
@@ -551,7 +558,12 @@ final class Tendr_Settings {
 			$html .= '<div><dt>' . esc_html__( 'Live account', 'tendr-pay-with-crypto' ) . '</dt><dd><code>' . esc_html( (string) $connection['live_account'] ) . '</code></dd></div>';
 		}
 		$html .= '</dl><div class="tendr-admin-actions"><a class="button button-primary" href="' . esc_url( $dashboard ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Open tendr dashboard', 'tendr-pay-with-crypto' ) . '</a>'
-			. '<a class="button" href="' . esc_url( $review ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Review queue', 'tendr-pay-with-crypto' ) . '</a></div></section>';
+			. '<a class="button" href="' . esc_url( $review ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Review queue', 'tendr-pay-with-crypto' ) . '</a>';
+		if ( null === Tendr_Connect::blocker() ) {
+			$start = wp_nonce_url( admin_url( 'admin-post.php?action=tendr_connect_start' ), 'tendr_connect_start' );
+			$html .= '<button type="button" class="button" data-tendr-connect="' . esc_url( $start ) . '">' . esc_html__( 'Reconnect to tendr', 'tendr-pay-with-crypto' ) . '</button><span class="tendr-connect-status" role="status" aria-live="polite"></span>';
+		}
+		$html .= '</div></section>';
 		$html .= '<section class="tendr-admin-card"><h3>' . esc_html__( 'Payment preferences', 'tendr-pay-with-crypto' ) . '</h3>' . self::settings_fields( $post ) . '</section></div>';
 		$html .= '<aside class="tendr-admin-side"><section class="tendr-admin-card"><div class="tendr-admin-card-heading"><h3>' . esc_html__( 'Payment mode', 'tendr-pay-with-crypto' ) . '</h3><span class="tendr-admin-badge ' . ( $live ? 'tendr-admin-badge-dark' : '' ) . '">' . esc_html( $mode ) . '</span></div>'
 			. '<p class="tendr-admin-description">' . ( $live

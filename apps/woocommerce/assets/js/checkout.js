@@ -4,7 +4,8 @@
  * - action "pay" (the order-pay step): open the tendr modal (tendr.js, `Tendr.open({ sessionUrl,
  *   onEvent })`) on the order's session. When the checkout completes, go to the thank-you page.
  *   If the modal can't run (tendr.js blocked or failed to load, an old browser, or it refuses the
- *   URL), go to the hosted checkout page instead.
+ *   URL, or the frame does not report ready within 15 seconds), go to the hosted checkout page
+ *   instead, using the same payment session.
  * - action "wait" (the thank-you page): ask the plugin's order-status endpoint every few seconds
  *   and reload once the order is no longer pending. The browser never marks an order paid; the
  *   signed webhook does.
@@ -19,19 +20,16 @@
     var root = document.querySelector('[data-tendr-pay]');
     var button = root ? root.querySelector('[data-tendr-open]') : null;
     var opened = false;
+    var attempt = 0;
+    var readyTimer = null;
+
+    function stopTimer() {
+      window.clearTimeout(readyTimer);
+      readyTimer = null;
+    }
 
     function redirect() {
       window.location.assign(data.sessionUrl);
-    }
-
-    function onEvent(event) {
-      if (!event || typeof event !== 'object') return;
-      if (event.type === 'complete') {
-        window.location.assign(data.successUrl);
-      } else if (event.type === 'close') {
-        opened = false;
-        if (button) button.focus();
-      }
     }
 
     function open() {
@@ -41,10 +39,39 @@
         redirect();
         return;
       }
+      opened = true;
+      var current = ++attempt;
+      var modal;
+      // Browsers do not reliably fire iframe.onerror when CSP refuses the frame. Wait for the
+      // SDK's origin/source-checked handshake instead; never infer payment from a frame load.
+      readyTimer = window.setTimeout(function () {
+        if (!opened || current !== attempt) return;
+        opened = false;
+        readyTimer = null;
+        if (modal && typeof modal.close === 'function') modal.close();
+        redirect();
+      }, 15000);
       try {
-        tendr.open({ sessionUrl: data.sessionUrl, onEvent: onEvent });
-        opened = true;
+        modal = tendr.open({
+          sessionUrl: data.sessionUrl,
+          onEvent: function (event) {
+            if (!opened || current !== attempt || !event || typeof event !== 'object') return;
+            if (event.type === 'ready' || event.type === 'status' || event.type === 'complete') {
+              stopTimer();
+            }
+            if (event.type === 'complete') {
+              opened = false;
+              window.location.assign(data.successUrl);
+            } else if (event.type === 'close') {
+              stopTimer();
+              opened = false;
+              if (button) button.focus();
+            }
+          },
+        });
       } catch (e) {
+        stopTimer();
+        opened = false;
         redirect();
       }
     }

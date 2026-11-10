@@ -1047,7 +1047,7 @@ approval decision; automated checks do not establish full compliance.
 | Guideline areas | Package evidence / remaining work |
 | --- | --- |
 | 1–2: licensing and responsibility | GPL-2.0-or-later declared; GPL text, font OFL notices and asset attribution included. Publisher must have rights to the Tendr branding and service. |
-| 3, 14–15: distribution and releases | Custom updater removed; version increased to 0.3.2. SVN release access and future maintenance start after directory approval. |
+| 3, 14–15: distribution and releases | Custom updater removed; version increased to 0.3.3. SVN release access and future maintenance start after directory approval. |
 | 4, 13: readable code and libraries | Shipped PHP/JS is readable. Blocks uses WordPress/WooCommerce libraries; no duplicate React/jQuery or bundled dev dependencies. |
 | 5–6, 16: working service | Live/test gateway, order updates and refunds are implemented. Account requirements, charges and the hosted service are documented. Service availability is still a reviewer check. |
 | 7: consent and data | Connection is merchant-initiated. Readme now names endpoints, customer email, order keys/details, brand sync, stored metadata and retention. Public policies remain a blocker below. |
@@ -1073,8 +1073,17 @@ WordPress.org username is confirmed; the candidate assumes the slug `tendr-pay-w
 **Validation:** Plugin Check static/runtime: zero errors, one performance advisory on
 `Tendr_Refunds::remaining()`. That query excludes only the current WooCommerce draft refund,
 scoped to one parent order; the exclusion is intentional to prevent double-counting. No finding
-is suppressed. PHPUnit: 247 tests / 1,232 assertions pass. PHP coding standards and compatibility checks pass.
+is suppressed. PHPUnit: 249 tests / 1,248 assertions pass; six checkout JavaScript regressions pass. PHP coding standards and compatibility checks pass.
 The runtime check also passes without the earlier translation-loading notice. The nine removed tests covered the deleted pilot updater.
+
+**Store address changes (0.3.3).** A changed domain, HTTPS scheme or subdirectory requires
+**Reconnect to tendr** in the plugin settings so Tendr updates both the checkout allowlist and
+webhook destination. Checkout pauses while the saved site address is stale; credentials stay
+available for the existing connection-replacement flow. Reconnecting starts in Test mode; check
+readiness and select Live again. On an otherwise connected store, an embedded checkout without
+a ready/status/complete handshake after 15 seconds falls back to the exact same hosted session.
+Closing the modal cancels that timer; a loaded checkout is never timed out. Run its regression
+tests with `npm run test:js --workspace=@tendr/woocommerce`.
 
 **Payout.** Connect asks where payments settle (USDC on NEAR by default, or another offered token)
 for a new store, and for a picked store that has none. The owner approves the `set_settlement`

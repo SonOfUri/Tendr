@@ -14,7 +14,7 @@ npm run dev:wordpress
 ```
 
 The first run installs WordPress 7.1.3, PHP 8.3, WooCommerce 11.2.1 (the plugin's tested version),
-the Storefront theme and Tendr 0.3.2 from the local release ZIP. It creates a **$1 virtual product**,
+the Storefront theme and Tendr 0.3.3 from the local release ZIP. It creates a **$1 virtual product**,
 enables pretty permalinks and guest checkout, and uses USD. Subsequent starts retain orders,
 products, configuration and Tendr connections. The Tendr plugin is refreshed from this checkout.
 An existing active theme is retained on restart.
@@ -127,7 +127,10 @@ and dependable hosting are needed for a permanent customer store.
 If the tunnel hostname changes, run the `--url` command again, sign in at the new origin and click
 **Reconnect** using the same Tendr store. The plugin has a connection-replacement flow for earlier
 orders; merely changing WordPress's URL does not update Tendr's registered webhook URL. Keep the
-same tunnel during an in-progress payment. Before retiring the store, disconnect it or revoke
+same tunnel during an in-progress payment. From 0.3.3, a changed site address pauses crypto checkout
+and shows a Reconnect notice. Use Reconnect without disconnecting first: it preserves the old
+connection credentials for the order hand-over. Reconnecting starts in Test mode, so select Live
+again after the readiness check. Before retiring the store, disconnect it or revoke
 its connection from the Tendr dashboard.
 
 ## Stop or return to local-only access

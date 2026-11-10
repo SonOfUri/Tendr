@@ -65,7 +65,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	 */
 	public function __construct() {
 		$this->id                 = self::ID;
-		$this->method_title       = __( 'tendr-pay-with-crypto', 'tendr-pay-with-crypto' );
+		$this->method_title       = __( 'tendr', 'tendr-pay-with-crypto' );
 		$this->method_description = __( 'Take crypto payments that settle into your own tendr account.', 'tendr-pay-with-crypto' );
 		$this->title              = __( 'Pay with crypto', 'tendr-pay-with-crypto' );
 		$this->description        = __( 'Pay with crypto from any wallet or exchange.', 'tendr-pay-with-crypto' );
@@ -145,7 +145,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	 * (`manage_woocommerce`) see it; guests and customers never do.
 	 */
 	public function is_available() {
-		if ( ! parent::is_available() || ! Tendr_Connect::is_connected() ) {
+		if ( ! parent::is_available() || ! Tendr_Connect::is_connected() || Tendr_Connect::site_address_changed() ) {
 			return false;
 		}
 		if ( 'test' === Tendr_Connect::mode() && ! current_user_can( 'manage_woocommerce' ) ) {
@@ -520,6 +520,9 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	 * @return string|WP_Error The session id, or why there is none.
 	 */
 	public function ensure_session( WC_Order $order ) {
+		if ( Tendr_Connect::site_address_changed() ) {
+			return new WP_Error( 'ACCOUNT_NOT_READY', __( 'Reconnect this site from the tendr payment settings after changing its address.', 'tendr-pay-with-crypto' ) );
+		}
 		$mode       = Tendr_Connect::mode();
 		$session_id = (string) $order->get_meta( self::META_SESSION_ID );
 		$have_url   = self::is_session_url( (string) $order->get_meta( self::META_SESSION_URL ) );
@@ -761,6 +764,10 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	public static function receipt_page( $order_id ): void {
 		$order = wc_get_order( $order_id );
 		if ( ! $order instanceof WC_Order || self::ID !== $order->get_payment_method() || ! $order->needs_payment() ) {
+			return;
+		}
+		if ( Tendr_Connect::site_address_changed() ) {
+			echo '<p class="tendr-pay">' . esc_html__( 'Crypto payment is temporarily unavailable while this store updates its connection. Please try again later or contact the store.', 'tendr-pay-with-crypto' ) . '</p>';
 			return;
 		}
 		$session_url = (string) $order->get_meta( self::META_SESSION_URL );
