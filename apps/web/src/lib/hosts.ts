@@ -154,7 +154,11 @@ export function routeForHost(input: {
 }): HostRoute {
   const { host, pathname, search } = input;
   const invoice = parseOrigin(input.invoiceOrigin ?? null);
-  if (invoice && sameHost(host, invoice)) {
+  const pay = parseOrigin(input.payOrigin);
+  const app = parseOrigin(input.appOrigin);
+  // Dedicated invoice host only. When INVOICE_BASE_URL shares the app origin
+  // (`https://app…/invoice/...`), fall through so `/invoice/<slug>` keeps working.
+  if (invoice && sameHost(host, invoice) && !(app && sameHost(host, app))) {
     const seg = firstSegment(pathname);
     if (pathname === '/') return redirect(input.landingUrl);
     if (isDemo(pathname)) return NOT_FOUND;
@@ -165,8 +169,6 @@ export function routeForHost(input: {
       return { kind: 'rewrite', pathname: `/invoice${pathname}` };
     return NOT_FOUND;
   }
-  const pay = parseOrigin(input.payOrigin);
-  const app = parseOrigin(input.appOrigin);
   // Unknown hosts: behave as before.
   if (!pay || !app) return otherHost(input);
   // One origin for both (the demo deployment, one-origin dev): the API hands out root-form URLs on

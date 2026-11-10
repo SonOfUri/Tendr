@@ -283,4 +283,16 @@ describe('invoice host', () => {
     expect(invoice('/invoice/acme')).toEqual(notFound);
     expect(invoice('/acme', 'unknown.example.com')).toEqual(next);
   });
+  it('does not treat the app host as invoice-only when bases share an origin', () => {
+    const shared = routeForHost({
+      host: 'app.usetendr.tech',
+      pathname: '/invoice/acme',
+      search: '',
+      invoiceOrigin: 'https://app.usetendr.tech/invoice',
+      payOrigin: PAY,
+      appOrigin: APP,
+      landingUrl: LANDING,
+    });
+    expect(shared).toEqual(next);
+  });
 });
