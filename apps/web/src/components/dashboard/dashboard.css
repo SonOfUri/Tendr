@@ -628,10 +628,22 @@ body:has(.dash-app) {
 }
 
 .dash-sidebar-account-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   margin: 0;
+  min-width: 0;
   font-size: 0.7rem;
   font-weight: 600;
   color: #8f8f8f;
+}
+
+.dash-sidebar-account-role > svg {
+  flex: 0 0 auto;
+}
+
+.dash-sidebar-account-role > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -887,11 +899,53 @@ html[data-appearance='light'] .dash-panel-icon-btn:focus-visible {
 }
 
 .dash-stat-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   font-size: 0.72rem;
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--tendr-muted);
+}
+
+.dash-stat-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: #d4d4d4;
+  line-height: 0;
+}
+
+html[data-appearance='light'] .dash-stat-icon {
+  color: #3a3a3a;
+}
+
+.dash-panel-title-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.dash-panel-title-with-icon > svg {
+  flex: 0 0 auto;
+  color: #d4d4d4;
+}
+
+html[data-appearance='light'] .dash-panel-title-with-icon > svg {
+  color: #3a3a3a;
+}
+
+.dash-balance-asset-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.dash-balance-asset-main .brand-mark {
+  flex: 0 0 auto;
 }
 
 .dash-stat-value {

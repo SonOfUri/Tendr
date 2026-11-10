@@ -12,8 +12,10 @@ import {
   type ComponentType,
 } from 'react';
 import {
+  Building2,
   CheckCircle2,
   CreditCard,
+  Crown,
   FlaskConical,
   Globe,
   KeyRound,
@@ -21,16 +23,16 @@ import {
   LineChart,
   Link2,
   LogOut,
-  PanelLeft,
-  PanelLeftClose,
   MapPin,
   Menu,
   Palette,
+  PanelLeft,
+  PanelLeftClose,
   Radio,
   SearchCheck,
   Settings2,
   Shield,
-  Building2,
+  UserRound,
   Users,
   Wallet,
   Webhook,
@@ -106,8 +108,8 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Overview',
     items: [
       { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
-      { href: '/dashboard/insights', label: 'Insights', icon: LineChart },
       { href: '/dashboard/account', label: 'Account', icon: Building2 },
+      { href: '/dashboard/insights', label: 'Insights', icon: LineChart },
     ],
   },
   {
@@ -618,7 +620,16 @@ function DashboardSidebar({
               {me.user.email}
             </p>
             <p className="dash-sidebar-account-role">
-              {store.name} · {store.role}
+              {store.role === 'owner' ? (
+                <Crown size={12} strokeWidth={2} aria-hidden />
+              ) : store.role === 'admin' ? (
+                <Shield size={12} strokeWidth={2} aria-hidden />
+              ) : (
+                <UserRound size={12} strokeWidth={2} aria-hidden />
+              )}
+              <span>
+                {store.name} · {store.role}
+              </span>
             </p>
           </div>
         </div>

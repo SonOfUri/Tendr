@@ -1,11 +1,22 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { Alert, Button, StatusBadge } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
-import { Check, ChevronRight, CircleCheck, Wallet } from 'lucide-react';
+import {
+  Check,
+  ChevronRight,
+  CircleCheck,
+  Crown,
+  FlaskConical,
+  Radio,
+  Shield,
+  UserRound,
+  Wallet,
+} from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
+import { TokenLogo } from '@/components/dashboard/asset-logos';
 import { NativeWalletSetup } from '@/components/dashboard/NativeWallet';
 import { CopyableId } from '@/components/dashboard/CopyableId';
 import { EmptyState, ErrorState, PageHeader, Panel, Stat } from '@/components/dashboard/ui';
@@ -13,6 +24,13 @@ import { api, errorMessage, type AccountView, type Balances, type GoLiveStatus }
 import { assetInfo, formatAmount } from '@/lib/assets';
 import { toast } from '@/components/toast';
 import { withStepUp } from '@/lib/webauthn';
+
+function roleIcon(role: string | null | undefined) {
+  const r = (role ?? '').toLowerCase();
+  if (r === 'owner') return <Crown size={14} strokeWidth={2} aria-hidden />;
+  if (r === 'admin') return <Shield size={14} strokeWidth={2} aria-hidden />;
+  return <UserRound size={14} strokeWidth={2} aria-hidden />;
+}
 
 interface Home {
   test: AccountView;
@@ -257,16 +275,19 @@ export default function AccountHomePage() {
       <div className="dash-stat-grid">
         <Stat
           label="Role"
+          icon={roleIcon(store.role)}
           value={store.role ? store.role.charAt(0).toUpperCase() + store.role.slice(1) : store.role}
           hint={store.isSigner ? 'Signer on this business' : 'Not a signer'}
         />
         <Stat
           label="Test"
+          icon={<FlaskConical size={14} strokeWidth={2} aria-hidden />}
           value={STATUS_WORDS[home.test.account?.status ?? ''] ?? home.test.account?.status ?? '—'}
           hint={home.test.account ? 'Provisioned' : 'Not created'}
         />
         <Stat
           label="Live"
+          icon={<Radio size={14} strokeWidth={2} aria-hidden />}
           value={
             live
               ? (STATUS_WORDS[live.status] ?? live.status)
@@ -286,7 +307,12 @@ export default function AccountHomePage() {
 
       <div className="dash-account-grid">
         <AccountCard
-          title="Test account"
+          title={
+            <span className="dash-panel-title-with-icon">
+              <FlaskConical size={16} strokeWidth={2} aria-hidden />
+              Test account
+            </span>
+          }
           view={home.test}
           balances={home.testBalances}
           note="Test money only. Try payments here first."
@@ -299,7 +325,12 @@ export default function AccountHomePage() {
           busy={busy}
         />
         <AccountCard
-          title="Live account"
+          title={
+            <span className="dash-panel-title-with-icon">
+              <Radio size={16} strokeWidth={2} aria-hidden />
+              Live account
+            </span>
+          }
           view={home.live}
           balances={home.liveBalances}
           note={live ? 'Real money.' : 'Created when you go live.'}
@@ -469,7 +500,7 @@ function AccountCard({
   onRetry,
   busy,
 }: {
-  title: string;
+  title: ReactNode;
   view: AccountView;
   balances: Balances;
   note: string;
@@ -510,7 +541,14 @@ function AccountCard({
               return (
                 <li key={b.asset} className="dash-balance-row">
                   <span className="dash-balance-asset dash-muted dash-small" title={b.asset}>
-                    {label}
+                    <span className="dash-balance-asset-main">
+                      <TokenLogo
+                        symbol={info.known ? info.symbol : b.asset}
+                        assetId={b.asset}
+                        size={22}
+                      />
+                      <span>{label}</span>
+                    </span>
                   </span>
                   <strong className="dash-balance-amt" title={formatAmount(b.asset, b.amount, livemode)}>
                     {amount}

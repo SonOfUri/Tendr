@@ -54,14 +54,19 @@ export function Stat({
   label,
   value,
   hint,
+  icon,
 }: {
   label: string;
   value: ReactNode;
   hint?: ReactNode;
+  icon?: ReactNode;
 }) {
   return (
     <div className="dash-stat">
-      <span className="dash-stat-label">{label}</span>
+      <span className="dash-stat-label">
+        {icon ? <span className="dash-stat-icon">{icon}</span> : null}
+        {label}
+      </span>
       <span className="dash-stat-value">{value}</span>
       {hint ? <span className="dash-stat-hint">{hint}</span> : null}
     </div>
