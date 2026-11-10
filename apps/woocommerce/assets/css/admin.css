@@ -1,0 +1,454 @@
+@font-face {
+  font-family: 'Tendr Sora';
+  src: url('../fonts/sora.woff2') format('woff2');
+  font-weight: 100 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Tendr Instrument Sans';
+  src: url('../fonts/instrument-sans.woff2') format('woff2');
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+/* Match the dashboard's monochrome theme, within this plugin's settings only. */
+.tendr-admin {
+  --tendr-admin-border: #e5e5e5;
+  color: #171717;
+  font-family: 'Tendr Sora', sans-serif;
+  font-size: 13px;
+  line-height: 1.65;
+  max-width: 1160px;
+  margin: 24px 0 40px;
+}
+
+.tendr-admin,
+.tendr-admin * {
+  box-sizing: border-box;
+}
+
+.tendr-admin .tendr-admin-header {
+  padding: 30px 34px 32px;
+  margin-bottom: 24px;
+  border: 1px solid #242424;
+  border-radius: 16px;
+  color: #f5f5f5;
+  background: #101010;
+}
+
+.tendr-admin-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 26px;
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -1.3px;
+}
+
+.tendr-admin-brand img {
+  display: block;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 26px;
+  object-fit: contain;
+}
+
+.tendr-admin-brand .tendr-admin-platform {
+  margin-left: auto;
+  border: 1px solid #404040;
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: #d4d4d4;
+}
+
+.tendr-admin .tendr-admin-header h2 {
+  color: #fff;
+  font-family: 'Tendr Instrument Sans', sans-serif;
+  font-size: clamp(26px, 3vw, 36px);
+  font-weight: 600;
+  letter-spacing: -1px;
+  line-height: 1.15;
+  margin: 0 0 10px;
+  padding: 0;
+}
+
+.tendr-admin .tendr-admin-header p {
+  color: #bdbdbd;
+  margin: 0;
+}
+
+.tendr-admin-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.55fr);
+  gap: 20px;
+  margin-top: 24px;
+  align-items: start;
+}
+
+.tendr-admin-main,
+.tendr-admin-side {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.tendr-admin-card {
+  min-width: 0;
+  padding: 26px;
+  background: #fff;
+  border: 1px solid var(--tendr-admin-border);
+  border-radius: 14px;
+}
+
+.tendr-admin-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tendr-admin h3 {
+  font-family: 'Tendr Instrument Sans', sans-serif;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.35px;
+  margin: 0;
+  color: #171717;
+}
+
+.tendr-admin p,
+.tendr-admin li {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.tendr-admin .tendr-admin-description {
+  margin: 10px 0 20px;
+  color: #646464;
+  font-size: 12px;
+}
+
+.tendr-admin .tendr-admin-store-name {
+  font-size: 25px;
+  font-weight: 550;
+  letter-spacing: -0.7px;
+  margin: -12px 0 22px;
+  overflow-wrap: anywhere;
+}
+
+.tendr-admin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #f4f4f4;
+  border: 1px solid var(--tendr-admin-border);
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tendr-admin-badge::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.tendr-admin-badge-dark {
+  color: #fff;
+  background: #171717;
+  border-color: #171717;
+}
+
+.tendr-admin-accounts {
+  margin: 0 0 24px;
+  padding: 0;
+}
+
+.tendr-admin-accounts > div {
+  padding: 12px 0;
+  border-top: 1px solid #eee;
+}
+
+.tendr-admin-accounts dt {
+  color: #737373;
+  margin-bottom: 5px;
+  font-size: 11px;
+}
+
+.tendr-admin-accounts dd {
+  margin: 0;
+}
+
+.tendr-admin-accounts code {
+  background: #f6f6f6;
+  padding: 4px 7px;
+  border-radius: 4px;
+  display: inline-block;
+  max-width: 100%;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.tendr-admin-actions,
+.tendr-admin-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tendr-admin .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  max-width: 100%;
+  padding: 9px 15px;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: none;
+  color: #262626;
+  font:
+    500 11px/1.5 'Tendr Sora',
+    sans-serif;
+  text-decoration: none;
+  white-space: normal;
+  text-align: center;
+  cursor: pointer;
+}
+
+.tendr-admin .button:hover {
+  color: #171717;
+  background: #f4f4f4;
+  border-color: #aaa;
+}
+
+.tendr-admin .button.button-primary {
+  color: #fff;
+  background: #171717;
+  border-color: #171717;
+}
+
+.tendr-admin .button.button-primary:hover {
+  background: #333;
+  border-color: #333;
+}
+
+.tendr-admin .button:focus-visible,
+.tendr-admin a:focus-visible,
+.tendr-admin input:focus,
+.tendr-admin select:focus {
+  outline: 2px solid #171717;
+  outline-offset: 3px;
+  box-shadow: none;
+}
+
+.tendr-admin .button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.tendr-admin-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px 18px;
+}
+
+.tendr-admin-field {
+  min-width: 0;
+}
+
+.tendr-admin-field-wide {
+  grid-column: 1 / -1;
+}
+
+.tendr-admin-field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 550;
+  margin-bottom: 9px;
+}
+
+.tendr-admin-field input[type='email'],
+.tendr-admin-field select {
+  width: 100%;
+  max-width: 100%;
+  min-height: 43px;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  background-color: #fff;
+  box-shadow: none;
+  color: #262626;
+  font:
+    400 12px/1.5 'Tendr Sora',
+    sans-serif;
+  padding: 10px 32px 10px 12px;
+}
+
+.tendr-admin-field input[type='email'] {
+  padding-right: 12px;
+}
+
+.tendr-admin .description {
+  color: #737373;
+  font-size: 11px;
+  font-style: normal;
+  margin: 10px 0 0;
+}
+
+.tendr-admin-card-footer {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #eee;
+}
+
+.tendr-admin .notice {
+  margin: 16px 0;
+  border-radius: 8px;
+  box-shadow: none;
+  padding: 8px 16px;
+  overflow-wrap: anywhere;
+}
+
+.tendr-admin .notice p,
+.tendr-admin .notice li {
+  font-size: 12px;
+}
+
+.tendr-admin .notice a {
+  color: #171717;
+  margin-inline-start: 4px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.tendr-admin-footer {
+  margin-top: 22px;
+  padding: 0 2px;
+  justify-content: space-between;
+  color: #737373;
+  font-size: 10px;
+}
+
+.tendr-admin-footer .button-link-delete {
+  border-color: transparent;
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  min-height: 36px;
+  padding: 6px 0;
+  color: #646464;
+}
+
+.tendr-admin-welcome {
+  padding: 34px;
+}
+
+.tendr-admin-eyebrow {
+  font-size: 10px !important;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  color: #737373;
+  margin: 0 0 12px;
+}
+
+.tendr-admin-welcome > p:not(.tendr-admin-eyebrow) {
+  max-width: 640px;
+  color: #646464;
+  margin: 16px 0 24px;
+}
+
+.tendr-admin-steps {
+  counter-reset: tendr-setup;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  margin: 32px 0 0;
+  padding: 28px 0 0;
+  border-top: 1px solid #eee;
+  list-style: none;
+}
+
+.tendr-admin-steps li::before {
+  counter-increment: tendr-setup;
+  content: '0' counter(tendr-setup);
+  display: block;
+  margin-bottom: 10px;
+  color: #737373;
+  font-size: 11px;
+}
+
+.tendr-admin-steps strong,
+.tendr-admin-steps span {
+  display: block;
+}
+
+.tendr-admin-steps strong {
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.tendr-admin-steps span {
+  color: #737373;
+  font-size: 11px;
+}
+
+@media (max-width: 1100px) {
+  .tendr-admin-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tendr-admin-side {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .tendr-admin {
+    margin-top: 18px;
+  }
+
+  .tendr-admin .tendr-admin-header,
+  .tendr-admin-card,
+  .tendr-admin-welcome {
+    padding: 22px 20px;
+  }
+
+  .tendr-admin-fields,
+  .tendr-admin-side,
+  .tendr-admin-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tendr-admin-brand {
+    font-size: 23px;
+  }
+
+  .tendr-admin-brand .tendr-admin-platform {
+    font-size: 9px;
+    padding: 3px 7px;
+  }
+
+  .tendr-admin-brand img {
+    width: 35px;
+    height: 22px;
+  }
+
+  .tendr-admin-field input[type='email'],
+  .tendr-admin-field select {
+    font-size: 16px;
+  }
+}

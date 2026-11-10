@@ -1,6 +1,6 @@
 {
   "name": "@tendr/woocommerce",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "tendr: Pay with crypto, the WooCommerce plugin (PHP). Dev and tests run in wp-env (Docker).",
   "license": "GPL-2.0-or-later",

@@ -381,15 +381,14 @@ final class Tendr_Settings {
 	}
 
 	/**
-	 * The settings rows, showing what tendr has (never the last local input).
+	 * The settings fields, showing what tendr has (never the last local input).
 	 *
 	 * @param string $post admin-post.php URL.
 	 */
-	private static function settings_rows( string $post ): string {
+	private static function settings_fields( string $post ): string {
 		$settings = self::store_settings();
 		if ( is_wp_error( $settings ) ) {
-			return '<tr><th scope="row">' . esc_html__( 'Store settings', 'tendr' ) . '</th><td>'
-				. self::notice( 'warning', __( 'Could not load the store settings from tendr:', 'tendr' ) . ' ' . $settings->get_error_message() ) . '</td></tr>';
+			return self::notice( 'warning', __( 'Could not load the store settings from tendr:', 'tendr' ) . ' ' . $settings->get_error_message() );
 		}
 		$choices = array(
 			'merchant' => __( 'The store', 'tendr' ),
@@ -402,14 +401,15 @@ final class Tendr_Settings {
 			}
 			return $html . '</select>';
 		};
-		$shared  = '<p class="description">' . esc_html__( 'Applies to all sites connected to this store.', 'tendr' ) . '</p>';
 
-		$html  = '<tr><th scope="row"><label for="tendr_fee_payer">' . esc_html__( 'Who pays the tendr fee', 'tendr' ) . '</label></th><td>'
-			. $select( 'tendr_fee_payer', $settings['default_fee_payer'] ) . $shared . '</td></tr>';
-		$html .= '<tr><th scope="row"><label for="tendr_gas_payer">' . esc_html__( 'Who pays network costs', 'tendr' ) . '</label></th><td>'
-			. $select( 'tendr_gas_payer', $settings['default_gas_payer'] ) . $shared . '</td></tr>';
-		$html .= '<tr><th scope="row"><label for="tendr_notification_email">' . esc_html__( 'Email for payment and refund notices', 'tendr' ) . '</label></th><td>'
-			. '<input type="email" class="regular-text" name="tendr_notification_email" id="tendr_notification_email" value="' . esc_attr( (string) $settings['notification_email'] ) . '" placeholder="' . esc_attr__( 'The store owners', 'tendr' ) . '">';
+		$html  = '<p class="tendr-admin-description">' . esc_html__( 'Applies to all sites connected to this store.', 'tendr' ) . '</p><div class="tendr-admin-fields">';
+		$html .= '<div class="tendr-admin-field"><label for="tendr_fee_payer">' . esc_html__( 'Who pays the tendr fee', 'tendr' ) . '</label>'
+			. $select( 'tendr_fee_payer', $settings['default_fee_payer'] ) . '</div>';
+		$html .= '<div class="tendr-admin-field"><label for="tendr_gas_payer">' . esc_html__( 'Who pays network costs', 'tendr' ) . '</label>'
+			. $select( 'tendr_gas_payer', $settings['default_gas_payer'] ) . '</div>';
+		$html .= '<div class="tendr-admin-field tendr-admin-field-wide"><label for="tendr_notification_email">' . esc_html__( 'Email for payment and refund notices', 'tendr' ) . '</label>'
+			. '<input type="email" name="tendr_notification_email" id="tendr_notification_email" value="' . esc_attr( (string) $settings['notification_email'] ) . '" placeholder="' . esc_attr__( 'The store owners', 'tendr' ) . '" aria-describedby="tendr-email-help">'
+			. '<p id="tendr-email-help" class="description">' . esc_html__( 'Leave blank to notify the store owners. A new address must be verified before it receives notices.', 'tendr' ) . '</p>';
 		if ( null !== $settings['notification_email_pending'] ) {
 			$html .= self::notice(
 				'info',
@@ -420,9 +420,8 @@ final class Tendr_Settings {
 				)
 			);
 		}
-		$html .= $shared . '</td></tr>';
-		$html .= '<tr><th scope="row"></th><td>' . wp_nonce_field( 'tendr_settings', 'tendr_settings_nonce', false, false )
-			. '<button type="submit" class="button button-primary" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', 'tendr_save_settings', $post ) ) . '">' . esc_html__( 'Save settings', 'tendr' ) . '</button></td></tr>';
+		$html .= '</div></div><div class="tendr-admin-card-footer">' . wp_nonce_field( 'tendr_settings', 'tendr_settings_nonce', false, false )
+			. '<button type="submit" class="button button-primary" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', 'tendr_save_settings', $post ) ) . '">' . esc_html__( 'Save settings', 'tendr' ) . '</button></div>';
 		return $html;
 	}
 
@@ -444,6 +443,7 @@ final class Tendr_Settings {
 		if ( 'wc-settings' !== $page || 'tendr' !== $section ) {
 			return;
 		}
+		wp_enqueue_style( 'tendr-admin', plugins_url( 'assets/css/admin.css', TENDR_PLUGIN_FILE ), array(), TENDR_VERSION );
 		wp_enqueue_script(
 			'tendr-admin-connect',
 			plugins_url( 'assets/js/admin-connect.js', TENDR_PLUGIN_FILE ),
@@ -484,7 +484,9 @@ final class Tendr_Settings {
 	 * The page body.
 	 */
 	public static function render(): string {
-		$html  = '<h2>' . esc_html__( 'tendr: Pay with crypto', 'tendr' ) . '</h2>';
+		$html  = '<div class="tendr-admin"><header class="tendr-admin-header"><div class="tendr-admin-brand">'
+			. '<img src="' . esc_url( plugins_url( 'assets/images/tendr-mark-white.png', TENDR_PLUGIN_FILE ) ) . '" width="42" height="26" alt=""><span>tendr</span><span class="tendr-admin-platform">WooCommerce</span></div>'
+			. '<h2>' . esc_html__( 'Crypto payments, connected.', 'tendr' ) . '</h2><p>' . esc_html__( 'Your store. Your funds. One place to manage your checkout.', 'tendr' ) . '</p></header>';
 		$html .= self::take_flash();
 
 		$connection = Tendr_Connect::connection();
@@ -495,8 +497,9 @@ final class Tendr_Settings {
 			if ( null !== $blocker ) {
 				$html .= self::notice( 'error', __( 'Payment updates cannot reach this site:', 'tendr' ) . ' ' . $blocker->get_error_message(), self::fix_link( $blocker ) );
 			}
-			return $html . self::connected( $connection );
+			return $html . self::connected( $connection ) . '</div>';
 		}
+		$html .= '<section class="tendr-admin-card tendr-admin-welcome"><p class="tendr-admin-eyebrow">' . esc_html__( 'Get started', 'tendr' ) . '</p><h3>' . esc_html__( 'Bring crypto to your checkout.', 'tendr' ) . '</h3>';
 
 		if ( 'unreadable' === $status || null !== $connection ) {
 			$html .= self::notice(
@@ -511,13 +514,16 @@ final class Tendr_Settings {
 
 		if ( null !== $blocker ) {
 			$html .= self::notice( 'error', $blocker->get_error_message(), self::fix_link( $blocker ) );
-			return $html . '<p><button type="button" class="button button-primary" disabled>' . esc_html( $label ) . '</button></p>';
+			return $html . '<p><button type="button" class="button button-primary" disabled>' . esc_html( $label ) . '</button></p></section></div>';
 		}
 
 		$start = wp_nonce_url( admin_url( 'admin-post.php?action=tendr_connect_start' ), 'tendr_connect_start' );
 		return $html
 			. '<p><button type="button" class="button button-primary" data-tendr-connect="' . esc_url( $start ) . '">' . esc_html( $label ) . '</button>'
-			. ' <span class="tendr-connect-status" role="status" aria-live="polite"></span></p>';
+			. ' <span class="tendr-connect-status" role="status" aria-live="polite"></span></p>'
+			. '<ol class="tendr-admin-steps"><li><strong>' . esc_html__( 'Connect your store', 'tendr' ) . '</strong><span>' . esc_html__( 'Sign in to Tendr and approve this site.', 'tendr' ) . '</span></li>'
+			. '<li><strong>' . esc_html__( 'Try a test payment', 'tendr' ) . '</strong><span>' . esc_html__( 'Walk through checkout with a simulated payment.', 'tendr' ) . '</span></li>'
+			. '<li><strong>' . esc_html__( 'Go live when ready', 'tendr' ) . '</strong><span>' . esc_html__( 'Check your setup and start accepting crypto.', 'tendr' ) . '</span></li></ol></section></div>';
 	}
 
 	/**
@@ -535,39 +541,36 @@ final class Tendr_Settings {
 		// Every control posts WooCommerce's settings form to its own admin-post action
 		// (formaction), each with its own nonce: this page is inside WooCommerce's <form>.
 		$html  = self::take_go_live() . self::nudges_html();
-		$html .= '<p>' . esc_html__( 'Connected to', 'tendr' ) . ' <strong>' . esc_html( (string) $connection['store_name'] ) . '</strong></p>';
-		$html .= '<table class="form-table" role="presentation"><tbody>';
+		$html .= '<div class="tendr-admin-grid"><div class="tendr-admin-main"><section class="tendr-admin-card"><div class="tendr-admin-card-heading"><h3>' . esc_html__( 'Store connection', 'tendr' ) . '</h3><span class="tendr-admin-badge">' . esc_html__( 'Connected', 'tendr' ) . '</span></div>';
+		$html .= '<p class="tendr-admin-description">' . esc_html__( 'Connected to', 'tendr' ) . '</p><p class="tendr-admin-store-name">' . esc_html( (string) $connection['store_name'] ) . '</p>';
+		$html .= '<dl class="tendr-admin-accounts">';
 		if ( '' !== (string) ( $connection['test_account'] ?? '' ) ) {
-			$html .= '<tr><th scope="row">' . esc_html__( 'Test account', 'tendr' ) . '</th><td><code>' . esc_html( (string) $connection['test_account'] ) . '</code></td></tr>';
+			$html .= '<div><dt>' . esc_html__( 'Test account', 'tendr' ) . '</dt><dd><code>' . esc_html( (string) $connection['test_account'] ) . '</code></dd></div>';
 		}
 		if ( '' !== (string) ( $connection['live_account'] ?? '' ) ) {
-			$html .= '<tr><th scope="row">' . esc_html__( 'Live account', 'tendr' ) . '</th><td><code>' . esc_html( (string) $connection['live_account'] ) . '</code></td></tr>';
+			$html .= '<div><dt>' . esc_html__( 'Live account', 'tendr' ) . '</dt><dd><code>' . esc_html( (string) $connection['live_account'] ) . '</code></dd></div>';
 		}
-		$html .= '<tr><th scope="row">' . esc_html__( 'Mode', 'tendr' ) . '</th><td><strong>' . esc_html( $mode ) . '</strong> '
+		$html .= '</dl><div class="tendr-admin-actions"><a class="button button-primary" href="' . esc_url( $dashboard ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Open tendr dashboard', 'tendr' ) . '</a>'
+			. '<a class="button" href="' . esc_url( $review ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Review queue', 'tendr' ) . '</a></div></section>';
+		$html .= '<section class="tendr-admin-card"><h3>' . esc_html__( 'Payment preferences', 'tendr' ) . '</h3>' . self::settings_fields( $post ) . '</section></div>';
+		$html .= '<aside class="tendr-admin-side"><section class="tendr-admin-card"><div class="tendr-admin-card-heading"><h3>' . esc_html__( 'Payment mode', 'tendr' ) . '</h3><span class="tendr-admin-badge ' . ( $live ? 'tendr-admin-badge-dark' : '' ) . '">' . esc_html( $mode ) . '</span></div>'
+			. '<p class="tendr-admin-description">' . ( $live
+				? esc_html__( 'Shoppers pay with real crypto.', 'tendr' )
+				: esc_html__( 'Payments are simulated, and only store managers see the payment method. Going live checks with tendr that your store is ready.', 'tendr' ) ) . '</p>'
 			. wp_nonce_field( 'tendr_mode', 'tendr_mode_nonce', false, false )
 			. '<button type="submit" class="button" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', 'tendr_set_mode', $post ) ) . '" name="tendr_mode" value="' . ( $live ? 'test' : 'live' ) . '">'
-			. ( $live ? esc_html__( 'Switch to test mode', 'tendr' ) : esc_html__( 'Switch to live mode', 'tendr' ) ) . '</button>'
-			. '<p class="description">' . ( $live
-				? esc_html__( 'Shoppers pay with real crypto.', 'tendr' )
-				: esc_html__( 'Payments are simulated, and only store managers see the payment method. Going live checks with tendr that your store is ready.', 'tendr' ) ) . '</p>';
+			. ( $live ? esc_html__( 'Switch to test mode', 'tendr' ) : esc_html__( 'Switch to live mode', 'tendr' ) ) . '</button>';
 		if ( ! $live ) {
 			$html .= '<p>' . wp_nonce_field( Tendr_Test_Purchase::NONCE, 'tendr_test_purchase_nonce', false, false )
 				. '<button type="submit" class="button" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', 'tendr_test_purchase', $post ) ) . '">' . esc_html__( 'Make a test purchase', 'tendr' ) . '</button></p>'
 				. '<p class="description">' . esc_html__( 'Creates a test order of 1.00 in your store currency, with no product, and opens its payment page.', 'tendr' ) . '</p>';
 		}
-		$html .= '</td></tr>';
-		$html .= self::settings_rows( $post );
-		$html .= '<tr><th scope="row">' . esc_html__( 'Checkout look', 'tendr' ) . '</th><td>' . wp_nonce_field( Tendr_Brand::NONCE, 'tendr_brand_nonce', false, false )
+		$html .= '</section><section class="tendr-admin-card"><h3>' . esc_html__( 'Checkout appearance', 'tendr' ) . '</h3><p class="tendr-admin-description">' . esc_html__( 'Bring your store identity to the payment page. Sync your name, logo and theme colours with Tendr.', 'tendr' ) . '</p>' . wp_nonce_field( Tendr_Brand::NONCE, 'tendr_brand_nonce', false, false )
 			. '<button type="submit" class="button" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', Tendr_Brand::ACTION, $post ) ) . '">' . esc_html__( 'Refresh brand from my store', 'tendr' ) . '</button>'
-			. '<p class="description">' . esc_html__( 'Sends your store name, logo and theme colours to tendr, to start a checkout theme from.', 'tendr' ) . '</p></td></tr>';
-		$html .= '</tbody></table>';
-
-		$html .= '<p>'
-			. '<a class="button" href="' . esc_url( $dashboard ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Open tendr dashboard', 'tendr' ) . '</a> '
-			. '<a class="button" href="' . esc_url( $review ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Review queue', 'tendr' ) . '</a> '
-			. wp_nonce_field( 'tendr_disconnect', 'tendr_disconnect_nonce', false, false )
+			. '</section></aside></div>';
+		$html .= '<footer class="tendr-admin-footer"><span>' . esc_html__( 'Connected securely through Tendr', 'tendr' ) . '</span>' . wp_nonce_field( 'tendr_disconnect', 'tendr_disconnect_nonce', false, false )
 			. '<button type="submit" class="button button-link-delete" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', 'tendr_disconnect', $post ) ) . '" data-tendr-disconnect="' . esc_attr( self::disconnect_confirmation() ) . '">' . esc_html__( 'Disconnect', 'tendr' ) . '</button>'
-			. '</p>';
+			. '</footer>';
 		return $html;
 	}
 

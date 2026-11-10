@@ -78,6 +78,8 @@ final class Tendr_Blocks extends AbstractPaymentMethodType {
 		return array(
 			'title'       => $gateway->get_title(),
 			'description' => $gateway->get_description(),
+			'icon'        => $gateway->icon,
+			'paymentHint' => __( 'Your order updates automatically after payment confirmation.', 'tendr' ),
 			'buttonLabel' => __( 'Pay with crypto', 'tendr' ),
 			'testMode'    => 'test' === Tendr_Connect::mode(),
 			'supports'    => array_values( array_filter( $gateway->supports, array( $gateway, 'supports' ) ) ),

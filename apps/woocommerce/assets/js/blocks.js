@@ -23,11 +23,32 @@
   var description = decode(data.description || '');
 
   function Content() {
-    return description ? element.createElement('p', null, description) : null;
+    return element.createElement(
+      'div',
+      { className: 'tendr-payment-content' },
+      description ? element.createElement('p', null, description) : null,
+      data.paymentHint
+        ? element.createElement('p', { className: 'tendr-payment-hint' }, decode(data.paymentHint))
+        : null,
+    );
   }
 
   function Label() {
-    return element.createElement('span', null, title);
+    return element.createElement(
+      'span',
+      { className: 'tendr-payment-label' },
+      data.icon
+        ? element.createElement('img', {
+            src: data.icon,
+            alt: '',
+            'aria-hidden': true,
+            width: 38,
+            height: 24,
+            className: 'tendr-payment-logo',
+          })
+        : null,
+      element.createElement('span', null, title),
+    );
   }
 
   registry.registerPaymentMethod({

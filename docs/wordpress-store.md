@@ -14,10 +14,15 @@ npm run dev:wordpress
 ```
 
 The first run installs WordPress 7.1.3, PHP 8.3, WooCommerce 11.2.1 (the plugin's tested version),
-the Storefront theme and Tendr 0.3.0 from the local release ZIP. It creates a **$1 virtual product**,
+the Storefront theme and Tendr 0.3.1 from the local release ZIP. It creates a **$1 virtual product**,
 enables pretty permalinks and guest checkout, and uses USD. Subsequent starts retain orders,
 products, configuration and Tendr connections. The Tendr plugin is refreshed from this checkout.
 An existing active theme is retained on restart.
+
+Tendr's plugin settings use the frontend dashboard's monochrome theme, with Sora and Instrument
+Sans bundled locally. The black and white marks come from the frontend team's `apps/web/public/tendr-logo-black.png`
+and `tendr-logo.png` on `deploy`; both are packaged with the plugin. The logo also appears in classic
+and Blocks checkout and on the payment handoff screen. Plugin styling stays scoped to Tendr's controls.
 
 ## Fashion concept storefront
 

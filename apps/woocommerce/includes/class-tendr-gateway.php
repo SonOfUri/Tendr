@@ -69,6 +69,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		$this->method_description = __( 'Take crypto payments that settle into your own tendr account.', 'tendr' );
 		$this->title              = __( 'Pay with crypto', 'tendr' );
 		$this->description        = __( 'Pay with crypto from any wallet or exchange.', 'tendr' );
+		$this->icon               = plugins_url( 'assets/images/tendr-mark-black.png', TENDR_PLUGIN_FILE );
 		$this->order_button_text  = __( 'Pay with crypto', 'tendr' );
 		$this->has_fields         = false;
 		$this->supports           = array( 'products', 'refunds' );
@@ -83,10 +84,30 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	 * from Tendr_Plugin::boot().
 	 */
 	public static function register(): void {
+		add_action( 'wp_enqueue_scripts', array( self::class, 'enqueue_styles' ) );
 		add_action( 'woocommerce_receipt_' . self::ID, array( self::class, 'receipt_page' ) );
 		add_action( 'woocommerce_thankyou_' . self::ID, array( self::class, 'thankyou_page' ) );
 		add_filter( 'woocommerce_cancel_unpaid_order', array( self::class, 'filter_cancel_unpaid_order' ), 10, 2 );
 		add_action( 'woocommerce_order_status_changed', array( self::class, 'clear_session_url' ), 10, 4 );
+	}
+
+	/**
+	 * Brand mark for classic checkout and the WooCommerce payment-method list.
+	 *
+	 * @return string
+	 */
+	public function get_icon() {
+		$icon = '<img src="' . esc_url( $this->icon ) . '" alt="' . esc_attr__( 'Tendr', 'tendr' ) . '" width="38" height="24" class="tendr-payment-logo">';
+		return apply_filters( 'woocommerce_gateway_icon', $icon, $this->id ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Preserve WooCommerce's existing gateway extension point.
+	}
+
+	/**
+	 * Checkout styles stay on checkout and order-payment screens.
+	 */
+	public static function enqueue_styles(): void {
+		if ( is_checkout() ) {
+			wp_enqueue_style( 'tendr-checkout', plugins_url( 'assets/css/checkout.css', TENDR_PLUGIN_FILE ), array(), TENDR_VERSION );
+		}
 	}
 
 	/**
@@ -757,6 +778,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		);
 
 		echo '<div class="tendr-pay" data-tendr-pay>';
+		echo '<div class="tendr-pay-brand"><img src="' . esc_url( plugins_url( 'assets/images/tendr-mark-black.png', TENDR_PLUGIN_FILE ) ) . '" width="35" height="22" alt=""><span>tendr</span></div>';
 		echo '<p>' . esc_html__( 'Complete your payment in the tendr window.', 'tendr' ) . '</p>';
 		echo '<p><button type="button" class="button alt" data-tendr-open>' . esc_html__( 'Pay with crypto', 'tendr' ) . '</button></p>';
 		echo '<p><a href="' . esc_url( $session_url ) . '" rel="noopener" data-tendr-fallback>' . esc_html__( 'Having trouble? Open the payment page', 'tendr' ) . '</a></p>';
