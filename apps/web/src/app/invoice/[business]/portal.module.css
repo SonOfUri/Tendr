@@ -1,196 +1,330 @@
 .shell {
+  /* Match checkout/demo dark asset picker tokens on this public page. */
+  --demo-panel: #1a1a1a;
+  --demo-panel-ink: #f4f4f4;
+  --demo-panel-muted: #a3a3a3;
+  --demo-panel-border: #2e2e2e;
+  --demo-panel-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  --demo-input-bg: #121212;
+  --demo-input-border: #333333;
+  --demo-scroll-size: 5px;
+  --demo-scroll-track: transparent;
+  --demo-scroll-thumb: rgba(244, 244, 244, 0.22);
+  --demo-scroll-thumb-hover: rgba(244, 244, 244, 0.38);
+
   min-height: 100vh;
-  background: #f4f4ef;
-  color: #20251f;
-  padding: 48px 20px;
-  font-family: Arial, sans-serif;
+  box-sizing: border-box;
+  padding: 2.5rem 1.15rem 3rem;
+  background:
+    radial-gradient(1000px 480px at 12% -10%, rgba(255, 255, 255, 0.06), transparent 55%),
+    radial-gradient(800px 420px at 90% 0%, rgba(255, 255, 255, 0.04), transparent 50%),
+    #0a0a0a;
+  color: #f5f5f5;
+  font-family: var(--tendr-font-sans, 'Instrument Sans', system-ui, sans-serif);
 }
+
 .card {
-  max-width: 680px;
-  margin: auto;
-  background: #fff;
-  border: 1px solid #dedfd7;
-  border-radius: 20px;
-  padding: 36px;
-  box-shadow: 0 12px 40px #20251f08;
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1.65rem 1.5rem 1.4rem;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, #141414 0%, #101010 100%);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
 }
+
 .brand {
-  font-size: 25px;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0 0 1.5rem;
+  font-family: var(--tendr-font-display, 'Sora', sans-serif);
+  font-size: 1.15rem;
   font-weight: 700;
-  letter-spacing: -1px;
-  margin: 0 0 40px;
+  letter-spacing: -0.03em;
 }
+
 .brand span {
-  font-size: 11px;
-  letter-spacing: 2px;
-  color: #65745b;
-  margin-left: 12px;
-}
-.card h1 {
-  font-size: 32px;
-  line-height: 1.15;
-  margin: 10px 0 20px;
-}
-.card p {
-  line-height: 1.6;
-}
-.eyebrow {
-  font-size: 12px;
+  margin-left: 0.15rem;
+  color: #8f8f8f;
+  font-size: 0.7rem;
   font-weight: 700;
-  letter-spacing: 1px;
-  color: #596c46;
+  letter-spacing: 0.14em;
 }
+
+.card h1 {
+  margin: 0.35rem 0 0.75rem;
+  font-family: var(--tendr-font-display, 'Sora', sans-serif);
+  font-size: clamp(1.7rem, 4vw, 2.15rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1.15;
+}
+
+.card p {
+  margin: 0;
+  color: #bdbdbd;
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #8f8f8f;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.lead {
+  margin-bottom: 0.35rem;
+}
+
 .form {
   display: grid;
-  gap: 20px;
-  margin-top: 30px;
+  gap: 1.05rem;
+  margin-top: 1.35rem;
 }
+
 .form label {
   display: grid;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
+  gap: 0.4rem;
   min-width: 0;
+  color: #d8d8d8;
+  font-size: 0.82rem;
+  font-weight: 650;
 }
+
 .form input,
-.form select,
 .form textarea {
   width: 100%;
   box-sizing: border-box;
   min-width: 0;
-  padding: 12px;
-  border: 1px solid #bfc5b6;
-  background: #fff;
-  color: #20251f;
-  border-radius: 8px;
+  padding: 0.8rem 0.9rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #0c0c0c;
+  color: #f5f5f5;
   font: inherit;
 }
+
+.form input::placeholder {
+  color: #6f6f6f;
+}
+
 .form :focus-visible,
 .card button:focus-visible {
-  outline: 3px solid #9dba75;
+  outline: 2px solid #f5f5f5;
   outline-offset: 2px;
 }
+
+.assetField {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.assetField > span {
+  color: #d8d8d8;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.assetField :global(.demo-asset-trigger) {
+  width: 100%;
+}
+
 .row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 0.85rem;
 }
+
 .breakdown {
   min-width: 0;
   margin: 0;
-  padding: 18px;
-  border: 1px solid #dedfd7;
-  border-radius: 10px;
+  padding: 1rem;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
   display: grid;
-  gap: 16px;
+  gap: 0.9rem;
 }
+
 .breakdown legend {
-  font-weight: 600;
-  padding: 0 6px;
+  padding: 0 0.35rem;
+  color: #f5f5f5;
+  font-weight: 650;
 }
+
 .breakdown > p {
-  font-size: 13px;
   margin: 0;
+  font-size: 0.82rem;
 }
+
 .lineItem {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(100px, 0.55fr) auto;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) minmax(6.5rem, 0.55fr) auto;
+  gap: 0.55rem;
   align-items: end;
 }
+
 .card button.secondary {
-  background: #edf1e8;
-  color: #2d4820;
-  padding: 12px;
-  font-size: 13px;
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: transparent;
+  color: #f5f5f5;
+  border-radius: 12px;
+  padding: 0.7rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+  cursor: pointer;
 }
+
+.card button.secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.card button.secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .totalRow {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
-  padding-top: 16px;
-  border-top: 1px solid #dedfd7;
+  gap: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: #f5f5f5;
 }
+
 .totalRow output {
   overflow-wrap: anywhere;
   text-align: right;
+  font-family: var(--tendr-font-display, 'Sora', sans-serif);
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
 }
-.card button {
-  background: #2d4820;
-  color: white;
-  border: 0;
-  border-radius: 8px;
-  padding: 14px 20px;
-  font-size: 15px;
-  font-weight: 600;
+
+.card button.primary,
+.card > button,
+.card form > button[type='submit'] {
+  appearance: none;
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  padding: 0.9rem 1.1rem;
+  background: #f2f2f2;
+  color: #0a0a0a;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
   cursor: pointer;
 }
-.card button:disabled {
-  opacity: 0.6;
+
+.card button.primary:hover:not(:disabled),
+.card > button:hover:not(:disabled),
+.card form > button[type='submit']:hover:not(:disabled) {
+  background: #fff;
+}
+
+.card button.primary:disabled,
+.card > button:disabled,
+.card form > button[type='submit']:disabled {
+  opacity: 0.55;
   cursor: wait;
 }
+
 .card dl {
   display: grid;
-  gap: 8px;
+  gap: 0.35rem;
+  margin: 1rem 0;
 }
+
 .card dt {
-  font-size: 12px;
-  color: #586151;
-  margin-top: 12px;
+  margin-top: 0.65rem;
+  color: #8f8f8f;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
+
 .card dd {
   margin: 0;
+  color: #f0f0f0;
 }
+
 .address {
   overflow-wrap: anywhere;
-  font-family: monospace;
-  font-size: 13px;
+  font-family: var(--tendr-font-mono, ui-monospace, monospace);
+  font-size: 0.82rem;
+  color: #cfcfcf;
 }
-.description {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
+
 .total {
-  font-size: 30px;
-  font-weight: 600;
+  margin: 0.35rem 0 0.75rem !important;
+  color: #fff !important;
+  font-family: var(--tendr-font-display, 'Sora', sans-serif);
+  font-size: clamp(1.6rem, 3.5vw, 2rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
 }
+
+.hint {
+  color: #8f8f8f !important;
+  font-size: 0.82rem !important;
+}
+
 .footer {
-  font-size: 12px;
-  color: #63705a;
-  margin-top: 36px;
-  border-top: 1px solid #e4e7df;
-  padding-top: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  margin-top: 1.5rem !important;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: #8f8f8f !important;
+  font-size: 0.78rem !important;
 }
+
 .error {
-  padding: 12px;
-  background: #fff1ef;
-  color: #a6271c;
-  border-radius: 8px;
+  margin: 0 0 0.85rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #f5f5f5;
 }
+
 .stateBlock {
   display: grid;
-  gap: 12px;
+  gap: 0.75rem;
 }
+
 .stateBlock h1 {
   margin-bottom: 0;
 }
+
 @media (max-width: 560px) {
   .shell {
-    padding: 16px 10px;
+    padding: 1rem 0.75rem 2rem;
   }
+
   .card {
-    padding: 24px 18px;
+    padding: 1.25rem 1rem 1.1rem;
   }
+
   .row {
     grid-template-columns: 1fr;
   }
+
   .lineItem {
     grid-template-columns: 1fr;
-    border-bottom: 1px solid #dedfd7;
-    padding-bottom: 16px;
-  }
-  .card h1 {
-    font-size: 26px;
+    padding-bottom: 0.85rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 }
