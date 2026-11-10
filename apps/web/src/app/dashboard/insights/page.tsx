@@ -12,7 +12,7 @@ export default function InsightsPage() {
     <div className="stack">
       <PageHeader
         title="Checkout insights"
-        description="Session metrics for this store and mode. Explain uses Tendr AI on the same report — it never moves money or changes checkout."
+        description="Conversion and drop-offs for this store and mode. Tendr AI can explain the same report — it never moves money or changes checkout."
       />
       <AiInsightsPanel merchantId={store.id} livemode={context.livemode} />
     </div>

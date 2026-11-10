@@ -24,6 +24,11 @@ export function AuthStage({ children }: Props) {
             src="/logo-with-watermark-dark.png"
             alt="Tendr"
           />
+          <img
+            className="login-demos-powered"
+            src="/poweredbynearintents.png"
+            alt="Powered by NEAR Intents"
+          />
         </aside>
         <section className="login-panel">
           <div className="login-panel-brand">

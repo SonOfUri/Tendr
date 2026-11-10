@@ -11,6 +11,7 @@ import { toast } from '@/components/toast';
 import { errorMessage } from '@/lib/api';
 import { safeNext } from '@/lib/navigation';
 import { loginWithPasskey } from '@/lib/webauthn';
+import { UserRoundKey } from 'lucide-react';
 
 function Login() {
   const router = useRouter();
@@ -42,17 +43,19 @@ function Login() {
 
       {error && <Alert tone="danger">{error}</Alert>}
 
-      <AuthCta onClick={() => void signIn()} disabled={busy}>
+      <AuthCta
+        onClick={() => void signIn()}
+        disabled={busy}
+        icon={<UserRoundKey size={18} strokeWidth={2} aria-hidden />}
+      >
         {busy ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
       </AuthCta>
 
-      <p className="login-panel-lead">Or sign in with email</p>
-      <EmailSignInForm
-        next={next}
-        disabled={busy}
-        className="login-panel-form"
-        SubmitButton={AuthCta}
-      />
+      <div className="login-panel-divider" role="separator" aria-label="or continue with email">
+        <span>or continue with email</span>
+      </div>
+
+      <EmailSignInForm next={next} disabled={busy} className="login-panel-form" />
 
       <p className="login-panel-foot">
         New to Tendr? <Link href="/signup">Create an account</Link>

@@ -1,21 +1,28 @@
 'use client';
 
 import { useState, type ComponentType } from 'react';
-import { Alert, Button, type ButtonProps } from '@tendr/ui';
+import { Alert, type ButtonProps } from '@tendr/ui';
+import { AuthCta } from '@/components/login/AuthCta';
 import { api, errorMessage } from '@/lib/api';
 import { safeNext } from '@/lib/navigation';
+import { Mail, Send } from 'lucide-react';
+
+type EmailSubmitProps = ButtonProps & {
+  icon?: React.ReactNode;
+  tone?: 'dark' | 'yellow';
+};
 
 /** Email access restores the person; it does not assert a login or wallet passkey. */
 export function EmailSignInForm({
   next,
   disabled = false,
   className = 'form',
-  SubmitButton = Button,
+  SubmitButton = AuthCta,
 }: {
   next?: string;
   disabled?: boolean;
   className?: string;
-  SubmitButton?: ComponentType<ButtonProps>;
+  SubmitButton?: ComponentType<EmailSubmitProps>;
 }) {
   const [email, setEmail] = useState('');
   const [sentTo, setSentTo] = useState<string | null>(null);
@@ -55,26 +62,36 @@ export function EmailSignInForm({
     );
   }
 
+  const Submit = SubmitButton;
+
   return (
     <form onSubmit={submit} className={className} aria-label="Sign in with email">
       <label className="field">
         <span>Email</span>
-        <input
-          type="email"
-          name="email"
-          required
-          autoComplete="email"
-          maxLength={254}
-          value={email}
-          disabled={busy || disabled}
-          onChange={(event) => setEmail(event.target.value)}
-          placeholder="you@company.com"
-        />
+        <span className="login-field-input">
+          <Mail className="login-field-icon" size={17} strokeWidth={2} aria-hidden />
+          <input
+            type="email"
+            name="email"
+            required
+            autoComplete="email"
+            maxLength={254}
+            value={email}
+            disabled={busy || disabled}
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="you@company.com"
+          />
+        </span>
       </label>
       {error && <Alert tone="danger">{error}</Alert>}
-      <SubmitButton type="submit" disabled={busy || disabled || !email.trim()}>
+      <Submit
+        type="submit"
+        disabled={busy || disabled || !email.trim()}
+        tone="yellow"
+        icon={<Send size={18} strokeWidth={2} aria-hidden />}
+      >
         {busy ? 'Sending sign-in link…' : 'Email me a sign-in link'}
-      </SubmitButton>
+      </Submit>
     </form>
   );
 }

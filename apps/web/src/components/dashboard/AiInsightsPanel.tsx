@@ -1,15 +1,16 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import type { MerchantInsights } from '@tendr/contracts';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CheckoutMetrics, MerchantInsights } from '@tendr/contracts';
 import { Button } from '@tendr/ui';
+import { ArrowRight, LineChart, Sparkles } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
-import { Panel } from '@/components/dashboard/ui';
+import { EmptyState, ErrorState } from '@/components/dashboard/ui';
 
 type Phase =
   | { k: 'loading' }
   | { k: 'ready'; data: MerchantInsights }
-  | { k: 'empty' }
+  | { k: 'empty'; days: number }
   | { k: 'unavailable'; message: string }
   | { k: 'rate' };
 
@@ -20,13 +21,38 @@ type Explain =
   | { k: 'unavailable'; message: string }
   | { k: 'rate' };
 
-function metric(label: string, value: number | string | null) {
-  return (
-    <div className="ai-insight-metric">
-      <span>{label}</span>
-      <strong>{value == null || value === '' ? 'No data' : value}</strong>
-    </div>
-  );
+type FunnelStep = {
+  key: string;
+  label: string;
+  value: number;
+  /** Share of previous step retained; null for the first step. */
+  retainPct: number | null;
+};
+
+function funnelSteps(m: CheckoutMetrics): FunnelStep[] {
+  const values = [
+    m.sessions_created,
+    m.sessions_quoted,
+    m.sessions_with_deposit,
+    m.sessions_settled,
+  ];
+  const labels = ['Created', 'Quoted', 'Deposited', 'Settled'];
+  const keys = ['created', 'quoted', 'deposited', 'settled'];
+  return values.map((value, i) => {
+    const prev = i === 0 ? null : values[i - 1];
+    const retainPct =
+      prev == null || prev === 0 ? (i === 0 ? null : 0) : Math.round((value / prev) * 1000) / 10;
+    return { key: keys[i]!, label: labels[i]!, value, retainPct };
+  });
+}
+
+function formatDelta(pp: string | null): { text: string; tone: 'up' | 'down' | 'flat' } | null {
+  if (pp == null || pp === '') return null;
+  const n = Number(pp);
+  if (!Number.isFinite(n)) return { text: `${pp} pp vs prior`, tone: 'flat' };
+  if (n > 0) return { text: `+${pp} pp vs prior`, tone: 'up' };
+  if (n < 0) return { text: `${pp} pp vs prior`, tone: 'down' };
+  return { text: '0 pp vs prior', tone: 'flat' };
 }
 
 export function AiInsightsPanel({
@@ -41,7 +67,7 @@ export function AiInsightsPanel({
   const [explain, setExplain] = useState<Explain>({ k: 'idle' });
   const req = useRef(0);
 
-  useEffect(() => {
+  function load() {
     const id = ++req.current;
     setPhase({ k: 'loading' });
     setExplain({ k: 'idle' });
@@ -54,7 +80,7 @@ export function AiInsightsPanel({
           c.sessions_quoted === 0 &&
           c.sessions_settled === 0 &&
           c.sessions_with_deposit === 0;
-        setPhase(empty ? { k: 'empty' } : { k: 'ready', data });
+        setPhase(empty ? { k: 'empty', days: data.window.days } : { k: 'ready', data });
       })
       .catch((err) => {
         if (id !== req.current) return;
@@ -74,6 +100,12 @@ export function AiInsightsPanel({
           });
         }
       });
+  }
+
+  useEffect(() => {
+    load();
+    // Reload when store/mode changes; days is fixed for now.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [merchantId, livemode, days]);
 
   async function onExplain() {
@@ -105,11 +137,125 @@ export function AiInsightsPanel({
     }
   }
 
+  const ready = phase.k === 'ready' ? phase.data : null;
+  const steps = useMemo(() => (ready ? funnelSteps(ready.current) : []), [ready]);
+  const delta = ready ? formatDelta(ready.conversion_change_percentage_points) : null;
+  const conversion =
+    ready?.current.conversion_percent == null || ready.current.conversion_percent === ''
+      ? null
+      : `${ready.current.conversion_percent}%`;
+
+  if (phase.k === 'loading') {
+    return (
+      <div className="ins" aria-busy="true" aria-label="Loading insights">
+        <div className="ins-skeleton ins-skeleton--hero" />
+        <div className="ins-skeleton ins-skeleton--funnel" />
+        <div className="ins-skeleton ins-skeleton--row" />
+      </div>
+    );
+  }
+
+  if (phase.k === 'rate') {
+    return (
+      <ErrorState message="Too many requests. Try again later." onRetry={() => load()} />
+    );
+  }
+
+  if (phase.k === 'unavailable') {
+    return <ErrorState message={phase.message} onRetry={() => load()} />;
+  }
+
+  if (phase.k === 'empty') {
+    return (
+      <EmptyState
+        icon={<LineChart size={22} strokeWidth={1.75} aria-hidden />}
+        title="No checkout sessions yet"
+        description={`Nothing to measure in the last ${phase.days} days. Insights appear once shoppers start checkout sessions in this mode.`}
+      />
+    );
+  }
+
+  if (!ready) return null;
+
   return (
-    <Panel
-      title="Checkout insights"
-      action={
-        phase.k === 'ready' || phase.k === 'empty' ? (
+    <div className="ins">
+      <section className="ins-hero" aria-label="Conversion">
+        <div className="ins-hero-main">
+          <p className="ins-kicker">
+            Last {ready.window.days} days
+            {!livemode ? <span className="ins-badge">Test</span> : null}
+          </p>
+          <p className="ins-hero-value">{conversion ?? '—'}</p>
+          <p className="ins-hero-label">Checkout conversion</p>
+          {delta ? (
+            <p className={`ins-delta ins-delta--${delta.tone}`}>{delta.text}</p>
+          ) : (
+            <p className="ins-delta ins-delta--flat">No prior-window comparison</p>
+          )}
+        </div>
+        <p className="ins-hero-meta">
+          Sessions, not visitors · Generated {new Date(ready.generated_at).toLocaleString()}
+        </p>
+      </section>
+
+      <section className="ins-funnel" aria-label="Checkout funnel">
+        <div className="ins-section-head">
+          <h2 className="ins-section-title">Funnel</h2>
+          <p className="ins-section-desc">How sessions move from create to settle</p>
+        </div>
+        <ol className="ins-funnel-steps">
+          {steps.map((step, i) => (
+            <li key={step.key} className="ins-funnel-step">
+              {i > 0 ? (
+                <span className="ins-funnel-join" aria-hidden>
+                  <ArrowRight size={16} strokeWidth={2} />
+                  {step.retainPct != null ? (
+                    <span className="ins-funnel-retain">{step.retainPct}%</span>
+                  ) : null}
+                </span>
+              ) : null}
+              <div className="ins-funnel-card">
+                <span className="ins-funnel-label">{step.label}</span>
+                <strong className="ins-funnel-value">{step.value.toLocaleString()}</strong>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section className="ins-secondary" aria-label="Other metrics">
+        <div className="ins-secondary-item">
+          <span>Expired without deposit</span>
+          <strong>{ready.current.expired_without_deposit.toLocaleString()}</strong>
+        </div>
+        <div className="ins-secondary-item">
+          <span>With refunds</span>
+          <strong>{ready.current.sessions_with_refunds.toLocaleString()}</strong>
+        </div>
+        <div className="ins-secondary-item ins-secondary-item--wide">
+          <span>Settled order totals</span>
+          <strong>
+            {ready.current.settled_order_totals.length
+              ? ready.current.settled_order_totals
+                  .map((t) => `${t.amount} ${t.currency}`)
+                  .join(' · ')
+              : '—'}
+          </strong>
+        </div>
+      </section>
+
+      <section className="ins-explain" aria-label="Tendr AI explanation">
+        <div className="ins-explain-head">
+          <div className="ins-explain-copy">
+            <p className="ins-explain-title">
+              <Sparkles size={16} strokeWidth={2} aria-hidden />
+              Tendr AI
+            </p>
+            <p className="ins-explain-desc">
+              Summarize conversion and drop-offs from this report. AI never moves money or changes
+              checkout.
+            </p>
+          </div>
           <Button
             variant="secondary"
             disabled={explain.k === 'loading'}
@@ -117,66 +263,27 @@ export function AiInsightsPanel({
           >
             {explain.k === 'loading' ? 'Explaining…' : 'Explain these results'}
           </Button>
-        ) : null
-      }
-    >
-      {phase.k === 'loading' ? <p className="dash-muted">Loading insights…</p> : null}
-      {phase.k === 'rate' ? <p className="dash-muted">Too many requests. Try again later.</p> : null}
-      {phase.k === 'unavailable' ? <p className="dash-muted">{phase.message}</p> : null}
-      {phase.k === 'empty' ? (
-        <p className="dash-muted">No checkout sessions in the last {days} days yet.</p>
-      ) : null}
-      {phase.k === 'ready' ? (
-        <>
-          <p className="dash-muted dash-small">
-            Last {phase.data.window.days} days · sessions, not visitors · generated{' '}
-            {new Date(phase.data.generated_at).toLocaleString()}
-            {livemode ? '' : ' · Test'}
-          </p>
-          <div className="ai-insight-grid">
-            {metric('Created', phase.data.current.sessions_created)}
-            {metric('Quoted', phase.data.current.sessions_quoted)}
-            {metric('Deposited', phase.data.current.sessions_with_deposit)}
-            {metric('Settled', phase.data.current.sessions_settled)}
-            {metric('Expired w/o deposit', phase.data.current.expired_without_deposit)}
-            {metric('With refunds', phase.data.current.sessions_with_refunds)}
-            {metric(
-              'Conversion',
-              phase.data.current.conversion_percent == null
-                ? null
-                : `${phase.data.current.conversion_percent}%`,
-            )}
-            {metric(
-              'vs prior window',
-              phase.data.conversion_change_percentage_points == null
-                ? null
-                : `${phase.data.conversion_change_percentage_points} pp`,
-            )}
-          </div>
-          {phase.data.current.settled_order_totals.length > 0 ? (
-            <p className="dash-muted dash-small">
-              Settled order totals:{' '}
-              {phase.data.current.settled_order_totals
-                .map((t) => `${t.amount} ${t.currency}`)
-                .join(' · ')}
-            </p>
-          ) : null}
-        </>
-      ) : null}
-      {explain.k === 'done' ? (
-        <div className="ai-insight-explain">
-          <p>{explain.answer}</p>
-          {explain.facts.length > 0 ? (
-            <ul>
-              {explain.facts.map((f) => (
-                <li key={f.id}>{f.text}</li>
-              ))}
-            </ul>
-          ) : null}
         </div>
-      ) : null}
-      {explain.k === 'rate' ? <p className="dash-muted">Rate limited — try explaining later.</p> : null}
-      {explain.k === 'unavailable' ? <p className="dash-muted">{explain.message}</p> : null}
-    </Panel>
+
+        {explain.k === 'done' ? (
+          <div className="ins-explain-body">
+            <p>{explain.answer}</p>
+            {explain.facts.length > 0 ? (
+              <ul>
+                {explain.facts.map((f) => (
+                  <li key={f.id}>{f.text}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+        {explain.k === 'rate' ? (
+          <p className="ins-explain-status">Rate limited — try explaining later.</p>
+        ) : null}
+        {explain.k === 'unavailable' ? (
+          <p className="ins-explain-status">{explain.message}</p>
+        ) : null}
+      </section>
+    </div>
   );
 }

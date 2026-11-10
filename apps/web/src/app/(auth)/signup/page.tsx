@@ -7,6 +7,7 @@ import { AuthCta } from '@/components/login/AuthCta';
 import { AuthStage } from '@/components/login/AuthStage';
 import { toast } from '@/components/toast';
 import { api, errorMessage } from '@/lib/api';
+import { Mail, Send } from 'lucide-react';
 
 export default function SignupPage() {
   const [email, setEmail] = useState('');
@@ -58,18 +59,26 @@ export default function SignupPage() {
           </p>
           <label className="field">
             <span>Email</span>
-            <input
-              type="email"
-              required
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              maxLength={254}
-              placeholder="you@company.com"
-            />
+            <span className="login-field-input">
+              <Mail className="login-field-icon" size={17} strokeWidth={2} aria-hidden />
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                maxLength={254}
+                placeholder="you@company.com"
+              />
+            </span>
           </label>
           {error && <Alert tone="danger">{error}</Alert>}
-          <AuthCta type="submit" disabled={busy || !email}>
+          <AuthCta
+            type="submit"
+            disabled={busy || !email}
+            tone="yellow"
+            icon={<Send size={18} strokeWidth={2} aria-hidden />}
+          >
             {busy ? 'Sending…' : 'Send me a link'}
           </AuthCta>
         </form>

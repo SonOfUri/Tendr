@@ -2563,7 +2563,7 @@ select.tendr-native-select,
 
 .login-frame {
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(18rem, 0.95fr);
+  grid-template-columns: minmax(0, 1.12fr) minmax(18rem, 0.88fr);
   width: min(1120px, 100%);
   height: min(620px, calc(100% - 4.25rem));
   max-width: 100%;
@@ -2572,13 +2572,12 @@ select.tendr-native-select,
   margin-top: auto;
   margin-bottom: auto;
   min-height: 0;
-  background: #fff;
-  border-radius: 28px;
-  overflow: hidden;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow:
-    0 8px 28px rgba(0, 0, 0, 0.1),
-    0 2px 8px rgba(0, 0, 0, 0.05);
+  background: transparent;
+  border-radius: 0;
+  overflow: visible;
+  border: 0;
+  box-shadow: none;
+  gap: 0;
 }
 
 .login-demos {
@@ -2665,13 +2664,28 @@ select.tendr-native-select,
 }
 
 .login-demos--art {
+  position: relative;
   padding: 0;
   gap: 0;
   justify-content: center;
   align-items: center;
+  border-radius: 28px;
+  overflow: hidden;
   background:
     url('/onboarding-bg-image.png') center / cover no-repeat,
     #050505;
+}
+
+.login-demos-powered {
+  position: absolute;
+  z-index: 2;
+  left: 1rem;
+  bottom: 1rem;
+  width: min(14.5rem, 62%);
+  height: auto;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
 }
 
 .login-demos-mark {
@@ -3023,15 +3037,68 @@ html[data-appearance='light'] .login-demos-mark--on-light {
 }
 
 .login-panel {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   justify-content: safe center;
   gap: 0.7rem;
+  margin-left: -1.75rem;
   padding: clamp(1.15rem, 2.5vw, 2rem);
   background: #fff;
   color: #0a0a0a;
+  /* Left radii let the banner show through the curve. */
+  border-radius: 28px 22px 22px 28px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.1),
+    0 2px 8px rgba(0, 0, 0, 0.05);
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+.login-panel-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.15rem 0;
+  color: #8a8a8a;
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.login-panel-divider::before,
+.login-panel-divider::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: #e4e4e4;
+}
+
+.login-panel-divider span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.login-field-input {
+  position: relative;
+  display: block;
+}
+
+.login-field-input .login-field-icon {
+  position: absolute;
+  top: 50%;
+  left: 0.85rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  color: #0a0a0a;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.login-field-input input {
+  padding-left: 2.45rem !important;
 }
 
 /* Long auth forms scroll without collapsing their copy or controls on small screens. */
@@ -3238,7 +3305,7 @@ html[data-appearance='light'] .login-panel-mark--on-light {
   margin-top: 0.25rem;
   min-height: 2.85rem;
   padding: 0.95rem 1rem;
-  border-radius: 12px !important;
+  border-radius: 999px !important;
   font-weight: 700 !important;
   background: #0a0a0a !important;
   color: #f5f5f5 !important;
@@ -3252,13 +3319,34 @@ html[data-appearance='light'] .login-panel-mark--on-light {
     filter 220ms ease;
 }
 
+.login-panel .login-panel-cta--yellow,
+.login-panel button.login-panel-cta.login-panel-cta--yellow,
+.auth-shell .login-panel button.login-panel-cta.login-panel-cta--yellow {
+  background: #f5d400 !important;
+  color: #0a0a0a !important;
+  border-color: #f5d400 !important;
+}
+
 .login-panel-cta-label {
   position: relative;
   z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #f5f5f5;
+  gap: 0.55rem;
+  color: inherit;
+}
+
+.login-panel-cta-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  line-height: 0;
+}
+
+.login-panel-cta--yellow .login-panel-cta-label {
+  color: #0a0a0a;
 }
 
 .login-panel button.login-panel-cta::after,
@@ -3283,6 +3371,13 @@ html[data-appearance='light'] .login-panel-mark--on-light {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
   filter: brightness(1.06);
   background: #0a0a0a !important;
+}
+
+.login-panel button.login-panel-cta.login-panel-cta--yellow:hover:not(:disabled) {
+  background: #ffe34a !important;
+  border-color: #ffe34a !important;
+  filter: none;
+  box-shadow: 0 10px 24px rgba(245, 212, 0, 0.35);
 }
 
 .login-panel button.login-panel-cta:hover:not(:disabled)::after,
@@ -3349,6 +3444,15 @@ html[data-appearance='light'] .login-panel-mark--on-light {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 0.4fr) minmax(0, 0.6fr);
     height: min(560px, 100%);
+    gap: 0.65rem;
+  }
+
+  .login-panel {
+    margin-left: 0;
+    border-radius: 22px;
+  }
+
+  .login-demos--art {
     border-radius: 22px;
   }
 
@@ -3432,12 +3536,22 @@ html[data-appearance='light'] .login-panel-mark--on-light {
     padding: 0.25rem 0;
   }
 
-  .login-frame {
+  .login-panel {
+    border-radius: 18px;
+  }
+
+  .login-demos--art {
     border-radius: 18px;
   }
 
   .login-demos {
     padding: 1rem;
+  }
+
+  .login-demos-powered {
+    left: 0.75rem;
+    bottom: 0.75rem;
+    width: min(9.5rem, 48%);
   }
 
   .login-scenario--prediction-markets {
@@ -3671,6 +3785,20 @@ html[data-appearance='dark'] body:has(.login-screen) {
 
 html[data-appearance='dark'] .login-panel {
   background: #141414;
+  color: #f5f5f5;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+html[data-appearance='dark'] .login-panel-divider {
+  color: #9a9a9a;
+}
+
+html[data-appearance='dark'] .login-panel-divider::before,
+html[data-appearance='dark'] .login-panel-divider::after {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+html[data-appearance='dark'] .login-field-input .login-field-icon {
   color: #f5f5f5;
 }
 
