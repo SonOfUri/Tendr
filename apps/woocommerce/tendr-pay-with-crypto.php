@@ -1,7 +1,6 @@
 <?php
 /**
  * Plugin Name:          tendr: Pay with crypto
- * Plugin URI:           https://usetendr.tech
  * Description:          Take crypto payments in WooCommerce. They settle into your own tendr account; connect in one click, no keys to copy.
  * Version:              0.3.1
  * Requires at least:    6.4
