@@ -57,11 +57,11 @@
 
 .hosted-pay-page .demo-status-card,
 .hosted-pay-page .demo-checkout-card {
-  width: min(1200px, 100%);
+  width: min(400px, 100%);
 }
 
 .hosted-pay-edge {
-  width: min(1200px, 100%);
+  width: min(400px, 100%);
   background: var(--demo-panel);
   color: var(--demo-panel-ink);
   border: 1px solid var(--demo-panel-border);
