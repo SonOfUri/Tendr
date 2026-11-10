@@ -14,7 +14,7 @@ npm run dev:wordpress
 ```
 
 The first run installs WordPress 7.1.3, PHP 8.3, WooCommerce 11.2.1 (the plugin's tested version),
-the Storefront theme and Tendr 0.3.1 from the local release ZIP. It creates a **$1 virtual product**,
+the Storefront theme and Tendr 0.3.2 from the local release ZIP. It creates a **$1 virtual product**,
 enables pretty permalinks and guest checkout, and uses USD. Subsequent starts retain orders,
 products, configuration and Tendr connections. The Tendr plugin is refreshed from this checkout.
 An existing active theme is retained on restart.

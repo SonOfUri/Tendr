@@ -54,15 +54,15 @@ final class Tendr_Credentials {
 			$value = $constants[ $name ] ?? null;
 			if ( ! is_string( $value ) || '' === trim( $value ) ) {
 				/* translators: %s: a wp-config.php constant name. */
-				return sprintf( __( '%s is missing or empty in wp-config.php.', 'tendr' ), $name );
+				return sprintf( __( '%s is missing or empty in wp-config.php.', 'tendr-pay-with-crypto' ), $name );
 			}
 			if ( 'put your unique phrase here' === $value ) {
 				/* translators: %s: a wp-config.php constant name. */
-				return sprintf( __( '%s in wp-config.php is still the sample phrase.', 'tendr' ), $name );
+				return sprintf( __( '%s in wp-config.php is still the sample phrase.', 'tendr-pay-with-crypto' ), $name );
 			}
 			if ( ( $counts[ $value ] ?? 0 ) > 1 ) {
 				/* translators: %s: a wp-config.php constant name. */
-				return sprintf( __( '%s in wp-config.php has the same value as another security key.', 'tendr' ), $name );
+				return sprintf( __( '%s in wp-config.php has the same value as another security key.', 'tendr-pay-with-crypto' ), $name );
 			}
 		}
 		return null;
@@ -94,7 +94,7 @@ final class Tendr_Credentials {
 	public static function salt_message( string $problem ): string {
 		return sprintf(
 			/* translators: 1: what is wrong, 2: URL of the WordPress salt generator. */
-			__( 'tendr cannot store its keys safely on this site: %1$s Its WordPress security keys (salts) protect the stored tendr keys, so they must be unique and secret. Replace the eight AUTH_KEY … NONCE_SALT lines in wp-config.php with fresh ones from %2$s, then connect. Everyone is signed out once when the keys change.', 'tendr' ),
+			__( 'tendr cannot store its keys safely on this site: %1$s Its WordPress security keys (salts) protect the stored tendr keys, so they must be unique and secret. Replace the eight AUTH_KEY … NONCE_SALT lines in wp-config.php with fresh ones from %2$s, then connect. Everyone is signed out once when the keys change.', 'tendr-pay-with-crypto' ),
 			$problem,
 			self::SALT_GENERATOR
 		);

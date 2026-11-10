@@ -30,7 +30,14 @@ const WEB_DOWNLOADS = resolve(ROOT, '../web/public/downloads/woocommerce');
 const SLUG = 'tendr-pay-with-crypto';
 
 /** What ships: these files and directories (recursively), relative to the plugin root. */
-const SHIPPED = ['tendr-pay-with-crypto.php', 'uninstall.php', 'readme.txt', 'includes', 'assets'];
+const SHIPPED = [
+  'tendr-pay-with-crypto.php',
+  'uninstall.php',
+  'readme.txt',
+  'LICENSE.txt',
+  'includes',
+  'assets',
+];
 /** Never shipped, even inside a shipped directory. */
 const FORBIDDEN = /(^|\/)(\.|node_modules\/|vendor\/|tests?\/|composer\.|phpunit|phpcs|package)/;
 
@@ -160,6 +167,11 @@ function main() {
   if (header(mainFile, 'Requires at least') !== requires)
     fail('Requires at least differs from readme');
   if (header(mainFile, 'Requires PHP') !== requiresPhp) fail('Requires PHP differs from readme');
+  if (header(mainFile, 'Text Domain') !== SLUG) fail('Text Domain must match the plugin slug');
+  const pluginUri = header(mainFile, 'Plugin URI')?.replace(/\/+$/, '');
+  const authorUri = header(mainFile, 'Author URI')?.replace(/\/+$/, '');
+  if (pluginUri && authorUri && pluginUri === authorUri)
+    fail('Plugin URI and Author URI must be different when both are provided');
 
   const files = shippedFiles();
   const dirs = new Set([`${SLUG}/`]);

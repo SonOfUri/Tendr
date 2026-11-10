@@ -57,7 +57,7 @@ final class Tendr_Order_Status {
 		$key   = (string) $request->get_param( 'order_key' );
 		$order = self::order_for_key( $key );
 		if ( null === $order ) {
-			return new WP_Error( 'tendr_order_not_found', __( 'Order not found.', 'tendr' ), array( 'status' => 404 ) );
+			return new WP_Error( 'tendr_order_not_found', __( 'Order not found.', 'tendr-pay-with-crypto' ), array( 'status' => 404 ) );
 		}
 		$response = new WP_REST_Response( array( 'status' => $order->get_status() ), 200 );
 		$response->header( 'Cache-Control', 'no-store' );

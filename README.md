@@ -1000,7 +1000,7 @@ USD amount matches `amount / rate` rounded up.
 ## WooCommerce plugin
 
 `apps/woocommerce/` is the WordPress plugin **tendr: Pay with crypto** (PHP 8.0+, WordPress 6.4+,
-WooCommerce 8.5+, GPL-2.0-or-later, text domain `tendr`). Stores install it from
+WooCommerce 8.5+, GPL-2.0-or-later, text domain `tendr-pay-with-crypto`). Stores install it from
 `https://pay.usetendr.tech/downloads/woocommerce`, connect in one click (Connect popup, passkey), and
 take crypto payments in the classic and Blocks checkouts. Refunds clicked in WooCommerce become
 signer-approved proposals. Everything PHP runs in Docker through `@wordpress/env`; nothing is
@@ -1026,23 +1026,55 @@ gets only its own events, re-connects and disconnects (the old keys get 401), an
 checks that a guest never sees the method in test mode. WordPress calls the API at
 `host.docker.internal:4100`; on Linux set `E2E_API_HOST=0.0.0.0` so the API is reachable there.
 
-**Plugin Check.** `npm run plugin-check` must report no errors. Two decisions are encoded in
-`apps/woocommerce/scripts/plugin-check.mjs`:
+**Plugin Check.** `npm run plugin-check` installs the built ZIP into the isolated :8892 site and
+runs Plugin Check 2.2.0 with static and runtime checks. It uses the actual
+`tendr-pay-with-crypto` slug; no findings are ignored. The review/test environments use WordPress
+7.1.4, WooCommerce 11.2.1, and PHP 8.2. Keep testing isolated from the connected Docker demo store.
 
-- the check runs with `--slug=tendr`, because the text domain is `tendr`. A WordPress.org listing
-  must get the slug `tendr`, or the text domain must change to the slug it gets;
-- `plugin_updater_detected` is ignored: the pilot updates from its own feed (below). The
-  WordPress.org build must drop `includes/class-tendr-updater.php`.
+**Updates.** Version 0.3.2 removes the custom updater. Once approved and released on WordPress.org,
+this plugin uses WordPress's standard update mechanism. Until then, install ZIP updates manually.
+The website's existing download manifest/update-feed endpoint remains for older pilot versions;
+new plugin code does not call it. Build a local review candidate without changing the web download
+manifest using `npm run build:zip --workspace=@tendr/woocommerce -- --no-publish`.
 
-**Updates.** The plugin reads `<TENDR_CHECKOUT_BASE>/v1/plugins/woocommerce/update.json` (default
-`https://pay.usetendr.tech`, https only; an http local origin is accepted only outside `production`).
-It offers an update only when the feed's version is greater than the installed one and the
-package is a `.zip` under `/downloads/woocommerce/` on the feed's origin. Before WordPress installs
-it, the plugin downloads the package itself and checks its sha256 against the feed; on a mismatch
-it deletes the file and the update stops. The checksum comes from the same origin as the zip, so it
-catches a corrupted or swapped download, not a compromised origin (there is no signature yet). The
-feed origin follows the `TENDR_CHECKOUT_BASE` constant, which only `wp-config.php` can set (a
-staging origin is deliberate).
+**Submission review, 10 November 2026.** This is a local review of the actual ZIP against the
+[submission page](https://wordpress.org/plugins/developers/add/),
+[18 directory guidelines](https://developer.wordpress.org/plugins/wordpress-org/detailed-plugin-guidelines/),
+and [common review issues](https://developer.wordpress.org/plugins/wordpress-org/common-issues/).
+The signed-in submission page was unavailable to the review tools. WordPress.org makes the final
+approval decision; automated checks do not establish full compliance.
+
+| Guideline areas | Package evidence / remaining work |
+| --- | --- |
+| 1–2: licensing and responsibility | GPL-2.0-or-later declared; GPL text, font OFL notices and asset attribution included. Publisher must have rights to the Tendr branding and service. |
+| 3, 14–15: distribution and releases | Custom updater removed; version increased to 0.3.2. SVN release access and future maintenance start after directory approval. |
+| 4, 13: readable code and libraries | Shipped PHP/JS is readable. Blocks uses WordPress/WooCommerce libraries; no duplicate React/jQuery or bundled dev dependencies. |
+| 5–6, 16: working service | Live/test gateway, order updates and refunds are implemented. Account requirements, charges and the hosted service are documented. Service availability is still a reviewer check. |
+| 7: consent and data | Connection is merchant-initiated. Readme now names endpoints, customer email, order keys/details, brand sync, stored metadata and retention. Public policies remain a blocker below. |
+| 8: external code | No external plugin updater. Hosted checkout SDK remains a service dependency, explicitly disclosed; service-code exception remains subject to reviewer acceptance. |
+| 9, 12, 17: conduct, listing and naming | No affiliate/review incentives, spam or mining found. Five relevant tags, Tendr-first name. Unverified contributor username removed; confirm publisher and final slug before upload. |
+| 10: public credits | No site-wide promotional footer/link in the plugin. Payment controls identify the provider; the separate demo-store theme is not shipped. |
+| 11: admin experience | Uses WooCommerce settings. Test-mode and configuration notices have resolution actions and clear when resolved. No dashboard takeover or advertising found. |
+| 18: directory discretion | Manual review and ongoing publisher conduct remain outside automated verification. |
+
+Reviewed security boundaries include admin capabilities/nonces, Connect state and PKCE, escaped
+output, encrypted connection credentials, redacted logs, signed/replay-protected webhooks,
+order/session matching, and key-gated read-only order status. Regression tests cover these paths;
+this is not a certification of the hosted Tendr service.
+
+**Release blockers:** `https://usetendr.tech/terms` and `https://usetendr.tech/privacy` both returned
+HTTP 404 on this review date. Both repository pages, including `origin/deploy`, still contain
+local-development/evaluation placeholders. Publish accurate service Terms and Privacy pages
+covering the actual operator, contact, data processing, providers and retention, and verify the
+readme links before submission. Do not substitute guessed business details or describe the current
+candidate as fully approved. The optional Contributors field is omitted until the submitting
+WordPress.org username is confirmed; the candidate assumes the slug `tendr-pay-with-crypto`.
+
+**Validation:** Plugin Check static/runtime: zero errors, one performance advisory on
+`Tendr_Refunds::remaining()`. That query excludes only the current WooCommerce draft refund,
+scoped to one parent order; the exclusion is intentional to prevent double-counting. No finding
+is suppressed. PHPUnit: 247 tests / 1,232 assertions pass. PHP coding standards and compatibility checks pass.
+The runtime check also passes without the earlier translation-loading notice. The nine removed tests covered the deleted pilot updater.
 
 **Payout.** Connect asks where payments settle (USDC on NEAR by default, or another offered token)
 for a new store, and for a picked store that has none. The owner approves the `set_settlement`

@@ -65,12 +65,12 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	 */
 	public function __construct() {
 		$this->id                 = self::ID;
-		$this->method_title       = __( 'tendr', 'tendr' );
-		$this->method_description = __( 'Take crypto payments that settle into your own tendr account.', 'tendr' );
-		$this->title              = __( 'Pay with crypto', 'tendr' );
-		$this->description        = __( 'Pay with crypto from any wallet or exchange.', 'tendr' );
+		$this->method_title       = __( 'tendr-pay-with-crypto', 'tendr-pay-with-crypto' );
+		$this->method_description = __( 'Take crypto payments that settle into your own tendr account.', 'tendr-pay-with-crypto' );
+		$this->title              = __( 'Pay with crypto', 'tendr-pay-with-crypto' );
+		$this->description        = __( 'Pay with crypto from any wallet or exchange.', 'tendr-pay-with-crypto' );
 		$this->icon               = plugins_url( 'assets/images/tendr-mark-black.png', TENDR_PLUGIN_FILE );
-		$this->order_button_text  = __( 'Pay with crypto', 'tendr' );
+		$this->order_button_text  = __( 'Pay with crypto', 'tendr-pay-with-crypto' );
 		$this->has_fields         = false;
 		$this->supports           = array( 'products', 'refunds' );
 
@@ -97,7 +97,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	 * @return string
 	 */
 	public function get_icon() {
-		$icon = '<img src="' . esc_url( $this->icon ) . '" alt="' . esc_attr__( 'Tendr', 'tendr' ) . '" width="38" height="24" class="tendr-payment-logo">';
+		$icon = '<img src="' . esc_url( $this->icon ) . '" alt="' . esc_attr__( 'Tendr', 'tendr-pay-with-crypto' ) . '" width="38" height="24" class="tendr-payment-logo">';
 		return apply_filters( 'woocommerce_gateway_icon', $icon, $this->id ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Preserve WooCommerce's existing gateway extension point.
 	}
 
@@ -116,9 +116,9 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	public function init_form_fields() {
 		$this->form_fields = array(
 			'enabled' => array(
-				'title'   => __( 'Enable/Disable', 'tendr' ),
+				'title'   => __( 'Enable/Disable', 'tendr-pay-with-crypto' ),
 				'type'    => 'checkbox',
-				'label'   => __( 'Enable tendr', 'tendr' ),
+				'label'   => __( 'Enable tendr', 'tendr-pay-with-crypto' ),
 				'default' => 'no',
 			),
 		);
@@ -176,7 +176,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	 * @return WP_Error
 	 */
 	public function process_refund( $order_id, $amount = null, $reason = '' ) {
-		return new WP_Error( 'tendr_refund_path', __( 'Refund tendr orders from the order screen: Refund, then "Refund via tendr".', 'tendr' ) );
+		return new WP_Error( 'tendr_refund_path', __( 'Refund tendr orders from the order screen: Refund, then "Refund via tendr".', 'tendr-pay-with-crypto' ) );
 	}
 
 	// ------------------------------------------------------------------ sessions.
@@ -448,7 +448,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	public function process_payment( $order_id ) {
 		$order = wc_get_order( $order_id );
 		if ( ! $order instanceof WC_Order ) {
-			self::notice( __( 'Crypto payment could not be started. Please try again.', 'tendr' ) );
+			self::notice( __( 'Crypto payment could not be started. Please try again.', 'tendr-pay-with-crypto' ) );
 			return array( 'result' => 'failure' );
 		}
 
@@ -472,16 +472,16 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	 */
 	private static function error_notice( WP_Error $error, WC_Order $order ): string {
 		if ( in_array( $error->get_error_code(), self::UNAVAILABLE_CODES, true ) ) {
-			return __( 'Crypto payment is unavailable right now. Please choose another payment method or try again later.', 'tendr' );
+			return __( 'Crypto payment is unavailable right now. Please choose another payment method or try again later.', 'tendr-pay-with-crypto' );
 		}
 		if ( self::is_precision_error( $error ) ) {
 			return sprintf(
 				/* translators: %s: currency code, e.g. JPY. */
-				__( 'Crypto payment is unavailable for this order: its total has more decimals than %s allows. The store\'s price decimals do not match its currency; please choose another payment method.', 'tendr' ),
+				__( 'Crypto payment is unavailable for this order: its total has more decimals than %s allows. The store\'s price decimals do not match its currency; please choose another payment method.', 'tendr-pay-with-crypto' ),
 				$order->get_currency()
 			);
 		}
-		return __( 'Crypto payment could not be started. Please try again.', 'tendr' );
+		return __( 'Crypto payment could not be started. Please try again.', 'tendr-pay-with-crypto' );
 	}
 
 	/**
@@ -527,7 +527,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		// left pending; see clear_session_url()).
 		$show_old = $have_url
 			? $session_id
-			: new WP_Error( 'tendr_session_unavailable', __( 'Crypto payment could not be started. Please try again.', 'tendr' ) );
+			: new WP_Error( 'tendr_session_unavailable', __( 'Crypto payment could not be started. Please try again.', 'tendr-pay-with-crypto' ) );
 
 		if ( '' !== $session_id ) {
 			$stored_mode = 'live' === $order->get_meta( self::META_MODE ) ? 'live' : 'test';
@@ -583,7 +583,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 			}
 			return $result;
 		}
-		$order->add_order_note( __( 'The order total changed after its crypto checkout started: that checkout was closed and a new one started at the current total.', 'tendr' ) );
+		$order->add_order_note( __( 'The order total changed after its crypto checkout started: that checkout was closed and a new one started at the current total.', 'tendr-pay-with-crypto' ) );
 		return true;
 	}
 
@@ -696,7 +696,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		$id  = isset( $created['id'] ) && is_string( $created['id'] ) ? $created['id'] : '';
 		$url = isset( $created['url'] ) && is_string( $created['url'] ) ? $created['url'] : '';
 		if ( ! preg_match( '/^ses_[0-9A-Za-z]{1,64}$/', $id ) || ! self::is_session_url( $url ) ) {
-			return new WP_Error( 'tendr_bad_response', __( 'tendr sent a response this plugin could not read. Try again.', 'tendr' ) );
+			return new WP_Error( 'tendr_bad_response', __( 'tendr sent a response this plugin could not read. Try again.', 'tendr-pay-with-crypto' ) );
 		}
 
 		$order->update_meta_data( self::META_ATTEMPT, (string) $attempt );
@@ -712,9 +712,9 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		$order->add_order_note(
 			'live' === $mode
 				/* translators: %s: tendr checkout session id. */
-				? sprintf( __( 'Crypto checkout started (tendr session %s).', 'tendr' ), $id )
+				? sprintf( __( 'Crypto checkout started (tendr session %s).', 'tendr-pay-with-crypto' ), $id )
 				/* translators: %s: tendr checkout session id. */
-				: sprintf( __( 'Crypto checkout started in test mode (tendr session %s).', 'tendr' ), $id )
+				: sprintf( __( 'Crypto checkout started in test mode (tendr session %s).', 'tendr-pay-with-crypto' ), $id )
 		);
 		return $id;
 	}
@@ -765,7 +765,7 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 		}
 		$session_url = (string) $order->get_meta( self::META_SESSION_URL );
 		if ( ! self::is_session_url( $session_url ) ) {
-			echo '<p class="tendr-pay">' . esc_html__( 'This crypto payment could not be started.', 'tendr' ) . ' <a href="' . esc_url( $order->get_checkout_payment_url() ) . '">' . esc_html__( 'Try again', 'tendr' ) . '</a></p>';
+			echo '<p class="tendr-pay">' . esc_html__( 'This crypto payment could not be started.', 'tendr-pay-with-crypto' ) . ' <a href="' . esc_url( $order->get_checkout_payment_url() ) . '">' . esc_html__( 'Try again', 'tendr-pay-with-crypto' ) . '</a></p>';
 			return;
 		}
 
@@ -779,9 +779,9 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 
 		echo '<div class="tendr-pay" data-tendr-pay>';
 		echo '<div class="tendr-pay-brand"><img src="' . esc_url( plugins_url( 'assets/images/tendr-mark-black.png', TENDR_PLUGIN_FILE ) ) . '" width="35" height="22" alt=""><span>tendr</span></div>';
-		echo '<p>' . esc_html__( 'Complete your payment in the tendr window.', 'tendr' ) . '</p>';
-		echo '<p><button type="button" class="button alt" data-tendr-open>' . esc_html__( 'Pay with crypto', 'tendr' ) . '</button></p>';
-		echo '<p><a href="' . esc_url( $session_url ) . '" rel="noopener" data-tendr-fallback>' . esc_html__( 'Having trouble? Open the payment page', 'tendr' ) . '</a></p>';
+		echo '<p>' . esc_html__( 'Complete your payment in the tendr window.', 'tendr-pay-with-crypto' ) . '</p>';
+		echo '<p><button type="button" class="button alt" data-tendr-open>' . esc_html__( 'Pay with crypto', 'tendr-pay-with-crypto' ) . '</button></p>';
+		echo '<p><a href="' . esc_url( $session_url ) . '" rel="noopener" data-tendr-fallback>' . esc_html__( 'Having trouble? Open the payment page', 'tendr-pay-with-crypto' ) . '</a></p>';
 		echo '</div>';
 	}
 
@@ -803,11 +803,11 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 				'statusUrl' => rest_url( Tendr_Order_Status::NAMESPACE . '/order-status/' . $order->get_order_key() ),
 				'interval'  => self::POLL_INTERVAL_MS,
 				'stopAfter' => self::POLL_STOP_AFTER_MS,
-				'slowText'  => __( 'Confirmation is taking longer than usual. You will get an email when your payment is confirmed, and you can check your order later.', 'tendr' ),
+				'slowText'  => __( 'Confirmation is taking longer than usual. You will get an email when your payment is confirmed, and you can check your order later.', 'tendr-pay-with-crypto' ),
 			)
 		);
 
-		echo '<p class="tendr-waiting" data-tendr-waiting role="status" aria-live="polite">' . esc_html__( 'Waiting for payment confirmation…', 'tendr' ) . '</p>';
+		echo '<p class="tendr-waiting" data-tendr-waiting role="status" aria-live="polite">' . esc_html__( 'Waiting for payment confirmation…', 'tendr-pay-with-crypto' ) . '</p>';
 	}
 
 	/**
@@ -927,13 +927,13 @@ class Tendr_Gateway extends WC_Payment_Gateway {
 	private static function cancel_hold_note( string $reason ): string {
 		switch ( $reason ) {
 			case 'deposit':
-				return __( 'Not cancelled: a crypto deposit is in progress for this order. The order stays pending and its stock stays held until tendr confirms the payment.', 'tendr' );
+				return __( 'Not cancelled: a crypto deposit is in progress for this order. The order stays pending and its stock stays held until tendr confirms the payment.', 'tendr-pay-with-crypto' );
 			case 'payment':
-				return __( 'Not cancelled: tendr has a crypto payment for this order. The order stays pending until tendr confirms it.', 'tendr' );
+				return __( 'Not cancelled: tendr has a crypto payment for this order. The order stays pending until tendr confirms it.', 'tendr-pay-with-crypto' );
 			case 'earlier_connection':
-				return __( 'This order\'s tendr payment belongs to an earlier connection — it can\'t be checked from here. Check the tendr dashboard before cancelling.', 'tendr' );
+				return __( 'This order\'s tendr payment belongs to an earlier connection — it can\'t be checked from here. Check the tendr dashboard before cancelling.', 'tendr-pay-with-crypto' );
 			default:
-				return __( 'Not cancelled yet: tendr could not be reached to close the crypto checkout. WooCommerce will try again on its next run.', 'tendr' );
+				return __( 'Not cancelled yet: tendr could not be reached to close the crypto checkout. WooCommerce will try again on its next run.', 'tendr-pay-with-crypto' );
 		}
 	}
 

@@ -192,7 +192,7 @@ final class Tendr_Webhooks {
 			return self::ok();
 		}
 		if ( 'busy' === $claim ) {
-			return new WP_Error( 'tendr_event_in_progress', __( 'Already being processed.', 'tendr' ), array( 'status' => 409 ) );
+			return new WP_Error( 'tendr_event_in_progress', __( 'Already being processed.', 'tendr-pay-with-crypto' ), array( 'status' => 409 ) );
 		}
 		if ( 'error' === $claim ) {
 			return self::retry();
@@ -427,13 +427,13 @@ final class Tendr_Webhooks {
 	 * 400 for anything not authentic or not an event.
 	 */
 	private static function bad_request(): WP_Error {
-		return new WP_Error( 'tendr_bad_signature', __( 'Invalid signature.', 'tendr' ), array( 'status' => 400 ) );
+		return new WP_Error( 'tendr_bad_signature', __( 'Invalid signature.', 'tendr-pay-with-crypto' ), array( 'status' => 400 ) );
 	}
 
 	/**
 	 * 503: try again later.
 	 */
 	private static function retry(): WP_Error {
-		return new WP_Error( 'tendr_retry', __( 'Try again later.', 'tendr' ), array( 'status' => 503 ) );
+		return new WP_Error( 'tendr_retry', __( 'Try again later.', 'tendr-pay-with-crypto' ), array( 'status' => 503 ) );
 	}
 }

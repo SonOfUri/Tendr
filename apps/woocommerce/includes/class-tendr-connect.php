@@ -51,7 +51,7 @@ final class Tendr_Connect {
 	public static function add_callback_page(): void {
 		$hook = add_submenu_page(
 			'',
-			__( 'Connecting to tendr', 'tendr' ),
+			__( 'Connecting to tendr', 'tendr-pay-with-crypto' ),
 			'',
 			'manage_woocommerce',
 			self::CALLBACK_PAGE,
@@ -68,7 +68,7 @@ final class Tendr_Connect {
 	public static function handle_start_request(): void {
 		$nonce = isset( $_GET['_wpnonce'] ) ? sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ) : '';
 		if ( ! wp_verify_nonce( $nonce, 'tendr_connect_start' ) ) {
-			wp_die( esc_html__( 'This Connect link has expired. Close this window and click Connect again.', 'tendr' ), 403 );
+			wp_die( esc_html__( 'This Connect link has expired. Close this window and click Connect again.', 'tendr-pay-with-crypto' ), 403 );
 		}
 		$url = self::start();
 		if ( is_wp_error( $url ) ) {
@@ -132,7 +132,7 @@ final class Tendr_Connect {
 	 */
 	public static function handle_disconnect_request(): void {
 		if ( ! self::disconnect_from_request() ) {
-			wp_die( esc_html__( 'You are not allowed to do that.', 'tendr' ), 403 );
+			wp_die( esc_html__( 'You are not allowed to do that.', 'tendr-pay-with-crypto' ), 403 );
 		}
 		wp_safe_redirect( Tendr_Settings::url() );
 		exit;
@@ -166,7 +166,7 @@ final class Tendr_Connect {
 				'tendr_admin_origin',
 				sprintf(
 					/* translators: 1: the WordPress admin address, 2: the site address. */
-					__( 'Connect needs the WordPress admin (%1$s) on the same address as the site (%2$s). Set the WordPress Address and Site Address to the same origin under Settings → General.', 'tendr' ),
+					__( 'Connect needs the WordPress admin (%1$s) on the same address as the site (%2$s). Set the WordPress Address and Site Address to the same origin under Settings → General.', 'tendr-pay-with-crypto' ),
 					self::origin_of( admin_url() ),
 					self::origin_of( $home )
 				)
@@ -177,20 +177,20 @@ final class Tendr_Connect {
 		if ( '' === $structure || ( $wp_rewrite instanceof WP_Rewrite && $wp_rewrite->using_index_permalinks() ) ) {
 			return new WP_Error(
 				'tendr_permalinks',
-				__( 'Enable pretty permalinks to connect. tendr sends payment updates to /wp-json/tendr/v1/webhook, which needs a permalink structure other than Plain (Settings → Permalinks).', 'tendr' )
+				__( 'Enable pretty permalinks to connect. tendr sends payment updates to /wp-json/tendr/v1/webhook, which needs a permalink structure other than Plain (Settings → Permalinks).', 'tendr-pay-with-crypto' )
 			);
 		}
 		if ( 'wp-json' !== rest_get_url_prefix() ) {
 			return new WP_Error(
 				'tendr_rest_prefix',
-				__( 'tendr sends payment updates to /wp-json/tendr/v1/webhook, but this site serves its REST API under another prefix. Remove the custom REST prefix to connect.', 'tendr' )
+				__( 'tendr sends payment updates to /wp-json/tendr/v1/webhook, but this site serves its REST API under another prefix. Remove the custom REST prefix to connect.', 'tendr-pay-with-crypto' )
 			);
 		}
 		$expected = self::strip_scheme( $home . '/wp-json/' . self::WEBHOOK_ROUTE );
 		if ( self::strip_scheme( untrailingslashit( rest_url( self::WEBHOOK_ROUTE ) ) ) !== $expected ) {
 			return new WP_Error(
 				'tendr_rest_url',
-				__( 'tendr sends payment updates to /wp-json/tendr/v1/webhook below the site address, but this site serves its REST API elsewhere. Check the permalink and REST API settings.', 'tendr' )
+				__( 'tendr sends payment updates to /wp-json/tendr/v1/webhook below the site address, but this site serves its REST API elsewhere. Check the permalink and REST API settings.', 'tendr-pay-with-crypto' )
 			);
 		}
 		return null;
@@ -203,7 +203,7 @@ final class Tendr_Connect {
 	 */
 	public static function start() {
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {
-			return new WP_Error( 'tendr_forbidden', __( 'You need permission to manage WooCommerce to connect tendr.', 'tendr' ) );
+			return new WP_Error( 'tendr_forbidden', __( 'You need permission to manage WooCommerce to connect tendr.', 'tendr-pay-with-crypto' ) );
 		}
 		$blocked = self::blocker();
 		if ( null !== $blocked ) {
@@ -261,26 +261,26 @@ final class Tendr_Connect {
 	 */
 	public static function handle_callback( array $params ): array {
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {
-			return self::result( 'error', __( 'You need permission to manage WooCommerce to connect tendr.', 'tendr' ) );
+			return self::result( 'error', __( 'You need permission to manage WooCommerce to connect tendr.', 'tendr-pay-with-crypto' ) );
 		}
 
 		$state   = ( isset( $params['state'] ) && is_string( $params['state'] ) ) ? $params['state'] : '';
 		$pending = ( '' !== $state && strlen( $state ) <= 512 ) ? get_transient( self::transient_key( $state ) ) : false;
 		if ( ! is_array( $pending ) || (int) ( $pending['user_id'] ?? 0 ) !== get_current_user_id() || empty( $pending['verifier'] ) ) {
-			return self::result( 'error', __( 'This connection attempt has expired or was started by someone else. Close this window and click Connect again.', 'tendr' ) );
+			return self::result( 'error', __( 'This connection attempt has expired or was started by someone else. Close this window and click Connect again.', 'tendr-pay-with-crypto' ) );
 		}
 		delete_transient( self::transient_key( $state ) );
 
 		if ( isset( $params['error'] ) ) {
 			if ( 'access_denied' === $params['error'] ) {
-				return self::result( 'cancelled', __( 'Connection cancelled', 'tendr' ) );
+				return self::result( 'cancelled', __( 'Connection cancelled', 'tendr-pay-with-crypto' ) );
 			}
-			return self::result( 'error', __( 'Connection failed. Close this window and click Connect again.', 'tendr' ) );
+			return self::result( 'error', __( 'Connection failed. Close this window and click Connect again.', 'tendr-pay-with-crypto' ) );
 		}
 
 		$code = ( isset( $params['code'] ) && is_string( $params['code'] ) ) ? $params['code'] : '';
 		if ( '' === $code || strlen( $code ) > 200 ) {
-			return self::result( 'error', __( 'Connection failed. Close this window and click Connect again.', 'tendr' ) );
+			return self::result( 'error', __( 'Connection failed. Close this window and click Connect again.', 'tendr-pay-with-crypto' ) );
 		}
 		// C1: never take credentials this site cannot keep secret (the code is left unredeemed).
 		$salts = Tendr_Credentials::site_salt_problem();
@@ -312,22 +312,22 @@ final class Tendr_Connect {
 		if ( is_wp_error( $issued ) ) {
 			$message = 'tendr_unreachable' === $issued->get_error_code()
 				? $issued->get_error_message()
-				: __( 'tendr could not complete the connection. Close this window and click Connect again.', 'tendr' );
+				: __( 'tendr could not complete the connection. Close this window and click Connect again.', 'tendr-pay-with-crypto' );
 			return self::result( 'error', $message );
 		}
 
 		try {
 			self::save_connection( $issued, (string) $pending['site_url'] );
 		} catch ( InvalidArgumentException $e ) {
-			return self::result( 'error', __( 'tendr sent a response this plugin could not read. Close this window and click Connect again.', 'tendr' ) );
+			return self::result( 'error', __( 'tendr sent a response this plugin could not read. Close this window and click Connect again.', 'tendr-pay-with-crypto' ) );
 		}
 		// The store's look, for themed checkouts. A failure leaves a notice and never fails Connect.
 		Tendr_Brand::send_after_connect();
 
 		/* translators: %s: the tendr store name. */
-		$result = self::result( 'connected', sprintf( __( 'Connected to %s', 'tendr' ), $issued['store']['name'] ) );
+		$result = self::result( 'connected', sprintf( __( 'Connected to %s', 'tendr-pay-with-crypto' ), $issued['store']['name'] ) );
 		if ( null !== $previous && $previous['id'] !== $issued['connection_id'] && ! self::replace_previous( $old_keys, (string) $issued['connection_id'] ) ) {
-			$result['notice'] = __( 'tendr could not move this site\'s earlier connection to the new one, so payments and refunds for orders placed before you reconnected may not update here. Check those orders on your tendr dashboard.', 'tendr' );
+			$result['notice'] = __( 'tendr could not move this site\'s earlier connection to the new one, so payments and refunds for orders placed before you reconnected may not update here. Check those orders on your tendr dashboard.', 'tendr-pay-with-crypto' );
 		}
 		return $result;
 	}
@@ -425,15 +425,15 @@ final class Tendr_Connect {
 		// A4: tendr cancels their open checkouts; a deposit already on its way still lands, but its
 		// outcome can no longer reach this site. Say so on each order still waiting.
 		foreach ( self::open_orders() as $order ) {
-			$order->add_order_note( __( 'tendr disconnected — a payment for this order will not be reported here; check the tendr dashboard.', 'tendr' ) );
+			$order->add_order_note( __( 'tendr disconnected — a payment for this order will not be reported here; check the tendr dashboard.', 'tendr-pay-with-crypto' ) );
 		}
 
 		if ( 'revoked' === $api ) {
-			Tendr_Settings::flash( 'success', __( 'Disconnected from tendr. This site\'s keys are revoked.', 'tendr' ) );
+			Tendr_Settings::flash( 'success', __( 'Disconnected from tendr. This site\'s keys are revoked.', 'tendr-pay-with-crypto' ) );
 		} elseif ( 'failed' === $api ) {
-			Tendr_Settings::flash( 'warning', __( 'Disconnected on this site, but this site could not reach tendr to revoke its keys. Remove it under Settings → Connected sites on your tendr dashboard.', 'tendr' ) );
+			Tendr_Settings::flash( 'warning', __( 'Disconnected on this site, but this site could not reach tendr to revoke its keys. Remove it under Settings → Connected sites on your tendr dashboard.', 'tendr-pay-with-crypto' ) );
 		} else {
-			Tendr_Settings::flash( 'warning', __( 'Disconnected on this site. Its stored keys could not be read, so remove it under Settings → Connected sites on your tendr dashboard to revoke them.', 'tendr' ) );
+			Tendr_Settings::flash( 'warning', __( 'Disconnected on this site. Its stored keys could not be read, so remove it under Settings → Connected sites on your tendr dashboard to revoke them.', 'tendr-pay-with-crypto' ) );
 		}
 	}
 
@@ -531,11 +531,11 @@ final class Tendr_Connect {
 		);
 
 		return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">'
-			. '<title>' . esc_html__( 'tendr', 'tendr' ) . '</title>'
+			. '<title>' . esc_html__( 'tendr', 'tendr-pay-with-crypto' ) . '</title>'
 			. '<style>body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;margin:0;padding:48px 16px;text-align:center;color:#1d2327;background:#f6f7f7}a{color:#2271b1}</style>'
 			. '</head><body>'
 			. '<p><strong>' . esc_html( $message ) . '</strong></p>'
-			. '<p>' . esc_html__( 'You can close this window.', 'tendr' ) . ' <a href="' . esc_url( Tendr_Settings::url() ) . '">' . esc_html__( 'Back to tendr settings', 'tendr' ) . '</a></p>'
+			. '<p>' . esc_html__( 'You can close this window.', 'tendr-pay-with-crypto' ) . ' <a href="' . esc_url( Tendr_Settings::url() ) . '">' . esc_html__( 'Back to tendr settings', 'tendr-pay-with-crypto' ) . '</a></p>'
 			. wp_get_inline_script_tag( $script )
 			. '</body></html>';
 	}

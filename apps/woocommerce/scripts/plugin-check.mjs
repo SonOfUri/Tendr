@@ -16,18 +16,6 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG = '--config=.wp-env.e2e.json';
 const SLUG = 'tendr-pay-with-crypto';
 
-/**
- * The text domain is `tendr` (global constraint: "Text domain `tendr`"), so the check is told the
- * slug that domain belongs to. Plugin Check otherwise expects the folder name as the domain.
- */
-const TEXT_DOMAIN_SLUG = 'tendr';
-
-/** Result codes not counted, each with why. */
-const IGNORED = {
-  plugin_updater_detected:
-    'The pilot is distributed from usetendr.tech with its own update feed (spec §9); a WordPress.org build must drop includes/class-tendr-updater.php.',
-};
-
 function fail(message) {
   console.error(`plugin-check: ${message}`);
   process.exit(1);
@@ -50,8 +38,8 @@ const out = wpCli([
   'plugin',
   'check',
   SLUG,
-  `--slug=${TEXT_DOMAIN_SLUG}`,
-  `--ignore-codes=${Object.keys(IGNORED).join(',')}`,
+  `--slug=${SLUG}`,
+  '--require=wp-content/plugins/plugin-check/cli.php',
   '--format=json',
 ]);
 
@@ -88,7 +76,6 @@ const errors = results.filter((r) => r.type === 'ERROR');
 const warnings = results.filter((r) => r.type !== 'ERROR');
 const show = (r) => `  ${r.type} ${r.file}:${r.line} ${r.code}: ${r.message}`;
 console.log(`Plugin Check: ${errors.length} error(s), ${warnings.length} warning(s)`);
-for (const [code, why] of Object.entries(IGNORED)) console.log(`  ignored ${code}: ${why}`);
 for (const r of warnings) console.log(show(r));
 for (const r of errors) console.error(show(r));
 process.exit(errors.length > 0 ? 1 : 0);

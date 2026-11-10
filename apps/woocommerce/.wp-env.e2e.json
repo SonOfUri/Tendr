@@ -1,12 +1,12 @@
 {
   "$schema": "https://schemas.wp.org/trunk/wp-env.json",
-  "core": "https://wordpress.org/wordpress-7.1.3.zip",
+  "core": "https://wordpress.org/wordpress-7.1.4.zip",
   "phpVersion": "8.2",
   "port": 8892,
   "testsEnvironment": false,
   "plugins": [
     "https://downloads.wordpress.org/plugin/woocommerce.11.2.1.zip",
-    "https://downloads.wordpress.org/plugin/plugin-check.2.1.0.zip"
+    "https://downloads.wordpress.org/plugin/plugin-check.2.2.0.zip"
   ],
   "mappings": {
     "wp-content/tendr-dist": "./dist"

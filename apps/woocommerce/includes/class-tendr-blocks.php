@@ -65,7 +65,7 @@ final class Tendr_Blocks extends AbstractPaymentMethodType {
 				TENDR_VERSION,
 				true
 			);
-			wp_set_script_translations( 'tendr-blocks', 'tendr' );
+			wp_set_script_translations( 'tendr-blocks', 'tendr-pay-with-crypto' );
 		}
 		return array( 'tendr-blocks' );
 	}
@@ -79,8 +79,8 @@ final class Tendr_Blocks extends AbstractPaymentMethodType {
 			'title'       => $gateway->get_title(),
 			'description' => $gateway->get_description(),
 			'icon'        => $gateway->icon,
-			'paymentHint' => __( 'Your order updates automatically after payment confirmation.', 'tendr' ),
-			'buttonLabel' => __( 'Pay with crypto', 'tendr' ),
+			'paymentHint' => __( 'Your order updates automatically after payment confirmation.', 'tendr-pay-with-crypto' ),
+			'buttonLabel' => __( 'Pay with crypto', 'tendr-pay-with-crypto' ),
 			'testMode'    => 'test' === Tendr_Connect::mode(),
 			'supports'    => array_values( array_filter( $gateway->supports, array( $gateway, 'supports' ) ) ),
 		);
