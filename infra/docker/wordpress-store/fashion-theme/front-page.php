@@ -7,9 +7,18 @@
             <p class="fashion-hero-description">Considered shapes. Quiet textures.<br>Pieces for wherever the day takes you.</p>
             <a class="fashion-button" href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>">Explore the collection <span aria-hidden="true">↗</span></a>
         </div>
-        <span class="fashion-hero-index">A STUDY IN SOFT CONTRASTS — 01 / 06</span>
+        <span class="fashion-hero-index">A STUDY IN SOFT CONTRASTS — COLLECTION 01</span>
     </section>
-    <div class="fashion-strip"><span>Woman · Man · Everyday essentials</span><span>Six pieces. Endless possibilities.</span><span>Discover the Tendr checkout experience ↗</span></div>
+    <div class="fashion-strip"><span>Clothing · Accessories · Fragrance</span><span>Small details. Everyday rituals.</span><a href="<?php echo esc_url( home_url( '/product/pocket-perfume-edit/' ) ); ?>">Discover the $1 pocket perfume ↗</a></div>
+    <section class="fashion-section" id="finishing-touches" aria-labelledby="fashion-finishing-title">
+        <div class="fashion-section-heading"><div><p class="fashion-eyebrow">Accessories &amp; fragrance · From $1</p><h2 id="fashion-finishing-title">The finishing touches.</h2></div><a class="fashion-text-link" href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>">Shop all ↗</a></div>
+        <div class="fashion-grid">
+            <?php foreach ( array( 'POCKET-PERFUME', 'TOTE', 'BODY-SPRAY', 'AMBER-PERFUME' ) as $sku ) {
+                $product = wc_get_product( wc_get_product_id_by_sku( 'TENDR-FASHION-' . $sku ) );
+                if ( $product ) { tendr_fashion_card( $product ); }
+            } ?>
+        </div>
+    </section>
     <section class="fashion-section" id="collection" aria-labelledby="fashion-collection-title">
         <div class="fashion-section-heading"><div><p class="fashion-eyebrow">Selected for you</p><h2 id="fashion-collection-title">The new essentials.</h2></div><a class="fashion-text-link" href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>">View all pieces ↗</a></div>
         <div class="fashion-grid">

@@ -144,8 +144,9 @@ h6 {
 }
 .fashion-nav {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
-  gap: 38px;
+  gap: 12px 30px;
   padding: 16px 20px;
 }
 .fashion-nav a {

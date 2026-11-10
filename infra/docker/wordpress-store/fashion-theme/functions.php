@@ -40,6 +40,8 @@ function tendr_fashion_navigation() {
         'Woman' => tendr_fashion_category( 'woman' ),
         'Man' => tendr_fashion_category( 'man' ),
         'Essentials' => tendr_fashion_category( 'essentials' ),
+        'Accessories' => tendr_fashion_category( 'accessories' ),
+        'Fragrance' => tendr_fashion_category( 'fragrance' ),
         'The concept' => home_url( '/the-concept/' ),
     );
     foreach ( $links as $label => $href ) {
@@ -49,7 +51,7 @@ function tendr_fashion_navigation() {
 function tendr_fashion_search( $id ) {
     ?>
     <form class="fashion-search" role="search" method="get" action="<?php echo esc_url( home_url( '/' ) ); ?>">
-        <label class="screen-reader-text" for="<?php echo esc_attr( $id ); ?>">Search clothing</label>
+        <label class="screen-reader-text" for="<?php echo esc_attr( $id ); ?>">Search the collection</label>
         <input id="<?php echo esc_attr( $id ); ?>" type="search" name="s" placeholder="Search the collection" value="<?php echo esc_attr( get_search_query() ); ?>">
         <input type="hidden" name="post_type" value="product">
         <button aria-label="Search" type="submit"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button>
@@ -63,7 +65,7 @@ function tendr_fashion_card( $product ) {
     <article class="fashion-product">
         <a class="fashion-product-image" href="<?php echo esc_url( $product->get_permalink() ); ?>" aria-label="<?php echo esc_attr( $product->get_name() ); ?>">
             <?php echo $product->get_image( 'woocommerce_single', array( 'loading' => 'lazy' ) ); ?>
-            <span>The everyday edit</span>
+            <span><?php echo esc_html( $product->get_meta( '_tendr_fashion_badge' ) ?: 'The everyday edit' ); ?></span>
         </a>
         <div class="fashion-product-details">
             <h3><a href="<?php echo esc_url( $product->get_permalink() ); ?>"><?php echo esc_html( $product->get_name() ); ?></a></h3>

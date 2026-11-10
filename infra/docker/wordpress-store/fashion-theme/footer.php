@@ -8,6 +8,8 @@
                 <li><a href="<?php echo esc_url( tendr_fashion_category( 'woman' ) ); ?>">Woman</a></li>
                 <li><a href="<?php echo esc_url( tendr_fashion_category( 'man' ) ); ?>">Man</a></li>
                 <li><a href="<?php echo esc_url( tendr_fashion_category( 'essentials' ) ); ?>">Everyday essentials</a></li>
+                <li><a href="<?php echo esc_url( tendr_fashion_category( 'accessories' ) ); ?>">Accessories</a></li>
+                <li><a href="<?php echo esc_url( tendr_fashion_category( 'fragrance' ) ); ?>">Fragrance</a></li>
             </ul></div>
             <div><h2>The store</h2><ul>
                 <li><a href="<?php echo esc_url( home_url( '/the-concept/' ) ); ?>">About this concept</a></li>

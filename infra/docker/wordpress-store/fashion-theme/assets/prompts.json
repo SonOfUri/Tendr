@@ -35,6 +35,36 @@
       "asset": "assets/tee.webp",
       "tool": "built-in image_gen",
       "prompt": "Use case: product-mockup. Asset type: individual product photograph for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Show exactly one garment, whole item centered with generous negative space, front view, invisible mannequin or neatly arranged natural drape. Seamless pale warm-gray #eeede8 studio background and soft diffused daylight. Crisp realistic fabric texture and subtle shadow. No person, no hangers, no props, no text, no logos, no watermark. Product: an off-white heavyweight cotton short-sleeve T-shirt, boxy relaxed cut, sturdy ribbed crew neckline, plain and impeccably constructed."
+    },
+    {
+      "asset": "assets/tote.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photo for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Seamless pale warm-gray #eeede8 studio background, soft diffused daylight, subtle natural shadow. One product centered, whole item visible with generous negative space, occupying approximately 65 percent of image height. Photorealistic material details. No people, no props, no watermark, no logos or real brand names. Subject: One natural ecru cotton canvas tote bag with long handles, boxy flat base, understated seams, no printed design. Upright in a soft three-quarter view with the entire handles visible."
+    },
+    {
+      "asset": "assets/earrings.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photo for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Seamless pale warm-gray #eeede8 studio background, soft diffused daylight, subtle natural shadow. One product centered, whole item visible with generous negative space, occupying approximately 65 percent of image height. Photorealistic material details. No people, no props, no watermark, no logos or real brand names. Subject: One matching pair of sculptural small gold-tone hoop earrings, softly rounded organic shape, resting side by side with a slight natural offset. Close enough to clearly show the polished metal."
+    },
+    {
+      "asset": "assets/sunglasses.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photo for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Seamless pale warm-gray #eeede8 studio background, soft diffused daylight, subtle natural shadow. One product centered, whole item visible with generous negative space, occupying approximately 65 percent of image height. Photorealistic material details. No people, no props, no watermark, no logos or real brand names. Subject: One pair of black acetate oval sunglasses, dark smoke lenses, folded arms, elegant subtle sculpted frame. Three-quarter front view."
+    },
+    {
+      "asset": "assets/body-spray.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photo for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Seamless pale warm-gray #eeede8 studio background, soft diffused daylight, subtle natural shadow. One product centered, whole item visible with generous negative space, occupying approximately 65 percent of image height. Photorealistic material details. No people, no props, no watermark, no logos or real brand names. Subject: One tall slim frosted pale-green cylindrical body spray bottle, 100 ml scale, with an ivory fine-mist pump and transparent cap. Minimal unbranded packaging with a small cream label carrying only the words CITRUS MIST in clean black type."
+    },
+    {
+      "asset": "assets/amber-perfume.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photo for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Seamless pale warm-gray #eeede8 studio background, soft diffused daylight, subtle natural shadow. One product centered, whole item visible with generous negative space, occupying approximately 65 percent of image height. Photorealistic material details. No people, no props, no watermark, no logos or real brand names. Subject: One rectangular thick clear-glass 50 ml perfume bottle filled with pale amber liquid, squared dark walnut-brown cap. Minimal small ivory label carrying only the words AMBER WOODS in clean black type. Elegant three-quarter front view."
+    },
+    {
+      "asset": "assets/pocket-perfume.webp",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: product-mockup. Asset type: individual product photo for an unofficial fashion concept store. Portrait 3:4 composition. Premium minimalist European fashion catalog photography. Seamless pale warm-gray #eeede8 studio background, soft diffused daylight, subtle natural shadow. One product centered, whole item visible with generous negative space, occupying approximately 65 percent of image height. Photorealistic material details. No people, no props, no watermark, no logos or real brand names. Subject: One slender clear-glass travel perfume atomizer, 5 ml sample scale, containing pale golden liquid and topped by a simple brushed champagne-metal cylindrical cap. A tiny cream label carrying only the word NEROLI in clean black type. Upright three-quarter view."
     }
   ]
 }
