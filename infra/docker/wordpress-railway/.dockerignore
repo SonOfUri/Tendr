@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!uploads.ini
+!apache-limits.conf
+!railway-health.php
+!entrypoint.sh

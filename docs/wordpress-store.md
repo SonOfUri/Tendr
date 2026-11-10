@@ -1,4 +1,14 @@
-# Local WordPress store connected to Tendr
+# WordPress store connected to Tendr
+
+The [hosted store](https://wordpress-store-production-d4cb84af.up.railway.app/) runs on Railway
+with persistent WordPress and MariaDB volumes, independently of the local Docker setup.
+The [WordPress admin](https://wordpress-store-production-d4cb84af.up.railway.app/wp-admin/) uses
+the existing administrator credentials. Use the hosted store for new orders; the local copy is
+retained as a fallback with its crypto gateway disabled after migration.
+See the [Railway deployment and migration runbook](../infra/docker/wordpress-railway/README.md)
+for service settings, image updates, backups, and the required Tendr Reconnect after a domain move.
+
+## Local development
 
 This runs a real WordPress/WooCommerce store in Docker, with Tendr's packaged plugin installed.
 The plugin uses the deployed API, app and checkout hosts. Its connection starts in Test mode;
