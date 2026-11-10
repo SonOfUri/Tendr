@@ -173,7 +173,9 @@ export function createTendr(win: Window, baseUrl: string): Tendr {
         hash < 0 ? '' : opts.sessionUrl.slice(hash)
       }`;
       const f = frame(opts, close, src);
-      f.iframe.style.maxWidth = '480px';
+      // Wide enough for the hosted checkout card (~3× the old 480px modal).
+      f.iframe.style.width = '100%';
+      f.iframe.style.maxWidth = '1440px';
       f.iframe.style.borderRadius = '16px';
 
       // The overlay's own close control: it works even when the checkout cannot talk to this page
