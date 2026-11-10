@@ -25,6 +25,9 @@ Create a session on your server, then pass its returned URL to Tendr's browser s
 
 Your server still verifies payment before fulfillment.
 
+The modal opens up to 960px wide on desktop, with space around it and a separate close button.
+It fits smaller screens automatically; longer checkout steps scroll inside the popup.
+
 ## Register the store origin
 
 The checkout's `frame-ancestors` policy allows only the merchant's registered checkout domains. Register the exact origin, including scheme and any non-default port. A path is not part of an origin.

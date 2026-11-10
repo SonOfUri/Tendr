@@ -67,6 +67,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   const [tokensFailed, setTokensFailed] = useState(false);
   // Framed by a registered store page: the × control can tell it to close.
   const [canClose, setCanClose] = useState(false);
+  const [modalEmbed, setModalEmbed] = useState(false);
   const pollerRef = useRef<Poller | null>(null);
   const bridgeRef = useRef<EmbedBridge | null>(null);
   // The wallet window opened from a framed checkout (`?wallet=1`, lib/wallets/popup.ts).
@@ -83,6 +84,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     setSecret(s);
     if (!s) setFatal('incomplete');
     setWalletWindow(isWalletWindow(window.location.search));
+    setModalEmbed(window.self !== window.top && isModalEmbed(window.location.search));
   }, [sessionId]);
 
   const client = useMemo(
@@ -285,9 +287,11 @@ export function Checkout({ sessionId }: { sessionId: string }) {
     [tokens],
   );
 
+  const cardClass = modalEmbed ? 'pay-card pay-card-modal' : 'pay-card';
+
   if (fatal) {
     return (
-      <div className="pay-card">
+      <div className={cardClass}>
         <section className="pay-section">
           <h1 className="pay-title">
             {fatal === 'incomplete'
@@ -306,7 +310,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
 
   if (!view || !screen || !client) {
     return (
-      <div className="pay-card">
+      <div className={cardClass}>
         {connection === 'reconnecting' ? <Reconnecting /> : null}
         <CheckingScreen />
       </div>
@@ -394,7 +398,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
 
   return (
     <ThemedPage theme={theme}>
-      <div className="pay-card">
+      <div className={cardClass}>
         <CheckoutCanvas
           view={view}
           theme={theme}

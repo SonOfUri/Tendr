@@ -667,6 +667,22 @@ code {
   color: var(--tendr-cyan);
 }
 
+/* The modal supplies its own outer margins. Let its checkout use the available desktop
+   width; the hosted page, inline widget and theme previews keep their compact layout. */
+main:has(.pay-card-modal) {
+  width: 100%;
+}
+
+.pay:has(.pay-card-modal) {
+  padding: 0;
+}
+
+.pay-card-modal {
+  width: 100%;
+  min-width: 0;
+  padding: clamp(1.25rem, 4vw, 2rem);
+}
+
 .pay-header {
   display: grid;
   gap: 0.45rem;
