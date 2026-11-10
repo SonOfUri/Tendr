@@ -1,0 +1,31 @@
+---
+title: Settlement and supported assets
+description: Choose what your store receives and distinguish settlement from withdrawal.
+---
+
+Your customer chooses a payment token and network. Your store chooses its settlement asset. Tendr uses a supported provider route to convert and settle the payment.
+
+For the current native live wallet, settlement credits your balance inside NEAR Intents. Choosing an asset associated with Base or another chain identifies its representation; it does not automatically send funds to an external wallet on that chain.
+
+## Current catalog
+
+`GET /v1/payment_links/settlement-options` returns `tokens` with `asset`, `symbol`, `chain` and `decimals`, the mode's `store_default` (or null), and `livemode`. Use a key with `payment_links:read`.
+
+Use exact asset identifiers from this response. Symbols alone are ambiguous across networks.
+
+## Defaults and overrides
+
+Set the default in the dashboard's payout/settlement settings. A link can specify `settlement_asset` to override it. Null inherits the default.
+
+Sessions snapshot settlement at creation. Changing a default or link does not reroute a payment already in progress.
+
+| Operation                | Destination                                       |
+| ------------------------ | ------------------------------------------------- |
+| Customer pays checkout   | Store's configured settlement account             |
+| Link overrides the asset | Same store account, in the selected asset         |
+| Owner withdraws          | External address reviewed and signed by the owner |
+| Owner pays an invoice    | Invoice's verified receiving address and asset    |
+
+A native wallet ID beginning with `0x` is an Intents account identifier. **Do not use it as an EVM deposit address.** Customers must use the checkout's current deposit instructions.
+
+See [Wallets and passkeys](/wallets/overview) and [Withdrawals](/wallets/withdrawals).

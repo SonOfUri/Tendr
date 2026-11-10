@@ -1,0 +1,32 @@
+name: Documentation
+
+on:
+  pull_request:
+    paths:
+      - 'apps/docs/**'
+      - 'apps/api/src/routes/**'
+      - 'packages/contracts/src/**'
+      - '.github/workflows/docs.yml'
+  push:
+    branches: [main, deploy, test/api-console]
+    paths:
+      - 'apps/docs/**'
+      - '.github/workflows/docs.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Check content and implemented routes
+        run: node apps/docs/scripts/check-docs.mjs
+      - name: Validate Mintlify build
+        working-directory: apps/docs
+        run: npx --yes mint@4.3.12 validate
+      - name: Check internal links
+        working-directory: apps/docs
+        run: npx --yes mint@4.3.12 broken-links

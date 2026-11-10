@@ -1,111 +1,28 @@
 ---
-title: Gasless payments
-description: How a shopper pays with a token and no gas coin, who pays the network fee, and where it does not apply.
+title: 'Gasless payments'
+description: 'Understand optional sponsorship and token-paid network fees.'
 ---
 
-A shopper who holds USDC on Base, USDT on Tron or USDC on Solana can pay without holding ETH, TRX or
-SOL. The pay page asks the shopper's wallet to sign one or two messages. Tendr's relayer submits the
-transaction and pays the gas. The money goes from the shopper's wallet to the deposit address in that
-one transaction. Tendr never holds it.
+Gasless routes let eligible wallets authorize a token payment while a relayer or paymaster submits the transaction. Availability depends on the deployment, chain, token, wallet and provider configuration. Do not promise gasless payment for every supported asset.
 
-Submitting the transaction never marks a payment paid. A payment is paid when the deposit is detected,
-exactly as for any other payment.
+## Who pays
 
-## Who pays the network fee
+A session may set `gas_payer` to `merchant` or `shopper`. Otherwise the payment link or store default applies.
 
-You choose, per store, with the default gas payer setting (`default_gas_payer`: `merchant` or
-`shopper`). A session can override it with `gas_payer`.
+- Merchant sponsorship follows the store's enabled policy, allowed chains/assets, per-payment cap and monthly budget.
+- Shopper-paid gasless routes can collect the network fee in the payment token.
+- A normal wallet transfer requires the wallet's native network fee.
 
-- **You sponsor.** You pay the fee. It is taken from your side of that payment, so the shopper sends
-  the same amount as without sponsorship. Sponsorship follows your [gas policy](/gasless/gas-policy):
-  a cap per payment and a budget per month.
-- **The shopper pays.** The fee comes out of the token the shopper sends, on top of the payment. You
-  receive the full payment amount.
+The checkout displays the applicable quote and fee before authorization. Copying a deposit address and sending from another app is a normal transfer; store sponsorship does not apply to that external send.
 
-The pay page shows the fee before the shopper signs:
+## Limits and fallback
 
-| Situation | What the shopper sees |
-| --- | --- |
-| You sponsor | Network fee: paid by your store name |
-| Shopper pays, gasless | A choice: pay the fee in the token (for example +0.08 USDC) or in the chain's coin |
-| No gasless method for this wallet and token | You'll need the chain's coin for the network fee |
+Live gasless execution has its own deployment switch in addition to ordinary live payments. Missing providers, unsupported token methods, exhausted budgets or wallet limitations can make a route unavailable. Use returned capabilities and quotes rather than fixed chain or dollar-cost assumptions.
 
-When the shopper pays, they choose the fee currency: the token they are paying with (gasless), or the
-chain's coin (a normal wallet send, as before). The token option is the default.
+EVM authorization/permit routes, supported smart-wallet paymasters, Solana paymasters, Tron forwarders and NEAR delegate actions have different prerequisites. A supported chain does not imply every wallet on it supports the required signing method.
 
-### Defaults
+## Verification
 
-A new gas policy allows $1 per payment and $50 per month, on every supported chain except Ethereum
-mainnet (you add it yourself). Until you turn the policy on, nothing is sponsored and the shopper pays.
-Switching the store default to `merchant` creates a policy with these defaults, turned on, if the mode
-has none.
+Relayer submission or deposit detection does **not** mean the order is paid. Wait for settlement and verified `payment.succeeded`, just as for a normal payment.
 
-The fee in a token is the live network fee in USD plus a safety margin (20% by default), divided by the
-token's price from the 1Click token list, rounded up. Tendr collects the fee in whatever token the
-shopper pays with and swaps it to USDC later.
-
-### When the payment is not sponsored
-
-If the payment fails any check, the shopper pays from the token and sees the fee first. The checks are
-your policy (enabled, chain, token, minimum order, first-time shopper, per-payment cap, monthly
-budget), the Tendr-wide daily loss limit, and a rule that the fee cannot exceed 1% of the order. The
-reason is on the payment as `network_fee.reason`. See
-[why a payment was not sponsored](/gasless/gas-policy#why-a-payment-was-not-sponsored).
-
-The 1% rule includes the integrator hook estimate. A hook session whose fee plus hook estimate is
-above 1% of the order falls back to shopper-paid gas. A hook estimate above 10% of the order on its
-own is refused: the quote fails with `QUOTE_TOO_SMALL`, because the hook is always called and its cost
-cannot move to anyone else.
-
-## How it works per chain
-
-| Chain | Method | What the shopper signs |
-| --- | --- | --- |
-| Ethereum, Base, Arbitrum, Optimism, Polygon, BSC, Avalanche, Gnosis, Berachain | EIP-3009 `transferWithAuthorization` (USDC and similar), or an EIP-2612 permit, relayed through the Tendr forwarder | One typed-data signature. It names the deposit address, the amounts, the fee recipient and a deadline. |
-| EVM smart wallets | Sponsored calls through Pimlico's paymaster | The wallet sends one batch. Only Safe smart wallets are supported. |
-| Solana | Pimlico's Solana paymaster (Kora) | One transaction whose fee payer is the paymaster. |
-| Tron | Tendr forwarder contract | Two signatures: an `approve` for exactly the payment plus fee, then a signed payment message. |
-| NEAR | NEP-366 meta-transaction | One signed delegate action. |
-
-Every signed payload binds the deposit address, the amounts, the fee recipient and a deadline. There
-are no open-ended approvals. A stolen relayer, Pimlico or gas key can fail to submit, but it cannot send
-a shopper's funds anywhere else. A signature made for one session is refused against another, before
-any gas is spent.
-
-### Limits
-
-- **Tron costs about $15** (the energy for the approve and the forwarder call) and needs two
-  signatures. With the default $1 cap it is shopper-paid. You can raise the cap, but the 1% rule still
-  applies.
-- **Solana sponsorship only applies to orders of roughly $34 or more.** The fee includes the rent for
-  the deposit's new token account (about 0.002 SOL), which makes it about 34 cents, and the 1% rule then
-  needs an order of about $34. Below that the shopper pays the fee in the token. The threshold moves with
-  the SOL price.
-- **NEAR gasless needs wallet support for `signDelegateAction`.** Meteor and Intear do not support it
-  yet, so NEAR shoppers pay normally until a wallet does. The shopper's NEAR account also needs at least
-  1 yoctoNEAR; Tendr pays the token registrations.
-- **Smart-wallet paymaster sponsorship supports Safe only.** Other smart wallets pay normally.
-- **Some tokens are not gasless.** A token with neither EIP-3009 nor permit (for example USDT on
-  Ethereum from a plain wallet) needs the shopper to hold ETH, and the pay page says so.
-- **Copy-address payments are not gasless.** If the shopper copies the deposit address and sends from
-  another app, they pay their own gas. Sponsorship does not apply, even if you sponsor. The pay page
-  says so next to the copy option.
-
-## Where the fee shows up
-
-- Sessions and payments carry `network_fee`:
-  `{ paid_by, fee_mode, amount, asset, usd, method, reason }`. `paid_by` is `merchant` or `shopper`.
-  `fee_mode` is `token` when the shopper paid in the payment token, `native` when their wallet paid gas,
-  and null when you sponsor. `amount` is in the token's base units. The whole object is null for
-  payments quoted before gasless payments existed.
-- The `payment.succeeded` webhook includes `network_fee`, and the "You got paid" email shows the fee and
-  who paid it.
-- Every relayed or sponsored transaction is a record in `GET /v1/gas-sponsorships`.
-- Test mode simulates the relayer. Nothing real is spent, and fee lines, budget and records behave as in
-  live mode.
-
-## Related
-
-- [Gas policy and usage API](/gasless/gas-policy)
-- [Integrator hooks](/integrations/hooks)
-- [Webhooks](/api-reference/webhooks)
+Session/payment `network_fee` records who paid, the fee mode, token/base-unit amount, USD value, method and fallback reason when available. See [Gas policy](/gasless/gas-policy) and [Webhooks](/api-reference/webhooks).

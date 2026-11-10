@@ -8,12 +8,12 @@ The gas policy decides when Tendr pays the network fee for your shoppers. There 
 
 ## Endpoints
 
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /v1/gas-policy` | The mode's policy. Defaults (disabled) while none is set. |
-| `PUT /v1/gas-policy` | Change any subset of the fields. |
-| `GET /v1/gas-policy/usage?month=YYYY-MM` | Budget use for a month. Defaults to the current month. |
-| `GET /v1/gas-sponsorships` | Every sponsored or relayed transaction, newest first. |
+| Endpoint                                 | Purpose                                                   |
+| ---------------------------------------- | --------------------------------------------------------- |
+| `GET /v1/gas-policy`                     | The mode's policy. Defaults (disabled) while none is set. |
+| `PUT /v1/gas-policy`                     | Change any subset of the fields.                          |
+| `GET /v1/gas-policy/usage?month=YYYY-MM` | Budget use for a month. Defaults to the current month.    |
+| `GET /v1/gas-sponsorships`               | Every sponsored or relayed transaction, newest first.     |
 
 Each call acts on the mode of the key or dashboard session that makes it.
 
@@ -43,16 +43,16 @@ Each call acts on the mode of the key or dashboard session that makes it.
 }
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `enabled` | Sponsorship is on. Default `false`. |
-| `per_payment_cap_usd` | The quoted fee must be at most this. Default `"1"`. Never above the monthly budget. |
-| `monthly_budget_usd` | Reserved plus spent per calendar month (UTC) never exceeds this. Default `"50"`. |
-| `min_order_usd` | The order must be at least this. Default `"0"`. |
-| `chains` | Where sponsorship may happen: any of `eth`, `base`, `arb`, `op`, `pol`, `bsc`, `avax`, `gnosis`, `bera`, `sol`, `near`, `tron`. Default is all except `eth`. |
-| `tokens` | Allowed 1Click asset ids. Empty means any token. |
-| `first_time_only` | Sponsor only the first payment from a shopper address to your store. Default `false`. |
-| `updated_at` | Null while the defaults apply. |
+| Field                 | Meaning                                                                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `enabled`             | Sponsorship is on. Default `false`.                                                                                                                          |
+| `per_payment_cap_usd` | The quoted fee must be at most this. Default `"1"`. Never above the monthly budget.                                                                          |
+| `monthly_budget_usd`  | Reserved plus spent per calendar month (UTC) never exceeds this. Default `"50"`.                                                                             |
+| `min_order_usd`       | The order must be at least this. Default `"0"`.                                                                                                              |
+| `chains`              | Where sponsorship may happen: any of `eth`, `base`, `arb`, `op`, `pol`, `bsc`, `avax`, `gnosis`, `bera`, `sol`, `near`, `tron`. Default is all except `eth`. |
+| `tokens`              | Allowed 1Click asset ids. Empty means any token.                                                                                                             |
+| `first_time_only`     | Sponsor only the first payment from a shopper address to your store. Default `false`.                                                                        |
+| `updated_at`          | Null while the defaults apply.                                                                                                                               |
 
 USD amounts are decimal strings with at most 6 decimals.
 
@@ -158,17 +158,17 @@ and monthly budget.
 When you sponsor and a payment falls back to the shopper, `network_fee.reason` on the session and
 payment says why. The checks run in this order and the first failure is reported:
 
-| `reason` | Meaning |
-| --- | --- |
-| `shopper_choice` | The resolved gas payer is `shopper`. |
-| `policy_disabled` | `enabled` is false. |
-| `chain` | The shopper's chain is not in `chains`. |
-| `token` | The token is not in `tokens`. |
-| `min_order` | The order is below `min_order_usd`. |
-| `not_first_time` | `first_time_only` is set and this address paid your store before. |
+| `reason`          | Meaning                                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `shopper_choice`  | The resolved gas payer is `shopper`.                                                                                |
+| `policy_disabled` | `enabled` is false.                                                                                                 |
+| `chain`           | The shopper's chain is not in `chains`.                                                                             |
+| `token`           | The token is not in `tokens`.                                                                                       |
+| `min_order`       | The order is below `min_order_usd`.                                                                                 |
+| `not_first_time`  | `first_time_only` is set and this address paid your store before.                                                   |
 | `per_payment_cap` | The fee is above the cap, above the session's `gas_max_usd`, or above 1% of the order (fee plus any hook estimate). |
-| `loss_cap` | Tendr's daily unrecovered-loss limit was reached. |
-| `budget` | The fee does not fit the month's remaining budget. |
+| `loss_cap`        | Tendr's daily unrecovered-loss limit was reached.                                                                   |
+| `budget`          | The fee does not fit the month's remaining budget.                                                                  |
 
 Other reasons are `fee_unavailable` (the live fee could not be read, so the shopper's wallet pays gas
 itself) and `fee_token_unpriced` (the token has no price in the token list, so the token option is not

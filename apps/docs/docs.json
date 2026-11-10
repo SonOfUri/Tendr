@@ -2,10 +2,53 @@
   "$schema": "https://mintlify.com/docs.json",
   "name": "Tendr",
   "theme": "mint",
+  "description": "Build crypto checkout, connect your store, and manage payments with Tendr.",
   "colors": {
-    "primary": "#4035F5",
-    "light": "#16C7F7",
-    "dark": "#080D1B"
+    "primary": "#171717",
+    "light": "#FAFAFA",
+    "dark": "#171717"
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg",
+    "href": "/"
+  },
+  "favicon": "/favicon.svg",
+  "appearance": {
+    "default": "system"
+  },
+  "fonts": {
+    "family": "Sora",
+    "heading": {
+      "family": "Instrument Sans"
+    }
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Website",
+        "href": "https://usetendr.tech"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Open dashboard",
+      "href": "https://app.usetendr.tech"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/SonOfUri/Tendr"
+    }
+  },
+  "api": {
+    "openapi": "openapi.json",
+    "playground": {
+      "display": "simple"
+    },
+    "examples": {
+      "languages": ["bash", "javascript", "python"]
+    }
   },
   "navigation": {
     "tabs": [
@@ -13,75 +56,111 @@
         "tab": "Guides",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Start here",
+            "pages": ["introduction", "quickstart", "concepts/test-and-live"]
+          },
+          {
+            "group": "Accept payments",
             "pages": [
-              "introduction",
-              "quickstart"
+              "payment-links/overview",
+              "payments/lifecycle",
+              "payments/settlement",
+              "payments/embedded-checkout",
+              "payments/refunds"
             ]
           },
           {
-            "group": "Concepts",
+            "group": "Store wallet",
+            "pages": ["wallets/overview", "wallets/withdrawals"]
+          },
+          {
+            "group": "Invoices and AI",
+            "pages": ["invoices/overview", "ai/overview"]
+          },
+          {
+            "group": "Customize checkout",
+            "pages": ["themes/overview", "themes/safety-rules"]
+          },
+          {
+            "group": "Security and reliability",
             "pages": [
-              "concepts/idempotency"
+              "security/api-keys",
+              "security/webhook-signatures",
+              "concepts/idempotency",
+              "security/privacy",
+              "security/production-checklist"
+            ]
+          },
+          {
+            "group": "Help",
+            "pages": ["development/troubleshooting"]
+          }
+        ]
+      },
+      {
+        "tab": "Integrations",
+        "groups": [
+          {
+            "group": "Build your integration",
+            "pages": ["integrations/ecommerce", "sdks/typescript"]
+          },
+          {
+            "group": "Commerce platforms",
+            "pages": ["integrations/woocommerce", "integrations/shopify"]
+          },
+          {
+            "group": "Routing and sponsorship",
+            "pages": [
+              "integrations/near-intents",
+              "gasless/overview",
+              "gasless/gas-policy",
+              "integrations/hooks"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": ["development/local-setup"]
+          }
+        ]
+      },
+      {
+        "tab": "API reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": ["api-reference/overview", "api-reference/errors"]
+          },
+          {
+            "group": "Checkout sessions",
+            "pages": [
+              "api-reference/sessions/create",
+              "api-reference/sessions/retrieve",
+              "api-reference/sessions/expire"
             ]
           },
           {
             "group": "Payment links",
             "pages": [
-              "payment-links/overview"
-            ]
-          },
-          {
-            "group": "Checkout themes",
-            "pages": [
-              "themes/overview",
-              "themes/safety-rules"
-            ]
-          },
-          {
-            "group": "API reference",
-            "pages": [
-              "api-reference/overview",
               "api-reference/payment-links",
-              "api-reference/themes",
-              "api-reference/webhooks"
+              "api-reference/links/create",
+              "api-reference/links/list",
+              "api-reference/links/retrieve",
+              "api-reference/links/update",
+              "api-reference/links/archive",
+              "api-reference/links/settlement-options"
             ]
           },
           {
-            "group": "Gasless payments",
-            "pages": [
-              "gasless/overview",
-              "gasless/gas-policy"
-            ]
+            "group": "Refunds",
+            "pages": ["api-reference/refunds/create", "api-reference/refunds/cancel"]
           },
           {
-            "group": "SDKs",
-            "pages": [
-              "sdks/typescript"
-            ]
+            "group": "Events and customization",
+            "pages": ["api-reference/webhooks", "api-reference/themes"]
           },
           {
-            "group": "Integrations",
-            "pages": [
-              "integrations/ecommerce",
-              "integrations/hooks",
-              "integrations/near-intents"
-            ]
-          },
-          {
-            "group": "Security",
-            "pages": [
-              "security/api-keys",
-              "security/webhook-signatures",
-              "security/production-checklist"
-            ]
-          },
-          {
-            "group": "Development",
-            "pages": [
-              "development/local-setup",
-              "development/troubleshooting"
-            ]
+            "group": "Dashboard features",
+            "pages": ["api-reference/dashboard", "api-reference/invoices", "api-reference/ai"]
           }
         ]
       }

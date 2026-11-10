@@ -1,0 +1,31 @@
+---
+title: Test and live modes
+description: Keep simulated payments and real funds separate throughout your integration.
+---
+
+Both modes use the same API base URL. Your credential selects the mode.
+
+| Mode | Secret key prefix | Payment behavior                                 |
+| ---- | ----------------- | ------------------------------------------------ |
+| Test | `tdr_test_`       | Simulated deposits and settlement; no real funds |
+| Live | `tdr_live_`       | Real provider quotes, transfers and settlement   |
+
+Use separate keys, webhook secrets, order records and configuration. Resources from another store or mode are not accessible with your current credential.
+
+## Go live
+
+1. Activate the store's live wallet and select its settlement asset.
+2. Register the production origin if you embed checkout.
+3. Register and verify live webhook delivery.
+4. Change the server credential to a live key.
+5. Perform a small payment and confirm both Tendr and your order records.
+
+A live key alone does not activate a wallet or enable live payments on a deployment. `ACCOUNT_NOT_READY` means the store needs setup; `LIVE_MODE_UNAVAILABLE` means live actions are disabled on the deployment.
+
+## Links and plugins
+
+Test links contain `?mode=test`. Removing it does not turn that link into a live link.
+
+WooCommerce hides Tendr from shoppers in Test mode; store managers can test it. Connecting or reconnecting starts in Test mode.
+
+Test environments may use named NEAR test accounts and simulated providers. The current live wallet uses a dedicated passkey and an Intents account identifier. Test recovery and multi-signer features do not imply those capabilities exist for live wallets.

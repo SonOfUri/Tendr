@@ -1,0 +1,39 @@
+---
+title: Payment verification
+description: Understand deposit detection, settlement, and order fulfillment.
+---
+
+A checkout session represents an amount your store wants to collect. A quote describes how a customer pays it. A payment records an observed deposit and its settlement outcome.
+
+## Confirmation happens on the backend
+
+The hosted checkout obtains a provider quote and shows its deposit instructions. A wallet submission or transaction hash is a hint for reconciliation. Tendr reconciles the deposit and settlement result, updates the session/payment, and emits a signed event.
+
+Your browser cannot mark an order paid. A submitted transaction or AI answer does not prove settlement.
+
+| Session state       | Meaning                                    | Store action                             |
+| ------------------- | ------------------------------------------ | ---------------------------------------- |
+| `PENDING_DEPOSIT`   | Waiting for payment                        | Keep the order unpaid                    |
+| `PROCESSING`        | Processing or settling a deposit           | Show confirmation pending                |
+| `SCREENING_PENDING` | Awaiting the configured screening decision | Wait                                     |
+| `SETTLED`           | Settlement completed                       | Corroborate and fulfill                  |
+| `HELD`              | Requires review                            | Do not fulfill automatically             |
+| `EXPIRED`           | Session ended without completing normally  | Reconcile before creating a new checkout |
+| `LATE_DEPOSIT`      | Deposit arrived after the session ended    | Review                                   |
+| `REFUNDED`          | Funds returned                             | Reconcile refund records                 |
+
+## Your fulfillment rule
+
+Verify `payment.succeeded`, match `session_id` and `external_ref`, and corroborate against the [session read](/api-reference/sessions/retrieve). Deduplicate by event ID and make the order transition atomic.
+
+For a public payment link, `external_ref` can be null. Associate it with its `payment_link_id` and session; not every event refers to a commerce order.
+
+## Delays and timeouts
+
+Events can be retried or arrive after the customer closes the browser. Respond promptly after durably recording them and perform slow work asynchronously.
+
+A timeout is an unknown outcome. Read the existing session before creating a replacement. Do not replace a session processing funds merely because a timer or browser request ended.
+
+The default lifetime is 30 minutes. Server-created sessions accept 60–1,800 seconds with `expires_in`. Public payment-link sessions initially have a shorter unquoted lifetime; the first quote extends it within the normal limit.
+
+Underpayments, overpayments, late deposits and returns needing an address have separate paths. Follow the returned state. See [Refunds](/payments/refunds) and the [webhook catalog](/api-reference/webhooks).

@@ -6,10 +6,11 @@ Tendr is a universal checkout and payment-orchestration layer for digital commer
 
 NEAR Intents is an optional execution integration behind the scenes—not the Tendr brand.
 
-> **Status:** checkout core. On top of the foundation (gateway, event log, worker, key vault) and
-> the NEAR merchant accounts, stores can create checkout sessions, embed the checkout, take
-> payments through 1Click into their merchant account, and receive signed webhooks. Test mode is
-> fully simulated. Live mode waits for the mainnet checks and the contract audit described below.
+> **Status:** stores can create checkout sessions, embed checkout, receive signed webhooks and
+> accept live payments through 1Click when the deployment is enabled and the store has a configured
+> wallet and settlement asset. Test mode is simulated. The current native Intents wallet uses a
+> dedicated owner passkey; the contract-account and sponsored-payment paths have separate rollout
+> requirements. See the [merchant and developer docs](apps/docs/README.md) for current integration guidance.
 
 ## Monorepo layout
 
@@ -42,7 +43,7 @@ Tendr/
 
 ## What is not implemented yet
 
-- Live checkout is not switched on: it waits for the mainnet checks and the contract audit below
+- Recovery, wallet-key rotation and shared signing for native Intents wallets
 - Merchant KYC
 
 ## Quick start
@@ -91,6 +92,15 @@ not collide with other local services.
 - API: http://localhost:4000 (`GET /v1/health`)
 - Worker health: http://localhost:4100/health
 - Docs: `npm run dev:docs` (Mintlify via `npx`)
+
+### Documentation
+
+The Mintlify site in `apps/docs` covers checkout, settlement, wallets, payment links, invoices, AI,
+webhooks and commerce integrations, with an OpenAPI reference for merchant endpoints. Run
+`npm run dev:docs` under Node 22 to preview it at <http://localhost:3001>.
+
+See [the docs README](apps/docs/README.md) for validation commands and the Mintlify GitHub setup
+using `/apps/docs`. Internal implementation plans and frontend handovers remain in `docs/`.
 
 ### Merchant accounts (NEAR)
 
@@ -689,9 +699,9 @@ account is used and the sweep is off. The per-chain detail is in the
     no gasless option, live quotes have no sponsored path and every live relayer path answers
     "gasless not available". Set it to `true` only after this list is done (and live mode itself is
     open, `LIVE_MODE_ENABLED=true`). Test mode already simulates all of it.
-14. Run the Mintlify CLI broken-links check on the docs before publishing them
-    (`cd apps/docs && npx --yes mintlify@4.2.83 broken-links`). It timed out in Docker during the
-    build; only a scripted nav and link check was run.
+14. Validate the Mintlify build and internal links before publishing documentation:
+    `npm run validate --workspace=@tendr/docs` and `npm run check:links --workspace=@tendr/docs`
+    under Node 22. The [docs README](apps/docs/README.md) covers the full publishing workflow.
 
 ### Returns: the return fee and the under-$1 rule
 

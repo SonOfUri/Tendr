@@ -7,14 +7,14 @@ See [payment links](/payment-links/overview) for what a link is and how it behav
 
 ## Merchant endpoints
 
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /v1/payment_links` | Create a link. Returns `201`. |
-| `GET /v1/payment_links` | List links, newest first. |
+| Endpoint                                   | Purpose                                                               |
+| ------------------------------------------ | --------------------------------------------------------------------- |
+| `POST /v1/payment_links`                   | Create a link. Returns `201`.                                         |
+| `GET /v1/payment_links`                    | List links, newest first.                                             |
 | `GET /v1/payment_links/settlement-options` | List supported settlement assets and the store default for this mode. |
-| `GET /v1/payment_links/:id` | Read one link. |
-| `PATCH /v1/payment_links/:id` | Change a link. |
-| `DELETE /v1/payment_links/:id` | Archive a link. Returns the link. |
+| `GET /v1/payment_links/:id`                | Read one link.                                                        |
+| `PATCH /v1/payment_links/:id`              | Change a link.                                                        |
+| `DELETE /v1/payment_links/:id`             | Archive a link. Returns the link.                                     |
 
 Each call acts on the mode of the key or dashboard session that makes it.
 
@@ -65,42 +65,42 @@ Each call acts on the mode of the key or dashboard session that makes it.
 }
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `slug` | The link's address. Generated from the title when omitted. Unique per store and mode, immutable. |
-| `url`, `qr_url` | Where to share it. Test links carry `?mode=test`. |
-| `amount_type` | `fixed` or `open`. |
-| `amount` | Fixed price, in the link's currency. Null for open links. |
-| `currency` | `USD` or an ISO 4217 code. |
-| `min_amount` | Open links only: a floor above the $1.00 minimum. |
-| `settlement_asset` | Exact Intents asset id credited to the store's Tendr account, or null to inherit the store default. |
+| Field                                   | Meaning                                                                                                              |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `slug`                                  | The link's address. Generated from the title when omitted. Unique per store and mode, immutable.                     |
+| `url`, `qr_url`                         | Where to share it. Test links carry `?mode=test`.                                                                    |
+| `amount_type`                           | `fixed` or `open`.                                                                                                   |
+| `amount`                                | Fixed price, in the link's currency. Null for open links.                                                            |
+| `currency`                              | `USD` or an ISO 4217 code.                                                                                           |
+| `min_amount`                            | Open links only: a floor above the $1.00 minimum.                                                                    |
+| `settlement_asset`                      | Exact Intents asset id credited to the store's Tendr account, or null to inherit the store default.                  |
 | `settlement_symbol`, `settlement_chain` | Display metadata for the selected asset. The chain identifies the asset version, not an external payout destination. |
-| `fee_payer`, `gas_payer` | `merchant`, `shopper`, or null for the store's default. |
-| `status` | `active` or `inactive` (switched off). |
-| `availability` | `available`, `inactive`, `archived`, `expired`, `used_up` or `merchant_not_ready`, computed on read. |
-| `use_count`, `max_uses` | Settled payments, and the optional limit. |
-| `total_*` | See [totals](/payment-links/overview#totals). Decimal strings in the currency's own decimals (USD figures have 2). |
+| `fee_payer`, `gas_payer`                | `merchant`, `shopper`, or null for the store's default.                                                              |
+| `status`                                | `active` or `inactive` (switched off).                                                                               |
+| `availability`                          | `available`, `inactive`, `archived`, `expired`, `used_up` or `merchant_not_ready`, computed on read.                 |
+| `use_count`, `max_uses`                 | Settled payments, and the optional limit.                                                                            |
+| `total_*`                               | See [totals](/payment-links/overview#totals). Decimal strings in the currency's own decimals (USD figures have 2).   |
 
 ## Create
 
 `POST /v1/payment_links`. Unknown fields are rejected.
 
-| Field | Required | Notes |
-| --- | --- | --- |
-| `title` | yes | Up to 80 characters. |
-| `amount_type` | yes | `fixed` or `open`. |
-| `currency` | yes | `USD` or an ISO 4217 code. |
-| `amount` | fixed only | Decimal string like `"25.10"`. Not allowed for open links. |
-| `min_amount` | no | Open only. |
-| `settlement_asset` | no | Exact asset id from `GET /v1/payment_links/settlement-options`; null or omitted inherits the store default. An explicit token settles into the Tendr account. |
-| `description` | no | Plain text, up to 500 characters. |
-| `slug` | no | 3 to 60 characters: lower-case letters, digits and inner hyphens. Reserved words (such as `qr`, `new`, `edit`, `test`) are refused. |
-| `note` | no | `optional` (default) or `off`. |
-| `status` | no | `active` (default) or `inactive`. |
-| `expires_at` | no | ISO 8601, in the future. |
-| `max_uses` | no | Integer, at least 1. |
-| `fee_payer`, `gas_payer` | no | `merchant` or `shopper`. |
-| `gas_max_usd` | no | Decimal string, up to 6 decimals. |
+| Field                    | Required   | Notes                                                                                                                                                         |
+| ------------------------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`                  | yes        | Up to 80 characters.                                                                                                                                          |
+| `amount_type`            | yes        | `fixed` or `open`.                                                                                                                                            |
+| `currency`               | yes        | `USD` or an ISO 4217 code.                                                                                                                                    |
+| `amount`                 | fixed only | Decimal string like `"25.10"`. Not allowed for open links.                                                                                                    |
+| `min_amount`             | no         | Open only.                                                                                                                                                    |
+| `settlement_asset`       | no         | Exact asset id from `GET /v1/payment_links/settlement-options`; null or omitted inherits the store default. An explicit token settles into the Tendr account. |
+| `description`            | no         | Plain text, up to 500 characters.                                                                                                                             |
+| `slug`                   | no         | 3 to 60 characters: lower-case letters, digits and inner hyphens. Reserved words (such as `qr`, `new`, `edit`, `test`) are refused.                           |
+| `note`                   | no         | `optional` (default) or `off`.                                                                                                                                |
+| `status`                 | no         | `active` (default) or `inactive`.                                                                                                                             |
+| `expires_at`             | no         | ISO 8601, in the future.                                                                                                                                      |
+| `max_uses`               | no         | Integer, at least 1.                                                                                                                                          |
+| `fee_payer`, `gas_payer` | no         | `merchant` or `shopper`.                                                                                                                                      |
+| `gas_max_usd`            | no         | Decimal string, up to 6 decimals.                                                                                                                             |
 
 ```bash
 curl -X POST "$TENDR_API_URL/v1/payment_links" \
@@ -167,9 +167,11 @@ from your own page, create a session with your secret key (`POST /v1/checkout/se
 
 `GET /v1/payment_links/public/:merchant/:link`
 
+Example response fields (the resolved `theme` is omitted here):
+
 ```json
 {
-  "merchant": { "name": "Acme", "logo_url": "https://..." },
+  "merchant": { "name": "Acme" },
   "title": "Logo design deposit",
   "description": "50% up front.",
   "amount_type": "fixed",
@@ -215,28 +217,28 @@ who comes back. The session has no `external_ref`. Responses are never cached.
 
 ## Limits
 
-| Route | Limit |
-| --- | --- |
-| Public read | 120 per minute per payer IP |
-| Pay | 10 per minute per payer IP, and 3 per payer IP per link per 5 minutes |
-| `LINK_BUSY` | 200 open sessions with a quote on one link |
+| Route       | Limit                                                                 |
+| ----------- | --------------------------------------------------------------------- |
+| Public read | 120 per minute per payer IP                                           |
+| Pay         | 10 per minute per payer IP, and 3 per payer IP per link per 5 minutes |
+| `LINK_BUSY` | 200 open sessions with a quote on one link                            |
 
 Past a rate limit the API answers `429 RATE_LIMITED`.
 
 ## Errors
 
-| Code | Status | When |
-| --- | --- | --- |
-| `NOT_FOUND` | 404 | Unknown link, or (public) unknown store. Identical for both. |
-| `VALIDATION_ERROR` | 400 | A field is invalid. `details.field` names it. Includes changing `slug`, and an expired `expires_at`. |
-| `AMOUNT_TOO_LOW` | 400 | Below the $1.00 floor or the link's `min_amount`. `details.min_amount` is the minimum in the link's currency. |
-| `FX_RATE_UNAVAILABLE` | 503 | No current rate for a non-USD link. Retry shortly. |
-| `LINK_UNAVAILABLE` | 409 | The link cannot take a payment. `details.availability` is `inactive`, `expired`, `used_up` or `merchant_not_ready`; a session created with your key (`POST /v1/checkout/sessions` with `payment_link_id`) can also get `archived`. The public pay route reports an archived link as `inactive`. |
-| `LINK_RESERVED` | 409 | Every remaining use is held by an open session. Try again shortly. |
-| `LINK_NOT_SUPPORTED` | 409 | The store settles into its own contract and cannot have links. |
-| `LINK_BUSY` | 429 | The link has 200 open sessions with a quote. |
-| `LIVE_MODE_UNAVAILABLE` | 403 | Live payments are not open yet on this platform. A live link's page still reads, but paying it and creating or changing live links are refused. Test links work as usual. |
-| `RATE_LIMITED` | 429 | A per-IP limit above. |
+| Code                    | Status | When                                                                                                                                                                                                                                                                                            |
+| ----------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NOT_FOUND`             | 404    | Unknown link, or (public) unknown store. Identical for both.                                                                                                                                                                                                                                    |
+| `VALIDATION_ERROR`      | 400    | A field is invalid. `details.field` names it. Includes changing `slug`, and an expired `expires_at`.                                                                                                                                                                                            |
+| `AMOUNT_TOO_LOW`        | 400    | Below the $1.00 floor or the link's `min_amount`. `details.min_amount` is the minimum in the link's currency.                                                                                                                                                                                   |
+| `FX_RATE_UNAVAILABLE`   | 503    | No current rate for a non-USD link. Retry shortly.                                                                                                                                                                                                                                              |
+| `LINK_UNAVAILABLE`      | 409    | The link cannot take a payment. `details.availability` is `inactive`, `expired`, `used_up` or `merchant_not_ready`; a session created with your key (`POST /v1/checkout/sessions` with `payment_link_id`) can also get `archived`. The public pay route reports an archived link as `inactive`. |
+| `LINK_RESERVED`         | 409    | Every remaining use is held by an open session. Try again shortly.                                                                                                                                                                                                                              |
+| `LINK_NOT_SUPPORTED`    | 409    | The store settles into its own contract and cannot have links.                                                                                                                                                                                                                                  |
+| `LINK_BUSY`             | 429    | The link has 200 open sessions with a quote.                                                                                                                                                                                                                                                    |
+| `LIVE_MODE_UNAVAILABLE` | 403    | The deployment has live actions disabled. Live reads may remain available; test links are unaffected.                                                                                                                                                                                           |
+| `RATE_LIMITED`          | 429    | A per-IP limit above.                                                                                                                                                                                                                                                                           |
 
 ## Creating a session for a link from your server
 

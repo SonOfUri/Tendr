@@ -5,7 +5,7 @@ title: Webhook signatures
 Each webhook endpoint has its own signing secret (`whsec_…`), shown once when the endpoint is created
 and again when you rotate it. Every delivery carries a `Tendr-Signature` header:
 
-```
+```text
 Tendr-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(signing secret, "<t>.<raw body>")>
 ```
 

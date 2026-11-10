@@ -1,15 +1,16 @@
 ---
-title: NEAR Intents
+title: 'NEAR Intents'
+description: 'How routing and store balances fit into Tendr payments.'
 ---
 
-<Warning>
-  Live NEAR Intents settlement is **not implemented yet**; it is coming in the checkout project.
-</Warning>
+Tendr uses the 1Click/NEAR Intents integration for supported cross-chain payment routes. Tendr owns the checkout, merchant API and order reconciliation; the provider supplies asset catalogs, quotes and execution results.
 
-Before enabling live mode:
+For native live wallets, settlement credits the store's Intents balance. The owner authorizes outgoing withdrawals or invoice payments with a dedicated wallet passkey.
 
-1. Read https://docs.near-intents.org/
-2. Record API versions, request/response examples, supported assets/networks, and limitations in an ADR
-3. Implement provider methods without inventing fields
-4. Keep credentials server-side (stored encrypted through the key vault)
-5. Enable live settlement only after verifier tests pass
+## Integrate through Tendr
+
+Use Tendr's supported asset catalogs and returned quote data rather than hardcoding token routes or constructing deposit addresses. Provider availability and liquidity can change.
+
+Your backend creates Tendr sessions. Customers use the hosted checkout; your backend consumes signed Tendr webhooks. A typical store integration does not need its own 1Click credential.
+
+The provider's reported transaction outcome is reconciled server-side. Submission alone is not settlement. See [Payment verification](/payments/lifecycle) and [Settlement](/payments/settlement).

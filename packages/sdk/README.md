@@ -1,24 +1,7 @@
 # @tendr/sdk
 
-Typed TypeScript client for the Tendr API.
+Private workspace TypeScript client for Tendr. Build with `npm run build --workspace=@tendr/contracts` and `npm run build --workspace=@tendr/sdk` from the repository root. A public npm release is not assumed.
 
-```ts
-import { TendrClient } from '@tendr/sdk';
+Implemented resources: `checkoutSessions.create`, `paymentLinks`, `themes`, and `themeAssets`. Authentication, optional idempotency headers, timeouts and typed API errors are supported; retries are caller-managed. Webhook verification is available through the Node-only `@tendr/sdk/webhook` export.
 
-const client = new TendrClient({
-  baseUrl: 'http://localhost:4000',
-  apiKey: process.env.TENDR_SECRET_KEY, // tdr_test_… or tdr_live_…
-});
-```
-
-The client handles authentication, `Idempotency-Key` headers, timeouts and typed errors
-(`TendrApiError`). Endpoint methods (sessions, quotes, payments) are coming in the checkout
-project.
-
-Webhook verification (Node only):
-
-```ts
-import { verifyWebhookSignature } from '@tendr/sdk/webhook';
-```
-
-Never embed secret API keys in browser bundles.
+See [the SDK documentation](../../apps/docs/sdks/typescript.mdx) and [HTTP quickstart](../../apps/docs/quickstart.mdx). Keep secret keys server-side.

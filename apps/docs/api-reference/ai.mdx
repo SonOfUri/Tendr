@@ -1,0 +1,35 @@
+---
+title: 'AI API'
+description: 'Inputs and authentication for checkout help, recommendations, insights and theme drafts.'
+---
+
+## Shopper endpoints
+
+These calls use `Authorization: Bearer <client_secret>` from the current checkout. They are served to the hosted checkout origin, not arbitrary merchant browsers.
+
+| Endpoint                                      | Body                               | Result                                                      |
+| --------------------------------------------- | ---------------------------------- | ----------------------------------------------------------- |
+| `POST /v1/checkout/client/ai/assistant`       | `{question}`                       | Answer, facts, `generated_at`, `read_only: true`            |
+| `POST /v1/checkout/client/ai/recommendations` | `{assets: [{asset_id, balance?}]}` | Preview routes, unavailable choices, ranking IDs and expiry |
+
+Questions are 1–1,000 characters. Recommendations compare one to four distinct assets. Balances are optional; unknown does not mean zero. Rankings exclude wallet gas and are not executable payment instructions.
+
+## Merchant endpoints
+
+Use the [dashboard session](/api-reference/dashboard), not an API key.
+
+| Endpoint                      | Input                       | Permission                                 |
+| ----------------------------- | --------------------------- | ------------------------------------------ |
+| `GET /v1/ai/insights?days=30` | Reporting window, 1–90 days | `account:read`                             |
+| `POST /v1/ai/insights`        | `{days, question?}`         | `account:read`, CSRF                       |
+| `POST /v1/ai/themes`          | `{name, prompt}`            | `settings:manage`, CSRF, `Idempotency-Key` |
+
+Insights GET is deterministic metrics; POST adds a model explanation with its attached report. Render the explanation against that returned report, not a newer independently fetched one.
+
+Theme generation returns `{theme, source: "model_generated_draft", requires_publish: true}`. Publish and default selection remain separate theme operations.
+
+## Failure handling
+
+`PROVIDER_NOT_CONFIGURED` and `PROVIDER_UNAVAILABLE` mean the AI surface is unavailable. Keep checkout, metric cards and manual theme editing usable. For 429, show a retry-later state. Do not poll the model or automatically retry paid generation in a loop.
+
+Responses are JSON, not streaming chat. Render answers/facts as text. See [Tendr AI](/ai/overview) for product behavior.

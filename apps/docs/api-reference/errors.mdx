@@ -1,0 +1,41 @@
+---
+title: 'Errors and retries'
+description: 'Interpret API errors without retrying unsafe or invalid operations.'
+---
+
+API errors have a consistent envelope:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "amount must be a decimal string like 25.10",
+    "requestId": "request-example",
+    "details": { "field": "amount" }
+  }
+}
+```
+
+`details` is optional. Keep `requestId` for troubleshooting, without logging credentials or checkout fragments.
+
+| HTTP | Typical code                                  | Action                                                      |
+| ---- | --------------------------------------------- | ----------------------------------------------------------- |
+| 400  | `VALIDATION_ERROR`                            | Correct the field or request shape                          |
+| 401  | `UNAUTHORIZED`, `SIGNATURE_INVALID`           | Check credential, signature or session                      |
+| 403  | `FORBIDDEN`, `LIVE_MODE_UNAVAILABLE`          | Check scope, permission or deployment availability          |
+| 404  | `NOT_FOUND`                                   | Check ID, store and mode; foreign resources are not exposed |
+| 409  | `ACCOUNT_NOT_READY`, `CONFLICT`               | Complete setup or refresh the existing operation            |
+| 409  | `IDEMPOTENCY_CONFLICT`                        | Same key was used for different request bytes               |
+| 409  | `IDEMPOTENCY_IN_PROGRESS`                     | Wait briefly, retry the same operation                      |
+| 429  | `RATE_LIMITED`                                | Back off; avoid repeated automatic submissions              |
+| 503  | `PROVIDER_UNAVAILABLE`, `FX_RATE_UNAVAILABLE` | Preserve state and retry appropriately                      |
+
+“Bad Request” normally corresponds to HTTP 400: the server rejected the request as invalid. Read the JSON code/message rather than assuming it means a network problem.
+
+## Retry deliberately
+
+For a timed-out session creation, retry the same request with the same idempotency key. For a signed withdrawal, read the existing payout and let reconciliation resolve it. Do not create another transfer as a retry.
+
+Fix invalid fields before retrying a 400. A changed request needs a new idempotency key if the previous response was stored. Client errors can be replayed; server errors are not cached.
+
+Keep the existing order/session ID when the UI fails. A browser timeout does not prove funds did not move.

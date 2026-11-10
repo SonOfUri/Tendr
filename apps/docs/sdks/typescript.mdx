@@ -1,72 +1,91 @@
 ---
 title: TypeScript SDK
+description: Use the repository's typed client for sessions, payment links, themes and webhook verification.
 ---
 
-```ts
-import { TendrClient } from '@tendr/sdk';
-import { verifyWebhookSignature } from '@tendr/sdk/webhook';
+<Note>
+  `@tendr/sdk` is currently a private workspace package in the Tendr repository. A public npm
+  release is not assumed. External integrations can use the [HTTP API](/quickstart) directly;
+  repository consumers can build and import the workspace package.
+</Note>
 
-const client = new TendrClient({
-  baseUrl: 'http://localhost:4000',
-  apiKey: process.env.TENDR_SECRET_KEY, // tdr_test_… or tdr_live_…
-});
+```bash
+npm run build --workspace=@tendr/contracts
+npm run build --workspace=@tendr/sdk
 ```
 
-The client currently handles authentication, `Idempotency-Key` headers, timeouts and typed errors (`TendrApiError`). Endpoint methods so far: `client.paymentLinks`, `client.themes`, `client.themeAssets` and `client.checkoutSessions.create` (below). Quotes and payments are coming in the checkout project.
+```typescript
+import { TendrClient, TendrApiError } from '@tendr/sdk';
+
+const client = new TendrClient({
+  baseUrl: 'https://api.usetendr.tech',
+  apiKey: process.env.TENDR_SECRET_KEY,
+  timeoutMs: 15_000,
+});
+
+const session = await client.checkoutSessions.create(
+  {
+    amount: '25.00',
+    amount_currency: 'USD',
+    external_ref: 'order-1042',
+    success_url: 'https://shop.example/orders/1042',
+    cancel_url: 'https://shop.example/cart',
+  },
+  { idempotencyKey: 'order-1042-checkout-1' },
+);
+```
+
+The current session response type is `Record<string, unknown>`; validate or narrow fields before using them. The SDK adds authentication and optional idempotency headers, serializes requests and applies an AbortController timeout. It does not automatically retry requests or generate idempotency keys.
+
+## Available methods
+
+| Resource           | Methods                                                                                                                                 |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `checkoutSessions` | `create`                                                                                                                                |
+| `paymentLinks`     | `create`, `list`, `retrieve`, `update`, `archive`                                                                                       |
+| `themes`           | `presets`, `list`, `create`, `retrieve`, `update`, `delete`, `publish`, `setDefault`, `validate`, `preview`, `fromWebsite`, `fromStore` |
+| `themeAssets`      | `upload`, `list`, `delete`                                                                                                              |
+
+Session retrieval, refunds, invoices, wallet signing and AI do not have SDK convenience methods today. Use the documented HTTP surface and correct credential type.
 
 ## Payment links
 
-```ts
+```typescript
 const link = await client.paymentLinks.create(
-  { title: 'Logo deposit', amount_type: 'fixed', amount: '250.00', currency: 'USD', max_uses: 1 },
-  { idempotencyKey: 'invoice-114' },
+  { title: 'Design deposit', amount_type: 'fixed', amount: '250.00', currency: 'USD' },
+  { idempotencyKey: 'design-deposit-1042' },
 );
-console.log(link.url, link.qr_url);
 
 const page = await client.paymentLinks.list({ status: 'active', limit: 20 });
-await client.paymentLinks.update(link.id, { status: 'inactive', max_uses: null }); // null clears
+await client.paymentLinks.update(link.id, { status: 'inactive' });
 await client.paymentLinks.archive(link.id);
 ```
 
-`create`, `list`, `retrieve`, `update` and `archive` map to the
-[payment links API](/api-reference/payment-links) and throw `TendrApiError` with its error codes
-(`LINK_NOT_SUPPORTED`, `AMOUNT_TOO_LOW`, and so on). The key needs `payment_links:read` or
-`payment_links:write`.
+## Errors
 
-## Checkout themes
+```typescript
+try {
+  await client.paymentLinks.retrieve('plink_example');
+} catch (error) {
+  if (error instanceof TendrApiError) {
+    console.error(error.status, error.code, error.requestId);
+  } else {
+    // Transport errors and timeouts are not API error responses.
+    throw error;
+  }
+}
+```
 
-```ts
-const theme = await client.themes.create({ name: 'Spring', from: { preset: 'fashion' } });
+## Verify a webhook
 
-const logo = await client.themeAssets.upload({
-  kind: 'logo',
-  file: new Blob([await readFile('logo.png')], { type: 'image/png' }),
-  filename: 'logo.png',
-});
+```typescript
+import { verifyWebhookSignature } from '@tendr/sdk/webhook';
 
-const { valid, problems } = await client.themes.validate(theme.draft);
-const { url } = await client.themes.preview(theme.id, {
-  sample: 'checkout',
-  scheme: 'dark',
-  viewport: 'phone',
-});
-
-await client.themes.publish(theme.id); // needs a live key
-await client.themes.setDefault(theme.id);
-
-await client.checkoutSessions.create({
-  amount: '35.00',
-  amount_currency: 'USD',
-  external_ref: 'order-1042',
-  success_url: 'https://shop.example/thanks',
-  cancel_url: 'https://shop.example/cart',
-  theme_id: theme.id,
-  line_items: [{ name: 'Linen tee', quantity: 2, unit_amount: '12.50' }],
+const valid = verifyWebhookSignature({
+  payload: rawBody,
+  signatureHeader,
+  secret: endpointSigningSecret,
 });
 ```
 
-`client.themes` has `presets`, `list`, `create`, `retrieve`, `update`, `delete`, `publish`, `setDefault`, `validate`, `preview`, `fromWebsite` and `fromStore`. `client.themeAssets` has `upload` (multipart), `list` and `delete`. Errors such as `THEME_INVALID` carry `details.problems`. See the [themes API](/api-reference/themes). The key needs `themes:read` or `themes:write`.
-
-## Webhooks
-
-Webhook verification is Node-only — do not import `@tendr/sdk/webhook` into browser bundles.
+This export uses Node crypto. Verify raw request bytes before parsing and deduplicate event IDs. See [Webhook signatures](/security/webhook-signatures). Never bundle server keys or this Node-only module into a browser.

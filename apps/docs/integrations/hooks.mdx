@@ -11,6 +11,12 @@ transfers.
 Hooks are for integrator stores (`kind = integrator`) on NEAR and the EVM chains Tendr supports
 (`eth`, `base`, `arb`, `op`, `pol`, `bsc`, `avax`, `gnosis`, `bera`). Solana and Tron have no hooks.
 
+<Note>
+  This is an advanced contract-integrator flow. Standard native live store wallets settle into
+  Intents and do not use contract-hook payout mode. Confirm deployment support before building a
+  hook integration.
+</Note>
+
 ## Setup
 
 1. Deploy a contract that implements the hook. Start from the reference contracts below.
@@ -25,7 +31,7 @@ curl -X POST "$TENDR_API_URL/v1/checkout/sessions" \
   -H "Authorization: Bearer $TENDR_SECRET_KEY" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
-  -d '{ "amount": "25", "currency": "USD", "hook_data": { "player": "p_8812" } }'
+  -d '{ "amount": "25.00", "amount_currency": "USD", "external_ref": "game-order-8812", "success_url": "https://game.example/success", "cancel_url": "https://game.example/cancel", "hook_data": { "player": "p_8812" } }'
 ```
 
 Giving `hook_data` sets the session's delivery to `HOOK`. The call is refused with `400
@@ -62,7 +68,7 @@ The reference contract returns the amount it credited. Tendr does not read the r
 
 ### NEAR
 
-```
+```text
 on_tendr_deposit({ payment_id, session_id, hook_data, token, amount, tx_hash })
 ```
 

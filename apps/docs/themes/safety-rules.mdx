@@ -12,8 +12,14 @@ Themes are written by merchants, and shoppers pay on the page they produce. Thes
     "message": "The theme has problems; see details.problems",
     "details": {
       "problems": [
-        { "path": "custom_css", "message": "Line 3: `position: fixed` isn't allowed — it could cover the payment details" },
-        { "path": "blocks.2.html", "message": "`<script>` isn't allowed — custom HTML can't run code" }
+        {
+          "path": "custom_css",
+          "message": "Line 3: `position: fixed` isn't allowed — it could cover the payment details"
+        },
+        {
+          "path": "blocks.2.html",
+          "message": "`<script>` isn't allowed — custom HTML can't run code"
+        }
       ]
     }
   }
@@ -40,18 +46,18 @@ Maximum 50 KB. Your rules are scoped to your blocks, so selectors need no prefix
 
 ### Selectors
 
-| Refused | Message |
-| --- | --- |
-| `body`, `html` | `` `body` can't be styled — your CSS only applies inside your blocks `` |
-| `:root`, `:host`, `:host-context()`, `:scope` | `` `:root` can't be styled — your CSS only applies inside your blocks `` |
-| `:has()` | `` `:has()` isn't allowed — it can reach outside your block `` |
-| `::part()`, `::slotted()`, `::view-transition*` | `` `::part` isn't allowed — your CSS only applies inside your blocks `` |
-| `*` on its own, or with only pseudo-elements | ``A selector can't be `*` on its own — name the elements you want to style`` |
-| A selector starting with a combinator (`> p`, `+ p`) | ``A selector can't start with `>` — it would reach outside your block`` |
+| Refused                                                                                  | Message                                                                                                                                         |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `body`, `html`                                                                           | `` `body` can't be styled — your CSS only applies inside your blocks ``                                                                         |
+| `:root`, `:host`, `:host-context()`, `:scope`                                            | `` `:root` can't be styled — your CSS only applies inside your blocks ``                                                                        |
+| `:has()`                                                                                 | `` `:has()` isn't allowed — it can reach outside your block ``                                                                                  |
+| `::part()`, `::slotted()`, `::view-transition*`                                          | `` `::part` isn't allowed — your CSS only applies inside your blocks ``                                                                         |
+| `*` on its own, or with only pseudo-elements                                             | ``A selector can't be `*` on its own — name the elements you want to style``                                                                    |
+| A selector starting with a combinator (`> p`, `+ p`)                                     | ``A selector can't start with `>` — it would reach outside your block``                                                                         |
 | Classes or ids starting with `tdr-` or `pay-`, and attribute selectors that mention them | `` `.pay-card` is reserved for Tendr's checkout and can't be styled `` and ``Selectors can't match Tendr's own class names (`tdr-…`, `pay-…`)`` |
-| Escapes (`\`) | ``Escaped characters (`\`) aren't allowed in selectors`` |
-| Namespaces (`svg\|a`) | `Namespaced selectors (\|) aren't allowed` |
-| Nested rules and `&` | `Nested rules aren't supported — write each rule at the top level` |
+| Escapes (`\`)                                                                            | ``Escaped characters (`\`) aren't allowed in selectors``                                                                                        |
+| Namespaces (`svg\|a`)                                                                    | `Namespaced selectors (\|) aren't allowed`                                                                                                      |
+| Nested rules and `&`                                                                     | `Nested rules aren't supported — write each rule at the top level`                                                                              |
 
 `*` is fine as part of a longer selector, such as `.card *`.
 
@@ -63,22 +69,22 @@ Only `@media`, `@supports` and `@keyframes` are allowed. Everything else, includ
 
 ### Properties and values
 
-| Refused | Message |
-| --- | --- |
-| `position: fixed`, `position: sticky` | `` `position: fixed` isn't allowed — it could cover the payment details `` |
-| `behavior`, `-moz-binding`, `expression()`, `paint()` | `… isn't allowed — it can run code` |
-| `user-modify` | `` `user-modify` isn't allowed — themes can't make text editable `` |
-| `view-transition-name`, `view-transition-class` | `… isn't allowed — it could draw over the payment details` |
-| Anchor positioning (`anchor-name`, `position-anchor`, `position-area`, `anchor()`, `anchor-size()` and related) | `… could move content over the payment details` |
-| `element()` | `` `element()` isn't allowed — it can copy the payment details `` |
-| `image-set()`, `src()` | `` … isn't allowed — use `url()` with an uploaded image `` |
-| `attr()` | `` `attr()` isn't allowed — CSS can't put text on the page `` |
-| `url()` to anything that is not an image or font uploaded to Tendr | `` `url()` can only point to images and fonts uploaded to Tendr `` |
-| `<` anywhere in the CSS | ``CSS text and links can't contain `<` `` |
-| Escapes in property names or values | ``Escaped characters (`\`) aren't allowed in values`` |
-| Address-like or send-instruction text in any string | `Text can't contain wallet addresses or payment instructions` |
-| CSS over 50 KB | `CSS is over 50 KB` |
-| Anything the parser cannot read | ``This part of the CSS couldn't be read — check for a missing `{`, `}` or `;` `` |
+| Refused                                                                                                         | Message                                                                          |
+| --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `position: fixed`, `position: sticky`                                                                           | `` `position: fixed` isn't allowed — it could cover the payment details ``       |
+| `behavior`, `-moz-binding`, `expression()`, `paint()`                                                           | `… isn't allowed — it can run code`                                              |
+| `user-modify`                                                                                                   | `` `user-modify` isn't allowed — themes can't make text editable ``              |
+| `view-transition-name`, `view-transition-class`                                                                 | `… isn't allowed — it could draw over the payment details`                       |
+| Anchor positioning (`anchor-name`, `position-anchor`, `position-area`, `anchor()`, `anchor-size()` and related) | `… could move content over the payment details`                                  |
+| `element()`                                                                                                     | `` `element()` isn't allowed — it can copy the payment details ``                |
+| `image-set()`, `src()`                                                                                          | ``… isn't allowed — use `url()` with an uploaded image``                         |
+| `attr()`                                                                                                        | `` `attr()` isn't allowed — CSS can't put text on the page ``                    |
+| `url()` to anything that is not an image or font uploaded to Tendr                                              | `` `url()` can only point to images and fonts uploaded to Tendr ``               |
+| `<` anywhere in the CSS                                                                                         | ``CSS text and links can't contain `<` ``                                        |
+| Escapes in property names or values                                                                             | ``Escaped characters (`\`) aren't allowed in values``                            |
+| Address-like or send-instruction text in any string                                                             | `Text can't contain wallet addresses or payment instructions`                    |
+| CSS over 50 KB                                                                                                  | `CSS is over 50 KB`                                                              |
+| Anything the parser cannot read                                                                                 | ``This part of the CSS couldn't be read — check for a missing `{`, `}` or `;` `` |
 
 ### CSS cannot draw text
 
@@ -101,20 +107,20 @@ The `custom_html` block takes up to 20 KB (`HTML block is over 20 KB`). Tendr sa
 
 Allowed tags: `p br span div strong em b i u s small h2 h3 h4 ul ol li blockquote a img figure figcaption hr table thead tbody tr th td`. Allowed attributes: `class` and `style` on any tag, `href`, `rel` and `target` on `a`, `src` and `alt` on `img`. Other tags are dropped, and these are refused outright:
 
-| Refused | Message |
-| --- | --- |
-| `<script>`, `<noscript>`, `<template>`, `<svg>`, `<math>` | `` `<script>` isn't allowed — custom HTML can't run code `` |
-| `<style>` | `` `<style>` isn't allowed — custom HTML can't carry its own stylesheet — use the theme's custom CSS `` |
-| `<form>`, `<input>`, `<button>`, `<select>`, `<option>`, `<datalist>`, `<textarea>`, `<keygen>`, `<output>`, `<dialog>` | `` `<form>` isn't allowed — custom HTML can't collect shopper input `` |
-| `<iframe>`, `<frame>`, `<frameset>`, `<object>`, `<embed>`, `<applet>`, `<portal>`, `<fencedframe>`, `<link>`, `<meta>`, `<base>` | `` `<iframe>` isn't allowed — custom HTML can't load other pages or files `` |
-| Event attributes (`onerror`, `onclick`, any `on…`) | `` `onerror` isn't allowed — custom HTML can't run code `` |
-| `contenteditable` | `` `contenteditable` isn't allowed — custom HTML can't collect shopper input `` |
-| `javascript:` and `vbscript:` URLs | `` `javascript:` links aren't allowed — custom HTML can't run code `` |
-| Links that are not `https://` | `Links must start with https://` |
-| Images from anywhere but Tendr's asset origin | `Images must be uploaded to Tendr — links to other sites are not allowed` |
-| Classes starting with `tdr-` or `pay-` | ``The class `tdr-wrap` is reserved for Tendr's checkout`` |
-| A `style` attribute that breaks a CSS rule above | `` In a `style` attribute: … `` followed by the CSS message |
-| Address-like or send-instruction text | `Text can't contain wallet addresses or payment instructions` |
+| Refused                                                                                                                           | Message                                                                                                 |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `<script>`, `<noscript>`, `<template>`, `<svg>`, `<math>`                                                                         | `` `<script>` isn't allowed — custom HTML can't run code ``                                             |
+| `<style>`                                                                                                                         | `` `<style>` isn't allowed — custom HTML can't carry its own stylesheet — use the theme's custom CSS `` |
+| `<form>`, `<input>`, `<button>`, `<select>`, `<option>`, `<datalist>`, `<textarea>`, `<keygen>`, `<output>`, `<dialog>`           | `` `<form>` isn't allowed — custom HTML can't collect shopper input ``                                  |
+| `<iframe>`, `<frame>`, `<frameset>`, `<object>`, `<embed>`, `<applet>`, `<portal>`, `<fencedframe>`, `<link>`, `<meta>`, `<base>` | `` `<iframe>` isn't allowed — custom HTML can't load other pages or files ``                            |
+| Event attributes (`onerror`, `onclick`, any `on…`)                                                                                | `` `onerror` isn't allowed — custom HTML can't run code ``                                              |
+| `contenteditable`                                                                                                                 | `` `contenteditable` isn't allowed — custom HTML can't collect shopper input ``                         |
+| `javascript:` and `vbscript:` URLs                                                                                                | `` `javascript:` links aren't allowed — custom HTML can't run code ``                                   |
+| Links that are not `https://`                                                                                                     | `Links must start with https://`                                                                        |
+| Images from anywhere but Tendr's asset origin                                                                                     | `Images must be uploaded to Tendr — links to other sites are not allowed`                               |
+| Classes starting with `tdr-` or `pay-`                                                                                            | ``The class `tdr-wrap` is reserved for Tendr's checkout``                                               |
+| A `style` attribute that breaks a CSS rule above                                                                                  | ``In a `style` attribute: …`` followed by the CSS message                                               |
+| Address-like or send-instruction text                                                                                             | `Text can't contain wallet addresses or payment instructions`                                           |
 
 Links get `rel="noopener noreferrer"` and `target="_blank"` automatically.
 
@@ -136,19 +142,19 @@ Invisible and format characters are stripped before checking, and in HTML the ch
 
 **Payment instructions.** A phrase like "send ... to the address", "transfer ... to wallet", "deposit ... to account 0x" or "pay ... to bc1" is refused with the same message.
 
-**Countdown labels.** A `countdown` label cannot look like the payment timer: no *expire*, *expires*, *expiring*, *expiry*, *session*, *deadline*, *time left*, *pay within* or *left to pay*. The message is `Countdown text can't look like the payment timer (avoid words like expires, session, deadline, time left)`.
+**Countdown labels.** A `countdown` label cannot look like the payment timer: no _expire_, _expires_, _expiring_, _expiry_, _session_, _deadline_, _time left_, _pay within_ or _left to pay_. The message is `Countdown text can't look like the payment timer (avoid words like expires, session, deadline, time left)`.
 
 **Button words.** `settings.button_label` follows these rules:
 
-| Refused | Message |
-| --- | --- |
-| Any digit | `Button text can't contain numbers` |
-| Any currency symbol | `Button text can't contain currency symbols` |
-| A currency code written in capitals as a whole word, such as `TRY` or `NGN` (any ISO 4217 code) | `Button text can't contain currency codes ("TRY")` |
-| A major currency code in any case: `USD`, `EUR`, `GBP`, `NGN`, `KES`, `GHS`, `ZAR`, `CAD`, `AUD`, `JPY`, `CNY`, `INR`, `BRL` (so `usd` and `Eur` too) | `Button text can't contain currency codes ("usd")` |
-| Any `{...}` other than `{amount}` | `Button text can only use the {amount} placeholder` |
+| Refused                                                                                                                                               | Message                                             |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Any digit                                                                                                                                             | `Button text can't contain numbers`                 |
+| Any currency symbol                                                                                                                                   | `Button text can't contain currency symbols`        |
+| A currency code written in capitals as a whole word, such as `TRY` or `NGN` (any ISO 4217 code)                                                       | `Button text can't contain currency codes ("TRY")`  |
+| A major currency code in any case: `USD`, `EUR`, `GBP`, `NGN`, `KES`, `GHS`, `ZAR`, `CAD`, `AUD`, `JPY`, `CNY`, `INR`, `BRL` (so `usd` and `Eur` too) | `Button text can't contain currency codes ("usd")`  |
+| Any `{...}` other than `{amount}`                                                                                                                     | `Button text can only use the {amount} placeholder` |
 
-The message names the word that was refused. Everyday words that are also codes, such as *Try*, *all*, *top* or *cup*, are fine unless written in capitals.
+The message names the word that was refused. Everyday words that are also codes, such as _Try_, _all_, _top_ or _cup_, are fine unless written in capitals.
 
 `{amount}` is filled in by Tendr with the real amount. The label applies to the main Pay button only.
 
@@ -156,18 +162,18 @@ The message names the word that was refused. Everyday words that are also codes,
 
 **Other document rules.**
 
-| Refused | Message |
-| --- | --- |
-| No payment block, or more than one | `The page needs exactly one payment block` |
-| Payment block nested or on the thank-you page | `The payment block must be on the main page, not nested or on the thank-you page` |
-| `thank_you` on the main page or nested | `The thank you block belongs on the thank-you page only` |
-| `back_to_store` on the main page or nested | `The back to store block belongs on the thank-you page only` |
-| Repeated block id | `Block id "x" is used twice` |
-| More than 40 blocks on a page | `A page can have at most 40 blocks` |
-| A missing palette for the mode | `A light palette is required for light mode` |
-| Low contrast | `Text is too hard to read on the background (needs a contrast of at least 4.5:1)` |
-| An asset that does not exist | `This file can't be found — upload it again` |
-| An asset of the wrong kind | `This file must be an uploaded font` or `This file must be an uploaded image or logo` |
+| Refused                                       | Message                                                                               |
+| --------------------------------------------- | ------------------------------------------------------------------------------------- |
+| No payment block, or more than one            | `The page needs exactly one payment block`                                            |
+| Payment block nested or on the thank-you page | `The payment block must be on the main page, not nested or on the thank-you page`     |
+| `thank_you` on the main page or nested        | `The thank you block belongs on the thank-you page only`                              |
+| `back_to_store` on the main page or nested    | `The back to store block belongs on the thank-you page only`                          |
+| Repeated block id                             | `Block id "x" is used twice`                                                          |
+| More than 40 blocks on a page                 | `A page can have at most 40 blocks`                                                   |
+| A missing palette for the mode                | `A light palette is required for light mode`                                          |
+| Low contrast                                  | `Text is too hard to read on the background (needs a contrast of at least 4.5:1)`     |
+| An asset that does not exist                  | `This file can't be found — upload it again`                                          |
+| An asset of the wrong kind                    | `This file must be an uploaded font` or `This file must be an uploaded image or logo` |
 
 ## Risks Tendr accepts
 
