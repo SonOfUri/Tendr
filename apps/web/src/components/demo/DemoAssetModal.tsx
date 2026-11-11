@@ -356,6 +356,7 @@ export function DemoAssetModal({
     typeof document !== 'undefined'
       ? document.querySelector('.demo-playground') ??
         document.querySelector('.hosted-pay-page') ??
+        document.querySelector('.invoice-portal') ??
         document.body
       : null;
 

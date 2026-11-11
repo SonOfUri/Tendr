@@ -132,7 +132,7 @@ export function InvoicePortal({ business }: { business: string }) {
   }
 
   return (
-    <div className={`${styles.shell} dash-demo-asset-field`}>
+    <div className={`${styles.shell} invoice-portal dash-demo-asset-field`}>
       <div className={styles.card}>
         <p className={styles.brand}>
           <TendrLogo size={26} tone="white" />

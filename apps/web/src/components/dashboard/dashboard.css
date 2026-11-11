@@ -4910,6 +4910,143 @@ html[data-appearance='light'] .wallet-pct button:hover {
   color: #fff;
 }
 
+/* Contractor invoices — merchant inbox + settle */
+.dash-invoice-page-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem 1.1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dash-invoice-page-copy {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1 1 16rem;
+}
+
+.dash-invoice-split {
+  display: grid;
+  gap: 1.15rem;
+  align-items: start;
+}
+
+@media (min-width: 980px) {
+  .dash-invoice-split {
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.15fr);
+  }
+}
+
+.dash-invoice-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.dash-invoice-row {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  text-align: left;
+  padding: 0.85rem 0.95rem;
+  border-radius: 12px;
+  border: 1px solid var(--tendr-border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.dash-invoice-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.dash-invoice-row[data-selected='true'] {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+html[data-appearance='light'] .dash-invoice-row:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+html[data-appearance='light'] .dash-invoice-row[data-selected='true'] {
+  border-color: rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.dash-invoice-row-main {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.dash-invoice-row-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.dash-invoice-row-meta {
+  color: var(--tendr-muted);
+  font-size: 0.82rem;
+}
+
+.dash-invoice-detail {
+  gap: 1rem;
+}
+
+.dash-invoice-hero {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.dash-invoice-amount {
+  margin: 0;
+  font-size: 1.55rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.dash-invoice-settle {
+  display: grid;
+  gap: 0.85rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--tendr-border);
+}
+
+.dash-invoice-step {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tendr-muted);
+}
+
+.dash-invoice-note {
+  margin: 0;
+  padding: 0.85rem 0.95rem;
+  border-radius: 12px;
+  border: 1px solid var(--tendr-border);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+html[data-appearance='light'] .dash-invoice-note {
+  background: rgba(0, 0, 0, 0.03);
+}
+
 .wallet-quote {
   display: grid;
   gap: 0.75rem;
