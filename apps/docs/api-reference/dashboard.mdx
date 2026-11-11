@@ -11,6 +11,8 @@ Requests use the authenticated session cookie with `credentials: include`, `tend
 
 Only approved dashboard origins can make these cookie-authenticated calls. Do not put a server key into a frontend to work around session requirements.
 
+Personal login security uses `/v1/auth/login-recovery/*` without store or mode headers. Code generation requires a session, CSRF and recent login-passkey confirmation. Recovery combines a fresh emailed token, a saved code and a new WebAuthn registration. See [Login recovery](/security/login-recovery).
+
 | Area             | Routes                                             | Access                                                 |
 | ---------------- | -------------------------------------------------- | ------------------------------------------------------ |
 | Payments         | `GET /v1/payments`, `GET /v1/payments/:id`         | `account:read`                                         |

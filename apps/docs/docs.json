@@ -84,6 +84,7 @@
           {
             "group": "Security and reliability",
             "pages": [
+              "security/login-recovery",
               "security/api-keys",
               "security/webhook-signatures",
               "concepts/idempotency",

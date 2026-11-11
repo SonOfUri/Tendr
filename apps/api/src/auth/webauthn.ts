@@ -39,6 +39,7 @@ import { AppError, conflict, notFound, unauthorized } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
+import { isSteppedUp } from './session.js';
 
 export const CEREMONY_CHALLENGE_TAG = new TextEncoder().encode('tendr-webauthn-ceremony-v1:');
 export const CHALLENGE_TTL_MS = 5 * 60_000;
@@ -99,7 +100,7 @@ async function consumeChallenge(
 }
 
 /** The challenge a client response claims to answer (base64url), or null if unreadable. */
-function claimedChallenge(clientDataJSON: unknown): string | null {
+export function claimedChallenge(clientDataJSON: unknown): string | null {
   if (typeof clientDataJSON !== 'string') return null;
   try {
     const { challenge } = decodeClientDataJSON(clientDataJSON);
@@ -197,6 +198,35 @@ export async function registrationOptions(user: {
 const registrationFailed = () =>
   new AppError('VALIDATION_ERROR', 'Passkey registration could not be verified', 400);
 
+/** Cryptographic verification only; the caller must authorize and consume its own challenge. */
+export async function verifyRegistrationProof(
+  response: RegistrationResponseJSON,
+  expectedChallenge: string,
+) {
+  const { WEBAUTHN_RP_ID, WEBAUTHN_ORIGINS } = env();
+  let verified: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
+  try {
+    verified = await verifyRegistrationResponse({
+      response,
+      expectedChallenge,
+      expectedOrigin: WEBAUTHN_ORIGINS,
+      expectedRPID: WEBAUTHN_RP_ID,
+      requireUserVerification: true,
+      supportedAlgorithmIDs: SUPPORTED_ALGS,
+    });
+  } catch {
+    throw registrationFailed();
+  }
+  if (!verified.verified || !verified.registrationInfo.userVerified) throw registrationFailed();
+  const { credential } = verified.registrationInfo;
+  return {
+    credentialId: credential.id,
+    publicKey: SignerKeySchema.parse(coseToSignerKey(credential.publicKey)),
+    signCount: BigInt(credential.counter),
+    transports: credential.transports ?? response.response.transports ?? [],
+  };
+}
+
 /**
  * The dashboard session registering a passkey: kept alive when this is the person's first passkey
  * (every other session of theirs ends), and whether it holds a recent assertion (needed for any
@@ -232,24 +262,7 @@ export async function verifyRegistration(
   if (!challenge || !(await consumeChallenge(challenge, 'registration', user.id))) {
     throw registrationFailed();
   }
-  const { WEBAUTHN_RP_ID, WEBAUTHN_ORIGINS } = env();
-  let verified: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
-  try {
-    verified = await verifyRegistrationResponse({
-      response,
-      expectedChallenge: challenge,
-      expectedOrigin: WEBAUTHN_ORIGINS,
-      expectedRPID: WEBAUTHN_RP_ID,
-      requireUserVerification: true,
-      supportedAlgorithmIDs: SUPPORTED_ALGS,
-    });
-  } catch (err) {
-    log('info', 'passkey registration rejected', { userId: user.id, err: String(err) });
-    throw registrationFailed();
-  }
-  if (!verified.verified || !verified.registrationInfo.userVerified) throw registrationFailed();
-  const { credential } = verified.registrationInfo;
-  const publicKey = SignerKeySchema.parse(coseToSignerKey(credential.publicKey));
+  const proof = await verifyRegistrationProof(response, challenge);
   try {
     return await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id} FOR UPDATE`;
@@ -257,15 +270,24 @@ export async function verifyRegistration(
         where: { userId: user.id, revokedAt: null },
       });
       const first = existing === 0;
-      if (!first && session && !session.steppedUp) throw stepUpRequired();
+      if (session) {
+        const current = await tx.dashboardSession.findFirst({
+          where: {
+            id: session.sessionId,
+            userId: user.id,
+            revokedAt: null,
+            expiresAt: { gt: new Date() },
+          },
+        });
+        if (!current) throw unauthorized('Your session ended; sign in again');
+        if (!first && (!session.steppedUp || !isSteppedUp(current.passkeyVerifiedAt)))
+          throw stepUpRequired();
+      }
       const created = await tx.webauthnCredential.create({
         data: {
           id: newId('cred'),
           userId: user.id,
-          credentialId: credential.id,
-          publicKey,
-          signCount: BigInt(credential.counter),
-          transports: credential.transports ?? response.response.transports ?? [],
+          ...proof,
           deviceLabel,
         },
       });

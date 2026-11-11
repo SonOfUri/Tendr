@@ -303,6 +303,7 @@ const NAV: { href: string; label: string }[] = [
   { href: '/dashboard/settings/payout', label: 'Payout' },
   { href: '/dashboard/team', label: 'Team' },
   { href: '/dashboard/security', label: 'Security' },
+  { href: '/settings/login-recovery', label: 'Login recovery' },
   { href: '/dashboard/recovery', label: 'Recovery' },
   { href: '/settings/api-console', label: 'API console' },
 ];

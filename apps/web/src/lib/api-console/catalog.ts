@@ -31,6 +31,16 @@ export function needsStore(endpoint: Endpoint): boolean {
 }
 
 const examples: Record<string, unknown> = {
+  'POST /v1/auth/login-recovery/start': { email: 'your-email@example.com' },
+  'POST /v1/auth/login-recovery/options': {
+    token: 'paste-token-from-email-fragment',
+    recoveryCode: 'paste-one-saved-code',
+  },
+  'POST /v1/auth/login-recovery/verify': {
+    token: 'paste-token-from-email-fragment',
+    recoveryCode: 'paste-one-saved-code',
+    response: {},
+  },
   'PUT /v1/invoices/settings': { enabled: true },
   'POST /v1/invoices/public/:business': {
     contractorName: 'Console contractor',
@@ -147,6 +157,8 @@ export function exampleBody(endpoint: Endpoint): string {
 }
 
 export function endpointNote(endpoint: Endpoint): string {
+  if (endpoint.path.startsWith('/v1/auth/login-recovery/'))
+    return 'Personal login recovery, independent of Test/Live and wallet recovery. Use /settings/login-recovery to save codes with a recent login passkey confirmation, or /recover/login after losing all login passkeys. Recovery needs a fresh email link and one saved code, then a real WebAuthn registration. Completing it revokes all old login keys and sessions. Avoid putting real codes or email tokens into console history; use the dedicated screens.';
   if (endpoint.path.startsWith('/v1/invoices/public/'))
     return 'Contractor invoices are live-only, even though this is a test console. Public calls omit cookies and store headers. Read the business tokens first; send items with descriptions and decimal token amounts. The API calculates the total; do not send a separate amount. On the live API, submission emails a private link. Copy its #token value into status/verify. No Tendr login is needed for the contractor. The local simulator keeps live writes disabled.';
   if (endpoint.path.startsWith('/v1/invoices'))

@@ -1,6 +1,6 @@
 # Tendr dashboard frontend handover
 
-Updated **9 November 2026** (AI, invoice and email-design review). Audience: the developer building the merchant dashboard in `apps/web`.
+Updated **11 November 2026** (login recovery, AI, invoices and email design). Audience: the developer building the merchant dashboard in `apps/web`.
 This is the current entry point for frontend work. It supersedes the deployment assumptions and
 "missing screens" lists in earlier versions of this handover. The filename is retained for existing links.
 
@@ -8,10 +8,10 @@ This is the current entry point for frontend work. It supersedes the deployment 
 
 Start with the [AI, invoice and email delivery brief](2026-11-09-ai-invoices-email-design.md)
 for screen states, design requirements, acceptance criteria and the full transactional email inventory.
-The [offline email gallery](email-preview.html) shows synthetic examples of all 23 current templates.
-The detailed API contracts remain below. AI and invoice backend code is present on both branches;
-AI API integration into the product UI and designed HTML email delivery remain frontend/backend work.
-Current emails are plain text.
+The [login recovery handover](2026-11-11-login-recovery.md) covers saved codes, lost-device recovery, backup login passkeys and three new security emails.
+The [offline email gallery](email-preview.html) shows synthetic plain-text examples of all 26 current templates.
+The detailed API contracts remain below. AI and invoice backend code is present on both branches.
+The newer `deploy` frontend includes AI integration and HTML emails with a plain-text alternative; preserve those implementations.
 
 The live backend supports native passkey wallets, payment links, incoming payments, withdrawals,
 settlement selection and API-key management. **The merchant reports successfully receiving a live
@@ -20,10 +20,10 @@ flows when integrating them into the redesigned dashboard.
 
 There are two frontend implementations to reconcile:
 
-| Branch / audited revision | What to use it for |
-| --- | --- |
-| `origin/deploy` at `24543c8` | Implementation baseline and Railway deployment branch: redesigned dashboard, native wallets/payouts, settlement selectors, API keys, AI APIs and invoice flow. Preserve its current design and payment behavior. |
-| `origin/test/api-console` at `f1bb3dd` | Functional reference and isolated API workbench, including AI routes and itemized invoices. Use this for integration examples and local test scenarios. |
+| Branch / audited revision              | What to use it for                                                                                                                                                                                               |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `origin/deploy` at `24543c8`           | Implementation baseline and Railway deployment branch: redesigned dashboard, native wallets/payouts, settlement selectors, API keys, AI APIs and invoice flow. Preserve its current design and payment behavior. |
+| `origin/test/api-console` at `f1bb3dd` | Functional reference and isolated API workbench, including AI routes and itemized invoices. Use this for integration examples and local test scenarios.                                                          |
 
 The revisions above identify code reviewed for this handover, not a requirement to reset a newer
 checkout. Fetch before starting and review any subsequent changes. `main` is not the deployment baseline.
@@ -52,7 +52,7 @@ and invoice-host notes were checked on 9 November. No credentials are included h
 | Screening                | `SCREENING_MODE=disabled`, an operator-selected hackathon configuration. Live funds are **not sanctions-screened**. Do not label skipped screening as a passed check; existing held payments remain held.                                                                                         |
 | Gas sponsorship / sweeps | `GASLESS_LIVE_ENABLED=false`, `FEE_SWEEP_ENABLED=false`. Do not promise active gasless sponsorship or automatic sweeps from a saved preference alone.                                                                                                                                             |
 | API / checkout           | `https://api.usetendr.tech` and `https://pay.usetendr.tech`. API readiness and the new authenticated API-key route were checked on 7 November. Shopper links stay on the pay host.                                                                                                                |
-| Public dashboard         | Configured origin is `https://app.usetendr.tech`, RP ID `usetendr.tech`. The public app host now serves the Railway frontend; the earlier Vercel failure is resolved. The separate `invoice.usetendr.tech` host still needs DNS/hosting correction; use the app-host invoice fallback.                                    |
+| Public dashboard         | Configured origin is `https://app.usetendr.tech`, RP ID `usetendr.tech`. The public app host now serves the Railway frontend; the earlier Vercel failure is resolved. The separate `invoice.usetendr.tech` host still needs DNS/hosting correction; use the app-host invoice fallback.            |
 | Working live console     | A dedicated Chrome profile maps the app origin to a loopback frontend while calling the real API. This is how the functional console is used; it does not establish that the public app domain works. See development setup below.                                                                |
 | Infrastructure           | HODL workspace, Railway `tendr` project; API, worker, web, Postgres, Redis. API/worker use `KEYVAULT_DRIVER=env`; assets use `ASSET_STORE_DRIVER=s3` with API-served assets. Native wallet onboarding does not require GCP billing, funding `tendr.near`, or deploying a per-store NEAR contract. |
 
@@ -61,15 +61,15 @@ a successful deployment or a UI preview is not evidence that a payment executed.
 
 ## Delivery checklist: what actually needs work
 
-| Priority | Work | Existing code / completion requirement |
-| --- | --- | --- |
-| 1 | Integrate the four AI surfaces | Wire checkout help, route comparison, merchant insights and theme generation to their existing APIs. Follow the new brief's loading/error/context and explicit-publish rules; demo responses are not the integration. |
-| 1 | Refine the invoice experience | Public submission/verification, itemized totals and owner inbox/payment already work. Deliver complete mobile, empty, expired, non-owner, processing and payment-review states while preserving exact amount and passkey behavior. |
-| 1 | Design transactional emails and integrate rendering | Cover all 23 template keys and invoice outcome variants. Resend currently receives plain text; HTML needs renderer/provider changes and richer structured invoice data if the design includes item tables. Use the fixture gallery and brief. |
-| 2 | Preserve wallet and payment flows | Native onboarding, payout/withdrawal, capability guards, refund approval and per-link settlement are already integrated on `deploy`. Regression-check store/mode changes, owner checks, signing cancellation and pending outcomes. |
-| 2 | Finish presentation and regression coverage | Preserve API-key one-time secrets, permissions and context isolation. Exercise payments, webhooks, settings and team flows against real response shapes. |
-| 2 | Extend themes where required | Existing presets, brand import, logo upload, CSS, validation, preview and publish/default remain the baseline. Review advanced block/font editing against current code before estimating additional work. |
-| Operator | Finish the custom invoice host | Verify Railway's requested DNS records for `invoice.usetendr.tech`; keep `https://app.usetendr.tech/invoice/<slug>` available. Preserve the established dashboard RP ID and CORS. |
+| Priority | Work                                                | Existing code / completion requirement                                                                                                                                                                                                        |
+| -------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1        | Integrate the four AI surfaces                      | Wire checkout help, route comparison, merchant insights and theme generation to their existing APIs. Follow the new brief's loading/error/context and explicit-publish rules; demo responses are not the integration.                         |
+| 1        | Refine the invoice experience                       | Public submission/verification, itemized totals and owner inbox/payment already work. Deliver complete mobile, empty, expired, non-owner, processing and payment-review states while preserving exact amount and passkey behavior.            |
+| 1        | Design transactional emails and integrate rendering | Cover all 23 template keys and invoice outcome variants. Resend currently receives plain text; HTML needs renderer/provider changes and richer structured invoice data if the design includes item tables. Use the fixture gallery and brief. |
+| 2        | Preserve wallet and payment flows                   | Native onboarding, payout/withdrawal, capability guards, refund approval and per-link settlement are already integrated on `deploy`. Regression-check store/mode changes, owner checks, signing cancellation and pending outcomes.            |
+| 2        | Finish presentation and regression coverage         | Preserve API-key one-time secrets, permissions and context isolation. Exercise payments, webhooks, settings and team flows against real response shapes.                                                                                      |
+| 2        | Extend themes where required                        | Existing presets, brand import, logo upload, CSS, validation, preview and publish/default remain the baseline. Review advanced block/font editing against current code before estimating additional work.                                     |
+| Operator | Finish the custom invoice host                      | Verify Railway's requested DNS records for `invoice.usetendr.tech`; keep `https://app.usetendr.tech/invoice/<slug>` available. Preserve the established dashboard RP ID and CORS.                                                             |
 
 Use existing backend contracts for analytics and overview metrics; the AI insight report is a
 bounded cohort report, not an arbitrary time series. Before adding global search, export or a new
@@ -95,7 +95,7 @@ changing a request; some API fields use snake_case and native-wallet fields use 
 | `apps/web/src/lib/webauthn.ts`                                            | Login-passkey registration, sign-in, step-up and contract challenge signing.                                                                                                                                   |
 | `apps/web/src/lib/payments.ts`, `assets.ts`, `asset-registry.ts`          | Payment/refund types, exact amount formatting, known token metadata and explorer links. Provider catalogs supplement the static registry.                                                                      |
 | `apps/web/src/lib/proposals.ts`, `actions.ts`                             | Existing contract proposal creation, signing, cancellation and action summaries.                                                                                                                               |
-| `apps/web/src/lib/payment-link-types.ts`, `payment-link-form.ts`          | Redesigned link DTO/form logic on `deploy`, including default/custom settlement fields.                                                                                                                                     |
+| `apps/web/src/lib/payment-link-types.ts`, `payment-link-form.ts`          | Redesigned link DTO/form logic on `deploy`, including default/custom settlement fields.                                                                                                                        |
 | `apps/web/src/lib/themes.ts`                                              | Theme draft state, validation mapping and editor helpers on `deploy`.                                                                                                                                          |
 | `apps/web/src/components/dashboard/ui.tsx`, `Select.tsx`, `dashboard.css` | Redesigned dashboard primitives and responsive monochrome styling on `deploy`; use these with shared `packages/ui`.                                                                                            |
 | `apps/web/src/app/dashboard/api-keys/`                                    | Working create/list/revoke page and component tests on both branches.                                                                                                                                          |
@@ -809,12 +809,12 @@ Contractors need no Tendr login. They enter their name, email, invoice reference
 
 Public routes use no cookies, no Tendr account headers, and no credentials. All responses are `no-store`:
 
-| Method and path                             | Input / response                                                                                                                                                                                                                                    |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /v1/invoices/public/:business`         | Business name/slug and current supported tokens (`assetId`, `blockchain`, `symbol`, `decimals`). 404 while paused/unavailable. Never exposes invoices or balances.                                                                                  |
+| Method and path                             | Input / response                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/invoices/public/:business`         | Business name/slug and current supported tokens (`assetId`, `blockchain`, `symbol`, `decimals`). 404 while paused/unavailable. Never exposes invoices or balances.                                                                                                                                                                     |
 | `POST /v1/invoices/public/:business`        | Strict JSON: `contractorName`, `email`, `reference`, optional `dueDate` (`YYYY-MM-DD`), `destinationAsset`, `destination`, `items` (1–50 objects with `description` up to 200 characters and `amount` in decimal **token units**, string). Do not send a separate total. Returns 202 `{accepted:true}` without an invoice ID or token. |
-| `POST /v1/invoices/public/:business/status` | `{token}` from email; returns that one invoice.                                                                                                                                                                                                     |
-| `POST /v1/invoices/public/:business/verify` | `{token}`; publishes the invoice after email verification. Idempotent after verification.                                                                                                                                                           |
+| `POST /v1/invoices/public/:business/status` | `{token}` from email; returns that one invoice.                                                                                                                                                                                                                                                                                        |
+| `POST /v1/invoices/public/:business/verify` | `{token}`; publishes the invoice after email verification. Idempotent after verification.                                                                                                                                                                                                                                              |
 
 The API validates every line against the selected token’s precision and calculates the total with integer arithmetic. Zero/negative amounts, excess precision, overflow and requests mixing `items` with a top-level `amount`/`description` are rejected. Invoice **responses** include `items: [{description, amount}]`; both item amounts and the invoice total are integer base-unit strings with explicit `symbol`/`decimals`. Do not use JavaScript floating point. The original `{description, amount}` submission shape remains accepted for older clients; historical invoices without stored items are returned as one line using their original description and amount. Show the same breakdown during email verification and merchant review. Invoice totals are denominated in the receiving token, not a fiat FX estimate. Only external chains supported by the destination validator are listed (EVM, NEAR, Solana, Bitcoin and Tron families); memo/tag destinations are not supported. Reference is unique per normalized contractor email, business and mode. Repeating an unverified reference resends verification for the **original** details and invalidates its previous link. Once verified, use the original private email link; repeating the submission does not create another invoice. To correct terms, the business declines the old invoice and the contractor submits a new reference.
 

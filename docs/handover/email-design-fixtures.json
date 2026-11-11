@@ -1,7 +1,42 @@
 {
-  "reviewed_at": "2026-11-09",
+  "reviewed_at": "2026-11-11",
   "description": "Synthetic design inputs for current MailMessage contracts. Reserved domains, fake IDs and unusable tokens only. Supplied subject/text examples mirror current handler copy; renderer fallback examples use renderMail. This is not an HTML delivery implementation.",
   "fixtures": [
+    {
+      "id": "login-recovery-link",
+      "scenario": "Saved-code login recovery; fresh email link, no wallet recovery.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "login_recovery_link",
+        "data": {
+          "url": "https://app.tendr.invalid/recover/login#token=SYNTHETIC-UNUSABLE-TOKEN"
+        }
+      }
+    },
+    {
+      "id": "login-recovery-codes-changed",
+      "scenario": "Security notice after code generation; no codes included.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "login_recovery_codes_changed",
+        "data": {
+          "at": "2026-11-11T12:00:00.000Z",
+          "url": "https://app.tendr.invalid/settings/login-recovery"
+        }
+      }
+    },
+    {
+      "id": "login-recovery-completed",
+      "scenario": "Old login passkeys and sessions revoked; wallet unchanged.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "login_recovery_completed",
+        "data": {
+          "at": "2026-11-11T12:15:00.000Z",
+          "url": "https://app.tendr.invalid/settings/login-recovery"
+        }
+      }
+    },
     {
       "id": "verify-email",
       "scenario": "New person confirms their email; single-use 15-minute link.",

@@ -123,6 +123,10 @@ describe('webauthn', () => {
     const [a, b] = [new SoftAuthenticator(), new SoftAuthenticator()];
     const ra = a.create(await registrationOptions(user));
     const rb = b.create(await registrationOptions(user));
+    const [sa, sb] = await Promise.all([
+      createDashboardSession(user.id),
+      createDashboardSession(user.id),
+    ]);
     // Hold inserts into webauthn_credentials (reads still pass) until both registrations are
     // parked, so without the per-person row lock both would count zero passkeys.
     let release!: () => void;
@@ -137,8 +141,8 @@ describe('webauthn', () => {
     await new Promise((r) => setTimeout(r, 50));
     const session = (id: string) => ({ sessionId: id, steppedUp: false });
     const results = Promise.allSettled([
-      verifyRegistration(user, ra, null, session('dss_a')),
-      verifyRegistration(user, rb, null, session('dss_b')),
+      verifyRegistration(user, ra, null, session(sa.sessionId)),
+      verifyRegistration(user, rb, null, session(sb.sessionId)),
     ]);
     for (let i = 0; i < 200; i++) {
       const [row] = await prisma.$queryRaw<{ n: number }[]>`
@@ -152,7 +156,8 @@ describe('webauthn', () => {
     const settled = await results;
     expect(settled.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
     const failed = settled.find((r) => r.status === 'rejected') as PromiseRejectedResult;
-    expect(failed.reason).toMatchObject({ code: 'STEP_UP_REQUIRED' });
+    // The winner also revokes the losing bootstrap session.
+    expect(failed.reason).toMatchObject({ code: 'UNAUTHORIZED' });
     expect(await prisma.webauthnCredential.count({ where: { userId: user.id } })).toBe(1);
   });
 

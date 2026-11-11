@@ -39,6 +39,9 @@ function Login() {
       </Button>
       <p className="muted">Or sign in with email</p>
       <EmailSignInForm next={next} disabled={busy} />
+      <p>
+        <Link href="/recover/login">Lost your login passkeys? Use a recovery code</Link>
+      </p>
       <p className="muted small">
         New to Tendr? <Link href="/signup">Create an account</Link>
       </p>

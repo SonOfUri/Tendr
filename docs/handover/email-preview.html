@@ -36,13 +36,16 @@
 </style>
 </head>
 <body><main id="top">
-<header><div class="eyebrow">Tendr · frontend handover · 2026-11-09</div>
+<header><div class="eyebrow">Tendr · frontend handover · 2026-11-11</div>
 <h1>Transactional email inventory</h1>
-<p>23 template keys · 29 synthetic cases · no emails sent</p>
+<p>26 template keys · 32 synthetic cases · no emails sent</p>
 <p class="notice"><strong>Current plain-text baseline, not an HTML email design.</strong> These cards show the plain-text renderer output and supplied copy. They do not preview the HTML email layout available on deploy. All recipients, IDs and links are synthetic; action URLs are displayed as text.</p>
 <p>Use the AI, invoice and email delivery brief alongside this gallery. Expand each payload to see which fields exist today. Regenerate with <code>node --import tsx docs/handover/preview-email-fixtures.mts</code>.</p>
 </header>
-<nav aria-label="Email scenarios"><a href="#verify-email">verify-email</a>
+<nav aria-label="Email scenarios"><a href="#login-recovery-link">login-recovery-link</a>
+<a href="#login-recovery-codes-changed">login-recovery-codes-changed</a>
+<a href="#login-recovery-completed">login-recovery-completed</a>
+<a href="#verify-email">verify-email</a>
 <a href="#login-link">login-link</a>
 <a href="#invite">invite</a>
 <a href="#invoice-verify">invoice-verify</a>
@@ -71,6 +74,70 @@
 <a href="#recovery-register-link">recovery-register-link</a>
 <a href="#recovery-session-opened">recovery-session-opened</a>
 <a href="#recovery-passkey-registered">recovery-passkey-registered</a></nav>
+<article id="login-recovery-link" aria-labelledby="login-recovery-link-title">
+  <div class="case-heading"><h2 id="login-recovery-link-title">login-recovery-link</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Saved-code login recovery; fresh email link, no wallet recovery.</p>
+  <dl><dt>Template</dt><dd><code>login_recovery_link</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>Recover your Tendr login</h3><pre>Use this link together with one of your saved recovery codes to create a new login passkey.
+The link expires in 15 minutes. Completing recovery revokes your old login passkeys and signs out every device.
+Recover your login:
+https://app.tendr.invalid/recover/login#token=SYNTHETIC-UNUSABLE-TOKEN
+This does not recover or replace your wallet signing key. If you did not request this, ignore the email and keep your recovery codes private.
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;login_recovery_link&quot;,
+  &quot;data&quot;: {
+    &quot;url&quot;: &quot;https://app.tendr.invalid/recover/login#token=SYNTHETIC-UNUSABLE-TOKEN&quot;
+  }
+}</pre></details>
+</article>
+<article id="login-recovery-codes-changed" aria-labelledby="login-recovery-codes-changed-title">
+  <div class="case-heading"><h2 id="login-recovery-codes-changed-title">login-recovery-codes-changed</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Security notice after code generation; no codes included.</p>
+  <dl><dt>Template</dt><dd><code>login_recovery_codes_changed</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>Your Tendr login recovery codes changed</h3><pre>New login recovery codes were generated at 2026-11-11T12:00:00.000Z. Previous codes no longer work.
+If this was not you, sign in with your passkey, review your devices and generate a new set of codes.
+Review login security:
+https://app.tendr.invalid/settings/login-recovery
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;login_recovery_codes_changed&quot;,
+  &quot;data&quot;: {
+    &quot;at&quot;: &quot;2026-11-11T12:00:00.000Z&quot;,
+    &quot;url&quot;: &quot;https://app.tendr.invalid/settings/login-recovery&quot;
+  }
+}</pre></details>
+</article>
+<article id="login-recovery-completed" aria-labelledby="login-recovery-completed-title">
+  <div class="case-heading"><h2 id="login-recovery-completed-title">login-recovery-completed</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Old login passkeys and sessions revoked; wallet unchanged.</p>
+  <dl><dt>Template</dt><dd><code>login_recovery_completed</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>Your Tendr login was recovered</h3><pre>A new login passkey was registered using email verification and a recovery code at 2026-11-11T12:15:00.000Z.
+Previous login passkeys and sessions were revoked. Your stores, wallet address and wallet signing key were not changed.
+If this was not you, secure your email account and use another saved recovery code to regain your login. Contact Tendr support if you need help.
+Review login security:
+https://app.tendr.invalid/settings/login-recovery
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;login_recovery_completed&quot;,
+  &quot;data&quot;: {
+    &quot;at&quot;: &quot;2026-11-11T12:15:00.000Z&quot;,
+    &quot;url&quot;: &quot;https://app.tendr.invalid/settings/login-recovery&quot;
+  }
+}</pre></details>
+</article>
 <article id="verify-email" aria-labelledby="verify-email-title">
   <div class="case-heading"><h2 id="verify-email-title">verify-email</h2><a href="#top">Back to index</a></div>
   <p class="scenario">New person confirms their email; single-use 15-minute link.</p>

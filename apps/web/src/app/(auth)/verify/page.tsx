@@ -8,8 +8,9 @@ import { api, errorMessage } from '@/lib/api';
 import { loadConnectParams, takeConnectWaiting } from '@/lib/connect';
 import { safeNext, takePendingInvite } from '@/lib/navigation';
 import { registerPasskey, type SessionStart } from '@/lib/webauthn';
+import LoginRecoveryCodes from '@/components/auth/LoginRecoveryCodes';
 
-type Step = 'confirm' | 'passkey' | 'done' | 'connect-elsewhere';
+type Step = 'confirm' | 'passkey' | 'recovery' | 'done' | 'connect-elsewhere';
 
 function Verify() {
   const router = useRouter();
@@ -21,6 +22,7 @@ function Verify() {
   const [email, setEmail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recoveryUnsaved, setRecoveryUnsaved] = useState(false);
 
   useEffect(() => {
     if (params.get('token')) window.history.replaceState(null, '', '/verify');
@@ -71,7 +73,7 @@ function Verify() {
     setError(null);
     try {
       await registerPasskey();
-      finish();
+      setStep('recovery');
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -107,6 +109,18 @@ function Verify() {
       <div className="card">
         <h1>You’re signed in</h1>
         <p>Opening your account…</p>
+      </div>
+    );
+  }
+
+  if (step === 'recovery') {
+    return (
+      <div className="stack">
+        <LoginRecoveryCodes onUnsavedChange={setRecoveryUnsaved} />
+        <p>You can also add a backup passkey from Login recovery in your dashboard.</p>
+        <Button onClick={finish} disabled={recoveryUnsaved}>
+          Continue to Tendr
+        </Button>
       </div>
     );
   }

@@ -79,7 +79,7 @@ const LINK_ASSET =
  * demo, legal pages, route handlers) is passed through untouched, as before.
  */
 const POLICY_PATH =
-  /^\/(?:dashboard(?:\/.*)?|signup|login|verify|invite(?:\/.*)?|recover(?:\/.*)?|pay(?:\/.*)?|invoice(?:\/.*)?|preview\/theme(?:\/.*)?|connect|settings\/notification-email\/verify|settings\/api-console|settings\/local-mail)$/;
+  /^\/(?:dashboard(?:\/.*)?|signup|login|verify|invite(?:\/.*)?|recover(?:\/.*)?|pay(?:\/.*)?|invoice(?:\/.*)?|preview\/theme(?:\/.*)?|connect|settings\/notification-email\/verify|settings\/api-console|settings\/local-mail|settings\/login-recovery)$/;
 
 /** One-time auth parameters and private local testing tools must never be cached. */
 const NO_STORE_PATHS = [
@@ -87,6 +87,8 @@ const NO_STORE_PATHS = [
   '/settings/notification-email/verify',
   '/settings/api-console',
   '/settings/local-mail',
+  '/settings/login-recovery',
+  '/recover/login',
 ];
 
 export async function middleware(request: NextRequest) {
