@@ -155,10 +155,12 @@ export default function ThemesPage() {
         description="Themes apply to this whole business across test and live. Drafts stay private until you publish; make-default needs a passkey step-up."
         actions={
           canWrite && !uiPreview ? (
-            <>
-              <Button
-                variant="secondary"
-                className="dash-btn-icon"
+            <div className="dash-action-bar" role="group" aria-label="Theme actions">
+              <button
+                type="button"
+                className="dash-action-chip"
+                data-tone="secondary"
+                data-active={importing || undefined}
                 onClick={() => {
                   setImporting((v) => !v);
                   setCreating(false);
@@ -166,21 +168,18 @@ export default function ThemesPage() {
                   action.setError(null);
                 }}
               >
-                {importing ? (
-                  <>
-                    <X size={16} strokeWidth={1.75} aria-hidden />
-                    Cancel
-                  </>
-                ) : (
-                  <>
-                    <Globe size={16} strokeWidth={1.75} aria-hidden />
-                    From website
-                  </>
-                )}
-              </Button>
-              <Button
-                variant="secondary"
-                className="dash-btn-icon"
+                <span className="dash-action-chip-icon" aria-hidden>
+                  {importing ? <X size={15} strokeWidth={1.85} /> : <Globe size={15} strokeWidth={1.85} />}
+                </span>
+                <span className="dash-action-chip-label">
+                  {importing ? 'Cancel' : 'From website'}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="dash-action-chip"
+                data-tone="secondary"
+                data-active={generating || undefined}
                 onClick={() => {
                   setGenerating((v) => !v);
                   setCreating(false);
@@ -188,20 +187,22 @@ export default function ThemesPage() {
                   action.setError(null);
                 }}
               >
-                {generating ? (
-                  <>
-                    <X size={16} strokeWidth={1.75} aria-hidden />
-                    Cancel
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={16} strokeWidth={1.75} aria-hidden />
-                    Generate with AI
-                  </>
-                )}
-              </Button>
-              <Button
-                className="dash-btn-icon"
+                <span className="dash-action-chip-icon" aria-hidden>
+                  {generating ? (
+                    <X size={15} strokeWidth={1.85} />
+                  ) : (
+                    <Sparkles size={15} strokeWidth={1.85} />
+                  )}
+                </span>
+                <span className="dash-action-chip-label">
+                  {generating ? 'Cancel' : 'Generate with AI'}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="dash-action-chip"
+                data-tone="primary"
+                data-active={creating || undefined}
                 onClick={() => {
                   setCreating((v) => !v);
                   setImporting(false);
@@ -209,19 +210,12 @@ export default function ThemesPage() {
                   action.setError(null);
                 }}
               >
-                {creating ? (
-                  <>
-                    <X size={16} strokeWidth={1.75} aria-hidden />
-                    Cancel
-                  </>
-                ) : (
-                  <>
-                    <Plus size={16} strokeWidth={1.75} aria-hidden />
-                    New theme
-                  </>
-                )}
-              </Button>
-            </>
+                <span className="dash-action-chip-icon" aria-hidden>
+                  {creating ? <X size={15} strokeWidth={1.85} /> : <Plus size={15} strokeWidth={1.85} />}
+                </span>
+                <span className="dash-action-chip-label">{creating ? 'Cancel' : 'New theme'}</span>
+              </button>
+            </div>
           ) : null
         }
       />
