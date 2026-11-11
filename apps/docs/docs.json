@@ -71,6 +71,7 @@
           {
             "group": "Security",
             "pages": [
+              "security/login-recovery",
               "security/api-keys",
               "security/webhook-signatures",
               "security/production-checklist"
@@ -81,6 +82,12 @@
             "pages": [
               "development/local-setup",
               "development/troubleshooting"
+            ]
+          },
+          {
+            "group": "Store wallet",
+            "pages": [
+              "wallets/overview"
             ]
           }
         ]

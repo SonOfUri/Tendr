@@ -140,6 +140,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/dashboard/webhooks', label: 'Webhooks', icon: Webhook },
       { href: '/dashboard/api-keys', label: 'API keys', icon: KeyRound },
       { href: '/dashboard/security', label: 'Security', icon: Shield },
+      { href: '/settings/login-recovery', label: 'Login recovery', icon: KeyRound },
       { href: '/dashboard/recovery', label: 'Recovery', icon: KeyRound },
     ],
   },

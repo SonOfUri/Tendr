@@ -78,6 +78,8 @@ export const IDENTITY_MODELS = [
   'DashboardSession',
   'EmailToken',
   'WebauthnChallenge',
+  'LoginRecoveryCode',
+  'LoginRecoveryRequest',
 ] as const;
 
 export type PerModeModel = (typeof PER_MODE_MODELS)[number];

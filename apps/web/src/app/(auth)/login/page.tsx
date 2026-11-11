@@ -60,6 +60,9 @@ function Login() {
       <p className="login-panel-foot">
         New to Tendr? <Link href="/signup">Create an account</Link>
       </p>
+      <p className="login-panel-foot">
+        <Link href="/recover/login">Lost your login passkeys? Use a recovery code</Link>
+      </p>
       <p className="login-panel-foot login-panel-foot--muted">
         Recovering a shared contract account? <Link href="/recover">Use your recovery kit</Link>
       </p>

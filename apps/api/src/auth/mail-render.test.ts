@@ -28,6 +28,15 @@ const DATA: Record<MailTemplate, Record<string, string>> = {
   },
   verify_email: { url: 'https://app.usetendr.tech/verify?token=a' },
   login_link: { url: 'https://app.usetendr.tech/verify?token=b' },
+  login_recovery_link: { url: 'https://app.usetendr.tech/recover/login#token=secret' },
+  login_recovery_codes_changed: {
+    at: '2026-11-11T10:00:00.000Z',
+    url: 'https://app.usetendr.tech/settings/login-recovery',
+  },
+  login_recovery_completed: {
+    at: '2026-11-11T10:00:00.000Z',
+    url: 'https://app.usetendr.tech/settings/login-recovery',
+  },
   invite: {
     url: 'https://app.usetendr.tech/invite/tok',
     storeName: 'Acme',

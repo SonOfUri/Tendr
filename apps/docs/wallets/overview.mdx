@@ -1,0 +1,34 @@
+---
+title: 'Wallets and passkeys'
+description: 'Separate signing in from the key that authorizes movement of store funds.'
+---
+
+Your Tendr identity, store membership and wallet are separate records. Signing in on another device returns the same identity and stores. A missing local passkey must not create a different wallet.
+
+| Credential               | Purpose                                             |
+| ------------------------ | --------------------------------------------------- |
+| Login passkey            | Sign in and confirm sensitive dashboard changes     |
+| Dedicated wallet passkey | Authorize transactions from the store's live wallet |
+
+Email sign-in establishes your Tendr login. It does not recreate or replace a wallet signing credential.
+
+Save [login recovery codes](/security/login-recovery) while you still have a working login passkey. A saved code plus fresh email verification lets you replace lost login passkeys while preserving the same account and stores.
+
+## Current live wallet
+
+A P-256 passkey controls a balance in NEAR Intents. The displayed `0x…` account ID is derived from the wallet key. It is not a named `business.tendr.near` account or a general EVM receiving address.
+
+Setup registers the dedicated credential, then proves possession during activation. Resume unfinished activation with the existing credential.
+
+<Warning>
+  The current native live wallet has one owner. Shared signing, owner-key rotation and wallet-key
+  recovery are not available. Keep access to the dedicated wallet passkey.
+</Warning>
+
+## Another device
+
+Synced passkeys can be available on devices using the same supported credential provider. Availability depends on provider and device settings. Cross-device authentication may also let your phone approve a request on another computer.
+
+If the wallet credential is unavailable, you can still sign in and view the same store. Transactions require a device or credential provider holding the wallet passkey.
+
+Creating another login passkey is not wallet migration. Contact support before attempting to replace an inaccessible wallet.

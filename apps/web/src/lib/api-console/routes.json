@@ -130,7 +130,7 @@
     "path": "/v1/auth/email/start",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 104,
+    "line": 121,
     "principals": ["public"]
   },
   {
@@ -139,7 +139,7 @@
     "path": "/v1/auth/email/verify",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 111,
+    "line": 131,
     "principals": ["public"]
   },
   {
@@ -148,7 +148,7 @@
     "path": "/v1/auth/passkeys/register/options",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 124,
+    "line": 144,
     "principals": ["user_session"]
   },
   {
@@ -157,7 +157,7 @@
     "path": "/v1/auth/passkeys/register/verify",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 143,
+    "line": 163,
     "principals": ["user_session"]
   },
   {
@@ -166,7 +166,7 @@
     "path": "/v1/auth/passkeys/login/options",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 189,
+    "line": 209,
     "principals": ["public"]
   },
   {
@@ -175,7 +175,7 @@
     "path": "/v1/auth/passkeys/login/verify",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 197,
+    "line": 217,
     "principals": ["public"]
   },
   {
@@ -184,7 +184,7 @@
     "path": "/v1/auth/passkeys/step-up/options",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 206,
+    "line": 226,
     "principals": ["user_session"]
   },
   {
@@ -193,7 +193,7 @@
     "path": "/v1/auth/passkeys/step-up/verify",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 210,
+    "line": 230,
     "principals": ["user_session"]
   },
   {
@@ -202,7 +202,7 @@
     "path": "/v1/auth/passkeys",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 219,
+    "line": 239,
     "principals": ["user_session"]
   },
   {
@@ -211,7 +211,7 @@
     "path": "/v1/auth/passkeys/:id",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 224,
+    "line": 244,
     "principals": ["user_session"],
     "stepUp": true
   },
@@ -221,7 +221,7 @@
     "path": "/v1/auth/recovery-session",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 239,
+    "line": 259,
     "principals": ["user_session"]
   },
   {
@@ -230,7 +230,7 @@
     "path": "/v1/auth/logout",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 253,
+    "line": 273,
     "principals": ["user_session"]
   },
   {
@@ -239,7 +239,7 @@
     "path": "/v1/me",
     "group": "auth",
     "source": "apps/api/src/routes/auth.ts",
-    "line": 260,
+    "line": 280,
     "principals": ["user_session"]
   },
   {
@@ -658,6 +658,52 @@
     "principals": ["dashboard_user"],
     "permission": "security:propose",
     "stepUp": true
+  },
+  {
+    "id": "GET /v1/auth/login-recovery/codes",
+    "method": "GET",
+    "path": "/v1/auth/login-recovery/codes",
+    "group": "login recovery",
+    "source": "apps/api/src/routes/login-recovery.ts",
+    "line": 47,
+    "principals": ["user_session"]
+  },
+  {
+    "id": "POST /v1/auth/login-recovery/codes",
+    "method": "POST",
+    "path": "/v1/auth/login-recovery/codes",
+    "group": "login recovery",
+    "source": "apps/api/src/routes/login-recovery.ts",
+    "line": 50,
+    "principals": ["user_session"],
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/auth/login-recovery/start",
+    "method": "POST",
+    "path": "/v1/auth/login-recovery/start",
+    "group": "login recovery",
+    "source": "apps/api/src/routes/login-recovery.ts",
+    "line": 63,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/auth/login-recovery/options",
+    "method": "POST",
+    "path": "/v1/auth/login-recovery/options",
+    "group": "login recovery",
+    "source": "apps/api/src/routes/login-recovery.ts",
+    "line": 70,
+    "principals": ["public"]
+  },
+  {
+    "id": "POST /v1/auth/login-recovery/verify",
+    "method": "POST",
+    "path": "/v1/auth/login-recovery/verify",
+    "group": "login recovery",
+    "source": "apps/api/src/routes/login-recovery.ts",
+    "line": 80,
+    "principals": ["public"]
   },
   {
     "id": "GET /v1/ai/insights",

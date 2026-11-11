@@ -88,8 +88,25 @@ const publicPasskey = (c: WebauthnCredential) => ({
   lastUsedAt: c.lastUsedAt,
 });
 
-async function startSession(reply: FastifyReply, userId: string, passkeyVerified: boolean) {
-  const session = await createDashboardSession(userId, { passkeyVerified });
+async function startSession(
+  reply: FastifyReply,
+  userId: string,
+  passkeyVerified: boolean,
+  credentialId?: string,
+) {
+  const session = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`;
+    // Recovery may have revoked this credential while its login assertion was being verified.
+    if (
+      credentialId &&
+      !(await tx.webauthnCredential.findFirst({
+        where: { id: credentialId, userId, revokedAt: null },
+      }))
+    ) {
+      throw unauthorized('That passkey is no longer active');
+    }
+    return createDashboardSession(userId, { passkeyVerified, db: tx });
+  });
   reply.header('set-cookie', sessionCookies(session.token, session.expiresAt));
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   const passkeys = await activeCredentials(userId);
@@ -199,10 +216,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/v1/auth/passkeys/login/verify', { config: { auth: 'public' } }, async (req, reply) => {
     const { response } = z.object({ response: WebauthnResponse }).strict().parse(req.body);
-    const { userId } = await verifyAuthentication(
+    const { userId, credentialId } = await verifyAuthentication(
       response as unknown as AuthenticationResponseJSON,
     );
-    return startSession(reply, userId, true);
+    return startSession(reply, userId, true, credentialId);
   });
 
   // Step-up: re-prove a passkey on the current session (sensitive actions need one ≤ 10 min old).

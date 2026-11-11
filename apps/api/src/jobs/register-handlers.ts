@@ -17,6 +17,7 @@ import { registerProductImageHandler } from '../themes/product-images.js';
 import { registerAccountHandlers } from './account-notices.js';
 import { registerNotificationEmailNotices } from './notification-email-notices.js';
 import { registerInvoiceNotices } from './invoice-notices.js';
+import { registerLoginRecoveryNotices } from './login-recovery-notices.js';
 import { registerPaymentNotices } from './payment-notices.js';
 import { registerReviewNotices } from './review-notices.js';
 import { registerEventHandler } from './handlers.js';
@@ -70,3 +71,4 @@ registerHookHandlers();
 registerProductImageHandler();
 
 registerInvoiceNotices();
+registerLoginRecoveryNotices();

@@ -35,6 +35,8 @@ export type IdPrefix =
   | 'dss'
   | 'etok'
   | 'wch' // webauthn ceremony challenge
+  | 'lrc' // login recovery code
+  | 'lrr' // login recovery email/challenge
   | 'inv'
   | 'nwal'
   | 'npay'

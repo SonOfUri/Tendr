@@ -102,6 +102,20 @@ describe('middleware /connect', () => {
   });
 });
 
+describe('Personal settings and recovery isolation', () => {
+  it.each([
+    '/settings/api-console',
+    '/settings/local-mail',
+    '/settings/login-recovery',
+    '/recover/login',
+  ])('uses the signing-page CSP and never caches %s', async (path) => {
+    const res = await middleware(new NextRequest(`http://localhost:3000${path}`));
+    expect(ancestors(res)).toBe("'none'");
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(res.headers.get('content-security-policy')).toContain("script-src 'self' 'nonce-");
+  });
+});
+
 describe('middleware payment link pages', () => {
   it('qr route not forced no-store; link page is', async () => {
     const fetchFn = fetchStub();

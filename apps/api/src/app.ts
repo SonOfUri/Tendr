@@ -16,6 +16,7 @@ import { checkoutAiRoutes } from './routes/checkout-ai.js';
 import { merchantAiRoutes } from './routes/merchant-ai.js';
 import { accountRoutes } from './routes/accounts.js';
 import { authRoutes } from './routes/auth.js';
+import { loginRecoveryRoutes } from './routes/login-recovery.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
 import {
   CHECKOUT_CLIENT_PREFIX,
@@ -260,6 +261,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(healthRoutes);
   await app.register(pingRoutes);
   await app.register(authRoutes);
+  await app.register(loginRecoveryRoutes);
   await app.register(apiKeyRoutes);
   await app.register(merchantRoutes);
   await app.register(teamRoutes);

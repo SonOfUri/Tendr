@@ -15,6 +15,9 @@ vi.mock('@/lib/api', async (original) => ({
   api: vi.fn(),
 }));
 vi.mock('@/lib/webauthn', () => ({ registerPasskey: vi.fn() }));
+vi.mock('@/components/auth/LoginRecoveryCodes', () => ({
+  default: () => <div>Save login recovery codes</div>,
+}));
 vi.mock('@/lib/navigation', async (original) => ({
   ...(await original<typeof import('@/lib/navigation')>()),
   takePendingInvite: () => null,
@@ -62,6 +65,9 @@ it('keeps first-passkey onboarding for a new person and rejects an external next
   await screen.findByRole('button', { name: 'Create my passkey' });
   expect(replace).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Create my passkey' }));
+  await screen.findByText('Save login recovery codes');
+  expect(replace).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Continue to Tendr' }));
   await waitFor(() => expect(replace).toHaveBeenCalledWith('/dashboard'));
   expect(registerPasskey).toHaveBeenCalledTimes(1);
 });

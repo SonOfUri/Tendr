@@ -377,6 +377,7 @@ export default function ApiConsole({ localMail = false }: { localMail?: boolean 
             Step up
           </button>
           <Link href="/signup">New account</Link>
+          <Link href="/settings/login-recovery">Login recovery and backup passkeys</Link>
           {localMail && <Link href="/settings/local-mail">Local inbox</Link>}
           <button
             disabled={busy}

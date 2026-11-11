@@ -132,7 +132,9 @@ describe('foundation schema', () => {
     await expect(createRow('CheckoutTheme', m.id, false, { isDefault: true })).rejects.toSatisfy(
       isUniqueViolation,
     );
-    await expect(createRow('CheckoutTheme', m.id, false, { isDefault: false })).resolves.toBeTruthy();
+    await expect(
+      createRow('CheckoutTheme', m.id, false, { isDefault: false }),
+    ).resolves.toBeTruthy();
     await expect(
       createRow('CheckoutTheme', other.id, false, { isDefault: true }),
     ).resolves.toBeTruthy();
@@ -152,7 +154,9 @@ describe('foundation schema', () => {
     await expect(createRow('ProductImage', m.id, false, { urlHash: 'h1' })).rejects.toSatisfy(
       isUniqueViolation,
     );
-    await expect(createRow('ProductImage', other.id, false, { urlHash: 'h1' })).resolves.toBeTruthy();
+    await expect(
+      createRow('ProductImage', other.id, false, { urlHash: 'h1' }),
+    ).resolves.toBeTruthy();
   });
 
   it('cross-merchant session theme still rejected', async () => {
@@ -197,7 +201,15 @@ describe('foundation schema', () => {
     const names = cols.map((c) => c.column_name);
     expect(names).not.toContain('dest_asset');
     expect(names).not.toContain('dest_chain');
-    expect(names).toEqual(expect.arrayContaining(['description', 'min_amount', 'note_mode', 'fee_payer', 'archived_at']));
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'description',
+        'min_amount',
+        'note_mode',
+        'fee_payer',
+        'archived_at',
+      ]),
+    );
   });
 
   it('sessions.payer_note is varchar(280)', async () => {
@@ -270,6 +282,8 @@ describe('foundation schema', () => {
         'DashboardSession',
         'EmailToken',
         'WebauthnChallenge',
+        'LoginRecoveryCode',
+        'LoginRecoveryRequest',
       ]);
     });
 

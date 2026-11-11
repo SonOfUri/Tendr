@@ -30,6 +30,32 @@ const carriedOut = (summary: string) =>
     .replace(/ — do not approve unless you expected this\)$/, ')');
 
 const COPY: Record<MailTemplate, (d: Data) => Copy> = {
+  login_recovery_link: (d) => ({
+    subject: 'Recover your Tendr login',
+    lines: [
+      'Use this link together with one of your saved recovery codes to create a new login passkey.',
+      'The link expires in 15 minutes. Completing recovery revokes your old login passkeys and signs out every device.',
+      ...link('Recover your login', d.url),
+      'This does not recover or replace your wallet signing key. If you did not request this, ignore the email and keep your recovery codes private.',
+    ],
+  }),
+  login_recovery_codes_changed: (d) => ({
+    subject: 'Your Tendr login recovery codes changed',
+    lines: [
+      `New login recovery codes were generated at ${one(d.at)}. Previous codes no longer work.`,
+      'If this was not you, sign in with your passkey, review your devices and generate a new set of codes.',
+      ...link('Review login security', d.url),
+    ],
+  }),
+  login_recovery_completed: (d) => ({
+    subject: 'Your Tendr login was recovered',
+    lines: [
+      `A new login passkey was registered using email verification and a recovery code at ${one(d.at)}.`,
+      'Previous login passkeys and sessions were revoked. Your stores, wallet address and wallet signing key were not changed.',
+      'If this was not you, secure your email account and use another saved recovery code to regain your login. Contact Tendr support if you need help.',
+      ...link('Review login security', d.url),
+    ],
+  }),
   invoice_notice: (d) => ({
     subject: 'Invoice update on Tendr',
     lines: [one(d.message), ...link('Review invoices', d.url)],

@@ -31,6 +31,16 @@ export function needsStore(endpoint: Endpoint): boolean {
 }
 
 const examples: Record<string, unknown> = {
+  'POST /v1/auth/login-recovery/start': { email: 'your-email@example.com' },
+  'POST /v1/auth/login-recovery/options': {
+    token: 'paste-token-from-email-fragment',
+    recoveryCode: 'paste-one-saved-code',
+  },
+  'POST /v1/auth/login-recovery/verify': {
+    token: 'paste-token-from-email-fragment',
+    recoveryCode: 'paste-one-saved-code',
+    response: {},
+  },
   'POST /v1/api_keys': {
     name: 'My backend',
     scopes: ['sessions:read', 'sessions:write', 'payments:read', 'events:read'],
@@ -131,6 +141,8 @@ export function exampleBody(endpoint: Endpoint): string {
 }
 
 export function endpointNote(endpoint: Endpoint): string {
+  if (endpoint.path.startsWith('/v1/auth/login-recovery/'))
+    return 'Personal login recovery, independent of Test/Live and wallet recovery. Use /settings/login-recovery to save codes with a recent login passkey confirmation, or /recover/login after losing all login passkeys. Recovery needs a fresh email link and one saved code, then a real WebAuthn registration. Completing it revokes all old login keys and sessions. Avoid putting real codes or email tokens into console history; use the dedicated screens.';
   if (endpoint.path.startsWith('/v1/account/native/'))
     return 'Live wallet APIs use a dedicated wallet passkey and the designated owner session with step-up. Register, then activate; payout quotes must be reviewed before signing. For refunds, create a payout with { "proposalId": "prop_..." }. Local simulated mode keeps live writes disabled.';
   if (endpoint.path.startsWith('/v1/connect/') || endpoint.path === '/v1/connection/brand')

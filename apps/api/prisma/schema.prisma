@@ -409,17 +409,50 @@ model User {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  memberships       MerchantUser[]
-  nativeWallets     NativeWallet[]
-  credentials       WebauthnCredential[]
-  dashboardSessions DashboardSession[]
-  challenges        WebauthnChallenge[]
-  accountKeys       AccountKey[]
-  proposals         AccountProposal[]
-  approvals         AccountApproval[]
-  connections       Connection[]
+  memberships           MerchantUser[]
+  nativeWallets         NativeWallet[]
+  credentials           WebauthnCredential[]
+  dashboardSessions     DashboardSession[]
+  challenges            WebauthnChallenge[]
+  accountKeys           AccountKey[]
+  proposals             AccountProposal[]
+  approvals             AccountApproval[]
+  connections           Connection[]
+  loginRecoveryCodes    LoginRecoveryCode[]
+  loginRecoveryRequests LoginRecoveryRequest[]
 
   @@map("users")
+}
+
+/// Login recovery only. These codes never authorize wallet transactions.
+model LoginRecoveryCode {
+  id         String    @id
+  userId     String    @map("user_id")
+  codeHash   String    @unique @map("code_hash")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  consumedAt DateTime? @map("consumed_at")
+  revokedAt  DateTime? @map("revoked_at")
+  user       User      @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([userId])
+  @@map("login_recovery_codes")
+}
+
+/// Fresh email proof plus a registration challenge bound to one saved code. Only hashes persist.
+model LoginRecoveryRequest {
+  id                 String    @id
+  userId             String    @map("user_id")
+  tokenHash          String    @unique @map("token_hash")
+  expiresAt          DateTime  @map("expires_at")
+  consumedAt         DateTime? @map("consumed_at")
+  challengeHash      String?   @map("challenge_hash")
+  challengeExpiresAt DateTime? @map("challenge_expires_at")
+  codeId             String?   @map("code_id")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  user               User      @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([userId])
+  @@map("login_recovery_requests")
 }
 
 /// A passkey. An active `public_key` is unique (a partial unique index in migration
