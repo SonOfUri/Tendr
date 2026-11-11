@@ -16,7 +16,7 @@ secret rotation the header carries a second `v1=` signed with the old secret, so
 ## Verifying with the SDK
 
 ```ts
-import { verifyWebhookSignature } from '@tendr/sdk/webhook';
+import { verifyWebhookSignature } from 'tendr-sdk/webhook';
 
 const ok = verifyWebhookSignature({
   payload: rawBody, // the raw request body, not re-serialised JSON

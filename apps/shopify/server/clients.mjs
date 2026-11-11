@@ -1,4 +1,4 @@
-import { TendrClient } from '@tendr/sdk';
+import { TendrClient } from 'tendr-sdk';
 
 export class ProviderError extends Error {
   constructor(code) {

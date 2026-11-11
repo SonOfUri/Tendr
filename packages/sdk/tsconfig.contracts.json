@@ -1,0 +1,6 @@
+{
+  "extends": "../../apps/api/tsconfig.json",
+  "compilerOptions": { "noEmit": true, "rootDir": "../.." },
+  "include": ["scripts/check-api-types.ts"],
+  "exclude": []
+}

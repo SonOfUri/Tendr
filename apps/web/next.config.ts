@@ -32,7 +32,7 @@ const nextConfig: NextConfig = {
         allowedDevOrigins: [new URL(process.env.WEB_URL!).hostname],
       }
     : {}),
-  transpilePackages: ['@tendr/ui', '@tendr/contracts', '@tendr/sdk'],
+  transpilePackages: ['@tendr/ui', '@tendr/contracts', 'tendr-sdk'],
   // The strict CSP for the dashboard and sign-in pages needs a per-request nonce, so it is set in
   // src/middleware.ts (see src/lib/csp.ts). Framing is refused here for every dashboard route.
   // These rules match the public path on every host (no `has: host` condition), so merchant pages

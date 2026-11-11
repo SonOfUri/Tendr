@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { signWebhookPayload } from '@tendr/sdk/webhook';
+import { signWebhookPayload } from 'tendr-sdk/webhook';
 import { loadConfig } from '../server/config.mjs';
 import { Store } from '../server/store.mjs';
 import { Engine, equalAmount, operationKey } from '../server/engine.mjs';

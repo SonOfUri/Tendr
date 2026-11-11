@@ -1,8 +1,13 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { signWebhookPayload, verifyWebhookSignature } from './webhook.js';
+import {
+  constructWebhookEvent,
+  TendrWebhookError,
+  signWebhookPayload,
+  verifyWebhookSignature,
+} from './webhook.js';
 
-const payload = JSON.stringify({ id: 'evt_1', type: 'payment.settled' });
+const payload = JSON.stringify({ id: 'evt_1', type: 'payment.succeeded' });
 const secret = 'whsec_test';
 const now = () => Math.floor(Date.now() / 1000);
 const v1 = (s: string, t: number, body: string) =>
@@ -63,5 +68,75 @@ describe('webhook signatures', () => {
     ]) {
       expect(verifyWebhookSignature({ payload, secret, signatureHeader: header })).toBe(false);
     }
+  });
+});
+
+describe('strict webhook verification', () => {
+  it('rejects a valid MAC with a trailing nibble (Buffer hex decoding would truncate it)', () => {
+    const { header } = signWebhookPayload({ payload, secret });
+    expect(verifyWebhookSignature({ payload, secret, signatureHeader: header + 'f' })).toBe(false);
+  });
+  it.each([NaN, Infinity, -1])('rejects an unsafe timestamp tolerance: %s', (toleranceSeconds) => {
+    const { header } = signWebhookPayload({ payload, secret });
+    expect(
+      verifyWebhookSignature({ payload, secret, signatureHeader: header, toleranceSeconds }),
+    ).toBe(false);
+  });
+  it('rejects duplicate/unsafe timestamps and future replays', () => {
+    const t = now();
+    const sig = v1(secret, t, payload);
+    for (const signatureHeader of [
+      `t=${t},t=${t},v1=${sig}`,
+      `t=${'9'.repeat(400)},v1=${sig}`,
+      `t=0${t},v1=${sig}`,
+    ]) {
+      expect(verifyWebhookSignature({ payload, secret, signatureHeader })).toBe(false);
+    }
+    const { header } = signWebhookPayload({ payload, secret, timestamp: t + 301 });
+    expect(verifyWebhookSignature({ payload, secret, signatureHeader: header })).toBe(false);
+  });
+  it('rejects empty secrets', () => {
+    const signatureHeader = `t=${now()},v1=${v1('', now(), payload)}`;
+    expect(verifyWebhookSignature({ payload, secret: '', signatureHeader })).toBe(false);
+  });
+});
+
+describe('constructWebhookEvent', () => {
+  const event = {
+    id: 'evt_1',
+    type: 'payment.succeeded',
+    created: 1700000000,
+    livemode: false,
+    data: { session_id: 'ses_1' },
+  };
+  it('verifies raw Uint8Array bytes and returns a valid envelope', () => {
+    const payload = new TextEncoder().encode(JSON.stringify(event));
+    const { header } = signWebhookPayload({ payload, secret });
+    expect(constructWebhookEvent({ payload, secret, signatureHeader: header })).toEqual(event);
+  });
+  it('verifies before parsing, and rejects invalid signed envelopes', () => {
+    expect(() =>
+      constructWebhookEvent({ payload: 'not json', signatureHeader: 'bad', secret }),
+    ).toThrow('signature');
+    for (const payload of [
+      'bad json',
+      'null',
+      '[]',
+      JSON.stringify({ ...event, data: [] }),
+      JSON.stringify({ ...event, livemode: 'false' }),
+      JSON.stringify({ ...event, created: -1 }),
+    ]) {
+      const { header } = signWebhookPayload({ payload, secret });
+      expect(() => constructWebhookEvent({ payload, secret, signatureHeader: header })).toThrow(
+        TendrWebhookError,
+      );
+    }
+  });
+  it('allows unknown future event types so receivers can ignore them safely', () => {
+    const payload = JSON.stringify({ ...event, type: 'future.event' });
+    const { header } = signWebhookPayload({ payload, secret });
+    expect(constructWebhookEvent({ payload, secret, signatureHeader: header }).type).toBe(
+      'future.event',
+    );
   });
 });

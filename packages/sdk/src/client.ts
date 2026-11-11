@@ -1,224 +1,215 @@
+import { HttpClient, paginate, queryString, resourceId } from './http.js';
+import type { RequestOptions, WriteOptions, TendrClientOptions } from './http.js';
 import type {
-  PaymentLinkCreate,
-  PaymentLinkUpdate,
-  ThemeCreate,
-  ThemeFromStore,
-  ThemeFromWebsite,
-  ThemePreview,
-  ThemeUpdate,
-} from '@tendr/contracts';
-import { TendrApiError } from './errors.js';
-import type {
+  CheckoutSession,
+  CreatedCheckoutSession,
+  GasPolicyInput,
+  GasPolicyView,
+  GasUsageView,
+  GasSponsorship,
+  GasSponsorshipListQuery,
+  GasSponsorshipPage,
+  HookCall,
+  HookCallListQuery,
+  HookCallPage,
+  LinkSettlementOptions,
+  PaymentLinkCreateInput,
+  PaymentLinkListQuery,
   PaymentLinkObject,
   PaymentLinkPage,
+  PaymentLinkUpdate,
+  PingResponse,
+  RefundCreateInput,
+  RefundObject,
   SessionCreateInput,
   ThemeAssetKind,
   ThemeAssetObject,
+  ThemeCreate,
   ThemeDeleted,
+  ThemeFromStore,
+  ThemeFromWebsite,
+  ThemeListQuery,
   ThemeObject,
   ThemePage,
   ThemePresetList,
+  ThemePreview,
   ThemePreviewLink,
+  ThemeUpdate,
   ThemeValidation,
 } from './types.js';
+export type { TendrClientOptions, RequestOptions, WriteOptions } from './http.js';
+export type { PaymentLinkCreateInput, PaymentLinkListQuery, ThemeListQuery } from './types.js';
 
-export interface TendrClientOptions {
-  baseUrl: string;
-  apiKey?: string;
-  timeoutMs?: number;
-  fetch?: typeof fetch;
-}
-
-/** `note` defaults to `optional`. */
-export type PaymentLinkCreateInput = Omit<PaymentLinkCreate, 'note'> & {
-  note?: PaymentLinkCreate['note'];
-};
-export type PaymentLinkListQuery = {
-  status?: 'active' | 'inactive';
-  include_archived?: boolean;
-  limit?: number;
-  starting_after?: string;
-};
-
-export type ThemeListQuery = { limit?: number; starting_after?: string };
-
-const queryString = (query: object) => {
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(query)) if (v !== undefined) qs.set(k, String(v));
-  return qs.size > 0 ? `?${qs.toString()}` : '';
-};
-
-/** The responses are the API's own JSON; there is no client-side parsing to do. */
-const asIs = <T>() => ({ parse: (data: unknown) => data as T });
-
+/** Server-side merchant SDK. The key selects the store and test/live mode. No automatic retries. */
 export class TendrClient {
-  private readonly baseUrl: string;
-  private readonly apiKey?: string;
-  private readonly timeoutMs: number;
-  private readonly fetchImpl: typeof fetch;
-
+  readonly #http: HttpClient;
   constructor(opts: TendrClientOptions) {
-    this.baseUrl = opts.baseUrl.replace(/\/$/, '');
-    this.apiKey = opts.apiKey;
-    this.timeoutMs = opts.timeoutMs ?? 15_000;
-    this.fetchImpl = opts.fetch ?? fetch;
+    this.#http = new HttpClient(opts);
   }
 
-  /** Merchant payment links (`/v1/payment_links`). Needs a key with `payment_links:read` / `:write`. */
-  readonly paymentLinks = {
-    create: (input: PaymentLinkCreateInput, opts?: { idempotencyKey?: string }) =>
-      this.request('POST', '/v1/payment_links', asIs<PaymentLinkObject>(), {
+  /** Check the selected store/mode and the key's scopes. */
+  ping = (opts?: RequestOptions) => this.#http.request<PingResponse>('GET', '/v1/ping', opts);
+
+  readonly checkoutSessions = {
+    create: (input: SessionCreateInput, opts?: WriteOptions) =>
+      this.#http.request<CreatedCheckoutSession>('POST', '/v1/checkout/sessions', {
+        ...opts,
         body: input,
-        idempotencyKey: opts?.idempotencyKey,
       }),
-    list: (query: PaymentLinkListQuery = {}) => {
-      const qs = new URLSearchParams();
-      for (const [k, v] of Object.entries(query)) if (v !== undefined) qs.set(k, String(v));
-      const suffix = qs.size > 0 ? `?${qs.toString()}` : '';
-      return this.request('GET', `/v1/payment_links${suffix}`, asIs<PaymentLinkPage>());
-    },
-    retrieve: (id: string) =>
-      this.request('GET', `/v1/payment_links/${encodeURIComponent(id)}`, asIs<PaymentLinkObject>()),
-    /** `null` clears an optional field; an omitted key leaves it unchanged. `slug` cannot change. */
-    update: (id: string, input: PaymentLinkUpdate) =>
-      this.request(
-        'PATCH',
-        `/v1/payment_links/${encodeURIComponent(id)}`,
-        asIs<PaymentLinkObject>(),
-        {
-          body: input,
-        },
-      ),
-    /** Hides the link and makes it unavailable; `update(id, { archived: false })` restores it. */
-    archive: (id: string) =>
-      this.request(
-        'DELETE',
-        `/v1/payment_links/${encodeURIComponent(id)}`,
-        asIs<PaymentLinkObject>(),
+    retrieve: (id: string, opts?: RequestOptions) =>
+      this.#http.request<CheckoutSession>('GET', `/v1/checkout/sessions/${resourceId(id)}`, opts),
+    /** Cancels an unpaid session. Does not refund an already settled payment. */
+    expire: (id: string, opts?: WriteOptions) =>
+      this.#http.request<CheckoutSession>(
+        'POST',
+        `/v1/checkout/sessions/${resourceId(id)}/expire`,
+        opts,
       ),
   };
 
-  /**
-   * Checkout themes (`/v1/themes`). A key needs `themes:read` / `themes:write`. `publish` and
-   * `setDefault` change what live shoppers see, so they need a live key.
-   */
+  /** Refund requests need refunds:write. Wallet approval/execution remain separate. */
+  readonly refunds = {
+    create: (input: RefundCreateInput, opts?: WriteOptions) =>
+      this.#http.request<RefundObject>('POST', '/v1/refunds', { ...opts, body: input }),
+    /** Available only before a refund proposal exists. Read progress through the session. */
+    cancel: (id: string, opts?: WriteOptions) =>
+      this.#http.request<RefundObject>('POST', `/v1/refunds/${resourceId(id)}/cancel`, opts),
+  };
+
+  /** Requires payment_links:read / payment_links:write. */
+  readonly paymentLinks = {
+    settlementOptions: (opts?: RequestOptions) =>
+      this.#http.request<LinkSettlementOptions>(
+        'GET',
+        '/v1/payment_links/settlement-options',
+        opts,
+      ),
+    create: (input: PaymentLinkCreateInput, opts?: WriteOptions) =>
+      this.#http.request<PaymentLinkObject>('POST', '/v1/payment_links', { ...opts, body: input }),
+    list: (query: PaymentLinkListQuery = {}, opts?: RequestOptions) =>
+      this.#http.request<PaymentLinkPage>('GET', `/v1/payment_links${queryString(query)}`, opts),
+    iterate: (
+      query: PaymentLinkListQuery = {},
+      opts?: RequestOptions,
+    ): AsyncGenerator<PaymentLinkObject> =>
+      paginate(async (cursor) => {
+        const page = await this.paymentLinks.list({ ...query, starting_after: cursor }, opts);
+        return { items: page.data, more: page.has_more };
+      }, query.starting_after),
+    retrieve: (id: string, opts?: RequestOptions) =>
+      this.#http.request<PaymentLinkObject>('GET', `/v1/payment_links/${resourceId(id)}`, opts),
+    /** Null clears an optional field; omission preserves it. Slugs cannot change. */
+    update: (id: string, input: PaymentLinkUpdate, opts?: RequestOptions) =>
+      this.#http.request<PaymentLinkObject>('PATCH', `/v1/payment_links/${resourceId(id)}`, {
+        ...opts,
+        body: input,
+      }),
+    archive: (id: string, opts?: RequestOptions) =>
+      this.#http.request<PaymentLinkObject>('DELETE', `/v1/payment_links/${resourceId(id)}`, opts),
+  };
+
+  /** Requires themes:read / themes:write. Publishing/default changes need a live key. */
   readonly themes = {
-    presets: () => this.request('GET', '/v1/themes/presets', asIs<ThemePresetList>()),
-    list: (query: ThemeListQuery = {}) =>
-      this.request('GET', `/v1/themes${queryString(query)}`, asIs<ThemePage>()),
-    create: (input: ThemeCreate, opts?: { idempotencyKey?: string }) =>
-      this.request('POST', '/v1/themes', asIs<ThemeObject>(), {
+    presets: (opts?: RequestOptions) =>
+      this.#http.request<ThemePresetList>('GET', '/v1/themes/presets', opts),
+    list: (query: ThemeListQuery = {}, opts?: RequestOptions) =>
+      this.#http.request<ThemePage>('GET', `/v1/themes${queryString(query)}`, opts),
+    iterate: (query: ThemeListQuery = {}, opts?: RequestOptions): AsyncGenerator<ThemeObject> =>
+      paginate(async (cursor) => {
+        const page = await this.themes.list({ ...query, starting_after: cursor }, opts);
+        return { items: page.data, more: page.has_more };
+      }, query.starting_after),
+    create: (input: ThemeCreate, opts?: WriteOptions) =>
+      this.#http.request<ThemeObject>('POST', '/v1/themes', { ...opts, body: input }),
+    retrieve: (id: string, opts?: RequestOptions) =>
+      this.#http.request<ThemeObject>('GET', `/v1/themes/${resourceId(id)}`, opts),
+    update: (id: string, input: ThemeUpdate, opts?: RequestOptions) =>
+      this.#http.request<ThemeObject>('PATCH', `/v1/themes/${resourceId(id)}`, {
+        ...opts,
         body: input,
-        idempotencyKey: opts?.idempotencyKey,
       }),
-    retrieve: (id: string) =>
-      this.request('GET', `/v1/themes/${encodeURIComponent(id)}`, asIs<ThemeObject>()),
-    /** Changes the name and/or the draft; the published version is untouched until `publish`. */
-    update: (id: string, input: ThemeUpdate) =>
-      this.request('PATCH', `/v1/themes/${encodeURIComponent(id)}`, asIs<ThemeObject>(), {
-        body: input,
-      }),
-    delete: (id: string) =>
-      this.request('DELETE', `/v1/themes/${encodeURIComponent(id)}`, asIs<ThemeDeleted>()),
-    publish: (id: string) =>
-      this.request('POST', `/v1/themes/${encodeURIComponent(id)}/publish`, asIs<ThemeObject>()),
-    setDefault: (id: string) =>
-      this.request('POST', `/v1/themes/${encodeURIComponent(id)}/default`, asIs<ThemeObject>()),
-    /** Checks a document without saving it; `problems` is empty when it is valid. */
-    validate: (document: unknown) =>
-      this.request('POST', '/v1/themes/validate', asIs<ThemeValidation>(), {
+    delete: (id: string, opts?: RequestOptions) =>
+      this.#http.request<ThemeDeleted>('DELETE', `/v1/themes/${resourceId(id)}`, opts),
+    publish: (id: string, opts?: WriteOptions) =>
+      this.#http.request<ThemeObject>('POST', `/v1/themes/${resourceId(id)}/publish`, opts),
+    setDefault: (id: string, opts?: WriteOptions) =>
+      this.#http.request<ThemeObject>('POST', `/v1/themes/${resourceId(id)}/default`, opts),
+    validate: (document: unknown, opts?: WriteOptions) =>
+      this.#http.request<ThemeValidation>('POST', '/v1/themes/validate', {
+        ...opts,
         body: { document },
       }),
-    /** A link to a sample checkout or link page showing the draft; valid for 15 minutes. */
-    preview: (id: string, opts: ThemePreview) =>
-      this.request(
-        'POST',
-        `/v1/themes/${encodeURIComponent(id)}/preview`,
-        asIs<ThemePreviewLink>(),
-        { body: opts },
-      ),
-    /** Creates a draft from a website's brand. Never publishes. */
-    fromWebsite: (input: ThemeFromWebsite) =>
-      this.request('POST', '/v1/themes/from-website', asIs<ThemeObject>(), { body: input }),
-    /** Creates a draft from a connected WooCommerce store's brand. Never publishes. */
-    fromStore: (input: ThemeFromStore) =>
-      this.request('POST', '/v1/themes/from-store', asIs<ThemeObject>(), { body: input }),
+    preview: (id: string, input: ThemePreview, opts?: WriteOptions) =>
+      this.#http.request<ThemePreviewLink>('POST', `/v1/themes/${resourceId(id)}/preview`, {
+        ...opts,
+        body: input,
+      }),
+    fromWebsite: (input: ThemeFromWebsite, opts?: WriteOptions) =>
+      this.#http.request<ThemeObject>('POST', '/v1/themes/from-website', { ...opts, body: input }),
+    fromStore: (input: ThemeFromStore, opts?: WriteOptions) =>
+      this.#http.request<ThemeObject>('POST', '/v1/themes/from-store', { ...opts, body: input }),
   };
 
-  /** Logos, images and fonts used by themes (`/v1/theme-assets`). Shared by both modes. */
   readonly themeAssets = {
-    /** `file` is sent as multipart/form-data; the API checks and re-encodes it. */
-    upload: (input: { kind: ThemeAssetKind; file: Blob; filename: string }) => {
+    /** Fetch supplies the multipart boundary; upload requires themes:write. */
+    upload: (
+      input: { kind: ThemeAssetKind; file: Blob; filename: string },
+      opts?: WriteOptions,
+    ) => {
       const form = new FormData();
       form.set('kind', input.kind);
       form.set('file', input.file, input.filename);
-      return this.request('POST', '/v1/theme-assets', asIs<ThemeAssetObject>(), { form });
+      return this.#http.request<ThemeAssetObject>('POST', '/v1/theme-assets', { ...opts, form });
     },
-    list: () => this.request('GET', '/v1/theme-assets', asIs<{ data: ThemeAssetObject[] }>()),
-    delete: (id: string) =>
-      this.request(
+    list: (opts?: RequestOptions) =>
+      this.#http.request<{ data: ThemeAssetObject[] }>('GET', '/v1/theme-assets', opts),
+    delete: (id: string, opts?: RequestOptions) =>
+      this.#http.request<{ id: string; object: 'theme_asset'; deleted: true }>(
         'DELETE',
-        `/v1/theme-assets/${encodeURIComponent(id)}`,
-        asIs<{ id: string; object: 'theme_asset'; deleted: true }>(),
+        `/v1/theme-assets/${resourceId(id)}`,
+        opts,
       ),
   };
 
-  /** Checkout sessions (`/v1/checkout/sessions`). */
-  readonly checkoutSessions = {
-    create: (input: SessionCreateInput, opts?: { idempotencyKey?: string }) =>
-      this.request('POST', '/v1/checkout/sessions', asIs<Record<string, unknown>>(), {
-        body: input,
-        idempotencyKey: opts?.idempotencyKey,
-      }),
+  readonly gasPolicy = {
+    retrieve: (opts?: RequestOptions) =>
+      this.#http.request<GasPolicyView>('GET', '/v1/gas-policy', opts),
+    /** Changes the store's sponsorship budget. Requires sessions:write; connection keys refused. */
+    update: (input: GasPolicyInput, opts?: RequestOptions) =>
+      this.#http.request<GasPolicyView>('PUT', '/v1/gas-policy', { ...opts, body: input }),
+    usage: (query: { month?: string } = {}, opts?: RequestOptions) =>
+      this.#http.request<GasUsageView>('GET', `/v1/gas-policy/usage${queryString(query)}`, opts),
   };
-
-  private async request<T>(
-    method: string,
-    path: string,
-    schema: { parse: (data: unknown) => T },
-    opts?: { body?: unknown; form?: FormData; idempotencyKey?: string },
-  ): Promise<T> {
-    const data = await this.requestRaw(method, path, opts);
-    return schema.parse(data);
-  }
-
-  private async requestRaw(
-    method: string,
-    path: string,
-    opts?: { body?: unknown; form?: FormData; idempotencyKey?: string },
-  ): Promise<Record<string, unknown>> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      const headers: Record<string, string> = {
-        Accept: 'application/json',
-      };
-      // A FormData body gets its multipart Content-Type (with boundary) from fetch itself.
-      if (opts?.body !== undefined) headers['Content-Type'] = 'application/json';
-      if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
-      if (opts?.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
-
-      const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        method,
-        headers,
-        body: opts?.form ?? (opts?.body !== undefined ? JSON.stringify(opts.body) : undefined),
-        signal: controller.signal,
-      });
-
-      const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!res.ok) {
-        const err = (json.error ?? {}) as Record<string, unknown>;
-        throw new TendrApiError({
-          code: (err.code as TendrApiError['code']) ?? 'INTERNAL_ERROR',
-          message: String(err.message ?? res.statusText),
-          requestId: String(err.requestId ?? ''),
-          status: res.status,
-          details: err.details,
-        });
-      }
-      return json;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
+  readonly gasSponsorships = {
+    list: (query: GasSponsorshipListQuery = {}, opts?: RequestOptions) =>
+      this.#http.request<GasSponsorshipPage>(
+        'GET',
+        `/v1/gas-sponsorships${queryString(query)}`,
+        opts,
+      ),
+    iterate: (
+      query: GasSponsorshipListQuery = {},
+      opts?: RequestOptions,
+    ): AsyncGenerator<GasSponsorship> =>
+      paginate(async (cursor) => {
+        const page = await this.gasSponsorships.list({ ...query, starting_after: cursor }, opts);
+        return { items: page.gas_sponsorships, more: page.has_more, cursor: page.next_cursor };
+      }, query.starting_after),
+  };
+  readonly hookCalls = {
+    list: (query: HookCallListQuery = {}, opts?: RequestOptions) =>
+      this.#http.request<HookCallPage>('GET', `/v1/hook-calls${queryString(query)}`, opts),
+    iterate: (query: HookCallListQuery = {}, opts?: RequestOptions): AsyncGenerator<HookCall> =>
+      paginate(async (cursor) => {
+        const page = await this.hookCalls.list({ ...query, starting_after: cursor }, opts);
+        return { items: page.hook_calls, more: page.has_more, cursor: page.next_cursor };
+      }, query.starting_after),
+    /** Retries a failed contract hook, identified by PAYMENT ID. May spend gas; not a payment retry. */
+    resend: (paymentId: string, opts?: WriteOptions) =>
+      this.#http.request<HookCall>(
+        'POST',
+        `/v1/payments/${resourceId(paymentId)}/hook/resend`,
+        opts,
+      ),
+  };
 }

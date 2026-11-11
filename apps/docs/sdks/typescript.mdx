@@ -1,86 +1,182 @@
 ---
 title: TypeScript SDK
-description: SDK availability and the typed client interface for Tendr integrations.
+description: Typed server-side checkout, payment links, refunds, themes, gas settings and webhook verification.
 ---
 
 <Note>
-  `@tendr/sdk` is not yet available as a public npm package. Use the [hosted HTTP API](/quickstart)
-  for integrations today. The examples below describe the SDK interface; installation instructions
-  will be added when the package is publicly available.
+  Version `0.2.0` is an installable release candidate; it has not been published to npm. If Tendr
+  has supplied you with the package archive, install it as shown below. Otherwise, use the [hosted
+  HTTP quickstart](/quickstart) until the public release is available.
 </Note>
 
+## Install
+
+Requires Node.js 22 or later. The archive includes compiled JavaScript and TypeScript declarations;
+no Tendr repository checkout or build is needed.
+
+```sh
+npm install ./tendr-sdk-0.2.0.tgz
+```
+
+ES modules and CommonJS are supported. The package has no runtime dependencies.
+
+## Create and retrieve a checkout
+
 ```typescript
-import { TendrClient, TendrApiError } from '@tendr/sdk';
+import { TendrClient } from 'tendr-sdk';
 
-const client = new TendrClient({
-  baseUrl: 'https://api.usetendr.tech',
-  apiKey: process.env.TENDR_SECRET_KEY,
-  timeoutMs: 15_000,
-});
+const apiKey = process.env.TENDR_SECRET_KEY;
+if (!apiKey) throw new Error('Set TENDR_SECRET_KEY on your server');
+const tendr = new TendrClient({ apiKey });
 
-const session = await client.checkoutSessions.create(
+const created = await tendr.checkoutSessions.create(
   {
     amount: '25.00',
     amount_currency: 'USD',
     external_ref: 'order-1042',
     success_url: 'https://shop.example/orders/1042',
     cancel_url: 'https://shop.example/cart',
+    line_items: [{ name: 'T-shirt', quantity: 1, unit_amount: '25.00' }],
   },
   { idempotencyKey: 'order-1042-checkout-1' },
 );
+
+// Save created.id and the COMPLETE created.url, then redirect the customer.
+const session = await tendr.checkoutSessions.retrieve(created.id);
 ```
 
-The current session response type is `Record<string, unknown>`; validate or narrow fields before using them. The SDK adds authentication and optional idempotency headers, serializes requests and applies an AbortController timeout. It does not automatically retry requests or generate idempotency keys.
+The client defaults to `https://api.usetendr.tech`. Your secret key selects the store and test/live
+mode. Keep it server-side; the SDK refuses browser construction. For a browser checkout, use the
+[embed](/payments/embedded-checkout).
+
+Creation and retrieval return different typed responses. Only creation returns `client_secret` and
+the URL's `#cs=…` fragment. Save that complete URL if you need to reopen checkout. Retrieval returns
+status, payments, refunds, fees and settlement details, but cannot restore the secret.
+
+Price orders on your server. Amounts and token base units are strings. Confirm fulfillment from
+verified `payment.succeeded` webhooks and a matching server-side session read.
 
 ## Available methods
 
-| Resource           | Methods                                                                                                                                 |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `checkoutSessions` | `create`                                                                                                                                |
-| `paymentLinks`     | `create`, `list`, `retrieve`, `update`, `archive`                                                                                       |
-| `themes`           | `presets`, `list`, `create`, `retrieve`, `update`, `delete`, `publish`, `setDefault`, `validate`, `preview`, `fromWebsite`, `fromStore` |
-| `themeAssets`      | `upload`, `list`, `delete`                                                                                                              |
+| Resource           | Methods                                                                                                                                            |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client             | `ping`                                                                                                                                             |
+| `checkoutSessions` | `create`, `retrieve`, `expire`                                                                                                                     |
+| `refunds`          | `create`, `cancel`                                                                                                                                 |
+| `paymentLinks`     | `create`, `list`, `iterate`, `retrieve`, `update`, `archive`, `settlementOptions`                                                                  |
+| `themes`           | `presets`, `list`, `iterate`, `create`, `retrieve`, `update`, `delete`, `publish`, `setDefault`, `validate`, `preview`, `fromWebsite`, `fromStore` |
+| `themeAssets`      | `upload`, `list`, `delete`                                                                                                                         |
+| `gasPolicy`        | `retrieve`, `usage`, `update`                                                                                                                      |
+| `gasSponsorships`  | `list`, `iterate`                                                                                                                                  |
+| `hookCalls`        | `list`, `iterate`, `resend`                                                                                                                        |
 
-Session retrieval, refunds, invoices, wallet signing and AI do not have SDK convenience methods today. Use the documented HTTP surface and correct credential type.
+Create an [API key](/security/api-keys) with the required resource scopes. Checkout needs
+`sessions:write` and `sessions:read`; refunds need `refunds:write`. Link/theme methods use their
+corresponding read/write scopes. Gas record and hook reads need `payments:read`; gas policy changes
+and hook resends need `sessions:write`. Any secret key can read gas policy/usage.
+
+Dashboard-only APIs, invoices, AI, key/webhook management and wallet signing/recovery use different
+credentials and are outside this SDK. A secret key does not replace a wallet passkey. Keys configured
+to require optional HMAC request signing are not supported by this release.
 
 ## Payment links
 
 ```typescript
-const link = await client.paymentLinks.create(
-  { title: 'Design deposit', amount_type: 'fixed', amount: '250.00', currency: 'USD' },
+const settlement = await tendr.paymentLinks.settlementOptions();
+const token = settlement.tokens.find((t) => t.symbol === 'USDC' && t.chain === 'base');
+if (!token) throw new Error('Choose a supported token');
+
+const link = await tendr.paymentLinks.create(
+  {
+    title: 'Design deposit',
+    amount_type: 'fixed',
+    amount: '250.00',
+    currency: 'USD',
+    settlement_asset: token.asset,
+  },
   { idempotencyKey: 'design-deposit-1042' },
 );
 
-const page = await client.paymentLinks.list({ status: 'active', limit: 20 });
-await client.paymentLinks.update(link.id, { status: 'inactive' });
-await client.paymentLinks.archive(link.id);
+await tendr.paymentLinks.update(link.id, { status: 'inactive' });
 ```
 
-## Errors
+The settlement override credits the selected asset to the same Tendr wallet. Omit it to inherit the
+store default. It is not an external payout address.
+
+## Refund requests
 
 ```typescript
+const refund = await tendr.refunds.create(
+  { session: created.id, amount: '5.00', currency: 'USD', external_ref: 'refund-1042-1' },
+  { idempotencyKey: 'refund-1042-1' },
+);
+```
+
+Supply exactly one of `session` or `payment`. This creates a refund request; wallet authorization and
+confirmed execution are separate. Follow its progress through session refunds or signed webhooks.
+`refunds.cancel` is only available before a proposal exists. See [Refunds](/payments/refunds).
+
+## Pagination
+
+```typescript
+const page = await tendr.paymentLinks.list({ status: 'active', limit: 20 });
+for await (const link of tendr.paymentLinks.iterate({ status: 'active', limit: 20 })) {
+  console.log(link.id, link.title);
+}
+```
+
+Iterators fetch pages as you consume them. Breaking the loop stops further requests. List methods
+preserve the API's response shape, including `has_more` and any `next_cursor`.
+
+## Request options and errors
+
+All methods accept a final `{ signal, timeoutMs }` argument. The default timeout is 15 seconds and
+includes reading the response body. POST methods also accept `idempotencyKey`.
+
+```typescript
+import { TendrApiError, TendrTimeoutError } from 'tendr-sdk';
+
 try {
-  await client.paymentLinks.retrieve('plink_example');
+  await tendr.checkoutSessions.retrieve(created.id, { timeoutMs: 5_000 });
 } catch (error) {
   if (error instanceof TendrApiError) {
     console.error(error.status, error.code, error.requestId);
+  } else if (error instanceof TendrTimeoutError) {
+    // Reconcile the operation before retrying a write.
   } else {
-    // Transport errors and timeouts are not API error responses.
     throw error;
   }
 }
 ```
 
+The SDK never automatically retries or creates idempotency keys. Save one key per operation and reuse
+it with identical input when retrying. Cancellation or timeout does not prove a write failed.
+POST replay expires after 24 hours; PATCH, PUT and DELETE are outside that replay layer. See
+[Idempotency](/concepts/idempotency). Multipart upload boundaries can change between calls, so reconcile
+the asset list before retrying an upload.
+
+`TendrApiError` preserves HTTP status, API code, request ID, details and any `retryAfter` header.
+`TendrConnectionError` reports network failures; `TendrTimeoutError` extends it.
+`TendrAbortError` reports caller cancellation, and `TendrResponseError` reports invalid successful
+JSON or a pagination cursor that does not advance. Redirects are not followed.
+
 ## Verify a webhook
 
 ```typescript
-import { verifyWebhookSignature } from '@tendr/sdk/webhook';
+import { constructWebhookEvent } from 'tendr-sdk/webhook';
 
-const valid = verifyWebhookSignature({
-  payload: rawBody,
+const event = constructWebhookEvent({
+  payload: rawBody, // string or Uint8Array/Buffer before JSON parsing
   signatureHeader,
   secret: endpointSigningSecret,
 });
 ```
 
-This export uses Node crypto. Verify raw request bytes before parsing and deduplicate event IDs. See [Webhook signatures](/security/webhook-signatures). Never bundle server keys or this Node-only module into a browser.
+Verification checks the signature and timestamp before parsing the event envelope. Invalid
+signatures/envelopes throw `TendrWebhookError`. `verifyWebhookSignature` is available when you only
+need a boolean. Both accept rotation signatures and default to a five-minute clock tolerance.
+
+This subpath uses Node crypto and must stay server-side. Validate event-specific `data` fields,
+deduplicate event IDs durably, and match the stored order, mode, amount and settled payment through
+`checkoutSessions.retrieve`. The package includes a framework-neutral webhook handler example.
+See [Webhook signatures](/security/webhook-signatures).

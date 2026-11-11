@@ -227,3 +227,78 @@ describe('client.checkoutSessions', () => {
     expect(c.headers['Idempotency-Key']).toBe('o1');
   });
 });
+
+describe('merchant checkout lifecycle', () => {
+  it('reads and expires sessions through merchant endpoints with request options', async () => {
+    const { client, fetchMock } = setup(200, { id: 'ses_1', status: 'EXPIRED', payments: [] });
+    await client.checkoutSessions.retrieve('ses_1');
+    expect(call(fetchMock).url).toBe('https://api.test/v1/checkout/sessions/ses_1');
+    fetchMock.mockClear();
+    await client.checkoutSessions.expire('ses_1', { idempotencyKey: 'expire-1' });
+    expect(call(fetchMock)).toMatchObject({
+      method: 'POST',
+      url: 'https://api.test/v1/checkout/sessions/ses_1/expire',
+      headers: { 'Idempotency-Key': 'expire-1' },
+    });
+  });
+  it('requests a refund and cancels the request without a destination or wallet signature', async () => {
+    const { client, fetchMock } = setup(201, { id: 'ref_1', status: 'pending' });
+    const input = { session: 'ses_1', amount: '5.00', currency: 'USD', external_ref: 'refund-1' };
+    await client.refunds.create(input, { idempotencyKey: 'refund-1' });
+    expect(call(fetchMock)).toMatchObject({
+      method: 'POST',
+      url: 'https://api.test/v1/refunds',
+      body: input,
+    });
+    fetchMock.mockClear();
+    await client.refunds.cancel('ref_1', { idempotencyKey: 'cancel-1' });
+    expect(call(fetchMock)).toMatchObject({
+      method: 'POST',
+      url: 'https://api.test/v1/refunds/ref_1/cancel',
+      headers: { 'Idempotency-Key': 'cancel-1' },
+    });
+  });
+  it('loads supported settlement tokens and preserves a chosen asset', async () => {
+    const { client, fetchMock } = setup(200, {
+      tokens: [{ asset: 'nep141:usdc.near', symbol: 'USDC' }],
+      livemode: true,
+      store_default: null,
+    });
+    const options = await client.paymentLinks.settlementOptions();
+    expect(call(fetchMock).url).toBe('https://api.test/v1/payment_links/settlement-options');
+    fetchMock.mockClear();
+    await client.paymentLinks.create({
+      title: 'Invoice',
+      amount_type: 'fixed',
+      amount: '1.00',
+      currency: 'USD',
+      settlement_asset: options.tokens[0]!.asset,
+    });
+    expect(call(fetchMock).body.settlement_asset).toBe('nep141:usdc.near');
+  });
+  it('reads gas usage and changes policy with PUT (no POST replay claim)', async () => {
+    const { client, fetchMock } = setup();
+    await client.gasPolicy.usage({ month: '2026-11' });
+    expect(call(fetchMock).url).toBe('https://api.test/v1/gas-policy/usage?month=2026-11');
+    fetchMock.mockClear();
+    await client.gasPolicy.update({ enabled: false });
+    expect(call(fetchMock)).toMatchObject({
+      method: 'PUT',
+      url: 'https://api.test/v1/gas-policy',
+      body: { enabled: false },
+    });
+  });
+  it('lists gas records and retries a hook by payment ID', async () => {
+    const { client, fetchMock } = setup();
+    await client.gasSponsorships.list({ session: 'ses_1', status: 'confirmed' });
+    expect(call(fetchMock).url).toBe(
+      'https://api.test/v1/gas-sponsorships?session=ses_1&status=confirmed',
+    );
+    fetchMock.mockClear();
+    await client.hookCalls.resend('pay_1', { idempotencyKey: 'retry-hook-1' });
+    expect(call(fetchMock)).toMatchObject({
+      method: 'POST',
+      url: 'https://api.test/v1/payments/pay_1/hook/resend',
+    });
+  });
+});

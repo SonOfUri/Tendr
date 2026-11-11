@@ -558,7 +558,7 @@ and safety rules), `apps/docs/api-reference/themes.mdx`, and the handover note
   `line_items` (up to 50).
 - A live session renders only a published theme; a test session may name a draft. A broken theme
   falls back to the Tendr default look and never stops a payment.
-- The SDK has `client.themes`, `client.themeAssets` and `client.checkoutSessions.create`.
+- The standalone TypeScript SDK covers checkout create/read/expire, refunds, payment links and settlement options, themes/assets, gas policy/records, and integrator hooks. It includes ESM/CommonJS and Node webhook verification with no runtime dependencies. See [packages/sdk/README.md](packages/sdk/README.md) for usage, packaging and release status.
 
 Environment (API; `TENDR_ASSET_ORIGIN` also in the web app, where the middleware uses it for the
 CSP and which Next bakes in at build):

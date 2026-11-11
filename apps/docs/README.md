@@ -33,7 +33,7 @@ payment services. `build` runs Mintlify's real strict validation, rather than a 
   internal targets and branding offline. Mintlify validates MDX, OpenAPI and the full build.
 - Update schemas and examples when routes change. A route-existence check cannot prove every
   field or business rule matches; review implementation and contracts together.
-- The SDK remains a private workspace package. Shopify remains a pilot pending platform approval.
+- SDK 0.2.0 is a standalone, tested archive; MIT-licensed and ready for npm publication. Do not advertise a registry install or download URL until the artifact is public. Shopify remains a pilot pending platform approval.
 - Public MDX pages describe the hosted service and merchant installation. Keep repository setup,
   Docker simulators and package build commands in internal repository documentation.
 - The WooCommerce guide links directly to the public `woocommerce-v0.3.3` GitHub release ZIP.
