@@ -38,6 +38,19 @@ describe('contentSecurityPolicy', () => {
     expect(d['script-src']).toContain("'unsafe-eval'");
     expect(d['connect-src']).toEqual(["'self'", 'http://localhost:4000', 'ws:']);
   });
+
+  it('allows Tendr asset origin for theme logos in the dashboard preview', () => {
+    const d = directives(
+      contentSecurityPolicy({
+        nonce: 'n',
+        apiBaseUrl: 'https://api.usetendr.tech',
+        dev: false,
+        assetOrigin: 'https://assets.usetendr.tech/tendr-assets',
+      }),
+    );
+    expect(d['img-src']).toContain('https://assets.usetendr.tech');
+    expect(d['font-src']).toEqual(["'self'", 'https://assets.usetendr.tech']);
+  });
 });
 
 describe('checkoutContentSecurityPolicy (/pay/*)', () => {

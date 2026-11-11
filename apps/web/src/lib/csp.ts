@@ -10,7 +10,8 @@
 // - style-src allows inline styles (React `style` attributes). Fonts are self-hosted (`/fonts`,
 //   copied from @fontsource by scripts/copy-fonts.mjs): no font or stylesheet host. Styles cannot
 //   run code.
-// - img-src allows data: and blob: for locally rendered QR codes.
+// - img-src allows data: and blob: for locally rendered QR codes, plus Tendr's asset origin so
+//   theme logos show in the dashboard editor live preview (same host as checkout).
 // - Development adds ws: to connect-src for hot reload.
 
 /** The origin of the API the dashboard talks to. */
@@ -37,7 +38,10 @@ export function contentSecurityPolicy(opts: {
   nonce: string;
   apiBaseUrl: string;
   dev: boolean;
+  /** `TENDR_ASSET_ORIGIN`: theme logos/images/fonts for the dashboard live preview. */
+  assetOrigin?: string | null;
 }): string {
+  const assets = assetSource(opts.assetOrigin);
   const directives = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${opts.nonce}'${opts.dev ? " 'unsafe-eval'" : ''}`,
@@ -45,8 +49,16 @@ export function contentSecurityPolicy(opts: {
     "frame-ancestors 'none'",
     `connect-src 'self' ${apiOrigin(opts.apiBaseUrl)}${opts.dev ? ' ws:' : ''}`,
     "style-src 'self' 'unsafe-inline'",
-    "font-src 'self'",
-    ["img-src 'self' data: blob: https://www.dextools.io", ...TOKEN_LOGO_HOSTS].join(' '),
+    ['font-src', "'self'", ...(assets ? [assets] : [])].join(' '),
+    [
+      'img-src',
+      "'self'",
+      'data:',
+      'blob:',
+      'https://www.dextools.io',
+      ...(assets ? [assets] : []),
+      ...TOKEN_LOGO_HOSTS,
+    ].join(' '),
     "base-uri 'self'",
     "form-action 'self'",
     "worker-src 'self'",
@@ -65,6 +77,7 @@ export function connectContentSecurityPolicy(opts: {
   nonce: string;
   apiBaseUrl: string;
   dev: boolean;
+  assetOrigin?: string | null;
 }): string {
   return `${contentSecurityPolicy(opts)}; frame-src 'none'`;
 }

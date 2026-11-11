@@ -114,11 +114,12 @@ export async function middleware(request: NextRequest) {
     return NextResponse.rewrite(target);
   }
   const checkout = pathname.startsWith('/pay/') || pathname.startsWith('/preview/theme/');
+  const assetOrigin = process.env.TENDR_ASSET_ORIGIN ?? null;
   const csp = checkout
     ? await checkoutPolicy(request, pathname, nonce, dev)
     : pathname === '/connect'
-      ? connectContentSecurityPolicy({ nonce, apiBaseUrl: publicApiBaseUrl, dev })
-      : contentSecurityPolicy({ nonce, apiBaseUrl: publicApiBaseUrl, dev });
+      ? connectContentSecurityPolicy({ nonce, apiBaseUrl: publicApiBaseUrl, dev, assetOrigin })
+      : contentSecurityPolicy({ nonce, apiBaseUrl: publicApiBaseUrl, dev, assetOrigin });
 
   // Next reads the nonce from the request's CSP header and applies it to its own scripts.
   const requestHeaders = new Headers(request.headers);

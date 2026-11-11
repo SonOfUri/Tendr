@@ -253,8 +253,14 @@ function Editor({
       formData.set('kind', 'logo');
       formData.set('file', file);
       const asset = await api<ThemeAssetObject>('/v1/theme-assets', { method: 'POST', formData });
-      await assets.reload();
+      // Merge immediately so the live preview can resolve the logo without waiting on reload.
+      assets.setData((prev) => {
+        const rows = prev?.data ?? [];
+        const next = [asset, ...rows.filter((a) => a.id !== asset.id)];
+        return { data: next };
+      });
       setSettings((s) => ({ ...s, logo_asset_id: asset.id }));
+      void assets.reload();
       setNotice('Logo uploaded and selected. Save the draft to keep it.');
     }).finally(() => {
       if (fileRef.current) fileRef.current.value = '';
