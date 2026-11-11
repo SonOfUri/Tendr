@@ -49,3 +49,5 @@ Apply migration `20261111090000_login_recovery`, regenerate Prisma, and deploy A
 Required UI checks: first-passkey setup and optional skip, existing-user enrollment, save acknowledgment, regeneration warning, expired/invalid links, canceled passkey creation, rate limit/retry, successful recovery and new login, backup-key add/remove, and clear wallet-key limitations. The automated suite covers both factors, cross-user proof rejection, replay/concurrency, expiry, origin/RP/UV, historical/wallet-key reuse, stale sessions, unchanged wallets/memberships, alerts, scanner-safe UI and no browser secret storage.
 
 Users without a saved code or another working login passkey cannot replace lost login keys through email alone. Synced passkeys and registered backup devices are the first fallback. Login recovery never grants access to an unavailable dedicated wallet signing key.
+
+Native wallet backup passkeys and offline recovery are now covered separately in the [wallet devices and recovery handover](2026-11-11-wallet-devices-recovery.md). Keep both enrollment flows visible; a saved login code is not a wallet recovery kit.

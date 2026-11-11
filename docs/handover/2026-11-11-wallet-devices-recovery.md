@@ -137,3 +137,9 @@ Verified mainnet relay lifecycle on 11 November 2026 with generated account
 kit-authorized replacement, and replacement-key kit removal all confirmed via final-block
 nonce/key reads. No merchant data was loaded and no funds moved. Focused backend suite: 251
 passing tests; browser security/payout/crypto suite: 11 passing tests.
+
+Production integration: `deploy` at `97471c0` preserves the redesigned wallet screen and places
+**Devices & recovery** below payout history. Console reference: `test/api-console` at `14f3705`.
+The production API build/type checks, 68 targeted backend tests, seven browser tests, and web
+production build passed. Chrome visual checks covered dark/light desktop and 390px mobile with
+no horizontal overflow or browser errors. All preview API responses were synthetic.

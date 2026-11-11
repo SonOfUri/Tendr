@@ -21,10 +21,10 @@ flows when integrating them into the redesigned dashboard.
 
 There are two frontend implementations to reconcile:
 
-| Branch / audited revision              | What to use it for                                                                                                                                                                                               |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `origin/deploy` at `24543c8`           | Implementation baseline and Railway deployment branch: redesigned dashboard, native wallets/payouts, settlement selectors, API keys, AI APIs and invoice flow. Preserve its current design and payment behavior. |
-| `origin/test/api-console` at `f1bb3dd` | Functional reference and isolated API workbench, including AI routes and itemized invoices. Use this for integration examples and local test scenarios.                                                          |
+| Branch / audited revision              | What to use it for                                                                                                                                                                                                                                                            |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `origin/deploy` at `97471c0`           | Implementation baseline and Railway deployment branch: redesigned dashboard, native wallets/payouts, backup wallet passkeys, offline wallet recovery, login recovery, settlement selectors, API keys, AI APIs and invoices. Preserve its current design and payment behavior. |
+| `origin/test/api-console` at `14f3705` | Functional reference and isolated API workbench, including AI routes and itemized invoices. Use this for integration examples and local test scenarios.                                                                                                                       |
 
 The revisions above identify code reviewed for this handover, not a requirement to reset a newer
 checkout. Fetch before starting and review any subsequent changes. `main` is not the deployment baseline.

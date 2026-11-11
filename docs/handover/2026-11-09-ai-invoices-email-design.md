@@ -10,7 +10,7 @@ Auth update, 9 November: returning users can request an email link even with act
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | AI       | Checkout assistant, route previews, merchant insight metrics/explanations, unpublished theme generation. NEAR AI Cloud integration is server-side.               | Integrate these four surfaces into the actual checkout/dashboard. The demo assistant's static responses/ranking are not the production integration.                                                                  |
 | Invoices | Public contractor form, email verification, itemized totals, owner inbox, enable/pause, decline, quote review, wallet-passkey settlement and receipt states.     | Refine the public invoice experience and merchant inbox while preserving the existing API and money flow. Include mobile, empty/error/expired states and the complete breakdown on both sides.                       |
-| Emails   | **26 template keys**, with several distinct invoice-notice variants. `deploy` sends HTML with a plain-text alternative; this gallery documents text-copy inputs. | Design and implement reusable transactional HTML layouts, retain plain-text alternatives, and coordinate the renderer/payload changes described below. A new React component alone does not change delivered emails. |
+| Emails   | **27 template keys**, with several distinct invoice-notice variants. `deploy` sends HTML with a plain-text alternative; this gallery documents text-copy inputs. | Design and implement reusable transactional HTML layouts, retain plain-text alternatives, and coordinate the renderer/payload changes described below. A new React component alone does not change delivered emails. |
 
 Use a feature branch based on `origin/deploy` and open a PR targeting `deploy`. The console branch provides functional examples and a live-API harness; preserve the production design. Changes to mail delivery code belong in the same reviewed PR as their template integration. This brief adds documentation and synthetic previews; it does not enable HTML delivery.
 
@@ -124,6 +124,10 @@ type MailMessage = {
 ### Login recovery addition, 11 November
 
 The [login recovery handover](2026-11-11-login-recovery.md) defines the new screens and complete API contract. Added templates: `login_recovery_link` (`url` with a private `#token`), `login_recovery_codes_changed` (`at`, settings `url`) and `login_recovery_completed` (`at`, settings `url`). Never include saved codes in an email, preserve token fragments, and clearly distinguish login recovery from wallet-key recovery. All three have synthetic fixtures below.
+
+### Wallet key changes addition, 11 November
+
+The [wallet devices and recovery handover](2026-11-11-wallet-devices-recovery.md) defines additional wallet passkeys, offline kits and revocation. The `wallet_keys_changed` template is sent after final on-chain confirmation to the wallet owner's verified email. Fields: `at`, `change`, `account`, `url` pointing to `/dashboard/wallet`. Explain the action, full wallet control and unchanged address. Never include kit secrets or signatures. A synthetic fixture is included in the gallery.
 
 ### Inventory: account access and invoice emails
 
