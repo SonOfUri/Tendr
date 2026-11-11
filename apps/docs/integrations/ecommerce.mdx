@@ -1,9 +1,12 @@
 ---
 title: 'Choose an integration'
-description: 'Select payment links, hosted checkout, WooCommerce or the Shopify pilot.'
+description: 'Select the TypeScript SDK, HTTP API, payment links, WooCommerce or the Shopify pilot.'
 ---
 
 <CardGroup cols={2}>
+  <Card title="TypeScript and JavaScript" icon="code" href="/sdks/typescript">
+    Install @usetendr/sdk from npm for Node.js 22+ servers. Includes types and webhook verification.
+  </Card>
   <Card title="Hosted checkout" icon="code" href="/quickstart">
     Create sessions from your server and confirm orders through webhooks.
   </Card>
@@ -16,7 +19,15 @@ description: 'Select payment links, hosted checkout, WooCommerce or the Shopify 
   <Card title="Shopify pilot" icon="bag-shopping" href="/integrations/shopify">
     Understand the offsite connector and approval requirements.
   </Card>
+  <Card title="HTTP API" icon="book" href="/api-reference/overview">
+    Integrate from another server language with the same hosted endpoints.
+  </Card>
 </CardGroup>
+
+For a custom Node.js store, use the SDK on your server to create a session, then redirect the
+customer to its returned URL or open the [checkout embed](/payments/embedded-checkout).
+The browser embed is separate from the server SDK. WooCommerce merchants can install the plugin
+directly; they do not need an npm package.
 
 ## Shared integration rules
 

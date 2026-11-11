@@ -24,6 +24,21 @@ Reconnect to the same store from WooCommerce's Tendr settings. Registering only 
 
 Sign in to the same identity and select the same store/mode. The wallet is tied to the store, not the browser. Wallet signing requires the dedicated wallet passkey; an email login does not supply it.
 
+## TypeScript SDK
+
+| Symptom                                       | What to check                                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cannot resolve `@tendr/sdk`                   | Install `@usetendr/sdk` and update both main and `/webhook` imports. The old workspace name was not the public npm package.                       |
+| `TendrClient is server-only`                  | Move client construction into a server route or backend job. Use the checkout URL or browser embed in the frontend.                               |
+| Invalid `apiKey`                              | Supply a server secret key beginning with `tdr_test_` or `tdr_live_`. Load it in the server environment; the SDK does not read environment files. |
+| Requests go to `/v1/v1/...`                   | Remove `/v1` from `baseUrl`, or omit the option to use the hosted API default.                                                                    |
+| `SIGNATURE_INVALID` on every API request      | The key requires HMAC request signing, which SDK 0.2.0 does not generate. Use an HTTP integration implementing the configured signing policy.     |
+| `TendrTimeoutError` or `TendrConnectionError` | Reconcile writes before retrying. Reuse the same saved operation key and identical input; the SDK does not retry automatically.                   |
+| `TendrWebhookError`                           | Use the endpoint signing secret and original body bytes, preserve the signature header, and check the server clock.                               |
+
+Use Node.js 22 or later. The webhook helper needs Node crypto. See the
+[SDK guide](/sdks/typescript) for configuration, scopes and error types.
+
 ## Report an issue
 
 Include the request ID, endpoint/method, HTTP status, mode, timestamp and non-secret resource ID. Do not send API keys, webhook secrets, full checkout URLs or invoice receipt tokens. A screenshot alone may not show which request failed.

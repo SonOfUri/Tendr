@@ -17,6 +17,24 @@ npm install @usetendr/sdk
 
 ES modules and CommonJS are supported. The package has no runtime dependencies.
 
+<CodeGroup>
+
+```typescript ES modules
+import { TendrClient } from '@usetendr/sdk';
+import { constructWebhookEvent } from '@usetendr/sdk/webhook';
+```
+
+```javascript CommonJS
+const { TendrClient } = require('@usetendr/sdk');
+const { constructWebhookEvent } = require('@usetendr/sdk/webhook');
+```
+
+</CodeGroup>
+
+Use the SDK in a Node.js server route, background job or backend service. For Next.js, keep it in
+server code and use the Node.js runtime for webhook handlers. The package does not need separate
+type definitions or a build from the Tendr repository.
+
 ## Migrating from tendr-sdk
 
 If you installed `tendr-sdk`, replace it with the official organization package:
@@ -28,6 +46,9 @@ npm install @usetendr/sdk
 
 Update imports to `@usetendr/sdk` and `@usetendr/sdk/webhook`. Version `0.2.0` uses the same API,
 credentials and response types as the earlier `tendr-sdk@0.2.0` release.
+
+Older examples may refer to the unpublished workspace name `@tendr/sdk`. Use `@usetendr/sdk` for
+public npm installations and imports.
 
 ## Create and retrieve a checkout
 
@@ -65,6 +86,28 @@ status, payments, refunds, fees and settlement details, but cannot restore the s
 Price orders on your server. Amounts and token base units are strings. Confirm fulfillment from
 verified `payment.succeeded` webhooks and a matching server-side session read.
 
+## Client configuration
+
+| Option      | Purpose                                                          | Default                     |
+| ----------- | ---------------------------------------------------------------- | --------------------------- |
+| `apiKey`    | Required server secret key: `tdr_test_…` or `tdr_live_…`         | None                        |
+| `baseUrl`   | API origin without `/v1`; use HTTPS                              | `https://api.usetendr.tech` |
+| `timeoutMs` | Positive integer deadline covering the request and response body | `15000`                     |
+| `fetch`     | Optional compatible fetch implementation, including test doubles | Node.js `fetch`             |
+
+The package does not load environment files. Read `TENDR_SECRET_KEY` through your application's
+server environment, as in the example above. Test and live use the same base URL.
+
+To check the key's store, mode and permissions without creating a payment:
+
+```typescript
+const identity = await tendr.ping();
+console.log(identity.merchantId, identity.livemode, identity.scopes);
+```
+
+Changing to a live key does not activate a wallet or configure settlement. Complete the
+[production checklist](/security/production-checklist) before accepting live payments.
+
 ## Available methods
 
 | Resource           | Methods                                                                                                                                            |
@@ -79,10 +122,26 @@ verified `payment.succeeded` webhooks and a matching server-side session read.
 | `gasSponsorships`  | `list`, `iterate`                                                                                                                                  |
 | `hookCalls`        | `list`, `iterate`, `resend`                                                                                                                        |
 
-Create an [API key](/security/api-keys) with the required resource scopes. Checkout needs
-`sessions:write` and `sessions:read`; refunds need `refunds:write`. Link/theme methods use their
-corresponding read/write scopes. Gas record and hook reads need `payments:read`; gas policy changes
-and hook resends need `sessions:write`. Any secret key can read gas policy/usage.
+## Permissions and boundaries
+
+Create an [API key](/security/api-keys) with only the required scopes:
+
+| Operation                                            | Required scope        |
+| ---------------------------------------------------- | --------------------- |
+| Create or expire a checkout                          | `sessions:write`      |
+| Retrieve a checkout and its payments/refunds         | `sessions:read`       |
+| Create or cancel a refund request                    | `refunds:write`       |
+| Read links or settlement options                     | `payment_links:read`  |
+| Create, update or archive links                      | `payment_links:write` |
+| Read themes or assets                                | `themes:read`         |
+| Change themes or assets, validate or preview themes  | `themes:write`        |
+| Read gas sponsorships or integrator hook calls       | `payments:read`       |
+| Change gas policy or resend a failed integrator hook | `sessions:write`      |
+| Read gas policy/usage or check identity with `ping`  | Any valid secret key  |
+
+Theme publishing and default selection require live mode. Connected-site keys cannot change gas
+policy or access integrator hooks. `hookCalls.resend(paymentId)` retries a failed contract hook
+using a **payment ID** and may spend gas; it does not resend a webhook or repeat a payment.
 
 Dashboard-only APIs, invoices, AI, key/webhook management and wallet signing/recovery use different
 credentials and are outside this SDK. A secret key does not replace a wallet passkey. Keys configured
@@ -189,3 +248,17 @@ This subpath uses Node crypto and must stay server-side. Validate event-specific
 deduplicate event IDs durably, and match the stored order, mode, amount and settled payment through
 `checkoutSessions.retrieve`. The package includes a framework-neutral webhook handler example.
 See [Webhook signatures](/security/webhook-signatures).
+
+## Complete integration examples
+
+The npm package includes two server examples in `node_modules/@usetendr/sdk/examples`:
+
+- [`checkout.ts`](https://github.com/SonOfUri/Tendr/blob/usetendr-sdk-v0.2.0/packages/sdk/examples/checkout.ts)
+  creates a checkout from a server-priced order with a stable operation key.
+- [`webhook.ts`](https://github.com/SonOfUri/Tendr/blob/usetendr-sdk-v0.2.0/packages/sdk/examples/webhook.ts)
+  verifies raw request bytes, checks mode, reconciles a settled USD order and delegates durable
+  deduplication to your database adapter.
+
+Adapt the order storage and fulfillment transaction to your application. The webhook example uses
+USD orders deliberately; integrations priced in other currencies must also reconcile the stored
+FX information. See [Settlement](/payments/settlement).

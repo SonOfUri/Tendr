@@ -20,9 +20,41 @@ In the dashboard's webhook settings, add your HTTPS endpoint and subscribe to `p
 
 ## 3. Create a checkout session
 
-Use the price from your order database. Reuse the same idempotency key when retrying the same request.
+For TypeScript or JavaScript on Node.js 22+, install the public SDK in your server application:
 
 ```bash
+npm install @usetendr/sdk
+```
+
+Set `TENDR_SECRET_KEY` in your server's environment. Use the price from your order database and
+reuse the same idempotency key when retrying the same request. Other server languages can use
+the equivalent HTTP request below.
+
+<CodeGroup>
+
+```typescript TypeScript
+import { TendrClient } from '@usetendr/sdk';
+
+const apiKey = process.env.TENDR_SECRET_KEY;
+if (!apiKey) throw new Error('Set TENDR_SECRET_KEY on your server');
+const tendr = new TendrClient({ apiKey });
+
+const created = await tendr.checkoutSessions.create(
+  {
+    amount: '25.00',
+    amount_currency: 'USD',
+    external_ref: 'order-1042',
+    success_url: 'https://shop.example/orders/1042',
+    cancel_url: 'https://shop.example/cart',
+    line_items: [{ name: 'Everyday T-shirt', quantity: 1, unit_amount: '25.00' }],
+  },
+  { idempotencyKey: 'order-1042-checkout-1' },
+);
+
+// Persist created.id and the complete created.url before redirecting the customer.
+```
+
+```bash cURL
 curl --fail-with-body https://api.usetendr.tech/v1/checkout/sessions \
   -H "Authorization: Bearer $TENDR_SECRET_KEY" \
   -H "Content-Type: application/json" \
@@ -38,6 +70,11 @@ curl --fail-with-body https://api.usetendr.tech/v1/checkout/sessions \
     ]
   }'
 ```
+
+</CodeGroup>
+
+The SDK uses `https://api.usetendr.tech` by default. Keep the client and its secret key on your
+server; the customer only needs the returned checkout URL.
 
 The response has this shape. These values are illustrative:
 
@@ -63,18 +100,37 @@ Verify the signature on `payment.succeeded`, deduplicate its event ID, and match
 
 A success redirect or a popup closing is a UI signal. Your server determines whether the order is paid from the verified event and stored payment data.
 
-```bash
+<CodeGroup>
+
+```typescript TypeScript
+// Use the session ID saved with the order, not an ID supplied by the browser.
+const session = await tendr.checkoutSessions.retrieve(created.id);
+```
+
+```bash cURL
 curl --fail-with-body "https://api.usetendr.tech/v1/checkout/sessions/$SESSION_ID" \
   -H "Authorization: Bearer $TENDR_SECRET_KEY"
 ```
 
+</CodeGroup>
+
 The session read includes status, payments, refunds, settlement and your order reference. It does not return the original client secret.
 
+Use `constructWebhookEvent` from `@usetendr/sdk/webhook` to verify the original request bytes before
+parsing the event. Follow the [webhook guide](/security/webhook-signatures) for signature checks,
+order reconciliation and duplicate delivery handling.
+
 <CardGroup cols={2}>
+  <Card title="SDK reference" icon="code" href="/sdks/typescript">
+    Explore payment links, refunds, pagination, request options and typed errors.
+  </Card>
   <Card title="Embed checkout" icon="window-maximize" href="/payments/embedded-checkout">
     Keep checkout in a modal or inline frame.
   </Card>
   <Card title="Go live" icon="circle-check" href="/security/production-checklist">
     Verify credentials, wallet readiness and confirmation.
+  </Card>
+  <Card title="Retry safely" icon="rotate" href="/concepts/idempotency">
+    Reconcile uncertain requests and reuse the same operation key.
   </Card>
 </CardGroup>
