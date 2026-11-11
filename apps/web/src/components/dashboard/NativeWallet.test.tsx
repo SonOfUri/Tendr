@@ -60,6 +60,14 @@ beforeEach(() => {
   vi.mocked(startRegistration).mockResolvedValue({ id: 'new-wallet' } as never);
   vi.mocked(api).mockImplementation(async (path, init) => {
     if (path === '/v1/account') return wallet as never;
+    if (path === '/v1/account/native/keys')
+      return {
+        accountId: '0xwallet',
+        rpId: 'localhost',
+        contract: 'intents.near',
+        keys: [],
+        operations: [],
+      } as never;
     if (path === '/v1/account/go-live') return status as never;
     if (path === '/v1/account/balances')
       return {

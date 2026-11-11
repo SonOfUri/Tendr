@@ -22,6 +22,8 @@ export const PER_MODE_MODELS = [
   'AccountKey',
   'MerchantAccount',
   'NativeWallet',
+  'NativeWalletKey',
+  'NativeWalletKeyOperation',
   'NativePayout',
   'Invoice',
   'AccountProposal',

@@ -221,6 +221,7 @@ export interface AccountView {
       contractLimits: boolean;
       autoSweep: boolean;
       nativePasskeyPayouts: boolean;
+      nativeWalletKeyManagement?: boolean;
     };
     nearAccountId: string;
     status: AccountStatus;

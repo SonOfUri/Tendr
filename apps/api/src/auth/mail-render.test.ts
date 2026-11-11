@@ -21,6 +21,12 @@ const review = {
 
 /** The real `data` keys of each template, read from its call site. */
 const DATA: Record<MailTemplate, Record<string, string>> = {
+  wallet_keys_changed: {
+    change: 'A new wallet passkey was enabled.',
+    at: '2026-11-11T20:00:00.000Z',
+    account: '0x1234',
+    url: 'https://app.usetendr.tech/dashboard/wallet',
+  },
   invoice_notice: { message: 'Invoice update', url: 'https://app.example.com/dashboard/invoices' },
   invoice_verify: {
     url: 'https://invoice.example.com/business#token=secret',

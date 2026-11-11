@@ -71,7 +71,7 @@
           },
           {
             "group": "Store wallet",
-            "pages": ["wallets/overview", "wallets/withdrawals"]
+            "pages": ["wallets/overview", "wallets/recovery", "wallets/withdrawals"]
           },
           {
             "group": "Invoices and AI",

@@ -2018,13 +2018,70 @@ model NativeWallet {
   activationExpiresAt DateTime?       @map("activation_expires_at")
   createdAt           DateTime        @default(now()) @map("created_at")
   updatedAt           DateTime        @updatedAt @map("updated_at")
+  keys                NativeWalletKey[]
+  keyOperations       NativeWalletKeyOperation[]
   merchant            Merchant        @relation(fields: [merchantId], references: [id])
   owner               User            @relation(fields: [ownerUserId], references: [id], onDelete: Restrict)
   account             MerchantAccount @relation(fields: [accountId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([merchantId, livemode])
   @@unique([accountId, merchantId, livemode])
+  @@unique([id, merchantId, livemode])
   @@map("native_wallets")
+}
+
+/// Public credentials only. An active key has full control of the SAME Intents account.
+model NativeWalletKey {
+  id            String   @id
+  merchantId    String   @map("merchant_id")
+  livemode      Boolean
+  walletId      String   @map("wallet_id")
+  kind          String
+  label         String
+  status        String   @default("pending")
+  publicKey     String   @unique @map("public_key")
+  credentialId  String?  @unique @map("credential_id")
+  cosePublicKey String?  @map("cose_public_key")
+  signCount     BigInt   @default(0) @map("sign_count")
+  transports    String[]
+  createdAt     DateTime @default(now()) @map("created_at")
+  activatedAt   DateTime? @map("activated_at")
+  revokedAt     DateTime? @map("revoked_at")
+  wallet        NativeWallet @relation(fields: [walletId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([merchantId, livemode, walletId, status])
+  @@map("native_wallet_keys")
+}
+
+/// One in-flight change per wallet (partial unique index in SQL). Signed bytes survive crashes.
+model NativeWalletKeyOperation {
+  id               String @id
+  merchantId       String @map("merchant_id")
+  livemode         Boolean
+  walletId         String @map("wallet_id")
+  userId           String @map("user_id")
+  kind             String
+  label            String
+  status           String
+  candidateKeyId   String? @map("candidate_key_id")
+  recoveryKeyId    String? @map("recovery_key_id")
+  revokeKeyIds     String[] @map("revoke_key_ids")
+  challenge        String
+  proofPayload     String @map("proof_payload")
+  payload          String?
+  signature        Json?
+  intentHash       String? @map("intent_hash")
+  claimedAt        DateTime? @map("claimed_at")
+  lastAttemptAt    DateTime? @map("last_attempt_at")
+  expiresAt        DateTime @map("expires_at")
+  confirmedAt      DateTime? @map("confirmed_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  wallet           NativeWallet @relation(fields: [walletId, merchantId, livemode], references: [id, merchantId, livemode], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([merchantId, livemode, walletId, createdAt])
+  @@index([status, updatedAt])
+  @@map("native_wallet_key_operations")
 }
 
 /// Immutable 1Click quote + unsigned payload. Retrying a submission reuses the same nonce.

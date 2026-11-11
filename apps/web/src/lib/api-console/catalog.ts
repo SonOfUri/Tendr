@@ -31,6 +31,10 @@ export function needsStore(endpoint: Endpoint): boolean {
 }
 
 const examples: Record<string, unknown> = {
+  'POST /v1/account/native/keys/operations': { kind: 'add_passkey', label: 'Backup device' },
+  'POST /v1/account/native/keys/operations/:id/register': { response: {} },
+  'POST /v1/account/native/keys/operations/:id/prove': { response: {} },
+  'POST /v1/account/native/keys/operations/:id/submit': { response: {} },
   'POST /v1/auth/login-recovery/start': { email: 'your-email@example.com' },
   'POST /v1/auth/login-recovery/options': {
     token: 'paste-token-from-email-fragment',

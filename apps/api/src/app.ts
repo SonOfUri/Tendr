@@ -1,3 +1,4 @@
+import { nativeWalletKeyRoutes } from './routes/native-wallet-keys.js';
 import cors from '@fastify/cors';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
@@ -268,6 +269,7 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await app.register(proposalRoutes);
   await app.register(accountRoutes);
   await app.register(nativeAccountRoutes);
+  await app.register(nativeWalletKeyRoutes);
   await app.register(invoiceRoutes);
   await app.register(recoveryRoutes);
   await app.register(checkoutSessionRoutes);

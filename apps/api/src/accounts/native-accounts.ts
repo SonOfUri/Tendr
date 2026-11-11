@@ -1,12 +1,9 @@
 import { Prisma, type NativeWallet } from '@prisma/client';
 import {
   generateRegistrationOptions,
-  generateAuthenticationOptions,
   verifyRegistrationResponse,
-  verifyAuthenticationResponse,
   type RegistrationResponseJSON,
   type AuthenticationResponseJSON,
-  type AuthenticatorTransportFuture,
 } from '@simplewebauthn/server';
 import { decodeClientDataJSON } from '@simplewebauthn/server/helpers';
 import { coseToSignerKey, newCeremonyChallenge, CHALLENGE_TTL_MS } from '../auth/webauthn.js';
@@ -21,13 +18,16 @@ import { prisma } from '../lib/prisma.js';
 import { nearClient } from '../near/client.js';
 import { tokenInfo } from '../checkout/tokens.js';
 import { SETTLEMENT_CHOICES } from './settlement.js';
+import { activationPayload, nativePublicKey, nativeAccountId } from './native-signing.js';
+
 import {
-  activationPayload,
-  nativePublicKey,
-  nativeAccountId,
-  payloadChallenge,
-  signedIntent,
-} from './native-signing.js';
+  activeWalletPasskeys,
+  keyAuthenticationOptions,
+  verifyWalletKeyAssertion,
+  ensureInitialWalletKey,
+  recordWalletAssertion,
+  reserveDedicatedWalletKey,
+} from './native-wallet-keys.js';
 
 export type NativeActor = { merchantId: string; userId: string; livemode: boolean };
 const scope = (a: NativeActor) => ({ merchantId: a.merchantId, livemode: a.livemode });
@@ -151,6 +151,7 @@ export async function registerNativeWallet(actor: NativeActor, response: Registr
         throw forbidden('Only an owner can manage this wallet');
       if (await tx.merchantAccount.findFirst({ where: scope(actor) }))
         throw conflict('A live account already exists');
+      await reserveDedicatedWalletKey(tx, credential.id, publicKey, key);
       const account = await tx.merchantAccount.create({
         data: {
           id: newId('macc'),
@@ -161,7 +162,7 @@ export async function registerNativeWallet(actor: NativeActor, response: Registr
           status: 'provisioning',
         },
       });
-      await tx.nativeWallet.create({
+      const wallet = await tx.nativeWallet.create({
         data: {
           id: newId('nwal'),
           ...scope(actor),
@@ -174,6 +175,7 @@ export async function registerNativeWallet(actor: NativeActor, response: Registr
           transports: credential.transports ?? [],
         },
       });
+      await ensureInitialWalletKey(wallet, tx);
       await recordEvent(tx, actor, {
         aggregateType: 'merchant_account',
         aggregateId: account.id,
@@ -190,14 +192,7 @@ export async function registerNativeWallet(actor: NativeActor, response: Registr
 }
 
 export async function nativeAuthenticationOptions(wallet: NativeWallet, payload: string) {
-  return generateAuthenticationOptions({
-    rpID: env().WEBAUTHN_RP_ID,
-    challenge: Buffer.from(payloadChallenge(payload), 'base64url'),
-    userVerification: 'required',
-    allowCredentials: [
-      { id: wallet.credentialId, transports: wallet.transports as AuthenticatorTransportFuture[] },
-    ],
-  });
+  return keyAuthenticationOptions(await activeWalletPasskeys(wallet), payload);
 }
 
 export async function verifyNativeAssertion(
@@ -205,28 +200,9 @@ export async function verifyNativeAssertion(
   payload: string,
   response: AuthenticationResponseJSON,
 ) {
-  if (response.id !== wallet.credentialId) throw invalid();
-  try {
-    const result = await verifyAuthenticationResponse({
-      response,
-      expectedChallenge: payloadChallenge(payload),
-      expectedOrigin: env().WEBAUTHN_ORIGINS,
-      expectedRPID: env().WEBAUTHN_RP_ID,
-      requireUserVerification: true,
-      credential: {
-        id: wallet.credentialId,
-        publicKey: Buffer.from(wallet.cosePublicKey, 'base64'),
-        counter: Number(wallet.signCount),
-      },
-    });
-    if (!result.verified || !result.authenticationInfo.userVerified) throw invalid();
-    return {
-      signed: signedIntent(payload, wallet.publicKey, response.response),
-      counter: BigInt(result.authenticationInfo.newCounter),
-    };
-  } catch {
-    throw invalid();
-  }
+  const key = (await activeWalletPasskeys(wallet)).find((k) => k.credentialId === response.id);
+  if (!key) throw invalid();
+  return verifyWalletKeyAssertion(key, payload, response);
 }
 
 export async function nativeActivationOptions(actor: NativeActor) {
@@ -265,7 +241,7 @@ export async function activateNativeWallet(
     wallet.activationExpiresAt <= new Date()
   )
     throw conflict('Request a fresh wallet activation challenge');
-  const { signed, counter } = await verifyNativeAssertion(
+  const { signed, counter, keyId } = await verifyNativeAssertion(
     wallet,
     wallet.activationPayload,
     response,
@@ -288,6 +264,7 @@ export async function activateNativeWallet(
     });
     if (consumed.count !== 1)
       throw conflict('The activation challenge was replaced or already used');
+    await recordWalletAssertion(tx, wallet, keyId, counter);
     await tx.merchantAccount.updateMany({
       where: {
         id: wallet.accountId,

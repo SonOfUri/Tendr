@@ -39,6 +39,8 @@ export type IdPrefix =
   | 'lrr' // login recovery email/challenge
   | 'inv'
   | 'nwal'
+  | 'nwk'
+  | 'nko'
   | 'npay'
   | 'bill'
   | 'macc'

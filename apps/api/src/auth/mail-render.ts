@@ -29,6 +29,16 @@ const carriedOut = (summary: string) =>
     .replace(/ — do not approve unless you expected this\)$/, ')');
 
 const COPY: Record<MailTemplate, (d: Data) => Copy> = {
+  wallet_keys_changed: (d) => ({
+    subject: 'Your Tendr wallet keys changed',
+    lines: [
+      one(d.change),
+      `Confirmed at ${one(d.at)} for wallet ${one(d.account)}.`,
+      'Every enabled wallet passkey and recovery kit has full control of this wallet. Your wallet address and balance were not moved by this key change.',
+      'If this was not you, use a wallet passkey you still control to review and remove unfamiliar keys. Login recovery codes cannot recover wallet funds.',
+      ...link('Review wallet keys', d.url),
+    ],
+  }),
   login_recovery_link: (d) => ({
     subject: 'Recover your Tendr login',
     lines: [

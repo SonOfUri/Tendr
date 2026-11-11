@@ -204,8 +204,9 @@ function AccountCapabilityGate({ children }: { children: React.ReactNode }) {
       <section className="card stack">
         <h1>Single-owner wallet</h1>
         <p>
-          This wallet uses its owner’s dedicated passkey. Shared signing, saved-address restrictions
-          and wallet recovery are not available.
+          Manage this wallet’s passkeys and offline recovery kit from the live wallet page. Every
+          enabled key has full control. Shared approvals, delayed recovery and saved-address
+          restrictions belong to contract accounts.
         </p>
         <Link href="/dashboard/wallet">Manage live wallet</Link>
       </section>

@@ -1,3 +1,4 @@
+import { recordWalletAssertion } from './native-wallet-keys.js';
 import type { Prisma, NativePayout, Invoice } from '@prisma/client';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
 import { z } from 'zod';
@@ -365,7 +366,7 @@ export async function submitNativePayout(
   if (p.accountId !== wallet.accountId) throw notFound('Payout not found');
   if (p.status !== 'awaiting_signature') return payoutView(p); // idempotent after acceptance, including unknown outcomes
   if (p.expiresAt <= new Date()) throw conflict('The payout quote has expired');
-  const { signed, counter } = await verifyNativeAssertion(wallet, p.payload, response);
+  const { signed, counter, keyId } = await verifyNativeAssertion(wallet, p.payload, response);
   await screen(actor, p.destination, p.destinationChain);
   validateTransferPayload(p.payload, {
     signerId: wallet.account.nearAccountId,
@@ -403,10 +404,7 @@ export async function submitNativePayout(
       data: { status: 'submitting', signature: json(signed), claimedAt: null },
     });
     if (claimed.count !== 1) throw conflict('This payout was already submitted');
-    await tx.nativeWallet.updateMany({
-      where: { id: wallet.id, ...scope(actor), signCount: { lt: counter } },
-      data: { signCount: counter },
-    });
+    await recordWalletAssertion(tx, wallet, keyId, counter);
     await recordEvent(tx, actor, {
       aggregateType: 'native_payout',
       aggregateId: id,

@@ -1017,6 +1017,7 @@ export function accountJson(a: MerchantAccount) {
       contractLimits: a.kind === 'contract',
       autoSweep: a.kind === 'contract',
       nativePasskeyPayouts: a.kind === 'native_intents',
+      nativeWalletKeyManagement: a.kind === 'native_intents',
     },
     livemode: a.livemode,
     nearAccountId: a.nearAccountId,
@@ -1069,6 +1070,7 @@ export async function accountView(ctx: ScopeContext) {
             ownerUserId: true,
             credentialId: true,
             publicKey: true,
+            keys: { where: { status: 'active' }, select: { kind: true } },
             owner: { select: { email: true } },
           },
         })
@@ -1077,7 +1079,7 @@ export async function accountView(ctx: ScopeContext) {
     bySigner.set(native.ownerUserId, {
       userId: native.ownerUserId,
       email: native.owner.email,
-      keys: 1,
+      keys: native.keys.length ? native.keys.filter((k) => k.kind === 'passkey').length : 1,
     });
   return {
     livemode: ctx.livemode,
@@ -1089,6 +1091,10 @@ export async function accountView(ctx: ScopeContext) {
           ownerUserId: native.ownerUserId,
           credentialId: native.credentialId,
           publicKey: native.publicKey,
+          activePasskeyCount: native.keys.length
+            ? native.keys.filter((k) => k.kind === 'passkey').length
+            : 1,
+          recoveryKitEnabled: native.keys.some((k) => k.kind === 'recovery'),
         }
       : null,
   };

@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { NativeWalletSecurity } from './NativeWalletSecurity';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { LinkSettlementOptions } from '@tendr/contracts';
 import { Alert, Button, Spinner } from '@tendr/ui';
@@ -70,8 +71,8 @@ export function NativeWalletSetup({
             </Alert>
           )}
           <p className="muted small">
-            Use a synced passkey you can keep. Wallet-key recovery and shared control are not
-            available yet.
+            Use a synced passkey you can keep. After activation, add a backup wallet passkey and
+            enable an offline wallet recovery kit. Each key has full wallet control.
           </p>
           {mine ? (
             <Button disabled={busy || closed} onClick={() => void setup()}>
@@ -219,6 +220,7 @@ export function NativeWalletPanel({
         isOwner={isOwner}
         onDone={load}
       />
+      {active && mine && !proposalId && <NativeWalletSecurity key={merchantId} store={store} />}
       {error && <Alert tone="danger">{error}</Alert>}
       {notice && <Alert tone="success">{notice}</Alert>}
       {active && (

@@ -1,6 +1,6 @@
 # Tendr dashboard frontend handover
 
-Updated **11 November 2026** (login recovery, AI, invoices and email design). Audience: the developer building the merchant dashboard in `apps/web`.
+Updated **11 November 2026** (wallet devices/recovery, login recovery, AI, invoices and email design). Audience: the developer building the merchant dashboard in `apps/web`.
 This is the current entry point for frontend work. It supersedes the deployment assumptions and
 "missing screens" lists in earlier versions of this handover. The filename is retained for existing links.
 
@@ -9,7 +9,8 @@ This is the current entry point for frontend work. It supersedes the deployment 
 Start with the [AI, invoice and email delivery brief](2026-11-09-ai-invoices-email-design.md)
 for screen states, design requirements, acceptance criteria and the full transactional email inventory.
 The [login recovery handover](2026-11-11-login-recovery.md) covers saved codes, lost-device recovery, backup login passkeys and three new security emails.
-The [offline email gallery](email-preview.html) shows synthetic plain-text examples of all 26 current templates.
+The [wallet devices and recovery handover](2026-11-11-wallet-devices-recovery.md) covers backup wallet passkeys, offline kits, lost-device recovery, revocation and the new wallet security email.
+The [offline email gallery](email-preview.html) shows synthetic plain-text examples of all 27 current templates.
 The detailed API contracts remain below. AI and invoice backend code is present on both branches.
 The newer `deploy` frontend includes AI integration and HTML emails with a plain-text alternative; preserve those implementations.
 

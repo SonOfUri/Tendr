@@ -1,3 +1,4 @@
+import { reserveDedicatedLoginKey } from '../accounts/native-wallet-keys.js';
 // Personal login recovery, independent of store/contract/wallet recovery. No wallet keys move.
 import { randomBytes } from 'node:crypto';
 import { Prisma } from '@prisma/client';
@@ -235,6 +236,7 @@ export async function completeLoginRecovery(
         })
       )
         throw conflict('Use a new login passkey, separate from your wallet');
+      await reserveDedicatedLoginKey(tx, proof.credentialId, proof.publicKey);
       await tx.webauthnCredential.updateMany({
         where: { userId: user.id, revokedAt: null },
         data: { revokedAt: now },
