@@ -12,6 +12,22 @@ NEAR Intents is an optional execution integration behind the scenes—not the Te
 > dedicated owner passkey; the contract-account and sponsored-payment paths have separate rollout
 > requirements. See the [merchant and developer docs](apps/docs/README.md) for current integration guidance.
 
+## TypeScript and JavaScript SDK
+
+The public server SDK is [`@usetendr/sdk`](https://www.npmjs.com/package/@usetendr/sdk),
+licensed under MIT. It supports Node.js 22+, ESM and CommonJS, with TypeScript declarations and
+no runtime dependencies.
+
+```bash
+npm install @usetendr/sdk
+```
+
+Use it for checkout sessions, payment links, refund requests, themes, gas settings, integrator
+hooks and webhook verification. Keep secret keys on your server. See the
+[SDK guide](https://docs.usetendr.tech/sdks/typescript) and
+[release README](https://github.com/SonOfUri/Tendr/blob/usetendr-sdk-v0.2.0/packages/sdk/README.md).
+Dashboard authentication, invoices, AI insights and wallet signing use their separate API flows.
+
 ## Monorepo layout
 
 ```text
@@ -558,7 +574,7 @@ and safety rules), `apps/docs/api-reference/themes.mdx`, and the handover note
   `line_items` (up to 50).
 - A live session renders only a published theme; a test session may name a draft. A broken theme
   falls back to the Tendr default look and never stops a payment.
-- The SDK has `client.themes`, `client.themeAssets` and `client.checkoutSessions.create`.
+- The standalone TypeScript SDK covers checkout create/read/expire, refunds, payment links and settlement options, themes/assets, gas policy/records, and integrator hooks. It includes ESM/CommonJS and Node webhook verification with no runtime dependencies. See the [SDK guide](https://docs.usetendr.tech/sdks/typescript) for installation and usage.
 
 Environment (API; `TENDR_ASSET_ORIGIN` also in the web app, where the middleware uses it for the
 CSP and which Next bakes in at build):

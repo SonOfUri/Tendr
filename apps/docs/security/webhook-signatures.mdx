@@ -15,15 +15,58 @@ secret rotation the header carries a second `v1=` signed with the old secret, so
 
 ## Verifying with the SDK
 
-```ts
-import { verifyWebhookSignature } from '@tendr/sdk/webhook';
+Install the [server SDK](/sdks/typescript) on Node.js 22+:
 
-const ok = verifyWebhookSignature({
-  payload: rawBody, // the raw request body, not re-serialised JSON
-  secret: endpointSigningSecret,
-  signatureHeader: req.headers['tendr-signature'] as string,
-});
+```bash
+npm install @usetendr/sdk
 ```
+
+Store the endpoint's `whsec_…` secret in your server environment, separately from the
+`tdr_test_…` or `tdr_live_…` API key. `constructWebhookEvent` verifies the signature and timestamp
+before parsing and validating the event envelope.
+
+This helper accepts a Fetch `Request`, such as the request passed to a Next.js App Router handler:
+
+```typescript
+import { constructWebhookEvent } from '@usetendr/sdk/webhook';
+
+export async function verifyTendrRequest(request: Request, webhookSecret: string) {
+  // Read the original bytes once. Do not call request.json() first.
+  const payload = new Uint8Array(await request.arrayBuffer());
+  return constructWebhookEvent({
+    payload,
+    signatureHeader: request.headers.get('tendr-signature') ?? '',
+    secret: webhookSecret,
+  });
+}
+```
+
+Use the Node.js runtime for the handler and set a request-body size limit in your server or
+framework. If your framework parses JSON automatically, configure this endpoint to retain the
+original body. Re-serializing parsed JSON can invalidate the signature.
+
+Invalid signatures, expired timestamps and malformed event envelopes throw `TendrWebhookError`.
+Return a non-success response for invalid deliveries; keep temporary API/database failures retryable.
+`verifyWebhookSignature` is also available from the same import path when you only need a boolean.
+Both helpers accept any matching `v1` signature and default to a five-minute timestamp tolerance.
+
+## Confirm an order
+
+Signature verification authenticates the delivery. Before fulfilling an order:
+
+1. Check `event.livemode` against the store mode and handle the expected event type.
+2. Validate the fields inside `event.data`; its shape depends on the event type.
+3. For `payment.succeeded`, find the stored order by `session_id` and retrieve that session with
+   `tendr.checkoutSessions.retrieve(session_id)`. Match `external_ref`, mode, amount/currency and
+   the settled payment identified by `payment_id`.
+4. Record the event ID, mark the order paid once and enqueue fulfillment in one database transaction.
+   Return a success response only after the delivery is durably handled. A previously handled
+   duplicate can return success without fulfilling again.
+
+See [event payloads](/api-reference/webhooks) and the SDK's
+[complete webhook example](https://github.com/SonOfUri/Tendr/blob/usetendr-sdk-v0.2.0/packages/sdk/examples/webhook.ts).
+The example includes settled-payment checks and a database adapter boundary; it does not use
+an in-memory set for production deduplication.
 
 ## Verifying by hand
 

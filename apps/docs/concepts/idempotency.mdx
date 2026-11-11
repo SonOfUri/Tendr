@@ -18,6 +18,17 @@ Send `Idempotency-Key` on supported POST requests, including session creation, p
 
 “Same request” means the same method, path/query and raw body bytes. Changing JSON serialization or whitespace can change the request hash. Switching credentials does not share the old replay entry.
 
+## With the TypeScript SDK
+
+Pass `{ idempotencyKey: savedOperationKey }` as the second argument to
+`tendr.checkoutSessions.create(input, options)`, `tendr.paymentLinks.create(input, options)` or
+`tendr.refunds.create(input, options)`. Persist the key and input before making the request.
+
+The SDK does not generate keys or retry automatically. If a request times out or is cancelled,
+the server may still have accepted it. Reconcile the operation and retry with the same key and
+identical input while the replay entry is retained. Do not switch from SDK to cURL for a retry
+unless the serialized body bytes also match. See [SDK request options](/sdks/typescript#request-options-and-errors).
+
 ## Exceptions
 
 Not every endpoint participates. One-time API-key creation explicitly excludes replay caching so raw secrets are not persisted there. AI insight explanations also disable this layer. AI theme generation requires an idempotency key because it creates a draft.

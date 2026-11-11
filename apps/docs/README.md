@@ -33,7 +33,7 @@ payment services. `build` runs Mintlify's real strict validation, rather than a 
   internal targets and branding offline. Mintlify validates MDX, OpenAPI and the full build.
 - Update schemas and examples when routes change. A route-existence check cannot prove every
   field or business rule matches; review implementation and contracts together.
-- The SDK remains a private workspace package. Shopify remains a pilot pending platform approval.
+- `@usetendr/sdk@0.2.0` is public on npm under MIT. Registry integrity and a clean install (ESM, CommonJS, TypeScript and examples) were verified on 12 November 2026. Repeat that verification before announcing future versions. Shopify remains a pilot pending platform approval.
 - Public MDX pages describe the hosted service and merchant installation. Keep repository setup,
   Docker simulators and package build commands in internal repository documentation.
 - The WooCommerce guide links directly to the public `woocommerce-v0.3.3` GitHub release ZIP.
@@ -46,16 +46,18 @@ movement or live wallet recovery/shared signing that the implementation does not
 
 ## Publish with Mintlify
 
-The prepared source can be connected through Mintlify's GitHub integration:
+The live site is **https://docs.usetendr.tech**. Mintlify's GitHub integration publishes
+`SonOfUri/Tendr`, branch **`test/api-console`**, from **`/apps/docs`**. This was confirmed from
+the successful Mintlify deployment check on that branch on 12 November 2026; the SDK feature
+branch received a skipped deployment check.
 
-1. Create or select the Tendr Mintlify project and connect `SonOfUri/Tendr`.
-2. Select the branch containing this documentation release. Current work is on `test/api-console`;
-   it must be merged if a different production documentation branch is selected.
-3. In Git settings, enable **docs.json is in a subdirectory**, and set `/apps/docs` (no trailing slash).
-4. Deploy and verify the generated Mintlify URL, both themes, navigation and API examples.
-5. Add `docs.usetendr.tech` in Mintlify's domain settings and use the DNS values it provides.
-   Do not guess the CNAME target or overwrite an existing record before checking it.
+1. Validate the content and internal links with the commands above.
+2. Publish documentation changes to `test/api-console`. Changes pushed only to another branch
+   do not update this site. When releasing docs from a feature branch, transfer the reviewed
+   `apps/docs` changes without assuming the application changes need the same release.
+3. Wait for the **Mintlify Deployment** GitHub check to succeed, then inspect the affected
+   public pages. A successful local build alone does not mean the website has changed.
+4. Verify package/download links and remove obsolete availability notices when a release is live.
 
-The repository work does not create a Mintlify account, enable a paid plan, publish a site or change
-DNS. GitHub access/project selection and any account billing are completed by the account owner.
-See [Mintlify's monorepo setup](https://www.mintlify.com/docs/deploy/monorepo).
+If the project configuration changes, check the connected branch and subdirectory in Mintlify
+before publishing. See [Mintlify's monorepo setup](https://www.mintlify.com/docs/deploy/monorepo).

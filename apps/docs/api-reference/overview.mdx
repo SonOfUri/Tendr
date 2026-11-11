@@ -5,6 +5,16 @@ description: 'Base URLs, credentials and the supported integration surfaces.'
 
 The hosted API base URL is `https://api.usetendr.tech`. Request and response bodies use JSON unless an upload endpoint explicitly requires multipart form data.
 
+For Node.js 22+ servers, install [`@usetendr/sdk`](/sdks/typescript):
+
+```bash
+npm install @usetendr/sdk
+```
+
+The SDK provides typed requests and responses, pagination helpers and webhook verification.
+It uses the same API keys, scopes and test/live boundaries as these HTTP endpoints. Follow the
+[quickstart](/quickstart) for equivalent TypeScript and cURL checkout examples.
+
 ## Choose the right credential
 
 | Surface                 | Credential                                              | Purpose                                                |

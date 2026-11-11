@@ -328,6 +328,13 @@ See [the native wallet handover](2026-11-02-native-intents-wallets.md) for the d
 All dashboard calls below use cookie authentication and the selected store/mode unless stated
 otherwise. Routes are authoritative; the SDK is not the dashboard transport.
 
+The public npm package is now **`@usetendr/sdk@0.2.0`** (MIT, Node.js 22+). It is for merchant
+server integrations using secret API keys, with a separate `@usetendr/sdk/webhook` verifier.
+Do not import it into dashboard browser code or replace the cookie/CSRF transport with it.
+Invoices, AI insights, key management and wallet signing/recovery retain the dashboard flows
+documented here. See the [SDK guide](https://docs.usetendr.tech/sdks/typescript) for the supported
+merchant methods and installation examples.
+
 | Area                  | Contract and permissions                                                                                                                                                                                                                                               |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Account               | `GET /v1/account`, `/v1/account/balances`, `/v1/account/settlement`, `/v1/account/go-live`; `account:read`. `POST /v1/account/retry` and `POST /v1/account/go-live` are owner/step-up contract operations, not native activation.                                      |
