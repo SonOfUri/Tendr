@@ -42,6 +42,8 @@ import {
   type ThemeScheme,
   type ThemeSettings,
 } from '@/lib/themes';
+import { livePreviewRead } from '@/lib/theme/live-preview';
+import { PreviewBody } from '@/app/preview/theme/[token]/ThemePreview';
 import { withStepUp } from '@/lib/webauthn';
 
 const MODE_OPTIONS = [
@@ -106,6 +108,7 @@ export default function ThemeEditorPage() {
           initial={loaded.data}
           canWrite={canWrite}
           storeId={store.id}
+          merchantName={store.name}
         />
       )}
     </>
@@ -116,10 +119,12 @@ function Editor({
   initial,
   canWrite,
   storeId,
+  merchantName,
 }: {
   initial: ThemeObject;
   canWrite: boolean;
   storeId: string;
+  merchantName: string;
 }) {
   const [theme, setTheme] = useState<ThemeObject>(initial);
   const [name, setName] = useState(initial.name);
@@ -278,6 +283,20 @@ function Editor({
   const f = problems.fields;
   const logos = (assets.data?.data ?? []).filter((a) => a.kind === 'logo');
   const currentLogo = (assets.data?.data ?? []).find((a) => a.id === settings.logo_asset_id);
+  const liveRead = useMemo(
+    () =>
+      livePreviewRead({
+        themeId: theme.id,
+        version: theme.version,
+        document,
+        css: css.trim() ? css : null,
+        assets: assets.data?.data ?? [],
+        merchantName,
+        scheme: previewScheme,
+        viewport: 'desktop',
+      }),
+    [theme.id, theme.version, document, css, assets.data?.data, merchantName, previewScheme],
+  );
 
   return (
     <>
@@ -298,6 +317,8 @@ function Editor({
         </Alert>
       ) : null}
 
+      <div className="theme-editor-split">
+        <div className="theme-editor-form stack">
       <Panel
         title="Status"
         action={
@@ -548,42 +569,6 @@ function Editor({
         </div>
       </Panel>
 
-      <Panel title="Preview">
-        <div className="stack">
-          <div className="field">
-            <span>Colour scheme</span>
-            <Select
-              ariaLabel="Preview colour scheme"
-              className="tendr-select--field"
-              value={previewScheme}
-              options={SCHEME_OPTIONS}
-              onChange={(v) => setPreviewScheme(v as ThemeScheme)}
-            />
-          </div>
-          <div className="actions">
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={busy !== null}
-              onClick={() => void openPreview()}
-            >
-              {busy === 'preview' ? 'Creating link…' : 'Open preview'}
-            </Button>
-            {preview ? (
-              <a href={preview.url} target="_blank" rel="noopener noreferrer">
-                Open preview again
-              </a>
-            ) : null}
-          </div>
-          <p className="dash-muted dash-small">
-            Opens a sample checkout in a new tab with the saved draft
-            {unsaved ? ' (you have unsaved changes: save first to see them)' : ''}. The link expires
-            after about 15 minutes
-            {preview ? ` (this one: ${new Date(preview.expires_at).toLocaleTimeString()})` : ''}.
-          </p>
-        </div>
-      </Panel>
-
       {canWrite ? (
         <Panel title="Go live">
           <div className="stack">
@@ -627,6 +612,59 @@ function Editor({
           Back to themes
         </Link>
       </p>
+        </div>
+
+        <aside className="theme-editor-preview" aria-label="Live theme preview">
+          <div className="theme-editor-preview-chrome">
+            <div className="theme-editor-preview-title">
+              <span>Live preview</span>
+              {unsaved ? (
+                <span className="dash-pill" data-tone="warn">
+                  unsaved
+                </span>
+              ) : (
+                <span className="dash-muted dash-small">Updates as you edit</span>
+              )}
+            </div>
+            <div className="theme-editor-preview-controls">
+              <Select
+                ariaLabel="Preview colour scheme"
+                className="tendr-select--field"
+                value={previewScheme}
+                options={SCHEME_OPTIONS}
+                onChange={(v) => setPreviewScheme(v as ThemeScheme)}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={busy !== null}
+                onClick={() => void openPreview()}
+              >
+                {busy === 'preview' ? 'Creating link…' : 'Open in new tab'}
+              </Button>
+              {preview ? (
+                <a
+                  href={preview.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="dash-text-link dash-small"
+                >
+                  Open again
+                </a>
+              ) : null}
+            </div>
+            <p className="dash-muted dash-small">
+              New tab uses the saved draft
+              {unsaved ? ' — save first to include unsaved changes' : ''}. Links expire after about
+              15 minutes
+              {preview ? ` (this one: ${new Date(preview.expires_at).toLocaleTimeString()})` : ''}.
+            </p>
+          </div>
+          <div className="theme-editor-preview-canvas">
+            <PreviewBody read={liveRead} embedded />
+          </div>
+        </aside>
+      </div>
     </>
   );
 }

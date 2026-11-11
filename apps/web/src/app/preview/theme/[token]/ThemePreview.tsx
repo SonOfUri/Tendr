@@ -106,7 +106,14 @@ function SealedPreview({
   );
 }
 
-export function PreviewBody({ read }: { read: PreviewRead }) {
+export function PreviewBody({
+  read,
+  embedded = false,
+}: {
+  read: PreviewRead;
+  /** In-dashboard pane: no body paint, ribbon stays inside the canvas. */
+  embedded?: boolean;
+}) {
   const theme = useMemo(() => {
     const payee = (read.theme as { payee?: unknown } | null)?.payee;
     return parseShopperTheme(read.theme, typeof payee === 'string' && payee ? payee : 'Your store');
@@ -170,8 +177,12 @@ export function PreviewBody({ read }: { read: PreviewRead }) {
   }
 
   return (
-    <ThemedPage theme={theme} scheme={opts.scheme}>
-      <div className="tdr-preview" data-viewport={opts.viewport}>
+    <ThemedPage theme={theme} scheme={opts.scheme} page={!embedded}>
+      <div
+        className="tdr-preview"
+        data-viewport={opts.viewport}
+        data-embedded={embedded ? 'true' : undefined}
+      >
         <p className="tdr-preview-ribbon" role="status">
           {PREVIEW_RIBBON}
         </p>

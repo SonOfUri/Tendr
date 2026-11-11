@@ -2215,6 +2215,98 @@ html[data-appearance='light'] .dash-golive-wallet-setup {
   padding-left: 1.1rem;
 }
 
+/* Theme editor: form left / live preview right */
+.theme-editor-split {
+  display: grid;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.theme-editor-form {
+  min-width: 0;
+}
+
+.theme-editor-preview {
+  position: sticky;
+  top: 1rem;
+  min-width: 0;
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.theme-editor-preview-chrome {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.theme-editor-preview-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.theme-editor-preview-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.theme-editor-preview-controls .tendr-select {
+  min-width: 8rem;
+  flex: 1 1 8rem;
+}
+
+.theme-editor-preview-canvas {
+  max-height: min(78vh, 56rem);
+  overflow: auto;
+  border: 1px solid var(--tendr-border);
+  border-radius: 10px;
+  background: var(--tendr-surface);
+}
+
+.theme-editor-preview-canvas .tdr-theme {
+  width: 100%;
+  background: var(--theme-bg, var(--tendr-surface));
+}
+
+.theme-editor-preview-canvas .tdr-preview[data-embedded='true'] {
+  padding-top: 0;
+  transform-origin: top center;
+}
+
+.theme-editor-preview-canvas .tdr-preview[data-embedded='true'] .tdr-preview-ribbon {
+  position: sticky;
+  inset: auto;
+  top: 0;
+  z-index: 2;
+}
+
+.theme-editor-preview-canvas .tdr-preview[data-embedded='true'] .pay-card {
+  width: min(100%, 28rem);
+  margin: 0.85rem auto 1.25rem;
+}
+
+@media (min-width: 1100px) {
+  .theme-editor-split {
+    grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.95fr);
+    gap: 1.5rem;
+  }
+}
+
+@media (max-width: 1099px) {
+  .theme-editor-preview {
+    position: static;
+  }
+
+  .theme-editor-preview-canvas {
+    max-height: min(70vh, 40rem);
+  }
+}
+
 .dash-field-error {
   color: #fff;
   font-size: 0.8rem;
