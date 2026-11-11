@@ -134,6 +134,8 @@ const EnvSchema = z
     ONECLICK_BASE_URL: z.string().url().default('https://1click.chaindefuser.com'),
     /** 1Click JWT, sent as `X-API-Key`. Required in production. */
     ONECLICK_API_KEY: optionalString,
+    INTENTS_RELAY_URL: z.string().url().default('https://solver-relay-v2.chaindefuser.com/rpc'),
+    INTENTS_RELAY_API_KEY: optionalString,
     // Checkout assistance, merchant insights and theme proposals. Model calls default off.
     AI_PROVIDER: z.enum(['disabled', 'openai-compatible', 'near-ai']).default('disabled'),
     AI_BASE_URL: z.preprocess(blankAsUnset, z.string().url().optional()),

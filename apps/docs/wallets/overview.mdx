@@ -21,8 +21,8 @@ A P-256 passkey controls a balance in NEAR Intents. The displayed `0x…` accoun
 Setup registers the dedicated credential, then proves possession during activation. Resume unfinished activation with the existing credential.
 
 <Warning>
-  The current native live wallet has one owner. Shared signing, owner-key rotation and wallet-key
-  recovery are not available. Keep access to the dedicated wallet passkey.
+  The native live wallet has one owner. Every enabled wallet passkey and recovery kit has full
+  control of the wallet. Additional keys are not multisig or shared approval.
 </Warning>
 
 ## Another device
@@ -31,4 +31,10 @@ Synced passkeys can be available on devices using the same supported credential 
 
 If the wallet credential is unavailable, you can still sign in and view the same store. Transactions require a device or credential provider holding the wallet passkey.
 
-Creating another login passkey is not wallet migration. Contact support before attempting to replace an inaccessible wallet.
+In **Live wallet → Devices & recovery**, create another wallet passkey on the new device. Prove
+it works, then approve the pending request with an existing wallet passkey. You can approve from
+your old device after comparing the key fingerprint. Wait for the request to show **Confirmed**.
+
+Creating another login passkey does not add a wallet signing key. Your wallet address stays the
+same when you add or remove wallet passkeys. See [wallet recovery](/wallets/recovery) to prepare
+for losing every device.

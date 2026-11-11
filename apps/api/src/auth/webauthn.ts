@@ -40,6 +40,7 @@ import { newId } from '../lib/ids.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { isSteppedUp } from './session.js';
+import { reserveDedicatedLoginKey } from '../accounts/native-wallet-keys.js';
 
 export const CEREMONY_CHALLENGE_TAG = new TextEncoder().encode('tendr-webauthn-ceremony-v1:');
 export const CHALLENGE_TTL_MS = 5 * 60_000;
@@ -283,6 +284,7 @@ export async function verifyRegistration(
         if (!first && (!session.steppedUp || !isSteppedUp(current.passkeyVerifiedAt)))
           throw stepUpRequired();
       }
+      await reserveDedicatedLoginKey(tx, proof.credentialId, proof.publicKey);
       const created = await tx.webauthnCredential.create({
         data: {
           id: newId('cred'),

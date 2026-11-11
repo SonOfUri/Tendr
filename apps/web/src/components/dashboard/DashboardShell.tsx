@@ -443,8 +443,9 @@ function ContractRouteNotice() {
     <section className="dash-panel stack">
       <h1 className="dash-page-title">Single-owner wallet</h1>
       <p className="dash-muted">
-        This wallet uses its owner’s passkey. Shared signing, saved-address restrictions, spending
-        limits, auto-sweep, and wallet recovery are not available.
+        Manage this wallet’s passkeys and offline recovery kit from the wallet page. Every enabled
+        key has full control. Shared approvals, delayed recovery, saved-address restrictions and
+        contract spending limits belong to contract accounts.
       </p>
       <Link href="/dashboard/wallet">Open wallet</Link>
     </section>

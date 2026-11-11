@@ -1,6 +1,6 @@
 # Native Intents wallets: API and frontend handover
 
-Updated **7 November 2026**. Start with the [dashboard frontend handover](2026-11-02-dashboard-frontend.md)
+Updated **11 November 2026**. See [wallet devices and offline recovery](2026-11-11-wallet-devices-recovery.md) for the new key-management flows. Start with the [dashboard frontend handover](2026-11-02-dashboard-frontend.md)
 for current deployment status, branch selection, the implementation checklist and development setup.
 
 New live stores use a dedicated P256 passkey and an implicit account inside `intents.near`.
@@ -9,9 +9,9 @@ top-up. The private key stays in the merchant's authenticator. The API sends the
 signed withdrawal intent to 1Click, which handles execution. Hosting and swap/withdrawal fees
 still apply.
 
-This implements the agreed single-owner hackathon scope. The backend and functional console on
-`test/api-console` implement the ceremonies below. The redesigned dashboard on `deploy` still
-needs that frontend integration; do not interpret its missing controls as a backend limitation.
+This implements the agreed single-owner scope. The backend and functional console on
+`test/api-console` implement the ceremonies below. The redesigned dashboard on `deploy` includes
+native wallet integration; preserve its existing design and payment behavior.
 Existing test accounts and existing contract accounts keep their current implementation.
 No existing live contract account or balance is automatically migrated.
 
@@ -157,12 +157,13 @@ through the existing proposal cancel endpoint by the wallet owner before authori
 ## Capabilities and recovery
 
 Native accounts have one wallet owner and threshold 1. Hide contract multisig, signer changes,
-recovery kits, delayed address allowlists, contract spending/refund limits, automatic sweeps,
+legacy contract recovery kits, delayed address allowlists, contract spending/refund limits, automatic sweeps,
 and contract upgrades. The API rejects those proposal routes for native accounts. Login/team
 permissions are API access controls; they do not change on-chain wallet ownership.
 
-This release has no wallet-key replacement or recovery ceremony. Recommend a synced passkey
-and explain that recovering a login/email session does not recover a lost wallet credential.
+Native wallets now support additional wallet passkeys, revocation, and a separate offline wallet
+recovery kit. Follow the [wallet recovery handover](2026-11-11-wallet-devices-recovery.md). The kit
+must be enabled before loss; recovering a login/email session alone cannot replace a wallet key.
 Do not advertise timed recovery or a second key as multisig: native Intents keys each have full
 control. Moving later to a contract wallet requires a separately authorized balance migration.
 

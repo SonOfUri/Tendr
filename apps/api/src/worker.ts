@@ -1,3 +1,4 @@
+import { pollNativeKeyOperations } from './accounts/native-key-operations.js';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { resolve } from 'node:path';
@@ -81,6 +82,7 @@ const HEALTH_CHECK_TIMEOUT_MS = 1000;
 /** Re-screens SCREENING_PENDING payments (backoff is per payment); runs every minute. */
 export const RETRY_SCREENINGS_JOB = 'retry-pending-screenings';
 export const NATIVE_PAYOUTS_JOB = 'poll-native-payouts';
+export const NATIVE_KEYS_JOB = 'poll-native-wallet-keys';
 /**
  * Deletes expired Connect credentials and revokes connections never redeemed, and ends expired
  * notification-email links (deleting their tokens); every minute.
@@ -257,6 +259,10 @@ async function processEventJob(job: Job<EventJobData>): Promise<void> {
 }
 
 async function processMaintenanceJob(job: Job): Promise<void> {
+  if (job.name === NATIVE_KEYS_JOB) {
+    await pollNativeKeyOperations();
+    return;
+  }
   if (job.name === NATIVE_PAYOUTS_JOB) {
     await pollNativePayouts();
     return;
@@ -451,6 +457,11 @@ export async function startWorker(
     NATIVE_PAYOUTS_JOB,
     { every: 60_000 },
     { name: NATIVE_PAYOUTS_JOB },
+  );
+  await maintenanceQueue.upsertJobScheduler(
+    NATIVE_KEYS_JOB,
+    { every: 15_000 },
+    { name: NATIVE_KEYS_JOB },
   );
 
   await maintenanceQueue.upsertJobScheduler(

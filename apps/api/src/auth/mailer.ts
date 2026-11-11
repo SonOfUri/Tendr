@@ -21,6 +21,7 @@ export const MailTemplateValues = [
   'login_recovery_link',
   'login_recovery_codes_changed',
   'login_recovery_completed',
+  'wallet_keys_changed',
   'invite',
   'proposal_needs_approval',
   'timelock_started',

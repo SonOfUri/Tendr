@@ -38,13 +38,14 @@
 <body><main id="top">
 <header><div class="eyebrow">Tendr · frontend handover · 2026-11-11</div>
 <h1>Transactional email inventory</h1>
-<p>26 template keys · 32 synthetic cases · no emails sent</p>
+<p>27 template keys · 33 synthetic cases · no emails sent</p>
 <p class="notice"><strong>Current plain-text baseline, not an HTML email design.</strong> These cards show the plain-text renderer output and supplied copy. They do not preview the HTML email layout available on deploy. All recipients, IDs and links are synthetic; action URLs are displayed as text.</p>
 <p>Use the AI, invoice and email delivery brief alongside this gallery. Expand each payload to see which fields exist today. Regenerate with <code>node --import tsx docs/handover/preview-email-fixtures.mts</code>.</p>
 </header>
 <nav aria-label="Email scenarios"><a href="#login-recovery-link">login-recovery-link</a>
 <a href="#login-recovery-codes-changed">login-recovery-codes-changed</a>
 <a href="#login-recovery-completed">login-recovery-completed</a>
+<a href="#wallet-keys-changed">wallet-keys-changed</a>
 <a href="#verify-email">verify-email</a>
 <a href="#login-link">login-link</a>
 <a href="#invite">invite</a>
@@ -135,6 +136,31 @@ https://app.tendr.invalid/settings/login-recovery
   &quot;data&quot;: {
     &quot;at&quot;: &quot;2026-11-11T12:15:00.000Z&quot;,
     &quot;url&quot;: &quot;https://app.tendr.invalid/settings/login-recovery&quot;
+  }
+}</pre></details>
+</article>
+<article id="wallet-keys-changed" aria-labelledby="wallet-keys-changed-title">
+  <div class="case-heading"><h2 id="wallet-keys-changed-title">wallet-keys-changed</h2><a href="#top">Back to index</a></div>
+  <p class="scenario">Confirmed wallet recovery; same account, old wallet passkeys revoked. No secrets.</p>
+  <dl><dt>Template</dt><dd><code>wallet_keys_changed</code></dd>
+  <dt>Recipient</dt><dd>owner@example.com</dd>
+  <dt>Copy source</dt><dd>Current renderer fallback</dd></dl>
+  <div class="message"><h3>Your Tendr wallet keys changed</h3><pre>A replacement wallet passkey was enabled using the recovery kit. Previous Tendr wallet passkeys were revoked.
+Confirmed at 2026-11-11T21:00:00.000Z for wallet 0x1212121212121212121212121212121212121212.
+Every enabled wallet passkey and recovery kit has full control of this wallet. Your wallet address and balance were not moved by this key change.
+If this was not you, use a wallet passkey you still control to review and remove unfamiliar keys. Login recovery codes cannot recover wallet funds.
+Review wallet keys:
+https://app.tendr.invalid/dashboard/wallet
+
+-- Tendr</pre></div>
+  <details><summary>Input payload available to the renderer</summary><pre>{
+  &quot;to&quot;: &quot;owner@example.com&quot;,
+  &quot;template&quot;: &quot;wallet_keys_changed&quot;,
+  &quot;data&quot;: {
+    &quot;at&quot;: &quot;2026-11-11T21:00:00.000Z&quot;,
+    &quot;change&quot;: &quot;A replacement wallet passkey was enabled using the recovery kit. Previous Tendr wallet passkeys were revoked.&quot;,
+    &quot;account&quot;: &quot;0x1212121212121212121212121212121212121212&quot;,
+    &quot;url&quot;: &quot;https://app.tendr.invalid/dashboard/wallet&quot;
   }
 }</pre></details>
 </article>

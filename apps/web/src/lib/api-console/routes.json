@@ -889,6 +889,93 @@
     "stepUp": true
   },
   {
+    "id": "GET /v1/account/native/keys",
+    "method": "GET",
+    "path": "/v1/account/native/keys",
+    "group": "native wallet keys",
+    "source": "apps/api/src/routes/native-wallet-keys.ts",
+    "line": 31,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose"
+  },
+  {
+    "id": "POST /v1/account/native/keys/operations",
+    "method": "POST",
+    "path": "/v1/account/native/keys/operations",
+    "group": "native wallet keys",
+    "source": "apps/api/src/routes/native-wallet-keys.ts",
+    "line": 34,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "GET /v1/account/native/keys/operations/:id",
+    "method": "GET",
+    "path": "/v1/account/native/keys/operations/:id",
+    "group": "native wallet keys",
+    "source": "apps/api/src/routes/native-wallet-keys.ts",
+    "line": 41,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/keys/operations/:id/register",
+    "method": "POST",
+    "path": "/v1/account/native/keys/operations/:id/register",
+    "group": "native wallet keys",
+    "source": "apps/api/src/routes/native-wallet-keys.ts",
+    "line": 44,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/keys/operations/:id/prove",
+    "method": "POST",
+    "path": "/v1/account/native/keys/operations/:id/prove",
+    "group": "native wallet keys",
+    "source": "apps/api/src/routes/native-wallet-keys.ts",
+    "line": 52,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/keys/operations/:id/challenge",
+    "method": "POST",
+    "path": "/v1/account/native/keys/operations/:id/challenge",
+    "group": "native wallet keys",
+    "source": "apps/api/src/routes/native-wallet-keys.ts",
+    "line": 59,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/keys/operations/:id/submit",
+    "method": "POST",
+    "path": "/v1/account/native/keys/operations/:id/submit",
+    "group": "native wallet keys",
+    "source": "apps/api/src/routes/native-wallet-keys.ts",
+    "line": 62,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
+    "id": "POST /v1/account/native/keys/operations/:id/cancel",
+    "method": "POST",
+    "path": "/v1/account/native/keys/operations/:id/cancel",
+    "group": "native wallet keys",
+    "source": "apps/api/src/routes/native-wallet-keys.ts",
+    "line": 73,
+    "principals": ["dashboard_user"],
+    "permission": "security:propose",
+    "stepUp": true
+  },
+  {
     "id": "GET /v1/payment_links/public/:merchant/:link",
     "method": "GET",
     "path": "/v1/payment_links/public/:merchant/:link",

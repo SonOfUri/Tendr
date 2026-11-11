@@ -87,7 +87,8 @@
           {
             "group": "Store wallet",
             "pages": [
-              "wallets/overview"
+              "wallets/overview",
+              "wallets/recovery"
             ]
           }
         ]

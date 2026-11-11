@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { NativeWalletSecurity } from './NativeWalletSecurity';
 import type { LinkSettlementOptions } from '@tendr/contracts';
 import { Alert, Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
@@ -162,7 +163,7 @@ export function NativeWalletPanel({
   isOwner: boolean;
   proposalId?: string;
 }) {
-  const store: StoreContext = { merchantId, livemode: true };
+  const store = useMemo<StoreContext>(() => ({ merchantId, livemode: true }), [merchantId]);
   const [data, setData] = useState<WalletData | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -760,6 +761,7 @@ export function NativeWalletPanel({
               <p className="dash-muted">No payouts yet.</p>
             )}
           </Panel>
+          {mine && !proposalId && <NativeWalletSecurity key={merchantId} store={store} />}
         </>
       ) : null}
     </div>

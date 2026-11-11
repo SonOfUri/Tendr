@@ -38,6 +38,20 @@
       }
     },
     {
+      "id": "wallet-keys-changed",
+      "scenario": "Confirmed wallet recovery; same account, old wallet passkeys revoked. No secrets.",
+      "message": {
+        "to": "owner@example.com",
+        "template": "wallet_keys_changed",
+        "data": {
+          "at": "2026-11-11T21:00:00.000Z",
+          "change": "A replacement wallet passkey was enabled using the recovery kit. Previous Tendr wallet passkeys were revoked.",
+          "account": "0x1212121212121212121212121212121212121212",
+          "url": "https://app.tendr.invalid/dashboard/wallet"
+        }
+      }
+    },
+    {
       "id": "verify-email",
       "scenario": "New person confirms their email; single-use 15-minute link.",
       "message": {
@@ -346,7 +360,7 @@
           "new_email": "notices@example.com"
         },
         "subject": "Notices for Northstar Studio now go to notices@example.com",
-        "text": "Payment and refund notices for Northstar Studio on tendr now go to notices@example.com.\n\nIf you did not make this change, sign in to your tendr dashboard and set the address\nunder Settings → Checkout, and check your connected sites."
+        "text": "Payment and refund notices for Northstar Studio on tendr now go to notices@example.com.\n\nIf you did not make this change, sign in to your tendr dashboard and set the address\nunder Settings \u2192 Checkout, and check your connected sites."
       }
     },
     {
@@ -360,7 +374,7 @@
           "new_email": ""
         },
         "subject": "Notices for Northstar Studio now go to the store owners' emails",
-        "text": "Payment and refund notices for Northstar Studio on tendr now go to the store owners' emails.\n\nIf you did not make this change, sign in to your tendr dashboard and set the address\nunder Settings → Checkout, and check your connected sites."
+        "text": "Payment and refund notices for Northstar Studio on tendr now go to the store owners' emails.\n\nIf you did not make this change, sign in to your tendr dashboard and set the address\nunder Settings \u2192 Checkout, and check your connected sites."
       }
     },
     {

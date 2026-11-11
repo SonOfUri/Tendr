@@ -1,0 +1,55 @@
+---
+title: 'Wallet recovery'
+description: 'Enable an offline recovery kit before losing access to your wallet passkeys.'
+---
+
+Your wallet recovery kit is separate from your [login recovery codes](/security/login-recovery).
+A kit restores signing access to the same store wallet. It does not create a new wallet or move
+your balance.
+
+<Warning>
+  Anyone with the wallet recovery file can control your wallet's funds. Keep it private and offline.
+  Tendr does not store its secret and cannot resend it. Enable recovery while you still have a
+  working wallet passkey.
+</Warning>
+
+## Enable recovery
+
+1. Open the [dashboard](https://app.usetendr.tech/dashboard/wallet), select your store and switch to live mode.
+2. In **Devices & recovery**, choose **Create recovery kit**.
+3. Download the file and keep a copy somewhere safe outside this device. Enter the requested
+   group from its secret to confirm you saved it.
+4. Review the key and approve it with your existing wallet passkey.
+5. Wait for **Confirmed**. Downloading the file alone does not enable recovery.
+
+Also add a backup wallet passkey or use a synced passkey on another device. Each enabled key can
+authorize transactions by itself. There is no multisig, waiting period or cancellation window
+after a key change confirms.
+
+## Recover after losing a device
+
+If another wallet passkey still works, use that device to add a replacement and remove the lost
+passkey. A passkey synced across devices is one credential: removing it removes that credential
+on every device where it is available.
+
+If no wallet passkey is available:
+
+1. Sign in to the same Tendr account. Use login recovery first if your login passkeys were also lost.
+2. Open **Live wallet → Devices & recovery → Recover with saved kit**.
+3. Paste the complete saved JSON file. Its secret stays in the browser; only a signature is sent.
+4. Create and verify a replacement wallet passkey on this device.
+5. Review the replacement and the old wallet keys to revoke, then confirm recovery.
+6. Wait for **Confirmed** before transacting. All previous wallet passkeys registered through
+   Tendr are revoked together. Your wallet address stays the same.
+
+The recovery kit remains enabled after use. Replace it if it may have been exposed. Replacing a
+kit requires an existing wallet passkey and revokes the old kit when the new one confirms.
+
+## Missing kit or pending request
+
+Without an available wallet passkey or a recovery kit enabled before the loss, email access and
+login recovery codes cannot restore wallet signing access.
+
+If a request is still confirming, you can reload safely. Do not create another wallet. A request
+with an issued signing payload must finish or expire on-chain before another key change can start.
+If confirmation remains unresolved, contact Tendr support with the request ID; never send your kit.

@@ -507,6 +507,48 @@ const builders: Record<MerchantOwnedModel, Builder> = {
       },
     });
   },
+  NativeWalletKey: async (merchantId, livemode, o) => {
+    const wallet =
+      (await prisma.nativeWallet.findFirst({ where: { merchantId, livemode } })) ??
+      (await builders.NativeWallet(merchantId, livemode, {}));
+    return prisma.nativeWalletKey.create({
+      data: {
+        id: newId('nwk'),
+        merchantId,
+        livemode,
+        walletId: wallet.id,
+        kind: 'passkey',
+        label: 'Test wallet key',
+        publicKey: unique('wallet-key'),
+        credentialId: unique('wallet-key-cred'),
+        cosePublicKey: 'AA==',
+        transports: [],
+        ...o,
+      },
+    });
+  },
+  NativeWalletKeyOperation: async (merchantId, livemode, o) => {
+    const wallet =
+      (await prisma.nativeWallet.findFirst({ where: { merchantId, livemode } })) ??
+      (await builders.NativeWallet(merchantId, livemode, {}));
+    return prisma.nativeWalletKeyOperation.create({
+      data: {
+        id: newId('nko'),
+        merchantId,
+        livemode,
+        walletId: wallet.id,
+        userId: String(wallet.ownerUserId),
+        kind: 'add_passkey',
+        label: 'New device',
+        status: 'registering',
+        challenge: unique('challenge'),
+        proofPayload: '',
+        revokeKeyIds: [],
+        expiresAt: new Date(Date.now() + 300000),
+        ...o,
+      },
+    });
+  },
   NativePayout: async (merchantId, livemode, o) => {
     const account =
       (await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } })) ??
