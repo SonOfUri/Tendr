@@ -1,5 +1,5 @@
-import { TendrClient } from 'tendr-sdk';
-import { constructWebhookEvent, TendrWebhookError } from 'tendr-sdk/webhook';
+import { TendrClient } from '@usetendr/sdk';
+import { constructWebhookEvent, TendrWebhookError } from '@usetendr/sdk/webhook';
 
 interface Orders {
   findBySessionId(id: string): Promise<{ id: string; amount: string; currency: string } | null>;

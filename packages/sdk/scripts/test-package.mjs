@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 const require = createRequire(import.meta.url);
 const sdk = fileURLToPath(new URL('..', import.meta.url));
-const dir = await mkdtemp(join(tmpdir(), 'tendr-sdk-consumer-'));
+const dir = await mkdtemp(join(tmpdir(), 'usetendr-sdk-consumer-'));
 try {
   const packed = JSON.parse(
     execFileSync('npm', ['pack', '--json', '--pack-destination', dir], {
@@ -35,20 +35,24 @@ try {
     ],
     { cwd: dir, stdio: 'pipe' },
   );
-  const pkg = JSON.parse(await readFile(join(dir, 'node_modules/tendr-sdk/package.json'), 'utf8'));
+  const pkg = JSON.parse(
+    await readFile(join(dir, 'node_modules/@usetendr/sdk/package.json'), 'utf8'),
+  );
   assert.equal(Object.keys(pkg.dependencies ?? {}).length, 0);
   assert.equal(pkg.license, 'MIT');
   assert.notEqual(pkg.private, true);
   assert(packed.files.some((file) => file.path === 'LICENSE'));
   assert(
-    (await readFile(join(dir, 'node_modules/tendr-sdk/LICENSE'), 'utf8')).startsWith('MIT License'),
+    (await readFile(join(dir, 'node_modules/@usetendr/sdk/LICENSE'), 'utf8')).startsWith(
+      'MIT License',
+    ),
   );
-  assert.deepEqual(await readdir(join(dir, 'node_modules')), ['.package-lock.json', 'tendr-sdk']);
+  assert.deepEqual(await readdir(join(dir, 'node_modules')), ['.package-lock.json', '@usetendr']);
   for (const kind of ['esm', 'cjs']) {
     const code =
       (kind === 'esm'
-        ? `import { TendrClient } from 'tendr-sdk'; import { constructWebhookEvent, signWebhookPayload } from 'tendr-sdk/webhook';`
-        : `const { TendrClient } = require('tendr-sdk'); const { constructWebhookEvent, signWebhookPayload } = require('tendr-sdk/webhook');`) +
+        ? `import { TendrClient } from '@usetendr/sdk'; import { constructWebhookEvent, signWebhookPayload } from '@usetendr/sdk/webhook';`
+        : `const { TendrClient } = require('@usetendr/sdk'); const { constructWebhookEvent, signWebhookPayload } = require('@usetendr/sdk/webhook');`) +
       `\n(async () => {
         const client = new TendrClient({ apiKey: 'tdr_test_package_fixture', fetch: async () => Response.json({ merchantId: 'mer_1' }) });
         if ((await client.ping()).merchantId !== 'mer_1') throw Error('Request failed');
@@ -60,8 +64,8 @@ try {
     await writeFile(file, code);
     execFileSync(process.execPath, [file], { cwd: dir, stdio: 'inherit' });
   }
-  const types = `import { TendrClient, type CheckoutSession, type RefundCreateInput } from 'tendr-sdk';
-    import { constructWebhookEvent } from 'tendr-sdk/webhook';
+  const types = `import { TendrClient, type CheckoutSession, type RefundCreateInput } from '@usetendr/sdk';
+    import { constructWebhookEvent } from '@usetendr/sdk/webhook';
     const client = new TendrClient({ apiKey: 'tdr_test_fixture' });
     async function check() {
       const created = await client.checkoutSessions.create({ amount: '1.00', amount_currency: 'USD', external_ref: 'o1', success_url: 'https://shop.example/success', cancel_url: 'https://shop.example/cancel' });

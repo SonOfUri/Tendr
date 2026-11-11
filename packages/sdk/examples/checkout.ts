@@ -1,4 +1,4 @@
-import { TendrClient } from 'tendr-sdk';
+import { TendrClient } from '@usetendr/sdk';
 
 // Call on your server after loading and pricing the order from your own database.
 export async function createCheckout(

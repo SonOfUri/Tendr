@@ -1,19 +1,30 @@
 # Tendr TypeScript SDK
 
-`tendr-sdk` 0.2.0 is a server-side TypeScript/JavaScript client for the hosted Tendr API. It includes ESM and CommonJS entry points, TypeScript declarations, and Node webhook verification, with **zero runtime dependencies**. Requires Node.js 22 or later.
+`@usetendr/sdk` 0.2.0 is a server-side TypeScript/JavaScript client for the hosted Tendr API. It includes ESM and CommonJS entry points, TypeScript declarations, and Node webhook verification, with **zero runtime dependencies**. Requires Node.js 22 or later.
 
 Licensed under MIT.
 
 ```sh
-npm install tendr-sdk
+npm install @usetendr/sdk
 ```
 
-For a release archive supplied directly by Tendr, use `npm install ./tendr-sdk-0.2.0.tgz`.
+For a release archive supplied directly by Tendr, use `npm install ./usetendr-sdk-0.2.0.tgz`.
+
+## Migrating from tendr-sdk
+
+`@usetendr/sdk` is the official package under Tendr’s npm organization. Version 0.2.0 has the same API as `tendr-sdk@0.2.0`.
+
+```sh
+npm uninstall tendr-sdk
+npm install @usetendr/sdk
+```
+
+Change imports from `tendr-sdk` to `@usetendr/sdk`, and from `tendr-sdk/webhook` to `@usetendr/sdk/webhook`. Existing keys and integrations use the same hosted API.
 
 ## Create a checkout
 
 ```ts
-import { TendrClient } from 'tendr-sdk';
+import { TendrClient } from '@usetendr/sdk';
 
 const apiKey = process.env.TENDR_SECRET_KEY;
 if (!apiKey) throw new Error('Set TENDR_SECRET_KEY on your server');
@@ -35,7 +46,7 @@ const session = await tendr.checkoutSessions.create(
 const current = await tendr.checkoutSessions.retrieve(session.id);
 ```
 
-CommonJS: `const { TendrClient } = require('tendr-sdk');`.
+CommonJS: `const { TendrClient } = require('@usetendr/sdk');`.
 
 The API key chooses the store and mode: `tdr_test_…` or `tdr_live_…`. A live key does not bypass wallet readiness or platform live-mode checks. Create keys and webhook endpoints in the Tendr dashboard. The client defaults to `https://api.usetendr.tech`; a custom `baseUrl` must be HTTPS (HTTP is allowed for localhost testing). Never bundle secret keys into a browser; the client refuses browser construction. Use the hosted checkout or the separate browser embed for shoppers.
 
@@ -123,7 +134,7 @@ Errors exported from the main package:
 - `TendrResponseError`: invalid successful JSON or a non-advancing pagination cursor.
 
 ```ts
-import { TendrApiError } from 'tendr-sdk';
+import { TendrApiError } from '@usetendr/sdk';
 try {
   await tendr.checkoutSessions.retrieve('ses_example');
 } catch (error) {
@@ -135,7 +146,7 @@ try {
 ## Webhooks (Node only)
 
 ```ts
-import { constructWebhookEvent } from 'tendr-sdk/webhook';
+import { constructWebhookEvent } from '@usetendr/sdk/webhook';
 
 const event = constructWebhookEvent({
   payload: rawBody, // string or Uint8Array/Buffer, BEFORE JSON parsing
@@ -153,15 +164,15 @@ Do not fulfill an order from a redirect or popup event. Verify `payment.succeede
 From the repository root:
 
 ```sh
-npm run generate:types --workspace=tendr-sdk
-npm run check:contracts --workspace=tendr-sdk
-npm run check:api-types --workspace=tendr-sdk
-npm run typecheck --workspace=tendr-sdk
-npm run lint --workspace=tendr-sdk
-npm run test --workspace=tendr-sdk
-npm run test:package --workspace=tendr-sdk
+npm run generate:types --workspace=@usetendr/sdk
+npm run check:contracts --workspace=@usetendr/sdk
+npm run check:api-types --workspace=@usetendr/sdk
+npm run typecheck --workspace=@usetendr/sdk
+npm run lint --workspace=@usetendr/sdk
+npm run test --workspace=@usetendr/sdk
+npm run test:package --workspace=@usetendr/sdk
 mkdir -p dist/sdk
-npm pack --workspace=tendr-sdk --pack-destination ./dist/sdk
+npm pack --workspace=@usetendr/sdk --pack-destination ./dist/sdk
 ```
 
-`prepack` builds both formats. The generated public contract snapshot contains no runtime schema code or private package imports. API serializer checks catch response drift. `test:package` installs the actual tarball in a temporary consumer with no workspace dependencies, executes ESM/CommonJS, and compiles both declaration paths and the examples. CI runs these checks. Publish the verified archive with `npm publish ./dist/sdk/tendr-sdk-0.2.0.tgz --access public --registry=https://registry.npmjs.org`. Publishing requires an npm maintainer account for `tendr-sdk` and npm authentication/2FA. Verify the registry version and install it in a clean project before announcing a release.
+`prepack` builds both formats. The generated public contract snapshot contains no runtime schema code or private package imports. API serializer checks catch response drift. `test:package` installs the actual tarball in a temporary consumer with no workspace dependencies, executes ESM/CommonJS, and compiles both declaration paths and the examples. CI runs these checks. Publish the verified archive with `npm publish ./dist/sdk/usetendr-sdk-0.2.0.tgz --access public --registry=https://registry.npmjs.org`. Publishing requires an npm maintainer account for `@usetendr/sdk` and npm authentication/2FA. Verify the registry version and install it in a clean project before announcing a release.

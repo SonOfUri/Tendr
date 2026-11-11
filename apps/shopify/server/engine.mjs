@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { verifyWebhookSignature } from 'tendr-sdk/webhook';
+import { verifyWebhookSignature } from '@usetendr/sdk/webhook';
 
 export class RequestError extends Error {
   constructor(status, code) {

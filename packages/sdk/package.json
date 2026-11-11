@@ -1,5 +1,5 @@
 {
-  "name": "tendr-sdk",
+  "name": "@usetendr/sdk",
   "version": "0.2.0",
   "type": "module",
   "main": "./dist/cjs/index.js",

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { RequestError } from './engine.mjs';
-import { signWebhookPayload } from 'tendr-sdk/webhook';
+import { signWebhookPayload } from '@usetendr/sdk/webhook';
 
 // No network adapter is constructed in simulator mode. Fixtures survive container restarts.
 export function simulatedProviders(config, store) {

@@ -216,7 +216,7 @@ Keep request logging off for OAuth query strings, bearer checkout URLs and raw w
 ```sh
 npm ci --include=dev
 npm run build --workspace=@tendr/contracts
-npm run build --workspace=tendr-sdk
+npm run build --workspace=@usetendr/sdk
 npm run test --workspace=@tendr/shopify
 npm run lint --workspace=@tendr/shopify
 npm run build --workspace=@tendr/shopify

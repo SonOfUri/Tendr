@@ -6,14 +6,14 @@ COPY packages/sdk/package.json packages/sdk/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/config-typescript/package.json packages/config-typescript/package.json
 COPY packages/config-eslint/package.json packages/config-eslint/package.json
-RUN npm ci --ignore-scripts --include=dev --workspace=@tendr/shopify --workspace=tendr-sdk --workspace=@tendr/contracts --workspace=@tendr/config-typescript --workspace=@tendr/config-eslint
+RUN npm ci --ignore-scripts --include=dev --workspace=@tendr/shopify --workspace=@usetendr/sdk --workspace=@tendr/contracts --workspace=@tendr/config-typescript --workspace=@tendr/config-eslint
 COPY packages/sdk packages/sdk
 COPY packages/contracts packages/contracts
 COPY packages/config-typescript packages/config-typescript
 COPY packages/config-eslint packages/config-eslint
 COPY apps/shopify apps/shopify
 RUN npm run build --workspace=@tendr/contracts \
-    && npm run build --workspace=tendr-sdk \
+    && npm run build --workspace=@usetendr/sdk \
     && npm run build --workspace=@tendr/shopify
 
 FROM node:22.22.0-bookworm-slim AS production-deps
@@ -22,7 +22,7 @@ COPY package.json package-lock.json ./
 COPY apps/shopify/package.json apps/shopify/package.json
 COPY packages/sdk/package.json packages/sdk/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
-RUN npm ci --ignore-scripts --omit=dev --workspace=@tendr/shopify --workspace=tendr-sdk --workspace=@tendr/contracts
+RUN npm ci --ignore-scripts --omit=dev --workspace=@tendr/shopify --workspace=@usetendr/sdk --workspace=@tendr/contracts
 
 FROM node:22.22.0-bookworm-slim
 ENV NODE_ENV=production

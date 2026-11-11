@@ -3,7 +3,7 @@ title: TypeScript SDK
 description: Typed server-side checkout, payment links, refunds, themes, gas settings and webhook verification.
 ---
 
-[`tendr-sdk`](https://www.npmjs.com/package/tendr-sdk) is available on npm under the MIT license.
+[`@usetendr/sdk`](https://www.npmjs.com/package/@usetendr/sdk) is available on npm under the MIT license.
 The current release is `0.2.0`.
 
 ## Install
@@ -12,15 +12,27 @@ Requires Node.js 22 or later. The package includes compiled JavaScript and TypeS
 no Tendr repository checkout or build is needed.
 
 ```sh
-npm install tendr-sdk
+npm install @usetendr/sdk
 ```
 
 ES modules and CommonJS are supported. The package has no runtime dependencies.
 
+## Migrating from tendr-sdk
+
+If you installed `tendr-sdk`, replace it with the official organization package:
+
+```sh
+npm uninstall tendr-sdk
+npm install @usetendr/sdk
+```
+
+Update imports to `@usetendr/sdk` and `@usetendr/sdk/webhook`. Version `0.2.0` uses the same API,
+credentials and response types as the earlier `tendr-sdk@0.2.0` release.
+
 ## Create and retrieve a checkout
 
 ```typescript
-import { TendrClient } from 'tendr-sdk';
+import { TendrClient } from '@usetendr/sdk';
 
 const apiKey = process.env.TENDR_SECRET_KEY;
 if (!apiKey) throw new Error('Set TENDR_SECRET_KEY on your server');
@@ -131,7 +143,7 @@ All methods accept a final `{ signal, timeoutMs }` argument. The default timeout
 includes reading the response body. POST methods also accept `idempotencyKey`.
 
 ```typescript
-import { TendrApiError, TendrTimeoutError } from 'tendr-sdk';
+import { TendrApiError, TendrTimeoutError } from '@usetendr/sdk';
 
 try {
   await tendr.checkoutSessions.retrieve(created.id, { timeoutMs: 5_000 });
@@ -160,7 +172,7 @@ JSON or a pagination cursor that does not advance. Redirects are not followed.
 ## Verify a webhook
 
 ```typescript
-import { constructWebhookEvent } from 'tendr-sdk/webhook';
+import { constructWebhookEvent } from '@usetendr/sdk/webhook';
 
 const event = constructWebhookEvent({
   payload: rawBody, // string or Uint8Array/Buffer before JSON parsing

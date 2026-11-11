@@ -59,15 +59,15 @@ jobs:
       - name: Build packages
         run: |
           npm run build --workspace=@tendr/contracts
-          npm run build --workspace=tendr-sdk
+          npm run build --workspace=@usetendr/sdk
           npm run build --workspace=@tendr/ui
       - name: Generate Prisma client
         run: npm run db:generate --workspace=@tendr/api
       - name: Verify standalone SDK
         run: |
-          npm run check:contracts --workspace=tendr-sdk
-          npm run check:api-types --workspace=tendr-sdk
-          npm run test:package --workspace=tendr-sdk
+          npm run check:contracts --workspace=@usetendr/sdk
+          npm run check:api-types --workspace=@usetendr/sdk
+          npm run test:package --workspace=@usetendr/sdk
       - name: Migrate
         run: npm run db:migrate --workspace=@tendr/api
       - name: Lint
@@ -75,14 +75,14 @@ jobs:
       - name: Typecheck
         run: |
           npm run typecheck --workspace=@tendr/contracts
-          npm run typecheck --workspace=tendr-sdk
+          npm run typecheck --workspace=@usetendr/sdk
           npm run typecheck --workspace=@tendr/ui
           npm run typecheck --workspace=@tendr/api
           npm run typecheck --workspace=@tendr/web
       - name: Test
         run: |
           npm run test --workspace=@tendr/contracts
-          npm run test --workspace=tendr-sdk
+          npm run test --workspace=@usetendr/sdk
           npm run test --workspace=@tendr/api
           npm run test --workspace=@tendr/web
       - name: Build
@@ -147,7 +147,7 @@ jobs:
       - name: Build packages
         run: |
           npm run build --workspace=@tendr/contracts
-          npm run build --workspace=tendr-sdk
+          npm run build --workspace=@usetendr/sdk
           npm run build --workspace=@tendr/ui
       - name: Generate Prisma client
         run: npm run db:generate --workspace=@tendr/api
@@ -262,7 +262,7 @@ jobs:
       - name: Build packages
         run: |
           npm run build --workspace=@tendr/contracts
-          npm run build --workspace=tendr-sdk
+          npm run build --workspace=@usetendr/sdk
           npm run build --workspace=@tendr/ui
       - name: Generate Prisma client
         run: npm run db:generate --workspace=@tendr/api
