@@ -622,8 +622,16 @@ export function DemoCheckoutPanel({
         ) : null}
 
         <p className="demo-checkout-footnote">
-          <TendrLogo size={22} variant="color" tone={logoTone} />
-          Powered by <strong>Tendr</strong>
+          <TendrLogo size={skin === 'gaming' ? 16 : 22} variant="color" tone={logoTone} />
+          {skin === 'gaming' ? (
+            <>
+              CHECKOUT BY <strong>TENDR</strong>
+            </>
+          ) : (
+            <>
+              Powered by <strong>Tendr</strong>
+            </>
+          )}
         </p>
       </div>
     </div>
@@ -691,8 +699,20 @@ export function DemoCheckoutOpening({
         </div>
 
         <p className="demo-checkout-footnote">
-          <TendrLogo size={22} variant="color" tone={skin === 'gaming' ? 'white' : 'black'} />
-          Powered by <strong>Tendr</strong>
+          <TendrLogo
+            size={skin === 'gaming' ? 16 : 22}
+            variant="color"
+            tone={skin === 'gaming' ? 'white' : 'black'}
+          />
+          {skin === 'gaming' ? (
+            <>
+              CHECKOUT BY <strong>TENDR</strong>
+            </>
+          ) : (
+            <>
+              Powered by <strong>Tendr</strong>
+            </>
+          )}
         </p>
       </div>
     </div>

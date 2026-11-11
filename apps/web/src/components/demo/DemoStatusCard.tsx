@@ -255,8 +255,20 @@ export function DemoStatusCard({
       )}
 
       <p className="demo-checkout-footnote">
-        <TendrLogo size={22} variant="color" tone={poweredByTone} />
-        Powered by <strong>Tendr</strong>
+        <TendrLogo
+          size={skin === 'gaming' ? 16 : 22}
+          variant="color"
+          tone={poweredByTone}
+        />
+        {skin === 'gaming' ? (
+          <>
+            CHECKOUT BY <strong>TENDR</strong>
+          </>
+        ) : (
+          <>
+            Powered by <strong>Tendr</strong>
+          </>
+        )}
       </p>
     </div>
   );
