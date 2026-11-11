@@ -5504,6 +5504,217 @@ html[data-appearance='light'] .conn-card {
   gap: 0.65rem;
 }
 
+/* Webhooks — endpoint cards, event chips, delivery log */
+.wh-grid {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.wh-card {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1.05rem 1.15rem;
+  border-radius: calc(var(--tendr-radius) + 4px);
+  border: 1px solid var(--tendr-border);
+  background: #121212;
+}
+
+.wh-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.75rem 0.9rem;
+}
+
+.wh-card-icon {
+  display: grid;
+  place-items: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--tendr-white);
+  flex-shrink: 0;
+}
+
+.wh-card-title {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1 1 12rem;
+}
+
+.wh-card-host {
+  font-size: 1.02rem;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.wh-card-path {
+  color: var(--tendr-muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.wh-card-all {
+  margin: 0;
+}
+
+.wh-card-events,
+.wh-event-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.wh-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.wh-create {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.wh-events {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.wh-events-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.wh-events-head strong {
+  display: block;
+  font-size: 0.95rem;
+}
+
+.wh-events-head p {
+  margin: 0.2rem 0 0;
+}
+
+.wh-event-groups {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.wh-event-group {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.wh-event-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--tendr-muted);
+}
+
+.wh-event-chip {
+  appearance: none;
+  margin: 0;
+  padding: 0.35rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #0e0e0e;
+  color: #d8d8d8;
+  font-family: var(--tendr-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 0.72rem;
+  line-height: 1.25;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.wh-event-chip:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+
+.wh-event-chip[data-on] {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #fff;
+}
+
+.wh-event-chip[data-static] {
+  cursor: default;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.wh-log {
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--tendr-border);
+  display: grid;
+  gap: 0.65rem;
+}
+
+.wh-log-table td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.wh-log-event {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+html[data-appearance='light'] .wh-card {
+  background: #fff;
+}
+
+html[data-appearance='light'] .wh-card-icon {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.08);
+  color: #161616;
+}
+
+html[data-appearance='light'] .wh-event-group {
+  background: #fafafa;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+html[data-appearance='light'] .wh-event-chip {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #333;
+}
+
+html[data-appearance='light'] .wh-event-chip:hover {
+  border-color: rgba(0, 0, 0, 0.28);
+  color: #111;
+}
+
+html[data-appearance='light'] .wh-event-chip[data-on] {
+  background: #161616;
+  border-color: #161616;
+  color: #fff;
+}
+
+html[data-appearance='light'] .wh-event-chip[data-static] {
+  background: #f4f4f5;
+  color: #333;
+}
+
 /* Insights — conversion hero + funnel (overview-adjacent, monochrome). */
 .ins {
   display: grid;
