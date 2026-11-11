@@ -5,9 +5,25 @@ import { createPortal } from 'react-dom';
 import type { AssistantAnswer, RouteRecommendations } from '@tendr/contracts';
 import { CheckoutApiError, type CheckoutClient } from '@/lib/checkout/api';
 import { networkName } from '@/lib/checkout/format';
-import type { DemoAssetOption } from '@/lib/demo-assets';
+import { chainLogo } from '@/lib/chain-logos';
+import {
+  optionMatchesAssetId,
+  variantForAssetId,
+  type DemoAssetOption,
+} from '@/lib/demo-assets';
 import { TendrAiGhost } from '@/components/demo/TendrAiGhost';
 import '@/components/demo/demo-playground.css';
+
+function routeVisuals(options: DemoAssetOption[], assetId: string, chain: string) {
+  const option = options.find((o) => optionMatchesAssetId(o, assetId));
+  const variant = option ? variantForAssetId(option, assetId) : undefined;
+  const chainMeta = chainLogo(variant?.blockchain ?? chain);
+  return {
+    iconSrc: option?.iconSrc || variant?.token.logo_url || '',
+    chainLogoSrc: variant?.logoSrc || chainMeta.logoSrc,
+    chainName: variant?.name || chainMeta.name || networkName(chain),
+  };
+}
 
 type Props = {
   client: CheckoutClient;
@@ -206,6 +222,7 @@ export function CheckoutAiFab({ client, sessionId, options, amountLabel, onPickR
                   phase.data.cheapest === route.asset_id ? 'Cheapest' : null,
                   phase.data.fastest === route.asset_id ? 'Fastest' : null,
                 ].filter(Boolean);
+                const visuals = routeVisuals(options, route.asset_id, route.chain);
                 return (
                   <button
                     key={route.asset_id}
@@ -228,7 +245,22 @@ export function CheckoutAiFab({ client, sessionId, options, amountLabel, onPickR
                       </span>
                     </span>
                     <span className="demo-tendrai-card-asset">
-                      {route.symbol} · {networkName(route.chain)}
+                      {visuals.iconSrc ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={visuals.iconSrc} alt="" width={22} height={22} />
+                      ) : null}
+                      <span>{route.symbol}</span>
+                      {visuals.chainLogoSrc ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={visuals.chainLogoSrc}
+                          alt=""
+                          className="demo-tendrai-card-chain"
+                          width={16}
+                          height={16}
+                        />
+                      ) : null}
+                      <span className="demo-tendrai-card-chain-name">{visuals.chainName}</span>
                     </span>
                     <span className="demo-tendrai-card-meta">
                       ~${route.amount_in_usd}
