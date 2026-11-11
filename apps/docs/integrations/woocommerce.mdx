@@ -1,16 +1,23 @@
 ---
 title: 'WooCommerce'
-description: 'Connect Tendr to WordPress, test checkout, and receive payment updates.'
+description: 'Download the Tendr plugin, install it in WordPress, and connect your store.'
 ---
 
 The Tendr plugin supports WooCommerce's classic and Blocks checkout. It creates or reuses a checkout session per order, opens hosted checkout and updates the order from signed Tendr webhooks.
+
+<Card title="Download Tendr for WooCommerce" icon="download" href="https://github.com/SonOfUri/Tendr/releases/download/woocommerce-v0.3.3/tendr-pay-with-crypto-0.3.3.zip">
+  Version 0.3.3 · Ready-to-install ZIP. Download it and upload it in WordPress—no code or terminal required.
+</Card>
 
 ## Install and connect
 
 <Steps>
   <Step title="Install the plugin">
-    Upload the Tendr plugin ZIP through **Plugins → Add New → Upload Plugin**, then activate it.
     WooCommerce must be active. The plugin requires WordPress 6.4+, WooCommerce 8.5+ and PHP 8.0+.
+
+    [Download the plugin ZIP](https://github.com/SonOfUri/Tendr/releases/download/woocommerce-v0.3.3/tendr-pay-with-crypto-0.3.3.zip)
+    and leave it compressed. In your WordPress admin, open **Plugins → Add New → Upload Plugin**,
+    choose `tendr-pay-with-crypto-0.3.3.zip`, click **Install Now**, then **Activate Plugin**.
   </Step>
   <Step title="Prepare the site">
     Use a publicly reachable HTTPS site with pretty permalinks. The storefront and admin must share
@@ -19,7 +26,7 @@ The Tendr plugin supports WooCommerce's classic and Blocks checkout. It creates 
   <Step title="Connect your store">
     Open **WooCommerce → Settings → Payments → tendr**. Click **Connect to tendr**, sign in, select
     your existing Tendr store and approve with your login passkey. Keys and webhook secrets are
-    exchanged server to server.
+    exchanged automatically. The plugin registers payment notifications for you.
   </Step>
   <Step title="Test checkout">
     Connection starts in Test mode. Only store managers see the method. Use **Make a test purchase**
@@ -31,15 +38,15 @@ The Tendr plugin supports WooCommerce's classic and Blocks checkout. It creates 
   </Step>
 </Steps>
 
-## ZIP availability
+## Update the plugin
 
-The plugin is currently distributed as a ZIP; WordPress.org listing approval is not assumed. If you maintain the repository, build the current package with:
+Download the new ZIP from [Tendr's plugin releases](https://github.com/SonOfUri/Tendr/releases?q=woocommerce-v).
+In WordPress, open **Plugins → Add New → Upload Plugin**, select the ZIP and click **Install Now**.
+When WordPress detects the existing plugin, choose **Replace current with uploaded**.
 
-```bash
-npm run build:zip --workspace=@tendr/woocommerce -- --no-publish
-```
-
-The package is written under `apps/woocommerce/dist/`. Use the latest tested release supplied by Tendr. Update through a replacement ZIP until a directory release is available.
+Take a store backup before updating. Keep the existing plugin installed while replacing it so your
+connection and settings are retained. The ZIP is available directly from Tendr; a WordPress.org
+listing is not required to install it.
 
 ## Payment and refund behavior
 
@@ -49,7 +56,7 @@ A refund request goes through Tendr's review/wallet authorization flow. WooComme
 
 ## Site address changes
 
-After changing the domain, HTTPS scheme, subdirectory or temporary tunnel hostname, click **Reconnect to tendr** and select the same store. Reconnecting moves the checkout domain and notification destination and hands earlier orders to the replacement connection.
+After changing the domain, HTTPS scheme or subdirectory, click **Reconnect to tendr** and select the same store. Reconnecting moves the checkout domain and notification destination and hands earlier orders to the replacement connection.
 
 Use Reconnect without disconnecting first, so the old connection credentials remain available for the hand-over. Reconnect starts in Test mode; switch back to Live after the readiness check.
 
@@ -64,5 +71,3 @@ Version 0.3.3 detects a stale address and pauses crypto checkout until reconnect
 | Payment visible in Tendr but order pending | Webhook destination, HTTPS reachability, delivery logs and signature verification |
 | Stored keys cannot be read                 | WordPress security salts changed; reconnect                                       |
 | Connect cannot return                      | Same admin/store origin, pretty permalinks, default REST prefix                   |
-
-For Docker development, follow [Local development](/development/local-setup).

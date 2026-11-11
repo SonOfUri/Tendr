@@ -1,18 +1,13 @@
 ---
 title: TypeScript SDK
-description: Use the repository's typed client for sessions, payment links, themes and webhook verification.
+description: SDK availability and the typed client interface for Tendr integrations.
 ---
 
 <Note>
-  `@tendr/sdk` is currently a private workspace package in the Tendr repository. A public npm
-  release is not assumed. External integrations can use the [HTTP API](/quickstart) directly;
-  repository consumers can build and import the workspace package.
+  `@tendr/sdk` is not yet available as a public npm package. Use the [hosted HTTP API](/quickstart)
+  for integrations today. The examples below describe the SDK interface; installation instructions
+  will be added when the package is publicly available.
 </Note>
-
-```bash
-npm run build --workspace=@tendr/contracts
-npm run build --workspace=@tendr/sdk
-```
 
 ```typescript
 import { TendrClient, TendrApiError } from '@tendr/sdk';

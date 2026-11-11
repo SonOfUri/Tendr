@@ -34,6 +34,11 @@ payment services. `build` runs Mintlify's real strict validation, rather than a 
 - Update schemas and examples when routes change. A route-existence check cannot prove every
   field or business rule matches; review implementation and contracts together.
 - The SDK remains a private workspace package. Shopify remains a pilot pending platform approval.
+- Public MDX pages describe the hosted service and merchant installation. Keep repository setup,
+  Docker simulators and package build commands in internal repository documentation.
+- The WooCommerce guide links directly to the public `woocommerce-v0.3.3` GitHub release ZIP.
+  When releasing a new plugin version, publish and verify the installable ZIP first, then update
+  its version and download links in the guide. Merchants should never need to build the plugin.
 
 Brand marks come from Tendr's existing WooCommerce/FE assets. The wordmark uses Sora; headings use
 Instrument Sans, matching the dashboard. Avoid claims of anonymous payments, autonomous AI money

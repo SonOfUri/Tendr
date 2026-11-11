@@ -116,10 +116,6 @@
               "gasless/gas-policy",
               "integrations/hooks"
             ]
-          },
-          {
-            "group": "Development",
-            "pages": ["development/local-setup"]
           }
         ]
       },

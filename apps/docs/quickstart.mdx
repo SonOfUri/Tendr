@@ -5,6 +5,11 @@ description: Create a test checkout from your server, open the hosted page, and 
 
 Use the hosted API at `https://api.usetendr.tech`. You need a Tendr store with test payment setup completed, a test secret key, and a publicly reachable HTTPS webhook endpoint.
 
+<Tip>
+  Using WooCommerce? [Download and install the Tendr plugin](/integrations/woocommerce) from your
+  WordPress admin. It connects your store and handles API keys and webhooks automatically.
+</Tip>
+
 ## 1. Create a test API key
 
 Select your store and Test mode in the dashboard. Open API keys and create a key with `sessions:write` and `sessions:read`. Keep it on your server as `TENDR_SECRET_KEY`. It begins with `tdr_test_` and is shown once.

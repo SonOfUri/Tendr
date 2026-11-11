@@ -5,10 +5,10 @@ description: 'Understand the offsite connector and what is required before Shopi
 
 <Warning>
   Tendr's Shopify connector is a pilot. It is not an approved, generally available Shopify payment
-  method. Creating a normal app or a development store does not add Tendr to checkout.
+  method. It cannot currently be enabled in your Shopify checkout.
 </Warning>
 
-The connector in `apps/shopify` implements an offsite payment flow: Shopify starts a session, the shopper visits Tendr checkout, the connector verifies and reconciles the outcome, then reports it to Shopify. Refunds wait for Tendr wallet approval and confirmed execution.
+The pilot uses an offsite payment flow: Shopify starts a session, the shopper visits Tendr checkout, the connector verifies and reconciles the outcome, then reports it to Shopify. Refunds wait for Tendr wallet approval and confirmed execution.
 
 ## Production requirements
 
@@ -16,16 +16,6 @@ Shopify Payments Partner access and the applicable payments extension approval a
 
 See Shopify's [offsite payments guide](https://shopify.dev/docs/apps/build/payments/offsite/use-the-cli?framework=remix) and [payments extension review](https://shopify.dev/docs/apps/build/payments/payments-extension-review).
 
-## Local simulator
-
-```bash
-npm run dev:shopify
-```
-
-The Docker simulator exercises payment, return, reconciliation and refund flows without a real Shopify store or funds. It does not host Shopify itself, create a Shopify account, or prove production acceptance.
-
-```bash
-npm run dev:shopify -- stop
-```
+## Accept payments today
 
 Use [WooCommerce](/integrations/woocommerce) or [hosted checkout](/quickstart) for the currently available integration paths.
