@@ -4,7 +4,15 @@ import { useState } from 'react';
 import { WebhookEventTypeValues } from '@tendr/contracts';
 import { Alert, Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
-import { Webhook } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronUp,
+  Plus,
+  RotateCw,
+  Send,
+  Trash2,
+  Webhook,
+} from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad } from '@/components/dashboard/common';
 import { EmptyState, PageHeader, Panel } from '@/components/dashboard/ui';
@@ -66,7 +74,8 @@ export default function WebhooksPage() {
               title="No endpoints yet"
               description="Add a URL to receive signed webhook events from Tendr."
               action={
-                <a href="#add-webhook" className="dash-empty-cta">
+                <a href="#add-webhook" className="dash-empty-cta dash-btn-icon">
+                  <Plus size={16} strokeWidth={1.75} aria-hidden />
                   Add one
                 </a>
               }
@@ -143,8 +152,15 @@ function CreateForm({
           </label>
         ))}
       </fieldset>
-      <Button type="submit" disabled={busy || !url}>
-        {busy ? 'Adding…' : 'Add endpoint'}
+      <Button type="submit" className="dash-btn-icon" disabled={busy || !url}>
+        {busy ? (
+          'Adding…'
+        ) : (
+          <>
+            <Plus size={16} strokeWidth={1.75} aria-hidden />
+            Add endpoint
+          </>
+        )}
       </Button>
     </form>
   );
@@ -200,16 +216,43 @@ function EndpointCard({
         {new Date(endpoint.created_at).toLocaleDateString()}
       </p>
       <div className="row">
-        <Button variant="secondary" onClick={() => void test()} disabled={action.busy}>
+        <Button
+          variant="secondary"
+          className="dash-btn-icon"
+          onClick={() => void test()}
+          disabled={action.busy}
+        >
+          <Send size={16} strokeWidth={1.75} aria-hidden />
           Send a test event
         </Button>
-        <Button variant="secondary" onClick={() => void rotate()} disabled={action.busy}>
+        <Button
+          variant="secondary"
+          className="dash-btn-icon"
+          onClick={() => void rotate()}
+          disabled={action.busy}
+        >
+          <RotateCw size={16} strokeWidth={1.75} aria-hidden />
           Rotate secret
         </Button>
-        <Button variant="secondary" onClick={() => setOpen((o) => !o)}>
-          {open ? 'Hide deliveries' : 'Delivery log'}
+        <Button variant="secondary" className="dash-btn-icon" onClick={() => setOpen((o) => !o)}>
+          {open ? (
+            <>
+              <ChevronUp size={16} strokeWidth={1.75} aria-hidden />
+              Hide deliveries
+            </>
+          ) : (
+            <>
+              <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
+              Delivery log
+            </>
+          )}
         </Button>
-        <button type="button" className="link-button dash-small" onClick={() => void remove()}>
+        <button
+          type="button"
+          className="link-button dash-small dash-btn-icon"
+          onClick={() => void remove()}
+        >
+          <Trash2 size={16} strokeWidth={1.75} aria-hidden />
           Delete
         </button>
       </div>
@@ -239,9 +282,11 @@ function EndpointCard({
                 <Status status={d.status} />
                 <Button
                   variant="secondary"
+                  className="dash-btn-icon"
                   onClick={() => void resend(d.id)}
                   disabled={action.busy}
                 >
+                  <RotateCw size={16} strokeWidth={1.75} aria-hidden />
                   Resend
                 </Button>
               </li>

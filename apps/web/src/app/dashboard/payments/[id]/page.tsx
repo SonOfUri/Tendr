@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { Alert } from '@tendr/ui';
+import { ArrowLeft, ArrowRight, ExternalLink, SearchCheck } from 'lucide-react';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useLoad } from '@/components/dashboard/common';
@@ -28,7 +29,10 @@ export default function PaymentPage() {
     return (
       <>
         <p className="dash-small">
-          <Link href="/dashboard/payments">← Payments</Link>
+          <Link href="/dashboard/payments" className="dash-text-link dash-btn-icon">
+            <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
+            Payments
+          </Link>
         </p>
         <PageHeader title="Payment" />
         {detail.error ? (
@@ -50,7 +54,10 @@ export default function PaymentPage() {
   return (
     <>
       <p className="dash-small">
-        <Link href="/dashboard/payments">← Payments</Link>
+        <Link href="/dashboard/payments" className="dash-text-link dash-btn-icon">
+          <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
+          Payments
+        </Link>
       </p>
       <PageHeader
         title={`${p.order.amount} ${p.order.currency}`}
@@ -69,7 +76,12 @@ export default function PaymentPage() {
 
       {(p.status === 'HELD' || p.held_reason === 'sanctions') && (
         <Alert tone="danger">
-          This payment is held. <Link href="/dashboard/review">Open the review queue</Link>.
+          This payment is held.{' '}
+          <Link href="/dashboard/review" className="dash-text-link dash-btn-icon">
+            <SearchCheck size={16} strokeWidth={1.75} aria-hidden />
+            Open the review queue
+          </Link>
+          .
         </Alert>
       )}
 
@@ -185,7 +197,11 @@ export default function PaymentPage() {
                   {r.proposal_id && (
                     <>
                       {' '}
-                      <Link href={`/dashboard/approvals/${r.proposal_id}`} className="dash-small">
+                      <Link
+                        href={`/dashboard/approvals/${r.proposal_id}`}
+                        className="dash-small dash-text-link dash-btn-icon"
+                      >
+                        <ArrowRight size={16} strokeWidth={1.75} aria-hidden />
                         proposal
                       </Link>
                     </>
@@ -207,8 +223,13 @@ export default function PaymentPage() {
 function TxLink({ tx, livemode }: { tx: TxRef; livemode: boolean }) {
   const url = explorerTxUrl(tx.chain, tx.hash, livemode);
   return url ? (
-    <a href={url} target="_blank" rel="noreferrer noopener" className="dash-mono dash-small">
-      {' '}
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="dash-mono dash-small dash-text-link dash-btn-icon"
+    >
+      <ExternalLink size={16} strokeWidth={1.75} aria-hidden />
       {tx.hash}
     </a>
   ) : (

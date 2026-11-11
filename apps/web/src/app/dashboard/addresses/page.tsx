@@ -16,7 +16,7 @@ import { chainLabel } from '@/lib/assets';
 import { chainFamily, isValidAddress } from '@/lib/checkout/address';
 import { chainId } from '@/lib/chain-logos';
 import { loadIntentsCatalog } from '@/lib/intents-catalog';
-import { MapPin } from 'lucide-react';
+import { MapPin, Minus, Plus } from 'lucide-react';
 import { toast } from '@/components/toast';
 import { draftProposal } from '@/lib/proposals';
 
@@ -78,7 +78,8 @@ export default function SavedAddressesPage() {
             description="Money only leaves to an address saved here. Add one and wait for signers to approve it."
             action={
               canRequest ? (
-                <a href="#add-address" className="dash-empty-cta">
+                <a href="#add-address" className="dash-empty-cta dash-btn-icon">
+                  <Plus size={16} strokeWidth={1.75} aria-hidden />
                   Add one
                 </a>
               ) : null
@@ -101,9 +102,11 @@ export default function SavedAddressesPage() {
                 {canRequest && a.status !== 'revoked' && (
                   <Button
                     variant="secondary"
+                    className="dash-btn-icon"
                     disabled={remove.busy}
                     onClick={() => void removeAddress(a)}
                   >
+                    <Minus size={16} strokeWidth={1.75} aria-hidden />
                     Remove
                   </Button>
                 )}
@@ -121,8 +124,21 @@ export default function SavedAddressesPage() {
               return (
                 <li key={p.id}>
                   <span className="grow">
-                    <Link href={`/dashboard/approvals/${p.id}`}>
-                      {p.kind === 'add_saved_address' ? 'Add' : 'Remove'}
+                    <Link
+                      href={`/dashboard/approvals/${p.id}`}
+                      className="dash-text-link dash-btn-icon"
+                    >
+                      {p.kind === 'add_saved_address' ? (
+                        <>
+                          <Plus size={16} strokeWidth={1.75} aria-hidden />
+                          Add
+                        </>
+                      ) : (
+                        <>
+                          <Minus size={16} strokeWidth={1.75} aria-hidden />
+                          Remove
+                        </>
+                      )}
                     </Link>{' '}
                     <span className="dash-mono dash-small">
                       {v.chain ? `${v.chain}: ${v.address}` : v.id}
@@ -230,8 +246,15 @@ function AddAddress() {
         After the signers approve it, this address waits 24 hours before it can receive money. Check
         every character: money sent to a wrong address cannot be recovered.
       </Alert>
-      <Button type="submit" disabled={busy || !address.trim()}>
-        {busy ? 'Saving…' : 'Ask to add this address'}
+      <Button type="submit" className="dash-btn-icon" disabled={busy || !address.trim()}>
+        {busy ? (
+          'Saving…'
+        ) : (
+          <>
+            <Plus size={16} strokeWidth={1.75} aria-hidden />
+            Ask to add this address
+          </>
+        )}
       </Button>
     </form>
   );

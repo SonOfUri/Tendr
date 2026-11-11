@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
-import { CreditCard } from 'lucide-react';
+import { ChevronDown, CreditCard, ExternalLink, X } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useLoad } from '@/components/dashboard/common';
 import {
@@ -101,11 +101,13 @@ function PaymentsContent() {
             </span>
             <Link
               href={`/dashboard/payment-links/${encodeURIComponent(paymentLinkId)}`}
-              className="dash-text-link dash-small"
+              className="dash-text-link dash-btn-icon dash-small"
             >
+              <ExternalLink size={16} strokeWidth={1.75} aria-hidden />
               View link
             </Link>
-            <Link href="/dashboard/payments" className="dash-text-link dash-small">
+            <Link href="/dashboard/payments" className="dash-text-link dash-btn-icon dash-small">
+              <X size={16} strokeWidth={1.75} aria-hidden />
               Clear filter
             </Link>
           </div>
@@ -209,7 +211,8 @@ function PaymentsContent() {
         {moreError ? <ErrorState message={moreError} /> : null}
         {cursor ? (
           <div className="actions" style={{ marginTop: '0.85rem' }}>
-            <Button variant="secondary" onClick={() => void loadMore()}>
+            <Button variant="secondary" className="dash-btn-icon" onClick={() => void loadMore()}>
+              <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
               Load more
             </Button>
           </div>

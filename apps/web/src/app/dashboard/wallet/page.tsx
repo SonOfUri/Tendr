@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Alert, Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
-import { MapPin } from 'lucide-react';
+import { ArrowUpRight, MapPin, Plus } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { DestinationBox, useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { EmptyState, ErrorState, PageHeader, Panel, Select } from '@/components/dashboard/ui';
@@ -178,7 +178,8 @@ function ContractWithdrawForm() {
           title="No saved addresses yet"
           description="Add one first. It can receive money 24 hours after it is approved."
           action={
-            <Link href="/dashboard/addresses#add-address" className="dash-empty-cta">
+            <Link href="/dashboard/addresses#add-address" className="dash-empty-cta dash-btn-icon">
+              <Plus size={16} strokeWidth={1.75} aria-hidden />
               Add one
             </Link>
           }
@@ -299,8 +300,15 @@ function ContractWithdrawForm() {
           </p>
         </fieldset>
 
-        <Button type="submit" disabled={busy}>
-          {busy ? 'Asking…' : 'Ask to withdraw'}
+        <Button type="submit" className="dash-btn-icon" disabled={busy}>
+          {busy ? (
+            'Asking…'
+          ) : (
+            <>
+              <ArrowUpRight size={16} strokeWidth={1.75} aria-hidden />
+              Ask to withdraw
+            </>
+          )}
         </Button>
       </form>
     </Panel>

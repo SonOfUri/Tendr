@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Alert, Button } from '@tendr/ui';
+import { Gauge, PowerOff, RefreshCw, Send, ShieldCheck } from 'lucide-react';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLivemode, useLoad } from '@/components/dashboard/common';
@@ -202,8 +203,15 @@ function ThresholdForm({
               }))}
             />
           </label>
-          <Button type="submit" disabled={busy || n === current}>
-            Ask to change
+          <Button type="submit" className="dash-btn-icon" disabled={busy || n === current}>
+            {busy ? (
+              'Ask to change'
+            ) : (
+              <>
+                <Send size={16} strokeWidth={1.75} aria-hidden />
+                Ask to change
+              </>
+            )}
           </Button>
         </div>
       ) : (
@@ -324,8 +332,15 @@ function LimitsForm({ onDraft }: { onDraft: (id: string) => void }) {
           <input inputMode="decimal" value={perDay} onChange={(e) => setPerDay(e.target.value)} />
         </label>
       </div>
-      <Button type="submit" disabled={busy || !asset}>
-        Ask to set limits
+      <Button type="submit" className="dash-btn-icon" disabled={busy || !asset}>
+        {busy ? (
+          'Ask to set limits'
+        ) : (
+          <>
+            <Gauge size={16} strokeWidth={1.75} aria-hidden />
+            Ask to set limits
+          </>
+        )}
       </Button>
     </form>
   );
@@ -359,8 +374,15 @@ function RefundCapForm({ onDraft }: { onDraft: (id: string) => void }) {
           />
         </label>
       </div>
-      <Button type="submit" disabled={busy || !asset}>
-        Ask to set the refund cap
+      <Button type="submit" className="dash-btn-icon" disabled={busy || !asset}>
+        {busy ? (
+          'Ask to set the refund cap'
+        ) : (
+          <>
+            <ShieldCheck size={16} strokeWidth={1.75} aria-hidden />
+            Ask to set the refund cap
+          </>
+        )}
       </Button>
     </form>
   );
@@ -390,13 +412,21 @@ function SweepRow({
       {enabled && (
         <Button
           variant="secondary"
+          className="dash-btn-icon"
           disabled={busy}
           onClick={async () => {
             const p = await run(() => draftProposal({ clear_auto_sweep: { asset: limit.asset } }));
             if (p) onDraft(p.id);
           }}
         >
-          Turn off
+          {busy ? (
+            'Turn off'
+          ) : (
+            <>
+              <PowerOff size={16} strokeWidth={1.75} aria-hidden />
+              Turn off
+            </>
+          )}
         </Button>
       )}
     </li>
@@ -479,8 +509,15 @@ function SweepForm({ saved, onDraft }: { saved: SavedAddress[]; onDraft: (id: st
           <span className="dash-mono">{target.address}</span>
         </p>
       )}
-      <Button type="submit" disabled={busy || !asset || !savedId}>
-        Ask to turn on auto-sweep
+      <Button type="submit" className="dash-btn-icon" disabled={busy || !asset || !savedId}>
+        {busy ? (
+          'Ask to turn on auto-sweep'
+        ) : (
+          <>
+            <RefreshCw size={16} strokeWidth={1.75} aria-hidden />
+            Ask to turn on auto-sweep
+          </>
+        )}
       </Button>
     </form>
   );

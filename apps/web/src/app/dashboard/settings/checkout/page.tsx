@@ -12,6 +12,7 @@ import { api } from '@/lib/api';
 import { domainsUsedByConnections } from '@/lib/connect';
 import { keepUnsavedEdits, notificationEmailStatus } from '@/lib/notification-email';
 import { CHECKOUT_DEFAULTS_SCOPE_NOTE, type CheckoutSettings } from '@/lib/payments';
+import { ExternalLink, RotateCw, Save } from 'lucide-react';
 import { withStepUp } from '@/lib/webauthn';
 
 type Payer = CheckoutSettings['default_fee_payer'];
@@ -140,7 +141,12 @@ export default function CheckoutSettingsPage() {
           {dropped.length > 0 && (
             <Alert tone="warning">
               {dropped.map((d) => d.origin).join(', ')} {dropped.length === 1 ? 'is' : 'are'} used
-              by a <Link href="/dashboard/settings/connected-sites">connected site</Link>. Without
+              by a{' '}
+              <Link href="/dashboard/settings/connected-sites" className="dash-text-link dash-btn-icon">
+                <ExternalLink size={16} strokeWidth={1.75} aria-hidden />
+                connected site
+              </Link>
+              . Without
               it, that site’s checkout can’t open in its page.{' '}
               {needsConfirm ? 'Save again to remove it anyway.' : 'Saving removes it.'}
             </Alert>
@@ -179,8 +185,15 @@ export default function CheckoutSettingsPage() {
           </p>
           {saved && <Alert tone="success">Saved.</Alert>}
           <div>
-            <Button type="submit" disabled={busy}>
-              {busy ? 'Saving…' : 'Save'}
+            <Button type="submit" className="dash-btn-icon" disabled={busy}>
+              {busy ? (
+                'Saving…'
+              ) : (
+                <>
+                  <Save size={16} strokeWidth={1.75} aria-hidden />
+                  Save
+                </>
+              )}
             </Button>
           </div>
         </form>
@@ -258,8 +271,20 @@ function NotificationEmail({
         {status.pending && (
           <Alert tone="info">
             {status.pending}.{' '}
-            <button type="button" className="link-button" onClick={resend} disabled={busy}>
-              Resend the link
+            <button
+              type="button"
+              className="link-button dash-btn-icon"
+              onClick={resend}
+              disabled={busy}
+            >
+              {busy ? (
+                'Resend the link'
+              ) : (
+                <>
+                  <RotateCw size={16} strokeWidth={1.75} aria-hidden />
+                  Resend the link
+                </>
+              )}
             </button>
           </Alert>
         )}
@@ -289,8 +314,15 @@ function NotificationEmail({
         </label>
         {notice && <Alert tone="success">{notice}</Alert>}
         <div>
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Saving…' : 'Save'}
+          <Button type="submit" className="dash-btn-icon" disabled={busy}>
+            {busy ? (
+              'Saving…'
+            ) : (
+              <>
+                <Save size={16} strokeWidth={1.75} aria-hidden />
+                Save
+              </>
+            )}
           </Button>
         </div>
       </form>

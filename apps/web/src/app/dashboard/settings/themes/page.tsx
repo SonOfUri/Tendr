@@ -6,7 +6,19 @@ import { useState } from 'react';
 import { can } from '@tendr/contracts';
 import { Alert, Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
-import { Palette, WifiOff } from 'lucide-react';
+import {
+  ExternalLink,
+  Globe,
+  Pencil,
+  Plus,
+  Sparkles,
+  Star,
+  Trash2,
+  Upload,
+  WifiOff,
+  X,
+  Palette,
+} from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import { EmptyState, ErrorState, PageHeader, Panel, Select } from '@/components/dashboard/ui';
@@ -146,6 +158,7 @@ export default function ThemesPage() {
             <>
               <Button
                 variant="secondary"
+                className="dash-btn-icon"
                 onClick={() => {
                   setImporting((v) => !v);
                   setCreating(false);
@@ -153,10 +166,21 @@ export default function ThemesPage() {
                   action.setError(null);
                 }}
               >
-                {importing ? 'Cancel' : 'From website'}
+                {importing ? (
+                  <>
+                    <X size={16} strokeWidth={1.75} aria-hidden />
+                    Cancel
+                  </>
+                ) : (
+                  <>
+                    <Globe size={16} strokeWidth={1.75} aria-hidden />
+                    From website
+                  </>
+                )}
               </Button>
               <Button
                 variant="secondary"
+                className="dash-btn-icon"
                 onClick={() => {
                   setGenerating((v) => !v);
                   setCreating(false);
@@ -164,9 +188,20 @@ export default function ThemesPage() {
                   action.setError(null);
                 }}
               >
-                {generating ? 'Cancel' : 'Generate with AI'}
+                {generating ? (
+                  <>
+                    <X size={16} strokeWidth={1.75} aria-hidden />
+                    Cancel
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={16} strokeWidth={1.75} aria-hidden />
+                    Generate with AI
+                  </>
+                )}
               </Button>
               <Button
+                className="dash-btn-icon"
                 onClick={() => {
                   setCreating((v) => !v);
                   setImporting(false);
@@ -174,7 +209,17 @@ export default function ThemesPage() {
                   action.setError(null);
                 }}
               >
-                {creating ? 'Cancel' : 'New theme'}
+                {creating ? (
+                  <>
+                    <X size={16} strokeWidth={1.75} aria-hidden />
+                    Cancel
+                  </>
+                ) : (
+                  <>
+                    <Plus size={16} strokeWidth={1.75} aria-hidden />
+                    New theme
+                  </>
+                )}
               </Button>
             </>
           ) : null
@@ -226,8 +271,15 @@ export default function ThemesPage() {
                   />
                 </label>
                 <div className="actions">
-                  <Button type="submit" disabled={action.busy}>
-                    {action.busy ? 'Generating…' : 'Generate draft'}
+                  <Button type="submit" className="dash-btn-icon" disabled={action.busy}>
+                    {action.busy ? (
+                      'Generating…'
+                    ) : (
+                      <>
+                        <Sparkles size={16} strokeWidth={1.75} aria-hidden />
+                        Generate draft
+                      </>
+                    )}
                   </Button>
                 </div>
               </form>
@@ -263,8 +315,15 @@ export default function ThemesPage() {
                   />
                 </label>
                 <div className="actions">
-                  <Button type="submit" disabled={action.busy}>
-                    {action.busy ? 'Reading site…' : 'Create draft'}
+                  <Button type="submit" className="dash-btn-icon" disabled={action.busy}>
+                    {action.busy ? (
+                      'Reading site…'
+                    ) : (
+                      <>
+                        <Globe size={16} strokeWidth={1.75} aria-hidden />
+                        Create draft
+                      </>
+                    )}
                   </Button>
                 </div>
               </form>
@@ -300,8 +359,15 @@ export default function ThemesPage() {
                   />
                 </div>
                 <div className="actions">
-                  <Button type="submit" disabled={action.busy}>
-                    {action.busy ? 'Creating…' : 'Create'}
+                  <Button type="submit" className="dash-btn-icon" disabled={action.busy}>
+                    {action.busy ? (
+                      'Creating…'
+                    ) : (
+                      <>
+                        <Plus size={16} strokeWidth={1.75} aria-hidden />
+                        Create
+                      </>
+                    )}
                   </Button>
                 </div>
               </form>
@@ -371,34 +437,50 @@ export default function ThemesPage() {
                             <div className="actions">
                               <Link
                                 href={`/dashboard/settings/themes/${theme.id}`}
-                                className="dash-text-link"
+                                className="dash-text-link dash-btn-icon"
                               >
-                                {canWrite ? 'Edit' : 'View'}
+                                {canWrite ? (
+                                  <>
+                                    <Pencil size={16} strokeWidth={1.75} aria-hidden />
+                                    Edit
+                                  </>
+                                ) : (
+                                  <>
+                                    <ExternalLink size={16} strokeWidth={1.75} aria-hidden />
+                                    View
+                                  </>
+                                )}
                               </Link>
                               {canWrite && dirty ? (
                                 <Button
                                   variant="secondary"
+                                  className="dash-btn-icon"
                                   disabled={action.busy}
                                   onClick={() => void publish(theme)}
                                 >
+                                  <Upload size={16} strokeWidth={1.75} aria-hidden />
                                   Publish
                                 </Button>
                               ) : null}
                               {canWrite && theme.status === 'published' && !theme.is_default ? (
                                 <Button
                                   variant="secondary"
+                                  className="dash-btn-icon"
                                   disabled={action.busy}
                                   onClick={() => void makeDefault(theme)}
                                 >
+                                  <Star size={16} strokeWidth={1.75} aria-hidden />
                                   Make default
                                 </Button>
                               ) : null}
                               {canWrite && !theme.is_default ? (
                                 <Button
                                   variant="ghost"
+                                  className="dash-btn-icon"
                                   disabled={action.busy}
                                   onClick={() => void remove(theme)}
                                 >
+                                  <Trash2 size={16} strokeWidth={1.75} aria-hidden />
                                   Delete
                                 </Button>
                               ) : null}

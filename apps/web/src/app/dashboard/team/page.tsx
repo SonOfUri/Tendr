@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Alert, Button } from '@tendr/ui';
+import { Send, ShieldPlus } from 'lucide-react';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
@@ -136,8 +137,15 @@ function InviteForm({ onSent }: { onSent: () => void }) {
         </label>
       </div>
       {sent && <Alert tone="success">Invite sent to {sent}. It works for 7 days.</Alert>}
-      <Button type="submit" disabled={busy || !email}>
-        {busy ? 'Sending…' : 'Send invite'}
+      <Button type="submit" className="dash-btn-icon" disabled={busy || !email}>
+        {busy ? (
+          'Sending…'
+        ) : (
+          <>
+            <Send size={16} strokeWidth={1.75} aria-hidden />
+            Send invite
+          </>
+        )}
       </Button>
     </form>
   );
@@ -207,8 +215,15 @@ function MemberRow({
         <span className="dash-muted dash-small">{ROLE_WORDS[member.role]}</span>
       )}
       {isOwner && !member.isSigner && member.role !== 'viewer' && (
-        <Button variant="secondary" disabled={busy} onClick={() => void makeSigner()}>
-          {busy ? 'Working…' : `Make signer${livemode ? '' : ' (test)'}`}
+        <Button variant="secondary" className="dash-btn-icon" disabled={busy} onClick={() => void makeSigner()}>
+          {busy ? (
+            'Working…'
+          ) : (
+            <>
+              <ShieldPlus size={16} strokeWidth={1.75} aria-hidden />
+              {`Make signer${livemode ? '' : ' (test)'}`}
+            </>
+          )}
         </Button>
       )}
     </li>

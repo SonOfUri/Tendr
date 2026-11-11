@@ -11,6 +11,7 @@ import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import { EmptyState, ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
 import { api } from '@/lib/api';
+import { Trash2, X } from 'lucide-react';
 import { withStepUp } from '@/lib/webauthn';
 
 const PLATFORMS: Record<string, { label: string; logo: string }> = {
@@ -122,17 +123,26 @@ export default function ConnectedSitesPage() {
                       stays.
                     </Alert>
                     <div className="button-row">
-                      <Button onClick={() => void remove(c)} disabled={busy}>
-                        {busy ? 'Waiting for your passkey…' : 'Remove site'}
+                      <Button className="dash-btn-icon" onClick={() => void remove(c)} disabled={busy}>
+                        {busy ? (
+                          'Waiting for your passkey…'
+                        ) : (
+                          <>
+                            <Trash2 size={16} strokeWidth={1.75} aria-hidden />
+                            Remove site
+                          </>
+                        )}
                       </Button>
                       <Button
                         variant="ghost"
+                        className="dash-btn-icon"
                         disabled={busy}
                         onClick={() => {
                           setConfirming(null);
                           setError(null);
                         }}
                       >
+                        <X size={16} strokeWidth={1.75} aria-hidden />
                         Keep it
                       </Button>
                     </div>
@@ -141,11 +151,13 @@ export default function ConnectedSitesPage() {
                   <div className="conn-card-actions">
                     <Button
                       variant="secondary"
+                      className="dash-btn-icon"
                       onClick={() => {
                         setError(null);
                         setConfirming(c.id);
                       }}
                     >
+                      <Trash2 size={16} strokeWidth={1.75} aria-hidden />
                       Remove
                     </Button>
                   </div>

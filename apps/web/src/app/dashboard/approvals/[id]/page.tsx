@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect } from 'react';
 import { Alert, Button } from '@tendr/ui';
+import { ArrowLeft, Check, X } from 'lucide-react';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { DestinationBox, Status, useAction, useLoad, useTick } from '@/components/dashboard/common';
@@ -89,7 +90,10 @@ export default function ProposalPage() {
     return (
       <div className="stack">
         <p className="dash-small">
-          <Link href="/dashboard/approvals">← Approvals</Link>
+          <Link href="/dashboard/approvals" className="dash-text-link dash-btn-icon">
+            <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
+            Approvals
+          </Link>
         </p>
         {canCancelRefund ? (
           <Panel title="Before you sign">
@@ -99,6 +103,7 @@ export default function ProposalPage() {
             </p>
             <Button
               variant="secondary"
+              className="dash-btn-icon"
               disabled={action.busy}
               onClick={() =>
                 void action.run(async () => {
@@ -106,7 +111,14 @@ export default function ProposalPage() {
                 })
               }
             >
-              Cancel proposal
+              {action.busy ? (
+                'Cancel proposal'
+              ) : (
+                <>
+                  <X size={16} strokeWidth={1.75} aria-hidden />
+                  Cancel proposal
+                </>
+              )}
             </Button>
           </Panel>
         ) : null}
@@ -151,7 +163,10 @@ export default function ProposalPage() {
   return (
     <>
       <p className="dash-small">
-        <Link href="/dashboard/approvals">← Approvals</Link>
+        <Link href="/dashboard/approvals" className="dash-text-link dash-btn-icon">
+          <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
+          Approvals
+        </Link>
       </p>
       <PageHeader
         title={summary.title}
@@ -223,13 +238,27 @@ export default function ProposalPage() {
         )}
         <div className="cta-row">
           {canApprove && (
-            <Button onClick={() => void approve()} disabled={action.busy}>
-              {action.busy ? 'Waiting for your passkey…' : 'Approve with passkey'}
+            <Button className="dash-btn-icon" onClick={() => void approve()} disabled={action.busy}>
+              {action.busy ? (
+                'Waiting for your passkey…'
+              ) : (
+                <>
+                  <Check size={16} strokeWidth={1.75} aria-hidden />
+                  Approve with passkey
+                </>
+              )}
             </Button>
           )}
           {canCancel && (
-            <Button variant="secondary" onClick={() => void cancel()} disabled={action.busy}>
-              {p.status === 'draft' ? 'Cancel request' : 'Cancel with passkey'}
+            <Button variant="secondary" className="dash-btn-icon" onClick={() => void cancel()} disabled={action.busy}>
+              {action.busy ? (
+                p.status === 'draft' ? 'Cancel request' : 'Cancel with passkey'
+              ) : (
+                <>
+                  <X size={16} strokeWidth={1.75} aria-hidden />
+                  {p.status === 'draft' ? 'Cancel request' : 'Cancel with passkey'}
+                </>
+              )}
             </Button>
           )}
         </div>

@@ -6,7 +6,17 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { can } from '@tendr/contracts';
 import { Alert, Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
-import { WifiOff } from 'lucide-react';
+import {
+  ArrowLeft,
+  Check,
+  CircleCheck,
+  ExternalLink,
+  Save,
+  Star,
+  Upload,
+  WifiOff,
+  X,
+} from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useLoad } from '@/components/dashboard/common';
 import {
@@ -83,7 +93,12 @@ export default function ThemeEditorPage() {
       <PageHeader
         title="Edit theme"
         description="Themes apply to this whole business across test and live. Publishing changes what live shoppers see."
-        actions={<TextLink href="/dashboard/settings/themes">All themes</TextLink>}
+        actions={
+          <TextLink href="/dashboard/settings/themes" className="dash-btn-icon">
+            <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
+            All themes
+          </TextLink>
+        }
       />
       {uiPreview ? (
         <Panel>
@@ -439,16 +454,31 @@ function Editor({
           </p>
 
           <div className="actions">
-            <Button type="submit" disabled={disabled || !unsaved}>
-              {busy === 'save' ? 'Saving…' : 'Save draft'}
+            <Button type="submit" className="dash-btn-icon" disabled={disabled || !unsaved}>
+              {busy === 'save' ? (
+                'Saving…'
+              ) : (
+                <>
+                  <Save size={16} strokeWidth={1.75} aria-hidden />
+                  Save draft
+                </>
+              )}
             </Button>
             <Button
               type="button"
               variant="secondary"
+              className="dash-btn-icon"
               disabled={disabled}
               onClick={() => void validate()}
             >
-              {busy === 'validate' ? 'Checking…' : 'Validate'}
+              {busy === 'validate' ? (
+                'Checking…'
+              ) : (
+                <>
+                  <Check size={16} strokeWidth={1.75} aria-hidden />
+                  Validate
+                </>
+              )}
             </Button>
           </div>
         </form>
@@ -493,6 +523,7 @@ function Editor({
                   <Button
                     type="button"
                     variant="ghost"
+                    className="dash-btn-icon"
                     disabled={disabled}
                     onClick={() =>
                       setSettings((s) => {
@@ -501,6 +532,7 @@ function Editor({
                       })
                     }
                   >
+                    <X size={16} strokeWidth={1.75} aria-hidden />
                     Remove logo
                   </Button>
                 ) : null}
@@ -537,10 +569,18 @@ function Editor({
                             <Button
                               type="button"
                               variant="secondary"
+                              className="dash-btn-icon"
                               disabled={disabled || settings.logo_asset_id === a.id}
                               onClick={() => setSettings((s) => ({ ...s, logo_asset_id: a.id }))}
                             >
-                              {settings.logo_asset_id === a.id ? 'In use' : 'Use'}
+                              {settings.logo_asset_id === a.id ? (
+                                <>
+                                  <CircleCheck size={16} strokeWidth={1.75} aria-hidden />
+                                  In use
+                                </>
+                              ) : (
+                                'Use'
+                              )}
                             </Button>
                           ) : null}
                         </td>
@@ -586,18 +626,34 @@ function Editor({
             <div className="actions">
               <Button
                 type="button"
+                className="dash-btn-icon"
                 disabled={disabled || unsaved || !publishable}
                 onClick={() => void publish()}
               >
-                {busy === 'publish' ? 'Publishing…' : 'Publish'}
+                {busy === 'publish' ? (
+                  'Publishing…'
+                ) : (
+                  <>
+                    <Upload size={16} strokeWidth={1.75} aria-hidden />
+                    Publish
+                  </>
+                )}
               </Button>
               <Button
                 type="button"
                 variant="secondary"
+                className="dash-btn-icon"
                 disabled={disabled || theme.status !== 'published' || theme.is_default || unsaved}
                 onClick={() => void makeDefault()}
               >
-                {busy === 'default' ? 'Working…' : 'Make default'}
+                {busy === 'default' ? (
+                  'Working…'
+                ) : (
+                  <>
+                    <Star size={16} strokeWidth={1.75} aria-hidden />
+                    Make default
+                  </>
+                )}
               </Button>
             </div>
             <p className="dash-muted dash-small">
@@ -614,7 +670,8 @@ function Editor({
       ) : null}
 
       <p className="dash-small">
-        <Link href="/dashboard/settings/themes" className="dash-text-link">
+        <Link href="/dashboard/settings/themes" className="dash-text-link dash-btn-icon">
+          <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
           Back to themes
         </Link>
       </p>
@@ -643,18 +700,27 @@ function Editor({
               <Button
                 type="button"
                 variant="secondary"
+                className="dash-btn-icon"
                 disabled={busy !== null}
                 onClick={() => void openPreview()}
               >
-                {busy === 'preview' ? 'Creating link…' : 'Open in new tab'}
+                {busy === 'preview' ? (
+                  'Creating link…'
+                ) : (
+                  <>
+                    <ExternalLink size={16} strokeWidth={1.75} aria-hidden />
+                    Open in new tab
+                  </>
+                )}
               </Button>
               {preview ? (
                 <a
                   href={preview.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="dash-text-link dash-small"
+                  className="dash-text-link dash-btn-icon dash-small"
                 >
+                  <ExternalLink size={14} strokeWidth={1.75} aria-hidden />
                   Open again
                 </a>
               ) : null}

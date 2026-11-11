@@ -11,7 +11,15 @@ import { AssetGridPicker } from '@/components/dashboard/AssetGridPicker';
 import { EmptyState, ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
 import { chainLabel, formatAmount } from '@/lib/assets';
 import { chainSelectOptions } from '@/components/dashboard/asset-logos';
-import { SearchCheck } from 'lucide-react';
+import {
+  ArrowRight,
+  FilePenLine,
+  MapPinPlus,
+  RotateCcw,
+  SearchCheck,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
 import { api } from '@/lib/api';
 import {
   heldReturnForms,
@@ -149,7 +157,8 @@ function RefundLine({ r, livemode }: { r: Refund; livemode: boolean }) {
       {r.proposal_id && (
         <>
           {' '}
-          <Link href={`/dashboard/approvals/${r.proposal_id}`} className="dash-small">
+          <Link href={`/dashboard/approvals/${r.proposal_id}`} className="dash-small dash-text-link dash-btn-icon">
+            <ArrowRight size={16} strokeWidth={1.75} aria-hidden />
             View the proposal
           </Link>
         </>
@@ -172,8 +181,15 @@ function CancelStoreRefund({ r, onChanged }: { r: Refund; onChanged: () => void 
   }
   return (
     <>
-      <Button variant="secondary" onClick={() => void run()} disabled={cancel.busy}>
-        {cancel.busy ? 'Cancelling…' : 'Cancel refund'}
+      <Button variant="secondary" className="dash-btn-icon" onClick={() => void run()} disabled={cancel.busy}>
+        {cancel.busy ? (
+          'Cancelling…'
+        ) : (
+          <>
+            <X size={16} strokeWidth={1.75} aria-hidden />
+            Cancel refund
+          </>
+        )}
       </Button>
     </>
   );
@@ -251,8 +267,15 @@ function HeldCard({
                 autoComplete="off"
               />
             </label>
-            <Button type="submit" disabled={ack.busy || phrase !== LEGAL_ACK_PHRASE}>
-              {ack.busy ? 'Confirming…' : 'Confirm legal clearance'}
+            <Button type="submit" className="dash-btn-icon" disabled={ack.busy || phrase !== LEGAL_ACK_PHRASE}>
+              {ack.busy ? (
+                'Confirming…'
+              ) : (
+                <>
+                  <ShieldCheck size={16} strokeWidth={1.75} aria-hidden />
+                  Confirm legal clearance
+                </>
+              )}
             </Button>
           </form>
         ) : (
@@ -330,13 +353,21 @@ function ReturnRow({
         )}
       </span>
       {canRedraft && (
-        <Button variant="secondary" onClick={() => void redraft()} disabled={redo.busy}>
-          {redo.busy ? 'Drafting…' : 'Draft again'}
+        <Button variant="secondary" className="dash-btn-icon" onClick={() => void redraft()} disabled={redo.busy}>
+          {redo.busy ? (
+            'Drafting…'
+          ) : (
+            <>
+              <RotateCcw size={16} strokeWidth={1.75} aria-hidden />
+              Draft again
+            </>
+          )}
         </Button>
       )}
       <CancelStoreRefund r={r} onChanged={onChanged} />
       {!r.proposal_id && !give && (
-        <button type="button" className="link-button dash-small" onClick={() => setGive(true)}>
+        <button type="button" className="link-button dash-small dash-btn-icon" onClick={() => setGive(true)}>
+          <MapPinPlus size={16} strokeWidth={1.75} aria-hidden />
           Send to another address
         </button>
       )}
@@ -405,8 +436,15 @@ function DestinationForm({
           />
         </label>
       </div>
-      <Button type="submit" disabled={busy || !address}>
-        {busy ? 'Drafting…' : label}
+      <Button type="submit" className="dash-btn-icon" disabled={busy || !address}>
+        {busy ? (
+          'Drafting…'
+        ) : (
+          <>
+            <FilePenLine size={16} strokeWidth={1.75} aria-hidden />
+            {label}
+          </>
+        )}
       </Button>
     </form>
   );

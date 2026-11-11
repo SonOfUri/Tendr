@@ -2082,6 +2082,27 @@ html[data-appearance='light'] .dash-golive-wallet-setup {
   align-items: center;
 }
 
+/* Lucide + label on dashboard Buttons / text links */
+.dash-app .actions > button,
+.dash-app .actions > a,
+.dash-app .actions > button,
+.dash-app .actions > a,
+.dash-app button.dash-btn-icon,
+.dash-app a.dash-btn-icon,
+.dash-app .dash-text-link.dash-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.dash-app .actions > button svg,
+.dash-app .actions > a svg,
+.dash-app button.dash-btn-icon svg,
+.dash-app a.dash-btn-icon svg,
+.dash-app .dash-text-link.dash-btn-icon svg {
+  flex-shrink: 0;
+}
+
 .dash-filter-bar {
   display: flex;
   flex-wrap: wrap;

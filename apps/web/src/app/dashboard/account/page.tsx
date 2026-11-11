@@ -14,6 +14,8 @@ import {
   Shield,
   UserRound,
   Wallet,
+  RefreshCw,
+  Rocket,
 } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { TokenLogo } from '@/components/dashboard/asset-logos';
@@ -455,6 +457,7 @@ export default function AccountHomePage() {
             <div className="dash-golive-actions">
               {!nativeLive && !live && isOwner ? (
                 <Button
+                  className="dash-btn-icon"
                   disabled={!checklist.ok || busy}
                   onClick={() =>
                     act(() =>
@@ -462,7 +465,14 @@ export default function AccountHomePage() {
                     )
                   }
                 >
-                  {busy ? 'Working…' : 'Go live'}
+                  {busy ? (
+                    'Working…'
+                  ) : (
+                    <>
+                      <Rocket size={16} strokeWidth={1.75} aria-hidden />
+                      Go live
+                    </>
+                  )}
                 </Button>
               ) : null}
               {!nativeLive && !live && !isOwner ? (
@@ -560,8 +570,15 @@ function AccountCard({
         )
       ) : null}
       {a?.status === 'failed' && onRetry ? (
-        <Button variant="secondary" onClick={onRetry} disabled={busy}>
-          Try setup again
+        <Button variant="secondary" className="dash-btn-icon" onClick={onRetry} disabled={busy}>
+          {busy ? (
+            'Try setup again'
+          ) : (
+            <>
+              <RefreshCw size={16} strokeWidth={1.75} aria-hidden />
+              Try setup again
+            </>
+          )}
         </Button>
       ) : null}
     </Panel>

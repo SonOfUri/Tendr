@@ -6,7 +6,20 @@ import { useEffect, useState } from 'react';
 import { can } from '@tendr/contracts';
 import { Alert, Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
-import { WifiOff } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Check,
+  Copy,
+  ExternalLink,
+  QrCode,
+  Receipt,
+  RotateCcw,
+  Save,
+  Share2,
+  WifiOff,
+} from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
 import {
@@ -15,7 +28,6 @@ import {
   PageHeader,
   Panel,
   Select,
-  TextLink,
 } from '@/components/dashboard/ui';
 import { api } from '@/lib/api';
 import { canNativeShare, sharePaymentLink } from '@/lib/share-link';
@@ -79,7 +91,10 @@ export default function PaymentLinkDetailPage() {
 
   const back = (
     <p className="small">
-      <Link href="/dashboard/payment-links">← Payment links</Link>
+      <Link href="/dashboard/payment-links" className="dash-text-link dash-btn-icon">
+        <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
+        Payment links
+      </Link>
     </p>
   );
 
@@ -209,18 +224,63 @@ export default function PaymentLinkDetailPage() {
             >
               {availabilityWords(link.availability)}
             </span>
-            <Button variant="secondary" onClick={() => void sendUrl()}>
-              {sendLabel}
+            <Button
+              variant="secondary"
+              className="dash-btn-icon"
+              onClick={() => void sendUrl()}
+            >
+              {sent === 'shared' || sent === 'copied' ? (
+                <>
+                  <Check size={16} strokeWidth={1.75} aria-hidden />
+                  {sendLabel}
+                </>
+              ) : nativeShare ? (
+                <>
+                  <Share2 size={16} strokeWidth={1.75} aria-hidden />
+                  {sendLabel}
+                </>
+              ) : (
+                <>
+                  <Copy size={16} strokeWidth={1.75} aria-hidden />
+                  {sendLabel}
+                </>
+              )}
             </Button>
-            <TextLink href={paymentsHref}>View payments</TextLink>
+            <Link href={paymentsHref} className="dash-text-link dash-btn-icon">
+              <Receipt size={16} strokeWidth={1.75} aria-hidden />
+              View payments
+            </Link>
             {canWrite ? (
               link.archived ? (
-                <Button disabled={busy || !online} onClick={() => void onArchive(false)}>
-                  {archive.busy ? 'Restoring…' : 'Restore'}
+                <Button
+                  className="dash-btn-icon"
+                  disabled={busy || !online}
+                  onClick={() => void onArchive(false)}
+                >
+                  {archive.busy ? (
+                    'Restoring…'
+                  ) : (
+                    <>
+                      <ArchiveRestore size={16} strokeWidth={1.75} aria-hidden />
+                      Restore
+                    </>
+                  )}
                 </Button>
               ) : (
-                <Button variant="secondary" disabled={busy || !online} onClick={() => void onArchive(true)}>
-                  {archive.busy ? 'Archiving…' : 'Archive'}
+                <Button
+                  variant="secondary"
+                  className="dash-btn-icon"
+                  disabled={busy || !online}
+                  onClick={() => void onArchive(true)}
+                >
+                  {archive.busy ? (
+                    'Archiving…'
+                  ) : (
+                    <>
+                      <Archive size={16} strokeWidth={1.75} aria-hidden />
+                      Archive
+                    </>
+                  )}
                 </Button>
               )
             ) : null}
@@ -246,7 +306,13 @@ export default function PaymentLinkDetailPage() {
             <dd className="dash-mono">{link.slug}</dd>
             <dt>URL</dt>
             <dd>
-              <a href={link.url} target="_blank" rel="noreferrer" className="dash-text-link dash-mono">
+              <a
+                href={link.url}
+                target="_blank"
+                rel="noreferrer"
+                className="dash-text-link dash-btn-icon dash-mono"
+              >
+                <ExternalLink size={16} strokeWidth={1.75} aria-hidden />
                 {link.url}
               </a>
             </dd>
@@ -324,8 +390,9 @@ export default function PaymentLinkDetailPage() {
               href={link.qr_url}
               target="_blank"
               rel="noreferrer"
-              className="dash-text-link dash-small"
+              className="dash-text-link dash-btn-icon dash-small"
             >
+              <QrCode size={16} strokeWidth={1.75} aria-hidden />
               Open QR image
             </a>
           </div>
@@ -504,15 +571,24 @@ export default function PaymentLinkDetailPage() {
               <Alert tone="info">You’re offline. Reconnect to save this payment link.</Alert>
             ) : null}
             <div className="actions">
-              <Button type="submit" disabled={busy || !online}>
-                {save.busy ? 'Saving…' : 'Save changes'}
+              <Button type="submit" className="dash-btn-icon" disabled={busy || !online}>
+                {save.busy ? (
+                  'Saving…'
+                ) : (
+                  <>
+                    <Save size={16} strokeWidth={1.75} aria-hidden />
+                    Save changes
+                  </>
+                )}
               </Button>
               <Button
                 type="button"
                 variant="secondary"
+                className="dash-btn-icon"
                 disabled={busy}
                 onClick={() => setForm(formFromLink(link))}
               >
+                <RotateCcw size={16} strokeWidth={1.75} aria-hidden />
                 Reset
               </Button>
             </div>

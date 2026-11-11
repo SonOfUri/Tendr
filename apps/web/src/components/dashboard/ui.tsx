@@ -149,9 +149,17 @@ export function FixtureBadge() {
   );
 }
 
-export function TextLink({ href, children }: { href: string; children: ReactNode }) {
+export function TextLink({
+  href,
+  children,
+  className,
+}: {
+  href: string;
+  children: ReactNode;
+  className?: string;
+}) {
   return (
-    <Link href={href} className="dash-text-link">
+    <Link href={href} className={['dash-text-link', className].filter(Boolean).join(' ')}>
       {children}
     </Link>
   );

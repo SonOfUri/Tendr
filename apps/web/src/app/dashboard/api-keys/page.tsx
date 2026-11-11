@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { Ban, Check, Copy, Key, RefreshCw, X } from 'lucide-react';
 import { ScopeValues, type Scope } from '@tendr/contracts';
 import { Alert, Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
@@ -139,8 +140,21 @@ function KeyManager({ context }: { context: StoreContext }) {
             <input readOnly value={issued.secret} autoComplete="off" spellCheck={false} />
           </label>
           <div className="row">
-            <Button onClick={() => void copy()}>{copied ? 'Copied' : 'Copy key'}</Button>
-            <Button variant="secondary" onClick={() => setIssued(null)}>
+            <Button className="dash-btn-icon" onClick={() => void copy()}>
+              {copied ? (
+                <>
+                  <Check size={16} strokeWidth={1.75} aria-hidden />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Copy size={16} strokeWidth={1.75} aria-hidden />
+                  Copy key
+                </>
+              )}
+            </Button>
+            <Button variant="secondary" className="dash-btn-icon" onClick={() => setIssued(null)}>
+              <Check size={16} strokeWidth={1.75} aria-hidden />
               I’ve saved this key
             </Button>
           </div>
@@ -190,16 +204,30 @@ function KeyManager({ context }: { context: StoreContext }) {
           </p>
           <Button
             type="submit"
+            className="dash-btn-icon"
             disabled={action.busy || !!issued || !name.trim() || scopes.length === 0}
           >
-            {action.busy && !revoking ? 'Creating…' : `Create ${mode} key`}
+            {action.busy && !revoking ? (
+              'Creating…'
+            ) : (
+              <>
+                <Key size={16} strokeWidth={1.75} aria-hidden />
+                {`Create ${mode} key`}
+              </>
+            )}
           </Button>
         </form>
       </section>
       <section className="card stack">
         <div className="row">
           <h2>Your {mode} keys</h2>
-          <Button variant="secondary" onClick={() => void keys.reload()} disabled={action.busy}>
+          <Button
+            variant="secondary"
+            className="dash-btn-icon"
+            onClick={() => void keys.reload()}
+            disabled={action.busy}
+          >
+            <RefreshCw size={16} strokeWidth={1.75} aria-hidden />
             Refresh keys
           </Button>
         </div>
@@ -229,14 +257,27 @@ function KeyManager({ context }: { context: StoreContext }) {
                           Revoke “{key.name}”? Integrations using this key will lose API access.
                         </p>
                         <div className="row">
-                          <Button disabled={action.busy} onClick={() => void revoke(key.id)}>
-                            Confirm revoke
+                          <Button
+                            className="dash-btn-icon"
+                            disabled={action.busy}
+                            onClick={() => void revoke(key.id)}
+                          >
+                            {action.busy ? (
+                              'Confirm revoke'
+                            ) : (
+                              <>
+                                <Ban size={16} strokeWidth={1.75} aria-hidden />
+                                Confirm revoke
+                              </>
+                            )}
                           </Button>
                           <Button
                             variant="secondary"
+                            className="dash-btn-icon"
                             disabled={action.busy}
                             onClick={() => setRevoking(null)}
                           >
+                            <X size={16} strokeWidth={1.75} aria-hidden />
                             Cancel
                           </Button>
                         </div>
@@ -244,9 +285,11 @@ function KeyManager({ context }: { context: StoreContext }) {
                     ) : (
                       <Button
                         variant="secondary"
+                        className="dash-btn-icon"
                         disabled={action.busy}
                         onClick={() => setRevoking(key.id)}
                       >
+                        <Ban size={16} strokeWidth={1.75} aria-hidden />
                         Revoke {key.name}
                       </Button>
                     ))}

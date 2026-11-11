@@ -11,11 +11,14 @@ import {
   ArchiveRestore,
   ArrowUpRight,
   Check,
+  ChevronDown,
   Copy,
   Link2,
   MoreHorizontal,
+  Plus,
   QrCode,
   WifiOff,
+  X,
 } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
@@ -163,8 +166,22 @@ export default function PaymentLinksPage() {
         }
         actions={
           canWrite && !uiPreview ? (
-            <Button disabled={!online} onClick={() => setCreating((v) => !v)}>
-              {creating ? 'Cancel' : 'Create link'}
+            <Button
+              className="dash-btn-icon"
+              disabled={!online}
+              onClick={() => setCreating((v) => !v)}
+            >
+              {creating ? (
+                <>
+                  <X size={16} strokeWidth={1.75} aria-hidden />
+                  Cancel
+                </>
+              ) : (
+                <>
+                  <Plus size={16} strokeWidth={1.75} aria-hidden />
+                  Create link
+                </>
+              )}
             </Button>
           ) : null
         }
@@ -245,8 +262,19 @@ export default function PaymentLinksPage() {
                   </div>
                   <SettlementField value={settlementAsset} onChange={setSettlementAsset} disabled={!online} />
                   <div className="actions">
-                    <Button type="submit" disabled={create.busy || !online}>
-                      {create.busy ? 'Creating…' : 'Create'}
+                    <Button
+                      type="submit"
+                      className="dash-btn-icon"
+                      disabled={create.busy || !online}
+                    >
+                      {create.busy ? (
+                        'Creating…'
+                      ) : (
+                        <>
+                          <Plus size={16} strokeWidth={1.75} aria-hidden />
+                          Create
+                        </>
+                      )}
                     </Button>
                   </div>
                 </form>
@@ -317,7 +345,12 @@ export default function PaymentLinksPage() {
                 }
                 action={
                   canWrite && !statusFilter && !includeArchived ? (
-                    <button type="button" className="dash-empty-cta" onClick={() => setCreating(true)}>
+                    <button
+                      type="button"
+                      className="dash-empty-cta dash-btn-icon"
+                      onClick={() => setCreating(true)}
+                    >
+                      <Plus size={16} strokeWidth={1.75} aria-hidden />
                       Create link
                     </button>
                   ) : null
@@ -383,7 +416,12 @@ export default function PaymentLinksPage() {
             {moreError ? <ErrorState message={moreError} /> : null}
             {hasMore ? (
               <div className="actions" style={{ marginTop: '0.85rem' }}>
-                <Button variant="secondary" onClick={() => void loadMore()}>
+                <Button
+                  variant="secondary"
+                  className="dash-btn-icon"
+                  onClick={() => void loadMore()}
+                >
+                  <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
                   Load more
                 </Button>
               </div>

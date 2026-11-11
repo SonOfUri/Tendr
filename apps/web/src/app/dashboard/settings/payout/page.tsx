@@ -4,6 +4,12 @@
 // plugin's "payout missing" status item, `GET /v1/connect/status`, links here), and the dashboard
 // pages that move money out.
 import Link from 'next/link';
+import {
+  ArrowUpRight,
+  CheckCircle2,
+  MapPin,
+  Wallet,
+} from 'lucide-react';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useLoad } from '@/components/dashboard/common';
@@ -38,7 +44,10 @@ export default function PayoutPage() {
             Set the default token on the wallet page. A payment link can still choose its own token.
             Neither choice sends funds to an outside address.
           </p>
-          <Link href="/dashboard/wallet">Open wallet</Link>
+          <Link href="/dashboard/wallet" className="dash-text-link dash-btn-icon">
+            <Wallet size={16} strokeWidth={1.75} aria-hidden />
+            Open wallet
+          </Link>
         </Panel>
       </div>
     );
@@ -72,7 +81,10 @@ export default function PayoutPage() {
                 approved.
               </span>
             </span>
-            <Link href="/dashboard/addresses">Manage saved addresses</Link>
+            <Link href="/dashboard/addresses" className="dash-text-link dash-btn-icon">
+              <MapPin size={16} strokeWidth={1.75} aria-hidden />
+              Manage saved addresses
+            </Link>
           </li>
           <li>
             <span className="grow">
@@ -80,7 +92,10 @@ export default function PayoutPage() {
               <br />
               <span className="muted small">Send your balance to a saved address.</span>
             </span>
-            <Link href="/dashboard/wallet">Withdraw</Link>
+            <Link href="/dashboard/wallet" className="dash-text-link dash-btn-icon">
+              <ArrowUpRight size={16} strokeWidth={1.75} aria-hidden />
+              Withdraw
+            </Link>
           </li>
           <li>
             <span className="grow">
@@ -90,7 +105,10 @@ export default function PayoutPage() {
                 Whether this mode&apos;s account is ready to take payments, and going live.
               </span>
             </span>
-            <Link href="/dashboard/account">Account status</Link>
+            <Link href="/dashboard/account" className="dash-text-link dash-btn-icon">
+              <CheckCircle2 size={16} strokeWidth={1.75} aria-hidden />
+              Account status
+            </Link>
           </li>
           <li>
             <span className="grow">
@@ -100,7 +118,10 @@ export default function PayoutPage() {
                 Settlement changes and withdrawals waiting for your signers.
               </span>
             </span>
-            <Link href="/dashboard/approvals">Approvals</Link>
+            <Link href="/dashboard/approvals" className="dash-text-link dash-btn-icon">
+              <CheckCircle2 size={16} strokeWidth={1.75} aria-hidden />
+              Approvals
+            </Link>
           </li>
         </ul>
       </Panel>

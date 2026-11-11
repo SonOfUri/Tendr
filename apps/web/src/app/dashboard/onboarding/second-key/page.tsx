@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Button } from '@tendr/ui';
+import { Fingerprint, KeyRound, Send } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { RecoveryKitCreator } from '@/components/dashboard/RecoveryKitCreator';
 import { PageHeader, Panel, Select, TextLink } from '@/components/dashboard/ui';
@@ -178,8 +179,15 @@ function InviteSigner() {
       </div>
       {sent ? <Alert tone="success">Invite sent to {sent}. It works for 7 days.</Alert> : null}
       <div className="actions">
-        <Button type="submit" disabled={busy || !email}>
-          {busy ? 'Sending…' : 'Send invite'}
+        <Button type="submit" className="dash-btn-icon" disabled={busy || !email}>
+          {busy ? (
+            'Sending…'
+          ) : (
+            <>
+              <Send size={16} strokeWidth={1.75} aria-hidden />
+              Send invite
+            </>
+          )}
         </Button>
       </div>
     </form>
@@ -222,6 +230,7 @@ function AddDevice() {
         <div className="actions">
           <Button
             variant="secondary"
+            className="dash-btn-icon"
             disabled={busy}
             onClick={() =>
               void run(async () => {
@@ -230,7 +239,14 @@ function AddDevice() {
               })
             }
           >
-            {busy ? 'Waiting for your passkey…' : 'Add a passkey from this browser'}
+            {busy ? (
+              'Waiting for your passkey…'
+            ) : (
+              <>
+                <Fingerprint size={16} strokeWidth={1.75} aria-hidden />
+                Add a passkey from this browser
+              </>
+            )}
           </Button>
         </div>
       ) : null}
@@ -247,6 +263,7 @@ function AddDevice() {
           </label>
           <div className="actions">
             <Button
+              className="dash-btn-icon"
               disabled={busy}
               onClick={() =>
                 void run(async () => {
@@ -256,7 +273,14 @@ function AddDevice() {
                 })
               }
             >
-              {busy ? 'Waiting for the new device…' : 'Create the new passkey'}
+              {busy ? (
+                'Waiting for the new device…'
+              ) : (
+                <>
+                  <KeyRound size={16} strokeWidth={1.75} aria-hidden />
+                  Create the new passkey
+                </>
+              )}
             </Button>
           </div>
         </>

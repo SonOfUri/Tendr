@@ -2,7 +2,18 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@tendr/ui';
-import { FileText } from 'lucide-react';
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  FileText,
+  KeyRound,
+  Pause,
+  Play,
+  Receipt,
+  XCircle,
+} from 'lucide-react';
 import { InvoiceBreakdown } from '@/components/InvoiceBreakdown';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad } from '@/components/dashboard/common';
@@ -135,14 +146,16 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                   href={data.data.settings.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="dash-text-link dash-mono dash-small"
+                  className="dash-text-link dash-btn-icon dash-mono dash-small"
                 >
+                  <ExternalLink size={16} strokeWidth={1.75} aria-hidden />
                   {data.data.settings.url}
                 </a>
               </div>
               {owner ? (
                 <Button
                   variant="secondary"
+                  className="dash-btn-icon"
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
@@ -157,7 +170,23 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                     })
                   }
                 >
-                  {data.data.settings.enabled ? 'Pause page' : 'Enable page'}
+                  {busy ? (
+                    data.data.settings.enabled ? (
+                      'Pause page'
+                    ) : (
+                      'Enable page'
+                    )
+                  ) : data.data.settings.enabled ? (
+                    <>
+                      <Pause size={16} strokeWidth={1.75} aria-hidden />
+                      Pause page
+                    </>
+                  ) : (
+                    <>
+                      <Play size={16} strokeWidth={1.75} aria-hidden />
+                      Enable page
+                    </>
+                  )}
                 </Button>
               ) : null}
             </div>
@@ -213,6 +242,7 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                   {cursor ? (
                     <Button
                       variant="secondary"
+                      className="dash-btn-icon"
                       disabled={busy}
                       onClick={() => {
                         setCursor(null);
@@ -220,12 +250,14 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                         setQuote(null);
                       }}
                     >
+                      <ChevronUp size={16} strokeWidth={1.75} aria-hidden />
                       Newest
                     </Button>
                   ) : null}
                   {data.data.inbox.nextCursor ? (
                     <Button
                       variant="secondary"
+                      className="dash-btn-icon"
                       disabled={busy}
                       onClick={() => {
                         setCursor(data.data!.inbox.nextCursor);
@@ -233,6 +265,7 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                         setQuote(null);
                       }}
                     >
+                      <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
                       Older invoices
                     </Button>
                   ) : null}
@@ -302,6 +335,7 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                       {!quote ? (
                         <div className="actions">
                           <Button
+                            className="dash-btn-icon"
                             disabled={busy || !asset}
                             onClick={() =>
                               void run(async () => {
@@ -317,10 +351,18 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                               })
                             }
                           >
-                            {busy ? 'Preparing…' : 'Review payment quote'}
+                            {busy ? (
+                              'Preparing…'
+                            ) : (
+                              <>
+                                <Receipt size={16} strokeWidth={1.75} aria-hidden />
+                                Review payment quote
+                              </>
+                            )}
                           </Button>
                           <Button
                             variant="secondary"
+                            className="dash-btn-icon"
                             disabled={busy}
                             onClick={() => {
                               if (
@@ -342,7 +384,14 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                               });
                             }}
                           >
-                            Decline
+                            {busy ? (
+                              'Decline'
+                            ) : (
+                              <>
+                                <XCircle size={16} strokeWidth={1.75} aria-hidden />
+                                Decline
+                              </>
+                            )}
                           </Button>
                         </div>
                       ) : (
@@ -375,6 +424,7 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                           </p>
                           <div className="actions">
                             <Button
+                              className="dash-btn-icon"
                               disabled={busy || new Date(quote.expiresAt).getTime() <= Date.now()}
                               onClick={() =>
                                 void run(async () => {
@@ -384,13 +434,22 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                                 })
                               }
                             >
-                              {busy ? 'Authorizing…' : 'Settle with wallet passkey'}
+                              {busy ? (
+                                'Authorizing…'
+                              ) : (
+                                <>
+                                  <KeyRound size={16} strokeWidth={1.75} aria-hidden />
+                                  Settle with wallet passkey
+                                </>
+                              )}
                             </Button>
                             <Button
                               variant="secondary"
+                              className="dash-btn-icon"
                               disabled={busy}
                               onClick={() => setQuote(null)}
                             >
+                              <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
                               Back
                             </Button>
                           </div>

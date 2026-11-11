@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { Alert, Button } from '@tendr/ui';
+import { KeyRound, X } from 'lucide-react';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useAction, useLoad, useTick } from '@/components/dashboard/common';
@@ -73,8 +74,15 @@ export default function RecoveryPage() {
               {countdown(recovery.executesAt, now)}).
             </Alert>
             {store.isSigner ? (
-              <Button onClick={() => void cancelRecovery()} disabled={cancel.busy}>
-                {cancel.busy ? 'Waiting for your passkey…' : 'Cancel the recovery with passkey'}
+              <Button className="dash-btn-icon" onClick={() => void cancelRecovery()} disabled={cancel.busy}>
+                {cancel.busy ? (
+                  'Waiting for your passkey…'
+                ) : (
+                  <>
+                    <X size={16} strokeWidth={1.75} aria-hidden />
+                    Cancel the recovery with passkey
+                  </>
+                )}
               </Button>
             ) : (
               <p className="dash-muted dash-small">Any signer can cancel it.</p>
@@ -262,8 +270,15 @@ function StartRecovery({ onStarted }: { onStarted: () => void }) {
         />
       </label>
 
-      <Button type="submit" disabled={busy || !kit.trim() || selected.length === 0}>
-        {busy ? 'Signing…' : 'Sign with the kit and start recovery'}
+      <Button type="submit" className="dash-btn-icon" disabled={busy || !kit.trim() || selected.length === 0}>
+        {busy ? (
+          'Signing…'
+        ) : (
+          <>
+            <KeyRound size={16} strokeWidth={1.75} aria-hidden />
+            Sign with the kit and start recovery
+          </>
+        )}
       </Button>
     </form>
   );

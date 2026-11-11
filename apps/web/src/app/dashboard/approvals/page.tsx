@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { Alert, Button } from '@tendr/ui';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
-import { CheckCircle2 } from 'lucide-react';
+import { ArrowUpRight, CheckCircle2, X } from 'lucide-react';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { Status, useAction, useLoad, useTick } from '@/components/dashboard/common';
 import { EmptyState, ErrorState, PageHeader, Panel } from '@/components/dashboard/ui';
@@ -98,7 +98,8 @@ export default function ApprovalsPage() {
           title="No proposals yet"
           description="Withdrawals, security changes, and other actions appear here once someone asks for them."
           action={
-            <Link href="/dashboard/wallet" className="dash-empty-cta">
+            <Link href="/dashboard/wallet" className="dash-empty-cta dash-btn-icon">
+              <ArrowUpRight size={16} strokeWidth={1.75} aria-hidden />
               Start a withdrawal
             </Link>
           }
@@ -133,6 +134,7 @@ export default function ApprovalsPage() {
                       {store.isSigner && (
                         <Button
                           variant="secondary"
+                          className="dash-btn-icon"
                           disabled={cancel.busy}
                           onClick={() =>
                             void cancel.run(async () => {
@@ -141,7 +143,14 @@ export default function ApprovalsPage() {
                             })
                           }
                         >
-                          Cancel
+                          {cancel.busy ? (
+                            'Cancel'
+                          ) : (
+                            <>
+                              <X size={16} strokeWidth={1.75} aria-hidden />
+                              Cancel
+                            </>
+                          )}
                         </Button>
                       )}
                     </>,
