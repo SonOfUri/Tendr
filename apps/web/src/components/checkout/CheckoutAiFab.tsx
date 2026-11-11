@@ -11,6 +11,7 @@ import {
   variantForAssetId,
   type DemoAssetOption,
 } from '@/lib/demo-assets';
+import { TENDR_AI_SUGGESTIONS } from '@/lib/demo-tendr-ai-help';
 import { TendrAiGhost } from '@/components/demo/TendrAiGhost';
 import '@/components/demo/demo-playground.css';
 
@@ -41,12 +42,6 @@ type Phase =
   | { k: 'empty' }
   | { k: 'rate' }
   | { k: 'unavailable'; message: string };
-
-const SUGGESTIONS = [
-  'How long will this payment take?',
-  'What happens if I send the wrong amount?',
-  'Can I get a refund?',
-];
 
 function errPhase(err: unknown): Phase {
   if (err instanceof CheckoutApiError) {
@@ -176,12 +171,12 @@ export function CheckoutAiFab({ client, sessionId, options, amountLabel, onPickR
             </button>
           </div>
 
-          <div className="demo-pay-methods" role="tablist" aria-label="Tendr AI mode">
+          <div className="checkout-ai-tabs" role="tablist" aria-label="Tendr AI mode">
             <button
               type="button"
               role="tab"
               aria-selected={tab === 'routes'}
-              className="demo-pay-method"
+              className="checkout-ai-tab"
               onClick={() => setTab('routes')}
             >
               Routes
@@ -190,7 +185,7 @@ export function CheckoutAiFab({ client, sessionId, options, amountLabel, onPickR
               type="button"
               role="tab"
               aria-selected={tab === 'help'}
-              className="demo-pay-method"
+              className="checkout-ai-tab"
               onClick={() => setTab('help')}
             >
               Help
@@ -287,7 +282,7 @@ export function CheckoutAiFab({ client, sessionId, options, amountLabel, onPickR
                 </div>
               ) : null}
               <div className="checkout-ai-suggestions">
-                {SUGGESTIONS.map((s) => (
+                {TENDR_AI_SUGGESTIONS.map((s) => (
                   <button key={s} type="button" disabled={thinking} onClick={() => void ask(s)}>
                     {s}
                   </button>

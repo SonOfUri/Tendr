@@ -4,6 +4,11 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { DemoAssetOption } from '@/lib/demo-assets';
 import { buildTendrAiRoutes, type TendrAiRoute } from '@/lib/demo-tendr-ai';
+import {
+  demoTendrAiHelp,
+  TENDR_AI_SUGGESTIONS,
+  type TendrAiHelpReply,
+} from '@/lib/demo-tendr-ai-help';
 import type { DemoSlug } from '@/lib/demo';
 import { TendrAiGhost } from './TendrAiGhost';
 
@@ -14,12 +19,21 @@ type Props = {
   onPickRoute: (assetId: string) => void;
 };
 
+type HelpPhase =
+  | { k: 'idle' }
+  | { k: 'loading' }
+  | { k: 'answer'; data: TendrAiHelpReply };
+
 export function DemoTendrAiFab({ options, amountLabel, skin, onPickRoute }: Props) {
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<'routes' | 'help'>('routes');
   const [thinking, setThinking] = useState(false);
+  const [help, setHelp] = useState<HelpPhase>({ k: 'idle' });
+  const [question, setQuestion] = useState('');
   const [mounted, setMounted] = useState(false);
   const panelId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
+  const helpReq = useRef(0);
 
   const ai = useMemo(() => buildTendrAiRoutes(options), [options]);
   const routes = useMemo(() => {
@@ -36,12 +50,19 @@ export function DemoTendrAiFab({ options, amountLabel, skin, onPickRoute }: Prop
   useEffect(() => {
     if (!open) {
       setThinking(false);
+      setHelp({ k: 'idle' });
+      setQuestion('');
+      setTab('routes');
+      return;
+    }
+    if (tab !== 'routes') {
+      setThinking(false);
       return;
     }
     setThinking(true);
-    const t = window.setTimeout(() => setThinking(false), 3000);
+    const t = window.setTimeout(() => setThinking(false), 1800);
     return () => window.clearTimeout(t);
-  }, [open]);
+  }, [open, tab]);
 
   useEffect(() => {
     if (!open) return;
@@ -59,10 +80,22 @@ export function DemoTendrAiFab({ options, amountLabel, skin, onPickRoute }: Prop
     };
   }, [open]);
 
+  function ask(q: string) {
+    const trimmed = q.trim().slice(0, 1000);
+    if (!trimmed || help.k === 'loading') return;
+    const id = ++helpReq.current;
+    setHelp({ k: 'loading' });
+    window.setTimeout(() => {
+      if (id !== helpReq.current) return;
+      setHelp({ k: 'answer', data: demoTendrAiHelp(trimmed) });
+    }, 900);
+  }
+
   if (!mounted || routes.length === 0) return null;
 
   const gaming = skin === 'gaming';
   const amount = amountLabel.replace(/^\$/, '').replace(/\.00$/, '');
+  const busy = thinking || help.k === 'loading';
 
   return createPortal(
     <div
@@ -75,16 +108,18 @@ export function DemoTendrAiFab({ options, amountLabel, skin, onPickRoute }: Prop
         <section
           id={panelId}
           className="demo-tendrai demo-tendrai-panel"
-          aria-label="Tendr AI route suggestions"
+          aria-label="Tendr AI"
         >
           <div className="demo-tendrai-intro">
-            <TendrAiGhost thinking={thinking} size={44} />
+            <TendrAiGhost thinking={busy} size={44} />
             <div className="demo-tendrai-intro-copy">
               <span className="demo-tendrai-kicker">Tendr AI</span>
               <p>
-                {thinking
-                  ? 'Ghost is scoring rails for this payment…'
-                  : `Picked routes for $${amount}.`}
+                {busy
+                  ? 'Working…'
+                  : tab === 'routes'
+                    ? `Route ideas for $${amount}.`
+                    : 'Ask about this checkout.'}
               </p>
             </div>
             <button
@@ -96,7 +131,29 @@ export function DemoTendrAiFab({ options, amountLabel, skin, onPickRoute }: Prop
               ×
             </button>
           </div>
-          {!thinking ? (
+
+          <div className="checkout-ai-tabs" role="tablist" aria-label="Tendr AI mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'routes'}
+              className="checkout-ai-tab"
+              onClick={() => setTab('routes')}
+            >
+              Routes
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'help'}
+              className="checkout-ai-tab"
+              onClick={() => setTab('help')}
+            >
+              Help
+            </button>
+          </div>
+
+          {tab === 'routes' && !thinking ? (
             <div className="demo-tendrai-cards" role="list">
               {routes.map((route) => (
                 <button
@@ -139,6 +196,49 @@ export function DemoTendrAiFab({ options, amountLabel, skin, onPickRoute }: Prop
               ))}
             </div>
           ) : null}
+
+          {tab === 'help' ? (
+            <div className="checkout-ai-help">
+              {help.k === 'answer' ? (
+                <div className="checkout-ai-answer">
+                  <p>{help.data.answer}</p>
+                  {help.data.facts.length > 0 ? (
+                    <ul>
+                      {help.data.facts.map((f) => (
+                        <li key={f.id}>{f.text}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="checkout-ai-suggestions">
+                {TENDR_AI_SUGGESTIONS.map((s) => (
+                  <button key={s} type="button" disabled={busy} onClick={() => ask(s)}>
+                    {s}
+                  </button>
+                ))}
+              </div>
+              <form
+                className="checkout-ai-ask"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  ask(question);
+                }}
+              >
+                <input
+                  value={question}
+                  maxLength={1000}
+                  disabled={busy}
+                  placeholder="Ask about this payment"
+                  aria-label="Ask Tendr AI"
+                  onChange={(e) => setQuestion(e.target.value)}
+                />
+                <button type="submit" disabled={busy || !question.trim()}>
+                  Ask
+                </button>
+              </form>
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -150,7 +250,7 @@ export function DemoTendrAiFab({ options, amountLabel, skin, onPickRoute }: Prop
         aria-label={gaming ? 'TENDR AI' : 'Open Tendr AI'}
         onClick={() => setOpen((v) => !v)}
       >
-        <TendrAiGhost thinking={open && thinking} size={36} />
+        <TendrAiGhost thinking={open && busy} size={36} />
         <span className="demo-tendrai-fab-label">{gaming ? 'AI' : 'Tendr AI'}</span>
       </button>
     </div>,

@@ -224,10 +224,29 @@ export function DemoCheckoutPanel({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
+      // Demo-only cheat: Shift+Alt+P skips the ~45s transfer wait.
+      if (
+        uiOnly &&
+        e.shiftKey &&
+        e.altKey &&
+        (e.code === 'KeyP' || e.key.toLowerCase() === 'p') &&
+        !completed.current &&
+        phase !== 'done' &&
+        phase !== 'expired' &&
+        phase !== 'loading'
+      ) {
+        e.preventDefault();
+        setPhase('waiting');
+        window.setTimeout(() => {
+          if (completed.current) return;
+          completed.current = true;
+          setPhase('done');
+        }, 1400);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, uiOnly, phase]);
 
   useEffect(() => {
     if (phase !== 'pay' || !tokenId) return;
