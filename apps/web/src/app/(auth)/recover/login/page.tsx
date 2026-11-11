@@ -7,7 +7,9 @@ import {
   startRegistration,
   type PublicKeyCredentialCreationOptionsJSON,
 } from '@simplewebauthn/browser';
-import { Alert, Button } from '@tendr/ui';
+import { Alert } from '@tendr/ui';
+import { AuthCta as Button } from '@/components/login/AuthCta';
+import styles from '@/components/auth/login-recovery.module.css';
 import { api, errorMessage, setCsrfToken } from '@/lib/api';
 
 export default function RecoverLogin() {
@@ -64,7 +66,7 @@ export default function RecoverLogin() {
   }
   return (
     <AuthStage>
-      <div className="stack">
+      <div className={styles.flow}>
         <h1>Recover your Tendr login</h1>
         <p>
           Keep your existing account and stores when you lose access to every login passkey. You

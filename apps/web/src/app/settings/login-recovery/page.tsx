@@ -2,7 +2,10 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { Alert, Button, Spinner } from '@tendr/ui';
+import { Alert, Spinner } from '@tendr/ui';
+import { AuthStage } from '@/components/login/AuthStage';
+import { AuthCta as Button } from '@/components/login/AuthCta';
+import styles from '@/components/auth/login-recovery.module.css';
 import LoginRecoveryCodes from '@/components/auth/LoginRecoveryCodes';
 import { api, errorMessage, type Me } from '@/lib/api';
 import { registerPasskey, withStepUp } from '@/lib/webauthn';
@@ -30,8 +33,8 @@ export default function LoginRecoverySettings() {
     }
   }
   return (
-    <div className="auth-shell">
-      <div className="stack">
+    <AuthStage>
+      <div className={styles.flow}>
         <h1>Login security and recovery</h1>
         {error && <Alert tone="danger">{error}</Alert>}
         {!me ? (
@@ -49,7 +52,7 @@ export default function LoginRecoverySettings() {
               Signed in as {me.user.email}. These settings apply to your login across all your
               stores.
             </p>
-            <section className="card stack">
+            <section className={styles.panel}>
               <h2>Backup login passkeys</h2>
               <p>
                 Add a passkey on another device or in a separate credential provider while you still
@@ -93,6 +96,6 @@ export default function LoginRecoverySettings() {
           <Link href="/dashboard">Back to dashboard</Link>
         </p>
       </div>
-    </div>
+    </AuthStage>
   );
 }

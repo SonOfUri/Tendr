@@ -1,0 +1,100 @@
+/* Long security forms use document scrolling, including on small screens. */
+:global(html):has(.flow),
+:global(body):has(.flow) {
+  height: auto;
+  max-height: none;
+  overflow: auto;
+}
+
+:global(body):has(.flow) :global(main),
+:global(.auth-shell):has(.flow),
+:global(.login-screen):has(.flow),
+:global(.login-frame):has(.flow),
+:global(.login-panel):has(.flow) {
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+
+:global(.login-screen):has(.flow) {
+  gap: 1.5rem;
+  padding-top: 1rem;
+}
+
+:global(.login-frame):has(.flow) {
+  width: min(720px, 100%);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto;
+  margin: 0 auto 2rem;
+}
+
+:global(.login-frame):has(.flow) :global(.login-demos) {
+  display: none;
+}
+
+:global(.login-panel):has(.flow) {
+  margin: 0;
+  border-radius: 22px;
+}
+
+.flow {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.flow p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.flow h1 {
+  margin: 0;
+  font-size: clamp(1.6rem, 4vw, 2rem);
+}
+
+.panel {
+  --recovery-text: #161616;
+  --recovery-muted: #525252;
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  padding: 1.25rem;
+  border: 1px solid #dedede;
+  border-radius: 16px;
+  background: #fff;
+  color: var(--recovery-text);
+}
+
+.panel h2,
+.panel p,
+.panel label,
+.panel pre {
+  margin: 0;
+  color: var(--recovery-text) !important;
+}
+
+.panel h2 {
+  font-size: 1.15rem;
+}
+
+.panel :global(.muted) {
+  color: var(--recovery-muted) !important;
+}
+
+.panel li + li {
+  margin-top: 1rem;
+}
+
+.panel input[type='checkbox'] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: #161616;
+}
+
+:global(html[data-appearance='dark']) .panel {
+  --recovery-text: #f5f5f5;
+  --recovery-muted: #c6c6c6;
+  background: #1b1b1b;
+  border-color: #414141;
+}

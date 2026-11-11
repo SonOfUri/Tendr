@@ -1,6 +1,6 @@
 # Login recovery: frontend and deployment handover
 
-Implemented 11 November 2026 on `test/api-console`. Use this contract when integrating the redesigned frontend on `deploy`; preserve its visual design and existing payment flows. The reference screens are `/settings/login-recovery` and `/recover/login`. This feature is personal identity recovery, shared across Test/Live and all stores. It does not implement native-wallet recovery or legacy contract recovery.
+Implemented 11 November 2026 on `test/api-console` and ported to `deploy`. The production port preserves the redesigned dashboard, uses its auth components and HTML email shell, and gives the longer recovery forms normal page scrolling on small screens. The reference screens are `/settings/login-recovery` and `/recover/login`. This feature is personal identity recovery, shared across Test/Live and all stores. It does not implement native-wallet recovery or legacy contract recovery.
 
 ## User journey
 

@@ -12,6 +12,7 @@ import { loadConnectParams, takeConnectWaiting } from '@/lib/connect';
 import { safeNext, takePendingInvite } from '@/lib/navigation';
 import { registerPasskey, type SessionStart } from '@/lib/webauthn';
 import LoginRecoveryCodes from '@/components/auth/LoginRecoveryCodes';
+import styles from '@/components/auth/login-recovery.module.css';
 
 type Step = 'confirm' | 'passkey' | 'recovery' | 'done' | 'connect-elsewhere';
 
@@ -121,7 +122,7 @@ function Verify() {
 
   if (step === 'recovery') {
     return (
-      <div className="stack">
+      <div className={styles.flow}>
         <LoginRecoveryCodes onUnsavedChange={setRecoveryUnsaved} />
         <p>You can also add a backup passkey from Login recovery in your dashboard.</p>
         <AuthCta onClick={finish} disabled={recoveryUnsaved}>

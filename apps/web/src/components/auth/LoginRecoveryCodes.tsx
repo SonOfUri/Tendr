@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Alert, Button } from '@tendr/ui';
+import { Alert } from '@tendr/ui';
+import { AuthCta as Button } from '@/components/login/AuthCta';
+import styles from './login-recovery.module.css';
 import { api, errorMessage } from '@/lib/api';
 import { withStepUp } from '@/lib/webauthn';
 
@@ -76,7 +78,7 @@ export default function LoginRecoveryCodes({
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   return (
-    <section className="card stack" aria-label="Login recovery codes">
+    <section className={styles.panel} aria-label="Login recovery codes">
       <h2>Save your login recovery codes</h2>
       <p>
         Use a saved code and email verification if you lose every login passkey. Keep a copy
