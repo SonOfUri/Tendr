@@ -87,5 +87,14 @@
       }
     ]
   },
-  "description": "One Checkout - Every way to pay"
+  "description": "One Checkout - Every way to pay",
+  "logo": {
+    "light": "/apps/docs/images/logo-black.png",
+    "dark": "/apps/docs/images/logo-White.png",
+    "href": "https://www.usetendr.tech"
+  },
+  "favicon": {
+    "light": "/apps/docs/images/black-on-yellow.png",
+    "dark": "/apps/docs/images/black-on-yellow.png"
+  }
 }
