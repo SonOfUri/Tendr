@@ -1,3 +1,4 @@
+import { usesTidepool } from '../lib/testnet.js';
 // Sanctions screening of payer / refund addresses (Chainalysis public sanctions API).
 //
 // With SCREENING_MODE=chainalysis (the default), a lookup that cannot complete is fail closed:
@@ -26,7 +27,7 @@ export type ScreeningOutcome = 'allow' | 'block' | 'unavailable' | 'skipped';
 
 /** An operator setting for live mode only; test fixtures keep exercising screening. */
 export function screeningDisabled(livemode: boolean): boolean {
-  return livemode && env().SCREENING_MODE === 'disabled';
+  return usesTidepool(livemode) || (livemode && env().SCREENING_MODE === 'disabled');
 }
 
 /** One durable disclosure per payment, including deposits whose sender cannot be resolved. */
@@ -50,7 +51,11 @@ export async function skipPaymentScreening(
         aggregateType: 'payment',
         aggregateId: paymentId,
         type: 'payment.screening_skipped',
-        payload: { decision: 'skipped', reason: 'operator_disabled', screening_mode: 'disabled' },
+        payload: {
+          decision: 'skipped',
+          reason: usesTidepool(ctx.livemode) ? 'tidepool_testnet' : 'operator_disabled',
+          screening_mode: 'disabled',
+        },
       });
   });
   return 'skipped';
@@ -239,7 +244,10 @@ export async function screenPayoutAddress(
         chain,
         decision,
         ...(decision === 'skipped'
-          ? { reason: 'operator_disabled', screening_mode: 'disabled' }
+          ? {
+              reason: usesTidepool(ctx.livemode) ? 'tidepool_testnet' : 'operator_disabled',
+              screening_mode: 'disabled',
+            }
           : {}),
       },
     }),

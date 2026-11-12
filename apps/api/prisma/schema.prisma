@@ -1105,6 +1105,7 @@ model Session {
 }
 
 model Quote {
+  testProvider String? @map("test_provider")
   id                   String              @id
   merchantId           String              @map("merchant_id")
   livemode             Boolean

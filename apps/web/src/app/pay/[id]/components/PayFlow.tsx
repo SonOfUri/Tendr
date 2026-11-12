@@ -276,7 +276,7 @@ export function PayFlow({
     );
   }
 
-  const network = networkName(token.blockchain);
+  const network = networkName(token.blockchain, view.test_provider === 'tidepool');
   // The chain's coin in the token list (its price sizes the coin fee for the fee choice).
   const nativeToken =
     tokens.find(
@@ -368,6 +368,7 @@ export function PayFlow({
               quote={quote}
               token={token}
               livemode={view.livemode}
+              testnet={view.test_provider === 'tidepool'}
               sessionId={view.id}
               blocked={blocked}
               onDidntGoThrough={onDidntGoThrough}
@@ -375,7 +376,11 @@ export function PayFlow({
               checkBeforeSend={checkBeforeSend}
               onSendingChange={setWalletSending}
               onWalletAddress={(address, gasless) => requote(token, address, 'wallet', gasless)}
-              gasless={{ api: client, merchantName: view.merchant.name, nativeToken }}
+              gasless={
+                view.test_provider === 'tidepool'
+                  ? undefined
+                  : { api: client, merchantName: view.merchant.name, nativeToken }
+              }
               onDepositSent={onDepositSent}
             />
           )}
@@ -399,7 +404,7 @@ export function PayFlow({
               {quote.small_overpay_notice ? (
                 <p className="muted small">{leftoversNotice(quote.small_overpay_usd)}</p>
               ) : null}
-              {!view.livemode ? (
+              {!view.livemode && view.test_provider !== 'tidepool' ? (
                 <TestModePanel client={client} kind="pay" onDone={onRefresh} />
               ) : null}
             </>

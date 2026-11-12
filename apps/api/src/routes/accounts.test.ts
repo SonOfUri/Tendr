@@ -303,6 +303,7 @@ describe('account routes', () => {
     expect(none.statusCode, none.body).toBe(200);
     expect(none.json()).toEqual({
       livemode: false,
+      account_kind: 'contract',
       account_status: 'active',
       settlement: null,
       pending: null,

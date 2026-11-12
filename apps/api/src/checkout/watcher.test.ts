@@ -1217,10 +1217,11 @@ describe('payment watcher', () => {
       where: { id: q.id },
       data: { watchStoppedAt: clock(), watchNextAt: null },
     });
-    expect(await resumeUnverifiedSuccessWatches(clock())).toBe(1);
+    const resumedAt = clock();
+    expect(await resumeUnverifiedSuccessWatches(resumedAt)).toBe(1);
     const row = await prisma.quote.findUniqueOrThrow({ where: { id: q.id } });
     expect(row.watchStoppedAt).toBeNull();
-    expect(row.watchNextAt).toEqual(clock());
+    expect(row.watchNextAt).toEqual(resumedAt);
   });
 
   it('worker jobs: the scan fans out one poll job per address; the poll job settles', async () => {

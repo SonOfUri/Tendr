@@ -83,6 +83,7 @@ const EnvSchema = z
      */
     NEAR_FAKE_TIMELOCK_SECONDS: z.coerce.number().int().min(1).max(86_400).optional(),
     LIVE_ACCOUNT_DRIVER: z.enum(['contract', 'native_intents']).default('contract'),
+    TEST_PAYMENT_PROVIDER: z.enum(['simulated', 'tidepool']).default('simulated'),
     // Public rpc.mainnet.near.org is deprecated (HTTP -429). Prefer FastNear / listed providers.
     NEAR_RPC_URL_LIVE: z.string().url().default('https://free.rpc.fastnear.com'),
     NEAR_RPC_URL_TEST: z.string().url().default('https://rpc.testnet.fastnear.com'),
@@ -573,6 +574,17 @@ const EnvSchema = z
       });
     }
     const driver = e.NEAR_CLIENT_DRIVER ?? (e.NODE_ENV === 'production' ? 'rpc' : 'fake');
+    if (
+      e.TEST_PAYMENT_PROVIDER === 'tidepool' &&
+      e.NODE_ENV !== 'test' &&
+      (driver !== 'rpc' || e.NEAR_FAKE_SIMULATE)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['TEST_PAYMENT_PROVIDER'],
+        message: 'Tidepool requires NEAR_CLIENT_DRIVER=rpc and no contract simulation',
+      });
+    }
     if (e.NEAR_FAKE_TIMELOCK_SECONDS !== undefined && !e.NEAR_FAKE_SIMULATE) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -767,6 +779,18 @@ const EnvSchema = z
   })
   .transform((e) => ({
     ...e,
+    INTENTS_CONTRACT_TEST:
+      e.TEST_PAYMENT_PROVIDER === 'tidepool'
+        ? 'verifier.tidepool-sandbox.testnet'
+        : e.INTENTS_CONTRACT_TEST,
+    NEAR_RPC_URL_TEST:
+      e.TEST_PAYMENT_PROVIDER === 'tidepool'
+        ? 'https://rpc.testnet.fastnear.com'
+        : e.NEAR_RPC_URL_TEST,
+    NEAR_RPC_URL_TEST_ARCHIVAL:
+      e.TEST_PAYMENT_PROVIDER === 'tidepool'
+        ? 'https://archival-rpc.testnet.fastnear.com'
+        : e.NEAR_RPC_URL_TEST_ARCHIVAL,
     INVOICE_BASE_URL: e.INVOICE_BASE_URL ?? `${e.WEB_URL.replace(/\/$/, '')}/invoice`,
     API_HOST: e.API_HOST ?? (e.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
     WORKER_HEALTH_HOST:

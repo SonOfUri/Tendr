@@ -99,8 +99,10 @@ describe('SimulatedOneClick quotes', () => {
     expect(q.quote.amountOut).toBe('24975024');
   });
 
-  it('refuses an unknown asset with a 400', async () => {
-    const err = await sim.quote(request({ originAsset: 'nep141:nope' })).catch((e: unknown) => e);
+  it('refuses an asset outside the supported NEP formats with a 400', async () => {
+    const err = await sim
+      .quote(request({ originAsset: 'unsupported:token' }))
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(OneClickError);
     expect(err).toMatchObject({ status: 400, code: 'UNSUPPORTED_ASSET' });
   });

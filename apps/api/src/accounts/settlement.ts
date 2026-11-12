@@ -1,3 +1,4 @@
+import { usesTidepool } from '../lib/testnet.js';
 // Where a store's payments settle (WooCommerce plugin spec §2 "choose payout", user decision
 // "Settlement: USDC by default"): the mode's mirrored `settlement_configs` row, an open
 // `set_settlement` proposal, and the tokens the dashboard and the Connect popup offer. Read only:
@@ -38,7 +39,12 @@ const OPEN_STATUSES = ['draft', 'pending', 'timelocked', 'executing'] as const;
 
 /** The store's payout in one mode, for the dashboard and the Connect popup. */
 export async function settlementView(ctx: { merchantId: string; livemode: boolean }) {
-  const choices = SETTLEMENT_CHOICES[ctx.livemode ? 'live' : 'test'];
+  const choices = usesTidepool(ctx.livemode)
+    ? [
+        choice('nep141:usdc.tidepool-sandbox.testnet', 'USDC', true),
+        choice('nep141:usdt.tidepool-sandbox.testnet', 'USDT'),
+      ]
+    : SETTLEMENT_CHOICES[ctx.livemode ? 'live' : 'test'];
   const where = { merchantId: ctx.merchantId, livemode: ctx.livemode };
   const [account, config, open] = await Promise.all([
     prisma.merchantAccount.findFirst({ where, orderBy: { createdAt: 'desc' } }),
@@ -53,15 +59,20 @@ export async function settlementView(ctx: { merchantId: string; livemode: boolea
   ]);
   return {
     livemode: ctx.livemode,
-    account_status: account?.status ?? null,
-    settlement: config
-      ? {
-          asset: config.destAssetId,
-          symbol: choices.find((c) => c.asset === config.destAssetId)?.symbol ?? null,
-          chain: config.destChain,
-          payout_mode: config.payoutMode,
-        }
-      : null,
+    account_kind: usesTidepool(ctx.livemode) ? 'native_intents' : (account?.kind ?? null),
+    account_status:
+      usesTidepool(ctx.livemode) && account?.kind !== 'native_intents'
+        ? null
+        : (account?.status ?? null),
+    settlement:
+      config && !(usesTidepool(ctx.livemode) && account?.kind !== 'native_intents')
+        ? {
+            asset: config.destAssetId,
+            symbol: choices.find((c) => c.asset === config.destAssetId)?.symbol ?? null,
+            chain: config.destChain,
+            payout_mode: config.payoutMode,
+          }
+        : null,
     pending: open ? { id: open.id, status: open.status } : null,
     choices,
   };

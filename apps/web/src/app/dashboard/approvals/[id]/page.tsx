@@ -123,6 +123,8 @@ export default function ProposalPage() {
           </Panel>
         ) : null}
         <NativeWalletPanel
+          key={`${store.id}:${context?.livemode}`}
+          livemode={context?.livemode ?? false}
           merchantId={store.id}
           userId={me.user.id}
           isOwner={store.role === 'owner'}
@@ -250,9 +252,18 @@ export default function ProposalPage() {
             </Button>
           )}
           {canCancel && (
-            <Button variant="secondary" className="dash-btn-icon" onClick={() => void cancel()} disabled={action.busy}>
+            <Button
+              variant="secondary"
+              className="dash-btn-icon"
+              onClick={() => void cancel()}
+              disabled={action.busy}
+            >
               {action.busy ? (
-                p.status === 'draft' ? 'Cancel request' : 'Cancel with passkey'
+                p.status === 'draft' ? (
+                  'Cancel request'
+                ) : (
+                  'Cancel with passkey'
+                )
               ) : (
                 <>
                   <X size={16} strokeWidth={1.75} aria-hidden />

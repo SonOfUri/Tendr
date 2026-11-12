@@ -42,7 +42,7 @@ import { previewSlug } from '@/lib/navigation';
 import { loginWithPasskey, registerPasskey, withStepUp } from '@/lib/webauthn';
 
 type Store = Pick<StoreSummary, 'id' | 'name' | 'slug' | 'role'>;
-type Created = StoreSummary & { testAccount: { nearAccountId: string; status: string } };
+type Created = StoreSummary & { testAccount: { nearAccountId: string; status: string } | null };
 
 type Phase =
   | { k: 'loading' }
@@ -233,7 +233,7 @@ export function ConnectFlow() {
           first={me.stores.length === 0}
           onCreated={async (store) => {
             await loadMe(true);
-            setPhase({ k: 'recovery', store });
+            setPhase(store.testAccount ? { k: 'recovery', store } : payoutPhase(store, true));
           }}
           onBack={eligibleStores(me.stores).length > 0 ? () => setPhase({ k: 'pick' }) : null}
         />
@@ -247,7 +247,7 @@ export function ConnectFlow() {
             <dd>{phase.store.name}</dd>
             <dt>Test account</dt>
             <dd>
-              <code>{phase.store.testAccount.nearAccountId}</code>
+              <code>{phase.store.testAccount?.nearAccountId}</code>
             </dd>
           </dl>
           <p className="muted">

@@ -33,7 +33,7 @@ export default function WalletPage() {
   const header = (
     <PageHeader
       title="Wallet"
-      description="Balances, settlement, and withdrawals for this account. Live native wallets use a wallet passkey; contract accounts go through approvals."
+        description="Balances, settlement, and withdrawals for this account. Native wallets use a wallet passkey; contract accounts go through approvals."
     />
   );
 
@@ -50,12 +50,16 @@ export default function WalletPage() {
     );
   }
 
-  const native = account.data.account?.kind === 'native_intents';
+  const native =
+    account.data.account?.kind === 'native_intents' ||
+    account.data.accountKind === 'native_intents';
   if (native) {
     return (
       <div className="stack">
         {header}
         <NativeWalletPanel
+          key={key}
+          livemode={context.livemode}
           merchantId={store.id}
           userId={me.user.id}
           isOwner={store.role === 'owner'}
@@ -121,21 +125,19 @@ function ContractWithdrawForm() {
   const decimals = chosen?.decimals ?? (info?.known ? info.decimals : 0);
   const tokenChoices = withdrawTokens(catalogTokens, balances, target?.chain ?? null, livemode);
   const assetOptions = buildDemoAssetOptions(
-    tokenChoices.map(
-      (token): Token => ({
-        asset_id: token.asset,
-        symbol: token.symbol,
-        blockchain: token.chain,
-        decimals: token.decimals,
-        price_usd: null,
-        popular: false,
-      }),
-    ),
+    tokenChoices.map((token): Token => ({
+      asset_id: token.asset,
+      symbol: token.symbol,
+      blockchain: token.chain,
+      decimals: token.decimals,
+      price_usd: null,
+      popular: false,
+    })),
   );
   const assetValue =
     asset && assetOptions.some((o) => o.chainVariants.some((v) => v.assetId === asset))
       ? asset
-      : assetOptions[0]?.chainVariants[0]?.assetId ?? assetOptions[0]?.value ?? '';
+      : (assetOptions[0]?.chainVariants[0]?.assetId ?? assetOptions[0]?.value ?? '');
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -235,11 +237,7 @@ function ContractWithdrawForm() {
           <label className="field">
             <span>Asset</span>
             {catalog.data && assetOptions.length ? (
-              <DemoAssetModal
-                options={assetOptions}
-                value={assetValue}
-                onChange={setAsset}
-              />
+              <DemoAssetModal options={assetOptions} value={assetValue} onChange={setAsset} />
             ) : (
               <p className="dash-muted dash-small">
                 {catalog.data ? 'No withdrawable tokens for this address.' : 'Loading tokens…'}

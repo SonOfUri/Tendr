@@ -123,6 +123,7 @@ export type { AccountState };
 
 /** A transaction's final outcome (`EXPERIMENTAL_tx_status`): who sent it and every receipt. */
 export interface TxStatusResult {
+  finalized?: boolean;
   hash: string;
   signerId: string;
   receiverId: string;

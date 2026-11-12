@@ -14,7 +14,11 @@ const injectedEvm = (family: PayTarget['family']) =>
 export async function loadAdapter(target: PayTarget, env: WalletEnv): Promise<WalletAdapter> {
   if (injectedEvm(target.family)) {
     const { createEvmAdapter, injectedEvmSession } = await import('./evm');
-    return createEvmAdapter(target, injectedEvmSession(window as never), evmGasless());
+    return createEvmAdapter(
+      target,
+      injectedEvmSession(window as never),
+      target.network === 'testnet' ? undefined : evmGasless(),
+    );
   }
   if (needsReown(target.family) && !env.reownProjectId) {
     throw new WalletError('unavailable', { detail: 'no Reown project id' });
@@ -25,7 +29,11 @@ export async function loadAdapter(target: PayTarget, env: WalletEnv): Promise<Wa
         import('./evm'),
         import('./appkit'),
       ]);
-      return createEvmAdapter(target, appKitSession('eip155', env.reownProjectId!), evmGasless());
+      return createEvmAdapter(
+        target,
+        appKitSession('eip155', env.reownProjectId!),
+        target.network === 'testnet' ? undefined : evmGasless(),
+      );
     }
     case 'solana': {
       const [{ createSolanaAdapter, solanaConnection }, { appKitSession }] = await Promise.all([
@@ -33,8 +41,8 @@ export async function loadAdapter(target: PayTarget, env: WalletEnv): Promise<Wa
         import('./appkit'),
       ]);
       return createSolanaAdapter(target, {
-        session: appKitSession('solana', env.reownProjectId!),
-        connection: () => solanaConnection(env.reownProjectId!),
+        session: appKitSession('solana', env.reownProjectId!, target.network === 'testnet'),
+        connection: () => solanaConnection(env.reownProjectId!, target.network === 'testnet'),
       });
     }
     case 'bitcoin': {
@@ -55,7 +63,10 @@ export async function loadAdapter(target: PayTarget, env: WalletEnv): Promise<Wa
     }
     case 'near': {
       const { createNearAdapter, nearSelectorDeps } = await import('./near');
-      return createNearAdapter(target, nearSelectorDeps(env.pickNearWallet));
+      return createNearAdapter(
+        target,
+        nearSelectorDeps(env.pickNearWallet, target.network === 'testnet'),
+      );
     }
   }
 }

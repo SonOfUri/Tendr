@@ -90,13 +90,14 @@ export function canPay(opts: {
   quote: Pick<Quote, 'refund_address' | 'deadline'>;
   now: number;
   livemode: boolean;
+  testnet?: boolean;
   paymentSent: boolean;
   busy: boolean;
   /** A gasless quote: the wallet only signs, so test mode can run it (the relay is simulated). */
   gasless?: boolean;
 }): boolean {
   return (
-    (opts.livemode || opts.gasless === true) &&
+    (opts.livemode || opts.testnet === true || opts.gasless === true) &&
     !opts.paymentSent &&
     !opts.busy &&
     sameAddress(opts.family, opts.address, opts.quote.refund_address) &&
@@ -116,6 +117,7 @@ export function WalletPanel({
   onWalletAddress,
   onDepositSent,
   livemode = true,
+  testnet = false,
   blocked = null,
   sessionId,
   openWalletWindow,
@@ -245,7 +247,7 @@ export function WalletPanel({
       defaultMode: 'token',
       feeRecipient: null,
     };
-    if (!adapter.gasless || !gasless || gaslessOff.current) return base;
+    if (testnet || !adapter.gasless || !gasless || gaslessOff.current) return base;
     try {
       const [opts, all] = await Promise.all([
         gasless.api.gaslessOptions({ origin_asset: quote.origin_asset, wallet_address: a }),
@@ -499,6 +501,7 @@ export function WalletPanel({
       quote,
       now: Date.now(),
       livemode,
+      testnet: testnet && route.target.network === 'testnet',
       paymentSent: blocked !== null,
       busy,
       gasless: gaslessQuote,
@@ -591,7 +594,7 @@ export function WalletPanel({
           {plan?.unavailable && UNAVAILABLE_COPY[plan.unavailable] ? (
             <p className="muted small">{UNAVAILABLE_COPY[plan.unavailable]}</p>
           ) : null}
-          {livemode || gaslessQuote ? (
+          {livemode || testnet || gaslessQuote ? (
             <>
               <button
                 type="button"
@@ -617,8 +620,10 @@ export function WalletPanel({
               </button>
               {!livemode ? (
                 <p className="pay-test-label small" role="note">
-                  <strong>Test mode</strong>: your wallet signs a test payment that no network
-                  accepts. Nothing is sent.
+                  <strong>Test mode</strong>:{' '}
+                  {testnet
+                    ? 'Your wallet sends test tokens on the selected test network. Keep test NEAR, ETH, or SOL for network fees.'
+                    : 'Your wallet signs a test payment that no network accepts. Nothing is sent.'}
                 </p>
               ) : null}
             </>

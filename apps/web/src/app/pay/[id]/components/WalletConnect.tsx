@@ -56,6 +56,7 @@ export interface WalletConnectProps {
   onDepositSent?: (r: WalletSendResult) => void;
   /** Test mode: wallets connect, but no payment is ever sent from them. */
   livemode?: boolean;
+  testnet?: boolean;
   /** A payment may already be on its way (C32): no wallet payment at all, just a notice. */
   blocked?: PaymentBlock;
   /** The shopper confirmed "My payment didn't go through". */
@@ -127,12 +128,22 @@ export function PaymentSentNotice({
 }
 
 export function WalletConnect(props: WalletConnectProps) {
-  const { quote, token, blocked = null, onDidntGoThrough, onSendingChange, autoOpen = false } =
-    props;
-  const route = useMemo(
-    () => adapterFor(quote.origin_asset, token.blockchain),
-    [quote.origin_asset, token.blockchain],
-  );
+  const {
+    quote,
+    token,
+    blocked = null,
+    onDidntGoThrough,
+    onSendingChange,
+    autoOpen = false,
+  } = props;
+  const route = useMemo(() => {
+    const r = adapterFor(quote.origin_asset, token.blockchain);
+    return r &&
+      ((props.testnet && r.target.network !== 'testnet') ||
+        (props.livemode !== false && r.target.network === 'testnet'))
+      ? null
+      : r;
+  }, [quote.origin_asset, token.blockchain, props.testnet, props.livemode]);
   const [panel, setPanel] = useState<{ assetId: string; Panel: Panel } | null>(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);

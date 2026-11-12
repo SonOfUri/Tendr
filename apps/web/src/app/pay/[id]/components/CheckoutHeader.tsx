@@ -78,7 +78,9 @@ export function CheckoutHeader({
       ) : null}
       {!view.livemode ? (
         <p className="pay-test-banner small" role="note">
-          Test mode. No real money moves.
+          {view.test_provider === 'tidepool'
+            ? 'Tidepool Test mode — use NEAR testnet, Base Sepolia, or Solana devnet test tokens. Keep test NEAR, ETH, or SOL for network fees.'
+            : 'Test mode. No real money moves.'}
         </p>
       ) : null}
     </header>

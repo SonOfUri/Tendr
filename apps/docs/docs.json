@@ -14,29 +14,19 @@
         "groups": [
           {
             "group": "Getting started",
-            "pages": [
-              "introduction",
-              "quickstart"
-            ]
+            "pages": ["introduction", "quickstart", "testing"]
           },
           {
             "group": "Concepts",
-            "pages": [
-              "concepts/idempotency"
-            ]
+            "pages": ["concepts/idempotency"]
           },
           {
             "group": "Payment links",
-            "pages": [
-              "payment-links/overview"
-            ]
+            "pages": ["payment-links/overview"]
           },
           {
             "group": "Checkout themes",
-            "pages": [
-              "themes/overview",
-              "themes/safety-rules"
-            ]
+            "pages": ["themes/overview", "themes/safety-rules"]
           },
           {
             "group": "API reference",
@@ -49,24 +39,15 @@
           },
           {
             "group": "Gasless payments",
-            "pages": [
-              "gasless/overview",
-              "gasless/gas-policy"
-            ]
+            "pages": ["gasless/overview", "gasless/gas-policy"]
           },
           {
             "group": "SDKs",
-            "pages": [
-              "sdks/typescript"
-            ]
+            "pages": ["sdks/typescript"]
           },
           {
             "group": "Integrations",
-            "pages": [
-              "integrations/ecommerce",
-              "integrations/hooks",
-              "integrations/near-intents"
-            ]
+            "pages": ["integrations/ecommerce", "integrations/hooks", "integrations/near-intents"]
           },
           {
             "group": "Security",
@@ -79,17 +60,11 @@
           },
           {
             "group": "Development",
-            "pages": [
-              "development/local-setup",
-              "development/troubleshooting"
-            ]
+            "pages": ["development/local-setup", "development/troubleshooting"]
           },
           {
             "group": "Store wallet",
-            "pages": [
-              "wallets/overview",
-              "wallets/recovery"
-            ]
+            "pages": ["wallets/overview", "wallets/recovery"]
           }
         ]
       }

@@ -802,16 +802,16 @@ describe('merchant accounts', () => {
           {
             asset: 'nep141:usdc.test',
             amount: '340282366920938463463374607431768211455',
-            symbol: null,
-            decimals: null,
-            amount_usd: null,
+            symbol: 'USDC',
+            decimals: 6,
+            amount_usd: '340282366920938463463374607431768.211455',
           },
           {
             asset: 'nep141:wrap.testnet',
             amount: '5',
-            symbol: null,
-            decimals: null,
-            amount_usd: null,
+            symbol: 'wNEAR',
+            decimals: 24,
+            amount_usd: '0',
           },
         ],
       });

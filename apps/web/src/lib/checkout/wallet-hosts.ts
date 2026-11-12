@@ -23,6 +23,10 @@ export const WALLET_CONNECT_HOSTS: readonly string[] = [
   // NEAR: contract views (storage registration, wNEAR balance) and the Wallet Selector's RPC.
   'https://free.rpc.fastnear.com',
   'https://rpc.mainnet.near.org',
+  'https://rpc.testnet.near.org',
+  'https://rpc.testnet.fastnear.com',
+  'https://api.devnet.solana.com',
+  'https://sepolia.base.org',
   // Intear wallet's session bridge (Meteor talks through its popup only).
   'wss://logout-bridge-service.intear.tech',
   'https://logout-bridge-service.intear.tech',

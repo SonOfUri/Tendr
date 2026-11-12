@@ -4,12 +4,7 @@
 // plugin's "payout missing" status item, `GET /v1/connect/status`, links here), and the dashboard
 // pages that move money out.
 import Link from 'next/link';
-import {
-  ArrowUpRight,
-  CheckCircle2,
-  MapPin,
-  Wallet,
-} from 'lucide-react';
+import { ArrowUpRight, CheckCircle2, MapPin, Wallet } from 'lucide-react';
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { useLoad } from '@/components/dashboard/common';
@@ -31,13 +26,13 @@ export default function PayoutPage() {
       <PageSkeleton label="Loading payout settings" />
     );
   }
-  const native = account.data.account?.kind === 'native_intents';
+  const native = (account.data.account?.kind ?? account.data.accountKind) === 'native_intents';
   if (native) {
     return (
       <div className="stack">
         <PageHeader
           title="Payout"
-          description={`Payments to ${store.name} credit the settlement token inside the live wallet. Withdrawals are signed with the wallet passkey.`}
+          description={`Payments to ${store.name} credit the settlement token inside the ${context.livemode ? 'Live' : 'Test'} wallet. Withdrawals are signed with the wallet passkey.`}
         />
         <Panel title="Where payments settle">
           <p className="dash-muted">

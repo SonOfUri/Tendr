@@ -161,6 +161,10 @@ const proofPayload = (
   });
 
 export async function listNativeWalletKeys(actor: NativeActor) {
+  if (!actor.livemode)
+    throw conflict(
+      'Wallet key management is available in live mode only; Tidepool Test wallets use their original passkey',
+    );
   const wallet = await ownedNativeWallet(actor);
   await ensureInitialWalletKey(wallet);
   const [keys, operations] = await Promise.all([
@@ -185,6 +189,10 @@ export async function listNativeWalletKeys(actor: NativeActor) {
 
 export async function startNativeKeyOperation(actor: NativeActor, input: Start) {
   assertLiveModeOpen();
+  if (!actor.livemode)
+    throw conflict(
+      'Wallet key management is available in live mode only; Tidepool Test wallets use their original passkey',
+    );
   const wallet = await ownedNativeWallet(actor);
   await ensureInitialWalletKey(wallet);
   const publicKey = input.kind === 'add_recovery' ? recoveryPublicKey(input.publicKeyB64) : null;
@@ -298,6 +306,10 @@ async function operationResponse(wallet: Wallet, op: NativeWalletKeyOperation) {
 }
 
 export async function getNativeKeyOperation(actor: NativeActor, id: string) {
+  if (!actor.livemode)
+    throw conflict(
+      'Wallet key management is available in live mode only; Tidepool Test wallets use their original passkey',
+    );
   const wallet = await ownedNativeWallet(actor);
   return operationResponse(wallet, await operation(actor, wallet, id));
 }
@@ -308,6 +320,10 @@ export async function registerNativeCandidate(
   response: RegistrationResponseJSON,
 ) {
   assertLiveModeOpen();
+  if (!actor.livemode)
+    throw conflict(
+      'Wallet key management is available in live mode only; Tidepool Test wallets use their original passkey',
+    );
   const wallet = await ownedNativeWallet(actor);
   const op = await operation(actor, wallet, id);
   assertOpen(op, 'registering');
@@ -377,6 +393,10 @@ export async function proveNativeCandidate(
   proof: { response?: AuthenticationResponseJSON; signatureB64?: string },
 ) {
   assertLiveModeOpen();
+  if (!actor.livemode)
+    throw conflict(
+      'Wallet key management is available in live mode only; Tidepool Test wallets use their original passkey',
+    );
   const wallet = await ownedNativeWallet(actor);
   const op = await operation(actor, wallet, id);
   assertOpen(op, 'proving');
@@ -407,6 +427,10 @@ export async function proveNativeCandidate(
 /** The payload is issued once. Never replace a nonce after a signature could have escaped. */
 export async function nativeKeyOperationChallenge(actor: NativeActor, id: string) {
   assertLiveModeOpen();
+  if (!actor.livemode)
+    throw conflict(
+      'Wallet key management is available in live mode only; Tidepool Test wallets use their original passkey',
+    );
   const wallet = await ownedNativeWallet(actor);
   let op = await operation(actor, wallet, id);
   assertOpen(op, 'awaiting_signature');
@@ -470,6 +494,10 @@ export async function submitNativeKeyOperation(
   proof: { response?: AuthenticationResponseJSON; signatureB64?: string },
 ) {
   assertLiveModeOpen();
+  if (!actor.livemode)
+    throw conflict(
+      'Wallet key management is available in live mode only; Tidepool Test wallets use their original passkey',
+    );
   const wallet = await ownedNativeWallet(actor);
   const op = await operation(actor, wallet, id);
   if (op.status === 'submitting' || op.status === 'confirmed') return operationView(op);
@@ -534,6 +562,10 @@ export async function submitNativeKeyOperation(
 
 export async function cancelNativeKeyOperation(actor: NativeActor, id: string) {
   assertLiveModeOpen();
+  if (!actor.livemode)
+    throw conflict(
+      'Wallet key management is available in live mode only; Tidepool Test wallets use their original passkey',
+    );
   const wallet = await ownedNativeWallet(actor);
   const op = await operation(actor, wallet, id);
   if (op.payload)

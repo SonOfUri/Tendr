@@ -1,3 +1,5 @@
+import { TIDEPOOL_TOKENS } from '@tendr/contracts';
+import { usesTidepool } from '../lib/testnet.js';
 // A store's merchant accounts: the test account (`<slug>.tendr.testnet`) provisioned when the store
 // is created, the live account (`<slug>.tendr.near`) provisioned at go-live, the recovery key, the
 // testnet-admin mirror of the live signer set, and balances.
@@ -351,7 +353,7 @@ export async function provisionMerchantAccount(
   livemode: boolean,
 ): Promise<MerchantAccount> {
   const row = await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } });
-  if (row?.kind === 'native_intents') return row;
+  if (row && (row.kind === 'native_intents' || usesTidepool(livemode))) return row;
   if (!row) throw notFound('No account to provision');
   if (row.status === 'active') return row;
   // The live-mode switch: no mainnet account is created while it is off. The row is left as it is
@@ -671,11 +673,7 @@ export async function retryProvisioning(ctx: ScopeContext): Promise<MerchantAcco
  * `payout`: store settlement not approved yet (test before go-live; live after the live account is active).
  */
 export type GoLiveMissing =
-  | 'live_mode_unavailable'
-  | 'second_key'
-  | 'threshold'
-  | 'wallet_passkey'
-  | 'payout';
+  'live_mode_unavailable' | 'second_key' | 'threshold' | 'wallet_passkey' | 'payout';
 
 function goLiveRule(
   signerCount: number,
@@ -1045,7 +1043,7 @@ export function accountJson(a: MerchantAccount) {
       contractLimits: a.kind === 'contract',
       autoSweep: a.kind === 'contract',
       nativePasskeyPayouts: a.kind === 'native_intents',
-      nativeWalletKeyManagement: a.kind === 'native_intents',
+      nativeWalletKeyManagement: a.kind === 'native_intents' && !usesTidepool(a.livemode),
     },
     livemode: a.livemode,
     nearAccountId: a.nearAccountId,
@@ -1111,7 +1109,12 @@ export async function accountView(ctx: ScopeContext) {
     });
   return {
     livemode: ctx.livemode,
-    account: account ? accountJson(account) : null,
+    account:
+      account && !(usesTidepool(ctx.livemode) && account.kind === 'contract')
+        ? accountJson(account)
+        : null,
+    accountKind: usesTidepool(ctx.livemode) ? 'native_intents' : (account?.kind ?? null),
+    testProvider: ctx.livemode ? null : env().TEST_PAYMENT_PROVIDER,
     signers: [...bySigner.values()],
     releaseCodeHash: account?.kind === 'native_intents' ? null : codeHashFor(ctx.livemode),
     nativeWallet: native
@@ -1129,17 +1132,13 @@ export async function accountView(ctx: ScopeContext) {
 }
 
 export const balancesCacheKey = (merchantId: string, livemode: boolean) =>
-  `balances:v2:${merchantId}:${livemode ? 'live' : 'test'}`;
+  `balances:v2:${merchantId}:${livemode ? 'live' : usesTidepool(false) ? 'tidepool' : 'test'}`;
 
 /**
  * `raw` (token base units) × `priceUsd` → a decimal USD string. Null when inputs are unusable.
  * Uses fixed-point BigInt math so large balances never go through IEEE floats.
  */
-export function tokenAmountUsd(
-  raw: string,
-  decimals: number,
-  priceUsd: string,
-): string | null {
+export function tokenAmountUsd(raw: string, decimals: number, priceUsd: string): string | null {
   if (!/^\d{1,39}$/.test(raw) || !Number.isInteger(decimals) || decimals < 0 || decimals > 24) {
     return null;
   }
@@ -1196,7 +1195,8 @@ export interface Balances {
  * strings (u128).
  */
 export async function getBalances(merchantId: string, livemode: boolean): Promise<Balances> {
-  const account = await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } });
+  const found = await prisma.merchantAccount.findFirst({ where: { merchantId, livemode } });
+  const account = usesTidepool(livemode) && found?.kind === 'contract' ? null : found;
   if (account?.status !== 'active') return { accountId: null, balances: [] };
   const key = balancesCacheKey(merchantId, livemode);
   try {
@@ -1235,16 +1235,17 @@ export async function getBalances(merchantId: string, livemode: boolean): Promis
   for (const p of payouts) assets.add(p.asset);
   for (const c of configs) assets.add(c.destAssetId);
   for (const p of proposals) assetsIn(p.action, assets);
-  const tokenIds = [...assets].sort().slice(0, MAX_BALANCE_ASSETS);
+  const tokenIds = usesTidepool(livemode)
+    ? Object.values(TIDEPOOL_TOKENS).map((t) => t.assetId)
+    : [...assets].sort().slice(0, MAX_BALANCE_ASSETS);
 
   let balances: Balances['balances'] = [];
   if (tokenIds.length > 0) {
     const [amounts, catalog] = await Promise.all([
-      nearClient(livemode).view<unknown>(
-        intentsContractFor(livemode),
-        'mt_batch_balance_of',
-        { account_id: account.nearAccountId, token_ids: tokenIds },
-      ),
+      nearClient(livemode).view<unknown>(intentsContractFor(livemode), 'mt_batch_balance_of', {
+        account_id: account.nearAccountId,
+        token_ids: tokenIds,
+      }),
       tokenList(livemode).catch(() => new Map()),
     ]);
     if (

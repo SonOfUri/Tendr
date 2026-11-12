@@ -1,0 +1,30 @@
+---
+title: 'Test payments'
+description: 'Try checkout, settlement and withdrawals with real testnet tokens.'
+---
+
+Tendr Test mode uses Tidepool to move test USDC and USDT across **NEAR testnet, Base Sepolia and Solana devnet**. Test tokens have no monetary value. Your Live wallet and funds are separate.
+
+## Set up your Test wallet
+
+Open the [dashboard](https://app.usetendr.tech), select your business and switch to **Test**. Open **Wallet**, create its dedicated passkey and complete activation. Choose the token you want payments to settle in.
+
+Use a synced wallet passkey that you can access from your devices. Your login passkey and Live wallet passkey are separate. Backup wallet keys and recovery kits are not available for Tidepool Test wallets yet.
+
+## Fund a customer wallet
+
+Get test USDC or USDT from the [Tidepool faucet](https://app.usetidepool.tech/faucet). You also need the network's test gas token: NEAR on NEAR testnet, ETH on Base Sepolia or SOL on Solana devnet. Select the matching test network in your wallet.
+
+Use only the token contracts offered by Tendr's Test checkout. Mainnet tokens and other test tokens are not interchangeable with Tidepool assets.
+
+## Make a payment
+
+Create a payment link while **Test** is selected, then open its checkout. Choose a supported token and network. Connect your customer wallet or follow the deposit instructions, review the amount and approve the transfer.
+
+The checkout waits for settlement verification before confirming success. You can then see the payment and balance in the dashboard. API integrations use the same checkout flow with a Test API key; normal payment webhooks report the Test payment result.
+
+## Withdraw
+
+From **Test → Wallet**, choose the balance, destination token and external testnet wallet address. Review the quoted output and approve with your Test wallet passkey. The withdrawal completes after Tendr verifies the destination transaction.
+
+The first integration uses customer-paid test gas. Gasless payments and simulated-success buttons are unavailable. Quotes may include solver or network costs, and faucet or route availability depends on Tidepool.

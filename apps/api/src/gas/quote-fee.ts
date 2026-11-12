@@ -1,3 +1,4 @@
+import { usesTidepool } from '../lib/testnet.js';
 // The network fee of a checkout quote (project 5a, spec §2.1, §2.4, §2.5, §8.1, §8.2): who pays it,
 // how, and what it costs, decided when the shopper asks for a quote.
 //
@@ -132,6 +133,24 @@ async function hookEstimate(input: PlanInput): Promise<string> {
  * stores the quote.
  */
 export async function planNetworkFee(input: PlanInput): Promise<NetworkFeePlan> {
+  if (usesTidepool(input.livemode)) {
+    if (input.method || input.session.delivery === 'HOOK')
+      throw new AppError(
+        'GASLESS_NOT_AVAILABLE',
+        'Tidepool supports wallet-paid network fees and webhook delivery',
+        409,
+      );
+    return {
+      paidBy: 'shopper',
+      feeMode: 'native',
+      method: null,
+      usd: '0',
+      tokenAmount: null,
+      reason: null,
+      sponsoredUsd: '0',
+      hookUsd: '0',
+    };
+  }
   const chain = input.origin.blockchain;
   const hookUsd = await hookEstimate(input);
   const order = await orderUsd(input.session, input.livemode);

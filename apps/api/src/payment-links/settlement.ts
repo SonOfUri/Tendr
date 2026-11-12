@@ -1,3 +1,4 @@
+import { usesTidepool } from '../lib/testnet.js';
 // A link can pick a different asset, never a different owner or payout address. 1Click credits
 // the chosen asset to the same merchant Intents account. Source-chain metadata is for display.
 import { SettlementAssetIdSchema, type LinkSettlementOptions } from '@tendr/contracts';
@@ -24,7 +25,13 @@ export async function settlementAssetData(livemode: boolean, asset: string | nul
   try {
     token = await tokenInfo(livemode, asset);
   } catch (err) {
-    if (livemode || !(err instanceof AppError) || err.code !== 'UNSUPPORTED_ASSET') throw err;
+    if (
+      livemode ||
+      usesTidepool(livemode) ||
+      !(err instanceof AppError) ||
+      err.code !== 'UNSUPPORTED_ASSET'
+    )
+      throw err;
     token = await tokenInfo(true, asset);
   }
   return {

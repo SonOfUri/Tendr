@@ -71,6 +71,7 @@ function asUint(v: unknown): bigint {
 }
 
 interface FinalExecutionOutcome {
+  final_execution_status?: string;
   status: ExecutionStatus | string;
   transaction?: {
     hash?: string;
@@ -377,6 +378,7 @@ export class NearRpc {
     const { tokens, gas } = burnt(o);
     return {
       hash: o.transaction?.hash ?? hash,
+      finalized: o.final_execution_status === 'FINAL',
       tokensBurnt: tokens,
       gasBurnt: gas,
       topLevelOk: !failureOf(o.status),

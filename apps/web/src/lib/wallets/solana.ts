@@ -66,10 +66,12 @@ export function buildSolanaInstructions(
 }
 
 /** A mainnet RPC connection through Reown's RPC (already in the checkout's connect-src). */
-export async function solanaConnection(projectId: string) {
+export async function solanaConnection(projectId: string, testnet = false) {
   const { Connection } = await import('@solana/web3.js');
   return new Connection(
-    `https://rpc.walletconnect.org/v1/?chainId=solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dKmFq&projectId=${encodeURIComponent(projectId)}`,
+    testnet
+      ? 'https://api.devnet.solana.com'
+      : `https://rpc.walletconnect.org/v1/?chainId=solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dKmFq&projectId=${encodeURIComponent(projectId)}`,
     'confirmed',
   );
 }

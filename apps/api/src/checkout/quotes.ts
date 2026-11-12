@@ -1,3 +1,5 @@
+import { env } from '../env.js';
+import { usesTidepool } from '../lib/testnet.js';
 // Shopper-side checkout: the shopper-safe session view, the token list, quotes, deposit-tx submit,
 // the refund-contact email and the test-mode deposit simulator. Every function acts on exactly the
 // session the client secret authenticated (`ctx.sessionId`), through the request's scoped client.
@@ -193,7 +195,15 @@ function assertOpen(s: { status: string; expiresAt: Date }, now: Date): void {
 /** The session's live (not superseded) quote, newest first. */
 function currentQuote(ctx: ShopperCtx) {
   return ctx.db.quote.findFirst({
-    where: { sessionId: ctx.sessionId, supersededAt: null },
+    where: {
+      sessionId: ctx.sessionId,
+      supersededAt: null,
+      ...(ctx.livemode
+        ? {}
+        : usesTidepool(false)
+          ? { testProvider: 'tidepool' }
+          : { OR: [{ testProvider: null }, { testProvider: 'simulated' }] }),
+    },
     orderBy: { createdAt: 'desc' },
   });
 }
@@ -454,6 +464,7 @@ export async function shopperSessionView(ctx: ShopperCtx) {
   return {
     id: s.id,
     livemode: s.livemode,
+    test_provider: s.livemode ? null : env().TEST_PAYMENT_PROVIDER,
     /** The account's name (the payee); the shown store name and logo live in `theme`. */
     merchant: { name: store.name },
     /** The resolved theme: re-read on every view, so a republish shows on the next poll. */
@@ -508,7 +519,12 @@ export async function shopperTokens(livemode: boolean) {
   // Test mode's fixture is a small stand-in for quoting. Merge the live catalog so the asset
   // modal matches demo (same pattern as knownIntentsChains / settlement pickers).
   const lists = [tokenList(livemode)];
-  if (!livemode && process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
+  if (
+    !livemode &&
+    !usesTidepool(livemode) &&
+    process.env.NODE_ENV !== 'test' &&
+    process.env.VITEST !== 'true'
+  ) {
     lists.push(tokenList(true));
   }
   const loaded = await Promise.all(lists.map((list) => list.catch(() => null)));
@@ -559,6 +575,8 @@ export function assertGaslessAvailable(
   chain: string,
   method: string | undefined,
 ): void {
+  if (usesTidepool(livemode) && method)
+    throw new AppError('GASLESS_NOT_AVAILABLE', 'Pay testnet network fees from your wallet', 409);
   if (!livemode || !method) return;
   const family = familyOf(chain);
   if (family && relayerFor(family, true) === null) {
@@ -908,12 +926,16 @@ async function storeQuote(
     });
     const clash = await tx.quote.findFirst({
       where: { livemode: t.livemode, depositAddress },
-      select: { id: true, sessionId: true, merchantId: true },
+      select: { id: true, sessionId: true, merchantId: true, testProvider: true },
     });
     if (clash) {
       // 1Click handed back an address we already hold (the simulator does for an identical
       // request). Only this session's own quote may be revived; anything else is refused.
-      if (clash.sessionId !== sessionId || clash.merchantId !== t.merchantId) {
+      if (
+        clash.sessionId !== sessionId ||
+        clash.merchantId !== t.merchantId ||
+        (!t.livemode && (clash.testProvider ?? 'simulated') !== env().TEST_PAYMENT_PROVIDER)
+      ) {
         throw conflict('The swap provider returned a deposit address already in use');
       }
       await tx.quote.updateMany({
@@ -937,6 +959,7 @@ async function storeQuote(
     await tx.quote.create({
       data: {
         id: writtenId!,
+        testProvider: t.livemode ? null : env().TEST_PAYMENT_PROVIDER,
         ...tenant,
         sessionId,
         originAssetId: origin.assetId,
@@ -1009,6 +1032,8 @@ async function assertQuotable(
 async function requireQuote(ctx: ShopperCtx) {
   const q = await currentQuote(ctx);
   if (!q) throw conflict('Request a quote first');
+  if (!ctx.livemode && (q.testProvider ?? 'simulated') !== env().TEST_PAYMENT_PROVIDER)
+    throw conflict('This quote belongs to the previous Test provider. Open a new checkout.');
   return q;
 }
 
@@ -1078,7 +1103,7 @@ export async function simulateDeposit(
   input: z.infer<typeof SimulateInputSchema>,
 ): Promise<StatusResponse> {
   // Production refuses everything but test-mode sessions, which is exactly this check.
-  if (ctx.livemode) throw notFound();
+  if (ctx.livemode || usesTidepool(ctx.livemode)) throw notFound();
   const q = await requireQuote(ctx);
   try {
     return await simulatedOneClick().simulate(q.depositAddress, input.scenario, {

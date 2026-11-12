@@ -71,12 +71,28 @@ const NETWORKS: Readonly<Record<string, { name: string; tx?: string }>> = {
 };
 
 /** A plain network name for a 1Click `blockchain` id ("arb" → "Arbitrum"). */
-export function networkName(blockchain: string): string {
+export function networkName(blockchain: string, testnet = false): string {
+  if (testnet)
+    return (
+      (
+        { near: 'NEAR testnet', base: 'Base Sepolia', sol: 'Solana devnet' } as Record<
+          string,
+          string
+        >
+      )[blockchain] ?? `${blockchain} testnet`
+    );
   return NETWORKS[blockchain.toLowerCase()]?.name ?? blockchain.toUpperCase();
 }
 
 /** A block explorer link for a transaction, or null when unknown. */
-export function explorerTxUrl(blockchain: string, hash: string): string | null {
+export function explorerTxUrl(blockchain: string, hash: string, testnet = false): string | null {
+  if (testnet) {
+    if (!/^[A-Za-z0-9]+$/.test(hash)) return null;
+    if (blockchain === 'near') return `https://testnet.nearblocks.io/txns/${hash}`;
+    if (blockchain === 'base') return `https://sepolia.basescan.org/tx/${hash}`;
+    if (blockchain === 'sol') return `https://explorer.solana.com/tx/${hash}?cluster=devnet`;
+    return null;
+  }
   const prefix = NETWORKS[blockchain.toLowerCase()]?.tx;
   if (!prefix || !/^[A-Za-z0-9]+$/.test(hash)) return null;
   return prefix + hash;

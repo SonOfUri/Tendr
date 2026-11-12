@@ -267,9 +267,10 @@ export default function AccountHomePage() {
           <Alert key={v.livemode ? 'live' : 'test'} tone="danger">
             <span data-testid={`storage-low-${v.livemode ? 'live' : 'test'}`}>
               The {v.livemode ? 'live' : 'test'} account{' '}
-              <span className="dash-mono">{v.account!.nearAccountId}</span> is low on NEAR for storing
-              proposals, and Tendr could not top it up automatically. New proposals and approvals may
-              fail until it is funded. Contact Tendr support, or send a little NEAR to the account.
+              <span className="dash-mono">{v.account!.nearAccountId}</span> is low on NEAR for
+              storing proposals, and Tendr could not top it up automatically. New proposals and
+              approvals may fail until it is funded. Contact Tendr support, or send a little NEAR to
+              the account.
             </span>
           </Alert>
         ))}
@@ -307,6 +308,18 @@ export default function AccountHomePage() {
         />
       </div>
 
+      {home.test.accountKind === 'native_intents' && (
+        <Panel title="Tidepool Test wallet">
+          <NativeWalletSetup
+            view={home.test}
+            status={null}
+            store={{ merchantId: store.id, livemode: false }}
+            userId={me.user.id}
+            isOwner={isOwner}
+            onDone={() => void load()}
+          />
+        </Panel>
+      )}
       <div className="dash-account-grid">
         <AccountCard
           title={
@@ -399,7 +412,9 @@ export default function AccountHomePage() {
                   <>
                     <span className="dash-golive-step-rail" aria-hidden>
                       <span className="dash-golive-step-dot">
-                        {step.done ? <Check size={14} strokeWidth={2.75} /> : (
+                        {step.done ? (
+                          <Check size={14} strokeWidth={2.75} />
+                        ) : (
                           <span className="dash-golive-step-num">{index + 1}</span>
                         )}
                       </span>
@@ -436,7 +451,9 @@ export default function AccountHomePage() {
                         {body}
                       </Link>
                     ) : (
-                      <div className="dash-golive-step-link dash-golive-step-link--static">{body}</div>
+                      <div className="dash-golive-step-link dash-golive-step-link--static">
+                        {body}
+                      </div>
                     )}
                   </li>
                 );
@@ -560,7 +577,10 @@ function AccountCard({
                       <span>{label}</span>
                     </span>
                   </span>
-                  <strong className="dash-balance-amt" title={formatAmount(b.asset, b.amount, livemode)}>
+                  <strong
+                    className="dash-balance-amt"
+                    title={formatAmount(b.asset, b.amount, livemode)}
+                  >
                     {amount}
                   </strong>
                 </li>

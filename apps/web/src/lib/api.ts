@@ -135,7 +135,8 @@ export async function api<T = unknown>(path: string, init: ApiInit = {}): Promis
       method,
       headers,
       credentials: 'include',
-      body: formData !== undefined ? formData : json === undefined ? undefined : JSON.stringify(json),
+      body:
+        formData !== undefined ? formData : json === undefined ? undefined : JSON.stringify(json),
     });
   } catch {
     throw new ApiError(0, 'NETWORK_ERROR', 'We could not reach Tendr. Check your connection.');
@@ -221,6 +222,8 @@ export interface Me {
 export type AccountStatus = 'provisioning' | 'active' | 'failed' | string;
 
 export interface AccountView {
+  accountKind?: 'contract' | 'native_intents' | null;
+  testProvider?: 'simulated' | 'tidepool' | null;
   livemode: boolean;
   account: {
     id: string;
@@ -272,13 +275,7 @@ export interface GoLiveStatus {
      * `live_mode_unavailable` (listed first) while the platform's live-mode switch is off.
      * `payout` when store settlement is not approved yet.
      */
-    missing: (
-      | 'live_mode_unavailable'
-      | 'second_key'
-      | 'threshold'
-      | 'wallet_passkey'
-      | 'payout'
-    )[];
+    missing: ('live_mode_unavailable' | 'second_key' | 'threshold' | 'wallet_passkey' | 'payout')[];
     signerCount: number;
     recoveryKeySet: boolean;
   };

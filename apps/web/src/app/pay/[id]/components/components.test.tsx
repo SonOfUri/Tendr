@@ -135,6 +135,8 @@ describe('WalletConnect', () => {
     expect(canPay({ ...base, quote: { ...quote, refund_address: null } })).toBe(false);
     expect(canPay({ ...base, now: Date.parse(quote.deadline) })).toBe(false);
     expect(canPay({ ...base, livemode: false })).toBe(false);
+    expect(canPay({ ...base, livemode: false, testnet: true })).toBe(true);
+    expect(canPay({ ...base, livemode: false, testnet: true, busy: true })).toBe(false);
     expect(canPay({ ...base, paymentSent: true })).toBe(false);
     expect(canPay({ ...base, busy: true })).toBe(false);
     expect(

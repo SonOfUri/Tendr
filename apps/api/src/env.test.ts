@@ -6,6 +6,29 @@ import { KEY_NAMES } from './keyvault/keys.js';
 
 const base = { DATABASE_URL: 'postgresql://x/y', REDIS_URL: 'redis://localhost:6380' };
 
+describe('Tidepool configuration', () => {
+  it('pins Test infrastructure and preserves Live settings', () => {
+    const e = loadEnv({
+      ...base,
+      NODE_ENV: 'development',
+      TEST_PAYMENT_PROVIDER: 'tidepool',
+      NEAR_CLIENT_DRIVER: 'rpc',
+      INTENTS_CONTRACT_TEST: 'wrong.testnet',
+      NEAR_RPC_URL_TEST: 'https://example.com',
+      INTENTS_CONTRACT_LIVE: 'intents.near',
+    });
+    expect(e.INTENTS_CONTRACT_TEST).toBe('verifier.tidepool-sandbox.testnet');
+    expect(e.NEAR_RPC_URL_TEST).toBe('https://rpc.testnet.fastnear.com');
+    expect(e.INTENTS_CONTRACT_LIVE).toBe('intents.near');
+  });
+  it('refuses simulator drivers outside unit tests', () => {
+    expect(() =>
+      loadEnv({ ...base, NODE_ENV: 'development', TEST_PAYMENT_PROVIDER: 'tidepool' }),
+    ).toThrow(/TEST_PAYMENT_PROVIDER/);
+    expect(loadEnv(base).TEST_PAYMENT_PROVIDER).toBe('simulated');
+  });
+});
+
 describe('AI provider configuration', () => {
   it('uses the NEAR gateway and rejects mismatched endpoints or unsupported reasoning profiles', () => {
     const near = {

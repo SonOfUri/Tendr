@@ -122,7 +122,7 @@ function returnAddressError(
     if (list.length > 0) {
       setAllowed(list);
       setChain(list[0]!);
-      return `This money can only be sent back on ${list.map(networkName).join(' or ')}. Choose one and enter your address there.`;
+      return `This money can only be sent back on ${list.map((chain) => networkName(chain)).join(' or ')}. Choose one and enter your address there.`;
     }
   }
   switch (err.code) {

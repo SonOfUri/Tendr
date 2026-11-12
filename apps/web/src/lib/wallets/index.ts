@@ -1,3 +1,4 @@
+import { TIDEPOOL_TOKENS } from '@tendr/contracts';
 // Paying the locked quote from the shopper's own wallet. Tendr never signs for the shopper.
 //
 // - `payTargetFor(assetId)` reads a 1Click asset id: which wallet family pays it, on which chain,
@@ -39,6 +40,7 @@ export interface WalletAdapter {
 }
 
 export interface PayTarget {
+  network?: 'mainnet' | 'testnet';
   assetId: string;
   family: ChainFamily;
   /** The 1Click `blockchain` id ("eth", "sol", "near"…). */
@@ -101,6 +103,25 @@ const BRIDGED = /\.(omft|omdep)\.near$/;
 
 export function payTargetFor(assetId: string): PayTarget | null {
   if (typeof assetId !== 'string') return null;
+  const testToken = Object.values(TIDEPOOL_TOKENS).find((t) => t.assetId === assetId);
+  if (testToken)
+    return {
+      assetId,
+      network: 'testnet',
+      kind: 'token',
+      contract: testToken.contract,
+      decimals: 6,
+      blockchain: testToken.blockchain,
+      family:
+        testToken.blockchain === 'base'
+          ? 'evm'
+          : testToken.blockchain === 'sol'
+            ? 'solana'
+            : 'near',
+      ...(testToken.blockchain === 'base' ? { chainId: 84532 } : {}),
+    };
+  if (assetId.endsWith('.testnet')) return null; // no unlisted test token can fall through to a mainnet wallet
+
   const known = KNOWN_TOKENS[assetId];
   if (known) return { assetId, kind: 'token', ...known };
 

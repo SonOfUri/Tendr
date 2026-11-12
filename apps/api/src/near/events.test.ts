@@ -136,6 +136,7 @@ describe('NearRpc.txStatus', () => {
           throw Object.assign(new Error('x'), { type: 'UNKNOWN_TRANSACTION' });
         if (mode === 'down') throw new Error('socket hang up');
         return {
+          final_execution_status: 'FINAL',
           status: { SuccessValue: '' },
           transaction: {
             hash: 'H',
@@ -175,6 +176,7 @@ describe('NearRpc.txStatus', () => {
     const rpc = new NearRpc(transport);
     await expect(rpc.txStatus('H', INTENTS)).resolves.toEqual({
       hash: 'H',
+      finalized: true,
       tokensBurnt: 345n,
       gasBurnt: 7n,
       topLevelOk: true,

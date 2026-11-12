@@ -20,7 +20,9 @@ export const merchantRoutes: FastifyPluginAsync = async (app) => {
       // The test account is provisioned by a job; poll GET /v1/account for its status.
       return reply.status(201).send({
         ...(await storeFor(userId, merchant.id)),
-        testAccount: { nearAccountId: testAccount.nearAccountId, status: testAccount.status },
+        testAccount: testAccount
+          ? { nearAccountId: testAccount.nearAccountId, status: testAccount.status }
+          : null,
       });
     },
   );

@@ -106,6 +106,7 @@ export interface SessionLineItem {
 }
 
 export interface SessionView {
+  test_provider?: 'simulated' | 'tidepool' | null;
   id: string;
   livemode: boolean;
   merchant: MerchantDisplay;

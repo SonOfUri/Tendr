@@ -1,3 +1,5 @@
+import { usesTidepool } from '../lib/testnet.js';
+import { tidepoolNearSettlementHashes } from './oneclick/tidepool.js';
 // The payment watcher (spec §4, §6, §7; "Changes after external plan review" #1–#3, #7, #8).
 //
 // Polling: `scanDueDeposits` (every 5 s) claims due deposit addresses with a lease
@@ -201,7 +203,8 @@ const DEFAULT_DEPS: WatcherDeps = {
   provider: providerFor,
   near: nearClient,
   screen: screenAddress,
-  topupEnabled: (livemode) => env().CHECKOUT_TOPUP_ENABLED ?? !livemode,
+  topupEnabled: (livemode) =>
+    !usesTidepool(livemode) && (env().CHECKOUT_TOPUP_ENABLED ?? !livemode),
   resolveSenders: defaultResolveSenders,
   simulatedTx: (hash) => simulatedOneClick().destinationTx(hash),
 };
@@ -322,6 +325,10 @@ async function pollQuote(q0: QuoteRow): Promise<PollResult> {
     stopped,
   });
   if (q0.watchStoppedAt) return result('none', true);
+  if (!q0.livemode && (q0.testProvider ?? 'simulated') !== env().TEST_PAYMENT_PROVIDER) {
+    await stopWatching(q0.id, now);
+    return result('none', true);
+  }
   const existing = await prisma.payment.findFirst({ where: { quoteId: q0.id } });
   if (
     existing &&
@@ -438,9 +445,7 @@ async function scheduleNext(q: QuoteRow, now: Date, polled = true): Promise<void
  * Tendr never verified the destination transfer (RPC outage / non-archival GC). Clears
  * `watchStoppedAt` so the next scan can poll again and settle.
  */
-export async function resumeUnverifiedSuccessWatches(
-  now: Date = deps.now(),
-): Promise<number> {
+export async function resumeUnverifiedSuccessWatches(now: Date = deps.now()): Promise<number> {
   const stuck = await prisma.payment.findMany({
     where: {
       status: { in: ['PROCESSING', 'SCREENING_PENDING'] },
@@ -1159,7 +1164,7 @@ async function destinationTxStatus(
   hash: string,
   route: string,
 ): Promise<TxStatusResult | null> {
-  if (livemode) return deps.near(true).txStatus(hash, route);
+  if (livemode || usesTidepool(livemode)) return deps.near(livemode).txStatus(hash, route);
   let chainErr: unknown = null;
   try {
     const tx = await deps.near(false).txStatus(hash, route);
@@ -1192,7 +1197,9 @@ export async function verify(
   const quoted = toBig(q.amountOut);
   const reported = big(status.swapDetails.amountOut);
   const required = reported > 0n ? reported : quoted;
-  const hashes = status.swapDetails.destinationChainTxHashes.map((h) => h.hash);
+  const hashes = usesTidepool(ctx.livemode)
+    ? tidepoolNearSettlementHashes(status)
+    : status.swapDetails.destinationChainTxHashes.map((h) => h.hash);
   const blocked: string[] = [];
   const viaReceipts = async (opts: { intentsContract?: string; route: string }) => {
     for (const hash of hashes) {
@@ -1203,7 +1210,7 @@ export async function verify(
         log('warn', 'watcher: destination tx lookup failed', { hash, err: String(err) });
         continue;
       }
-      if (!tx) continue;
+      if (!tx || (usesTidepool(ctx.livemode) && (!tx.finalized || !tx.topLevelOk))) continue;
       const credits = matchingCredits(tx.receipts, {
         assetId: session.destAsset,
         receiver: session.recipient,

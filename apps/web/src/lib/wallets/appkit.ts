@@ -2,7 +2,8 @@
 // the shopper clicks "Connect wallet": this module is itself imported on demand (wallets/index.ts)
 // and imports the SDK with dynamic import(), so none of it is in the checkout's first load.
 //
-// One AppKit instance per page, created on first use, mainnet networks only. Its extras are off:
+// One AppKit instance per page, created on first use, with mainnets and Tidepool test networks.
+// Its extras are off:
 // analytics, email and social logins (the embedded wallet frame), swaps, on-ramp, send, history,
 // Coinbase's SDK. Fonts: the checkout's own, so no font is fetched from Reown.
 import type { AppKit } from '@reown/appkit';
@@ -14,7 +15,7 @@ export type AppKitNamespace = 'eip155' | 'solana' | 'bip122';
 export interface AppKitSession<P> {
   connect(): Promise<{ address: string }>;
   provider(): P | undefined;
-  /** Solana / Bitcoin: switches the wallet to mainnet if needed; false if it is not on mainnet. */
+  /** Solana / Bitcoin: switches to the requested network; false if the wallet cannot do so. */
   ensureNetwork(): Promise<boolean>;
   disconnect(): Promise<void>;
 }
@@ -43,6 +44,7 @@ async function loadAppKit(projectId: string): Promise<AppKit> {
         networks: [
           n.mainnet,
           n.base,
+          n.baseSepolia,
           n.arbitrum,
           n.optimism,
           n.polygon,
@@ -51,6 +53,7 @@ async function loadAppKit(projectId: string): Promise<AppKit> {
           n.gnosis,
           n.berachain,
           n.solana,
+          n.solanaDevnet,
           n.bitcoin,
         ],
         metadata: {
@@ -129,7 +132,11 @@ function waitForConnection(kit: AppKit, namespace: AppKitNamespace): Promise<{ a
   });
 }
 
-export function appKitSession<P>(namespace: AppKitNamespace, projectId: string): AppKitSession<P> {
+export function appKitSession<P>(
+  namespace: AppKitNamespace,
+  projectId: string,
+  testnet = false,
+): AppKitSession<P> {
   let kit: AppKit | null = null;
   return {
     async connect() {
@@ -146,13 +153,21 @@ export function appKitSession<P>(namespace: AppKitNamespace, projectId: string):
     async ensureNetwork() {
       if (!kit) return false;
       if (namespace === 'eip155') return true;
-      const want = namespace === 'solana' ? SOLANA_MAINNET : BITCOIN_MAINNET;
+      const want =
+        namespace === 'solana'
+          ? testnet
+            ? 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
+            : SOLANA_MAINNET
+          : BITCOIN_MAINNET;
       if (kit.getCaipNetwork(namespace)?.caipNetworkId === want) return true;
       try {
-        const { solana, bitcoin } = await import('@reown/appkit/networks');
-        await kit.switchNetwork(namespace === 'solana' ? solana : bitcoin, {
-          throwOnFailure: true,
-        });
+        const { solana, solanaDevnet, bitcoin } = await import('@reown/appkit/networks');
+        await kit.switchNetwork(
+          namespace === 'solana' ? (testnet ? solanaDevnet : solana) : bitcoin,
+          {
+            throwOnFailure: true,
+          },
+        );
       } catch {
         return false;
       }

@@ -26,16 +26,11 @@ import { buildDemoAssetOptions } from '@/lib/demo-assets';
 import { formatUsd } from '@/lib/payments';
 import { toast } from '@/components/toast';
 import { withStepUp } from '@/lib/webauthn';
-import {
-  activateWallet,
-  registerWallet,
-  signPayout,
-  type NativePayout,
-} from '@/lib/native-wallet';
+import { activateWallet, registerWallet, signPayout, type NativePayout } from '@/lib/native-wallet';
 
 type WalletData = {
   view: AccountView;
-  status: GoLiveStatus;
+  status: GoLiveStatus | null;
   balances: Balances;
   tokens: SettlementToken[];
   storeDefault: string | null;
@@ -87,7 +82,7 @@ export function NativeWalletSetup({
   onDone,
 }: {
   view: AccountView;
-  status: GoLiveStatus;
+  status: GoLiveStatus | null;
   store: StoreContext;
   userId: string;
   isOwner: boolean;
@@ -97,7 +92,7 @@ export function NativeWalletSetup({
   const wallet = view.nativeWallet;
   const mine = isOwner && (!wallet || wallet.ownerUserId === userId);
   const active = view.account?.status === 'active';
-  const closed = status.checklist.missing.includes('live_mode_unavailable');
+  const closed = store.livemode && status?.checklist.missing.includes('live_mode_unavailable');
 
   async function setup() {
     setBusy(true);
@@ -124,8 +119,7 @@ export function NativeWalletSetup({
         <div className="dash-golive-ready-copy">
           <strong>Wallet activated</strong>
           <p className="dash-muted dash-small">
-            Settlement and withdrawals are on the{' '}
-            <Link href="/dashboard/wallet">wallet page</Link>.
+            Settlement and withdrawals are on the <Link href="/dashboard/wallet">wallet page</Link>.
           </p>
         </div>
       </div>
@@ -140,7 +134,11 @@ export function NativeWalletSetup({
       </p>
       <div>
         <Button disabled={!mine || busy} onClick={() => void setup()}>
-          {busy ? 'Waiting for your passkey…' : wallet ? 'Finish wallet activation' : 'Create wallet passkey and activate'}
+          {busy
+            ? 'Waiting for your passkey…'
+            : wallet
+              ? 'Finish wallet activation'
+              : 'Create wallet passkey and activate'}
         </Button>
       </div>
       {!mine ? (
@@ -157,13 +155,15 @@ export function NativeWalletPanel({
   userId,
   isOwner,
   proposalId,
+  livemode = true,
 }: {
   merchantId: string;
   userId: string;
   isOwner: boolean;
   proposalId?: string;
+  livemode?: boolean;
 }) {
-  const store = useMemo<StoreContext>(() => ({ merchantId, livemode: true }), [merchantId]);
+  const store = useMemo<StoreContext>(() => ({ merchantId, livemode }), [merchantId, livemode]);
   const [data, setData] = useState<WalletData | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -179,12 +179,12 @@ export function NativeWalletPanel({
   async function load() {
     const [view, status, balances] = await Promise.all([
       api<AccountView>('/v1/account', { store }),
-      api<GoLiveStatus>('/v1/account/go-live', { store }),
+      livemode ? api<GoLiveStatus>('/v1/account/go-live', { store }) : Promise.resolve(null),
       api<Balances>('/v1/account/balances', { store }),
     ]);
     const native =
       view.account?.kind === 'native_intents' ||
-      (!view.account && status.accountKind === 'native_intents');
+      (!view.account && (view.accountKind ?? status?.accountKind) === 'native_intents');
     if (view.account?.kind === 'contract' || !native) {
       setData({ view, status, balances, tokens: [], storeDefault: null, payouts: [] });
       return;
@@ -194,7 +194,7 @@ export function NativeWalletPanel({
       active
         ? api<LinkSettlementOptions>('/v1/payment_links/settlement-options', { store })
         : Promise.resolve({
-            livemode: true,
+            livemode,
             tokens: [] as SettlementToken[],
             chains: [] as string[],
             store_default: null,
@@ -240,9 +240,9 @@ export function NativeWalletPanel({
         }
       });
     return () => controller.abort();
-    // store identity is merchant id; livemode is always live here.
+    // Remount by merchant and mode so a reviewed payout cannot cross contexts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [merchantId]);
+  }, [merchantId, livemode]);
 
   const pending = data?.payouts.some((p) => p.status === 'submitting' || p.status === 'submitted');
   useEffect(() => {
@@ -276,7 +276,8 @@ export function NativeWalletPanel({
 
   const native =
     data.view.account?.kind === 'native_intents' ||
-    (!data.view.account && data.status.accountKind === 'native_intents');
+    (!data.view.account &&
+      (data.view.accountKind ?? data.status?.accountKind) === 'native_intents');
   if (!native) {
     return (
       <Alert tone="info">
@@ -291,7 +292,10 @@ export function NativeWalletPanel({
     isOwner && (!data.view.nativeWallet || data.view.nativeWallet.ownerUserId === userId);
   const catalogOptions = buildDemoAssetOptions(toCheckoutTokens(data.tokens));
 
-  function tokenMeta(id: string, row?: BalanceRow): { symbol: string; decimals: number; chain: string } {
+  function tokenMeta(
+    id: string,
+    row?: BalanceRow,
+  ): { symbol: string; decimals: number; chain: string } {
     const token = data!.tokens.find((t) => t.asset === id);
     if (token) {
       return {
@@ -300,7 +304,7 @@ export function NativeWalletPanel({
         chain: token.chain,
       };
     }
-    const info = assetInfo(id, true);
+    const info = assetInfo(id, livemode);
     return {
       symbol: row?.symbol?.trim() || info.symbol,
       decimals: typeof row?.decimals === 'number' ? row.decimals : info.decimals,
@@ -310,10 +314,10 @@ export function NativeWalletPanel({
 
   function showAmount(id: string, raw: string) {
     const meta = tokenMeta(id);
-    if (data!.tokens.some((t) => t.asset === id) || assetInfo(id, true).known) {
+    if (data!.tokens.some((t) => t.asset === id) || assetInfo(id, livemode).known) {
       return `${formatUnits(raw, meta.decimals)} ${meta.symbol}`;
     }
-    return formatAmount(id, raw, true);
+    return formatAmount(id, raw, livemode);
   }
 
   function selectBalance(id: string) {
@@ -391,19 +395,30 @@ export function NativeWalletPanel({
       : data.storeDefault &&
           catalogOptions.some((o) => o.chainVariants.some((v) => v.assetId === data.storeDefault))
         ? data.storeDefault
-        : catalogOptions[0]?.chainVariants[0]?.assetId ?? catalogOptions[0]?.value ?? '';
+        : (catalogOptions[0]?.chainVariants[0]?.assetId ?? catalogOptions[0]?.value ?? '');
   const destinationValue =
     destinationAsset &&
     catalogOptions.some((o) => o.chainVariants.some((v) => v.assetId === destinationAsset))
       ? destinationAsset
-      : catalogOptions[0]?.chainVariants[0]?.assetId ?? catalogOptions[0]?.value ?? '';
+      : (catalogOptions[0]?.chainVariants[0]?.assetId ?? catalogOptions[0]?.value ?? '');
   const withdrawValue =
     asset && withdrawOptions.some((o) => o.chainVariants.some((v) => v.assetId === asset))
       ? asset
-      : withdrawOptions[0]?.chainVariants[0]?.assetId ?? withdrawOptions[0]?.value ?? '';
+      : (withdrawOptions[0]?.chainVariants[0]?.assetId ?? withdrawOptions[0]?.value ?? '');
 
   return (
     <div className="stack wallet-layout">
+      {!livemode && (
+        <Alert tone="info">
+          Tidepool Test wallet. Use test USDC or USDT on NEAR testnet, Base Sepolia, or Solana
+          devnet.{' '}
+          <a href="https://app.usetidepool.tech/faucet" target="_blank" rel="noreferrer">
+            Get test tokens
+          </a>
+          . This wallet has a separate passkey; use a synced passkey. Backup-key changes and
+          recovery kits are not available in Test mode yet.
+        </Alert>
+      )}
       <NativeWalletSetup
         view={data.view}
         status={data.status}
@@ -469,48 +484,51 @@ export function NativeWalletPanel({
                   <strong className="wallet-bal-total-usd">{totalUsdLabel}</strong>
                 </div>
                 <div className="wallet-balances" role="listbox" aria-label="Balances">
-                {funded.map((b) => {
-                  const meta = tokenMeta(b.asset, b);
-                  const selected = asset === b.asset;
-                  const amount = formatUnits(b.amount, meta.decimals);
-                  const usd = formatUsd(b.amount_usd ?? null);
-                  return (
-                    <button
-                      key={b.asset}
-                      type="button"
-                      role="option"
-                      aria-selected={selected}
-                      className="wallet-bal-card"
-                      data-selected={selected ? 'true' : 'false'}
-                      disabled={busy || Boolean(proposalId)}
-                      onClick={() => selectBalance(b.asset)}
-                    >
-                      <div className="wallet-bal-head">
-                        <span className="wallet-bal-mark">
-                          <TokenLogo symbol={meta.symbol} assetId={b.asset} size={36} />
-                          {meta.chain ? (
-                            <span className="wallet-bal-chain-badge" title={chainLabel(meta.chain)}>
-                              <ChainLogo chain={meta.chain} size={15} />
-                            </span>
-                          ) : null}
-                        </span>
-                        <div className="wallet-bal-meta">
-                          <span className="wallet-bal-sym">{meta.symbol}</span>
-                          {meta.chain ? (
-                            <span className="wallet-bal-chain">{chainLabel(meta.chain)}</span>
-                          ) : null}
+                  {funded.map((b) => {
+                    const meta = tokenMeta(b.asset, b);
+                    const selected = asset === b.asset;
+                    const amount = formatUnits(b.amount, meta.decimals);
+                    const usd = formatUsd(b.amount_usd ?? null);
+                    return (
+                      <button
+                        key={b.asset}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className="wallet-bal-card"
+                        data-selected={selected ? 'true' : 'false'}
+                        disabled={busy || Boolean(proposalId)}
+                        onClick={() => selectBalance(b.asset)}
+                      >
+                        <div className="wallet-bal-head">
+                          <span className="wallet-bal-mark">
+                            <TokenLogo symbol={meta.symbol} assetId={b.asset} size={36} />
+                            {meta.chain ? (
+                              <span
+                                className="wallet-bal-chain-badge"
+                                title={chainLabel(meta.chain)}
+                              >
+                                <ChainLogo chain={meta.chain} size={15} />
+                              </span>
+                            ) : null}
+                          </span>
+                          <div className="wallet-bal-meta">
+                            <span className="wallet-bal-sym">{meta.symbol}</span>
+                            {meta.chain ? (
+                              <span className="wallet-bal-chain">{chainLabel(meta.chain)}</span>
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
-                      <div className="wallet-bal-values">
-                        <span className="wallet-bal-amt" title={`${amount} ${meta.symbol}`}>
-                          {amount} <span className="wallet-bal-amt-sym">{meta.symbol}</span>
-                        </span>
-                        <span className="wallet-bal-usd">{usd}</span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+                        <div className="wallet-bal-values">
+                          <span className="wallet-bal-amt" title={`${amount} ${meta.symbol}`}>
+                            {amount} <span className="wallet-bal-amt-sym">{meta.symbol}</span>
+                          </span>
+                          <span className="wallet-bal-usd">{usd}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </>
             ) : (
               <p className="dash-muted">No funds received yet.</p>
@@ -561,7 +579,9 @@ export function NativeWalletPanel({
                             onChange={(id) => selectBalance(id)}
                           />
                         ) : (
-                          <p className="dash-muted dash-small wallet-swap-empty">No funded assets</p>
+                          <p className="dash-muted dash-small wallet-swap-empty">
+                            No funded assets
+                          </p>
                         )}
                       </div>
                       <div className="wallet-pct" role="group" aria-label="Amount percentage">
@@ -660,7 +680,9 @@ export function NativeWalletPanel({
                 </div>
                 <div className="wallet-quote-row">
                   <span className="wallet-quote-label">Est. receive</span>
-                  <strong>{showAmount(review.destinationAsset, review.quote.quote.amountOut)}</strong>
+                  <strong>
+                    {showAmount(review.destinationAsset, review.quote.quote.amountOut)}
+                  </strong>
                 </div>
                 {review.quote.quote.minAmountOut ? (
                   <div className="wallet-quote-row">
@@ -718,7 +740,12 @@ export function NativeWalletPanel({
                 disabled={busy}
                 onClick={() => void load()}
               >
-                <RefreshCw size={15} strokeWidth={2.25} aria-hidden data-spin={busy ? 'true' : 'false'} />
+                <RefreshCw
+                  size={15}
+                  strokeWidth={2.25}
+                  aria-hidden
+                  data-spin={busy ? 'true' : 'false'}
+                />
               </button>
             }
           >
@@ -761,7 +788,11 @@ export function NativeWalletPanel({
               <p className="dash-muted">No payouts yet.</p>
             )}
           </Panel>
-          {mine && !proposalId && <NativeWalletSecurity key={merchantId} store={store} />}
+          {mine &&
+            !proposalId &&
+            data.view.account?.capabilities?.nativeWalletKeyManagement !== false && (
+              <NativeWalletSecurity key={merchantId} store={store} />
+            )}
         </>
       ) : null}
     </div>

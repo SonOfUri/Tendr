@@ -1,10 +1,12 @@
 # Tendr dashboard frontend handover
 
-Updated **11 November 2026** (wallet devices/recovery, login recovery, AI, invoices and email design). Audience: the developer building the merchant dashboard in `apps/web`.
+Updated **12 November 2026** (Tidepool Test wallets, wallet devices/recovery, login recovery, AI, invoices and email design). Audience: the developer building the merchant dashboard in `apps/web`.
 This is the current entry point for frontend work. It supersedes the deployment assumptions and
 "missing screens" lists in earlier versions of this handover. The filename is retained for existing links.
 
 ## Start here
+
+The [Tidepool Test mode handover](2026-11-12-tidepool-dashboard.md) covers real testnet checkout, native Test wallet setup, supported assets, provider isolation and Test recovery limits. It supersedes simulator/automatic Test-account setup assumptions below when `testProvider` is `tidepool`.
 
 Start with the [AI, invoice and email delivery brief](2026-11-09-ai-invoices-email-design.md)
 for screen states, design requirements, acceptance criteria and the full transactional email inventory.

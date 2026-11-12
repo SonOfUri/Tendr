@@ -13,7 +13,9 @@ import { recordEvent } from '../events/record.js';
 import { sha256 } from '../lib/crypto.js';
 import { AppError, conflict, forbidden } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
-import { assertLiveModeOpen } from '../lib/live-mode.js';
+import { assertNativeMode, usesTidepool, intentsContractFor } from '../lib/testnet.js';
+import { isUnknownAccountOrKey } from '../near/rpc.js';
+import { TIDEPOOL_TOKENS } from '../checkout/oneclick/tidepool.js';
 import { prisma } from '../lib/prisma.js';
 import { nearClient } from '../near/client.js';
 import { tokenInfo } from '../checkout/tokens.js';
@@ -34,11 +36,45 @@ const scope = (a: NativeActor) => ({ merchantId: a.merchantId, livemode: a.livem
 const invalid = () => new AppError('VALIDATION_ERROR', 'Wallet passkey could not be verified', 400);
 
 export async function requireNativeOwner(actor: NativeActor) {
-  if (!actor.livemode) throw conflict('Native Intents wallets are available in live mode only');
+  if (!actor.livemode) assertNativeMode(false);
   const member = await prisma.merchantUser.findFirst({
     where: { merchantId: actor.merchantId, userId: actor.userId },
   });
   if (member?.role !== 'owner') throw forbidden('Only an owner can manage this wallet');
+}
+
+/** A legacy Test placeholder can be replaced only when no NEAR account or Tidepool funds exist.
+ * The old identity is retained in an audit event; live accounts are never candidates.
+ */
+async function registrationAccount(actor: NativeActor) {
+  const old = await prisma.merchantAccount.findFirst({ where: scope(actor) });
+  if (!old) return null;
+  if (!usesTidepool(actor.livemode) || old.kind !== 'contract')
+    throw conflict('This store already has an account; activate its wallet');
+  if (old.provisionClaimedAt && old.provisionClaimedAt.getTime() > Date.now() - 5 * 60_000)
+    throw conflict('Wait for the previous Test account setup to finish');
+  let exists = true;
+  try {
+    await nearClient(false).viewAccount(old.nearAccountId);
+  } catch (error) {
+    if (!isUnknownAccountOrKey(error)) throw error;
+    exists = false;
+  }
+  if (exists)
+    throw conflict(
+      'This store has an on-chain legacy Test account. Use a new store for Tidepool; its existing wallet is preserved.',
+    );
+  const balances = await nearClient(false).view<string[]>(
+    intentsContractFor(false),
+    'mt_batch_balance_of',
+    {
+      account_id: old.nearAccountId,
+      token_ids: Object.values(TIDEPOOL_TOKENS).map((t) => t.assetId),
+    },
+  );
+  if (balances.length !== 6 || balances.some((value) => value !== '0'))
+    throw conflict('The previous Test identity has funds; its wallet must be preserved');
+  return old;
 }
 
 export async function ownedNativeWallet(actor: NativeActor, active = true) {
@@ -56,13 +92,11 @@ export async function ownedNativeWallet(actor: NativeActor, active = true) {
 }
 
 export async function nativeRegistrationOptions(actor: NativeActor) {
-  assertLiveModeOpen();
+  assertNativeMode(actor.livemode);
   await requireNativeOwner(actor);
-  if (env().LIVE_ACCOUNT_DRIVER !== 'native_intents')
+  if (actor.livemode && env().LIVE_ACCOUNT_DRIVER !== 'native_intents')
     throw conflict('Native account registration is not enabled');
-  if (await prisma.merchantAccount.findFirst({ where: scope(actor) })) {
-    throw conflict('This store already has a live account; activate its wallet or contact support');
-  }
+  await registrationAccount(actor);
   const merchant = await prisma.merchant.findUniqueOrThrow({ where: { id: actor.merchantId } });
   const challenge = Buffer.from(newCeremonyChallenge()).toString('base64url');
   await prisma.webauthnChallenge.create({
@@ -78,8 +112,8 @@ export async function nativeRegistrationOptions(actor: NativeActor) {
   return generateRegistrationOptions({
     rpID: env().WEBAUTHN_RP_ID,
     rpName: env().WEBAUTHN_RP_NAME,
-    userID: new TextEncoder().encode(`${actor.merchantId}:live`),
-    userName: `${merchant.name} — live wallet`,
+    userID: new TextEncoder().encode(`${actor.merchantId}:${actor.livemode ? 'live' : 'test'}`),
+    userName: `${merchant.name} — ${actor.livemode ? 'live' : 'test'} wallet`,
     userDisplayName: `${merchant.name} wallet`,
     challenge: Buffer.from(challenge, 'base64url'),
     attestationType: 'none',
@@ -95,9 +129,9 @@ export async function nativeRegistrationOptions(actor: NativeActor) {
 
 /** Registration is followed by an assertion: attestation:none alone is NOT proof of ownership. */
 export async function registerNativeWallet(actor: NativeActor, response: RegistrationResponseJSON) {
-  assertLiveModeOpen();
+  assertNativeMode(actor.livemode);
   await requireNativeOwner(actor);
-  if (env().LIVE_ACCOUNT_DRIVER !== 'native_intents')
+  if (actor.livemode && env().LIVE_ACCOUNT_DRIVER !== 'native_intents')
     throw conflict('Native account registration is not enabled');
   let challenge: string;
   let registration: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
@@ -132,6 +166,7 @@ export async function registerNativeWallet(actor: NativeActor, response: Registr
   if (!('p256' in key)) throw invalid();
   const publicKey = nativePublicKey(key.p256);
   const accountId = nativeAccountId(publicKey);
+  const previous = await registrationAccount(actor);
   // A dedicated credential prevents stores sharing a login key (and therefore sharing funds).
   if (
     await prisma.webauthnCredential.findFirst({
@@ -149,19 +184,48 @@ export async function registerNativeWallet(actor: NativeActor, response: Registr
         }))
       )
         throw forbidden('Only an owner can manage this wallet');
-      if (await tx.merchantAccount.findFirst({ where: scope(actor) }))
-        throw conflict('A live account already exists');
+      const current = await tx.merchantAccount.findFirst({ where: scope(actor) });
+      if (
+        current &&
+        (!previous ||
+          current.id !== previous.id ||
+          current.kind !== 'contract' ||
+          current.updatedAt.getTime() !== previous.updatedAt.getTime())
+      )
+        throw conflict('An account already exists or changed during registration');
+      if (previous)
+        await recordEvent(tx, actor, {
+          aggregateType: 'merchant_account',
+          aggregateId: previous.id,
+          type: 'merchant_account.legacy_test_replaced',
+          payload: {
+            previous: JSON.parse(
+              JSON.stringify(previous, (_key, value) =>
+                typeof value === 'bigint' ? value.toString() : value,
+              ),
+            ),
+          },
+        });
       await reserveDedicatedWalletKey(tx, credential.id, publicKey, key);
-      const account = await tx.merchantAccount.create({
-        data: {
-          id: newId('macc'),
-          ...scope(actor),
-          kind: 'native_intents',
-          nearAccountId: accountId,
-          threshold: 1,
-          status: 'provisioning',
-        },
-      });
+      const accountData = {
+        ...scope(actor),
+        kind: 'native_intents' as const,
+        nearAccountId: accountId,
+        threshold: 1,
+        status: 'provisioning' as const,
+        contractCodeHash: null,
+        createdTx: null,
+        provisionAttemptId: null,
+        provisionClaimedAt: null,
+        storageLowAt: null,
+        reconciledAt: null,
+        signerEpoch: 0n,
+        proposalsSeen: 0,
+        recoveryKeyEpoch: null,
+      };
+      const account = previous
+        ? await tx.merchantAccount.update({ where: { id: previous.id }, data: accountData })
+        : await tx.merchantAccount.create({ data: { id: newId('macc'), ...accountData } });
       const wallet = await tx.nativeWallet.create({
         data: {
           id: newId('nwal'),
@@ -206,13 +270,13 @@ export async function verifyNativeAssertion(
 }
 
 export async function nativeActivationOptions(actor: NativeActor) {
-  assertLiveModeOpen();
+  assertNativeMode(actor.livemode);
   const wallet = await ownedNativeWallet(actor, false);
   if (wallet.account.status === 'active') throw conflict('The wallet is already active');
   const expires = new Date(Date.now() + CHALLENGE_TTL_MS);
   const payload = activationPayload(
     wallet.account.nearAccountId,
-    env().INTENTS_CONTRACT_LIVE,
+    intentsContractFor(actor.livemode),
     expires,
   );
   await prisma.nativeWallet.updateMany({
@@ -232,7 +296,7 @@ export async function activateNativeWallet(
   actor: NativeActor,
   response: AuthenticationResponseJSON,
 ) {
-  assertLiveModeOpen();
+  assertNativeMode(actor.livemode);
   const wallet = await ownedNativeWallet(actor, false);
   if (wallet.account.status === 'active') return wallet.account;
   if (
@@ -246,10 +310,10 @@ export async function activateNativeWallet(
     wallet.activationPayload,
     response,
   );
-  const simulation = await nearClient(true).view<{
+  const simulation = await nearClient(actor.livemode).view<{
     intents_executed?: unknown[];
     invariant_violated?: unknown;
-  }>(env().INTENTS_CONTRACT_LIVE, 'simulate_intents', { signed: [signed] });
+  }>(intentsContractFor(actor.livemode), 'simulate_intents', { signed: [signed] });
   if (simulation.intents_executed?.length !== 1 || simulation.invariant_violated)
     throw conflict('The Intents verifier did not accept this wallet');
   return tenantTransaction(actor, async (tx) => {
@@ -274,11 +338,14 @@ export async function activateNativeWallet(
       },
       data: { status: 'active' },
     });
+    await tx.settlementConfig.updateMany({ where: scope(actor), data: { isDefault: false } });
     await tx.settlementConfig.create({
       data: {
         id: newId('stc'),
         ...scope(actor),
-        destAssetId: SETTLEMENT_CHOICES.live[0]!.asset,
+        destAssetId: usesTidepool(actor.livemode)
+          ? TIDEPOOL_TOKENS.nearUsdc.assetId
+          : SETTLEMENT_CHOICES.live[0]!.asset,
         destChain: 'near',
         payoutMode: 'intents',
         isDefault: true,
@@ -297,9 +364,9 @@ export async function activateNativeWallet(
 }
 
 export async function setNativeSettlement(actor: NativeActor, asset: string) {
-  assertLiveModeOpen();
+  assertNativeMode(actor.livemode);
   await ownedNativeWallet(actor);
-  await tokenInfo(true, asset);
+  await tokenInfo(actor.livemode, asset);
   if (!asset.startsWith('nep141:'))
     throw new AppError('UNSUPPORTED_ASSET', 'Choose a supported NEP-141 settlement asset', 400);
   await tenantTransaction(actor, async (tx) => {

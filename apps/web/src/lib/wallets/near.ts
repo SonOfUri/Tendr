@@ -251,6 +251,7 @@ export function rpcView(rpcUrl: string = NEAR_RPC, fetchFn: typeof fetch = fetch
 /** The real dependencies: Wallet Selector on mainnet with Meteor and Intear. */
 export function nearSelectorDeps(
   pickWallet: (wallets: { id: string; name: string }[]) => Promise<string | null>,
+  testnet = false,
 ): NearDeps {
   let selector: Promise<{
     wallet(id: string): Promise<unknown>;
@@ -268,7 +269,7 @@ export function nearSelectorDeps(
             import('@near-wallet-selector/intear-wallet'),
           ]);
         return setupWalletSelector({
-          network: 'mainnet',
+          network: testnet ? 'testnet' : 'mainnet',
           modules: [setupMeteorWallet(), setupIntearWallet()],
         }) as never;
       })().catch((err: unknown) => {
@@ -313,6 +314,6 @@ export function nearSelectorDeps(
           }),
       };
     },
-    view: rpcView(),
+    view: rpcView(testnet ? 'https://rpc.testnet.fastnear.com' : NEAR_RPC),
   };
 }

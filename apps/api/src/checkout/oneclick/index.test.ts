@@ -1,3 +1,4 @@
+import { TidepoolOneClick } from './tidepool.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadEnv } from '../../env.js';
 import {
@@ -34,4 +35,11 @@ describe('providerFor', () => {
     expect(feeAccountFor(true)).toBe('fees.tendr.near');
     expect(feeAccountFor(false)).toBe('fees.tendr.testnet');
   });
+});
+
+it('selects Tidepool only for Test and disables simulation', () => {
+  loadEnv({ ...process.env, TEST_PAYMENT_PROVIDER: 'tidepool' });
+  expect(providerFor(false)).toBeInstanceOf(TidepoolOneClick);
+  expect(providerFor(true)).toBeInstanceOf(HttpOneClick);
+  expect(() => simulatedOneClick()).toThrow('Simulation is disabled');
 });

@@ -1,3 +1,4 @@
+import { TIDEPOOL_TOKENS } from '@tendr/contracts';
 import { describe, expect, it } from 'vitest';
 import { adapterFor, payTargetFor, type DepositRequest } from './index';
 import { assertDepositMatches } from './match';
@@ -156,5 +157,27 @@ describe('assertDepositMatches: only ever the locked quote', () => {
       assertDepositMatches(target, { ...ok, depositAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t' }),
     ).toThrow(WalletError);
     expect(() => assertDepositMatches(target, { ...ok, decimals: -1 })).toThrow(WalletError);
+  });
+});
+
+describe('Tidepool payment networks', () => {
+  it.each(Object.values(TIDEPOOL_TOKENS))(
+    'pins $blockchain $symbol to its test network and token',
+    (token) => {
+      const target = payTargetFor(token.assetId);
+      expect(target).toMatchObject({
+        network: 'testnet',
+        contract: token.contract,
+        decimals: 6,
+        blockchain: token.blockchain,
+      });
+      if (token.blockchain === 'base') expect(target?.chainId).toBe(84532);
+      expect(adapterFor(token.assetId, token.blockchain)).not.toBeNull();
+      expect(adapterFor(token.assetId, 'eth')).toBeNull();
+    },
+  );
+  it('never routes an unlisted testnet token through a mainnet NEAR wallet', () => {
+    expect(payTargetFor('nep141:unknown.tp-omft.testnet')).toBeNull();
+    expect(payTargetFor('nep141:wrap.testnet')).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+import { usesTidepool } from '../lib/testnet.js';
 // Gasless relayer entry points (project 5a, spec §2.3, §3): `relayerFor(family, livemode)` picks
 // the family's relayer (the simulated one in test mode), and `pollEvmRelays` sees the live EVM
 // relayer's transactions through to an outcome (a worker job).
@@ -225,6 +226,12 @@ export async function gaslessOptions(
   shopper: ShopperCtx,
   input: z.infer<typeof GaslessOptionsInputSchema>,
 ): Promise<GaslessOptions> {
+  if (usesTidepool(shopper.livemode))
+    throw new AppError(
+      'GASLESS_NOT_AVAILABLE',
+      'Testnet network fees are paid by your wallet',
+      409,
+    );
   const session = await loadSession(shopper);
   if (session.status !== 'PENDING_DEPOSIT' || session.expiresAt.getTime() <= Date.now()) {
     throw new AppError('SESSION_EXPIRED', 'This checkout is no longer taking payments', 409);

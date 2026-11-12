@@ -1,3 +1,4 @@
+import { tidepoolEnabled } from '../lib/testnet.js';
 // Store creation at signup: the person (already verified, with a passkey) names their store; the
 // store gets a slug and the person becomes its owner and first signer.
 //
@@ -68,7 +69,7 @@ const isSlugConflict = (err: unknown) =>
 export async function createStore(
   userId: string,
   name: string,
-): Promise<{ merchant: Merchant; membership: MerchantUser; testAccount: MerchantAccount }> {
+): Promise<{ merchant: Merchant; membership: MerchantUser; testAccount: MerchantAccount | null }> {
   const passkeys = await prisma.webauthnCredential.count({ where: { userId, revokedAt: null } });
   if (passkeys === 0) throw conflict('Register a passkey before creating a store');
 
@@ -94,7 +95,7 @@ export async function createStore(
             isSigner: true,
           },
         });
-        const testAccount = await createTestAccount(tx, ctx, slug);
+        const testAccount = tidepoolEnabled() ? null : await createTestAccount(tx, ctx, slug);
         return { merchant, membership, testAccount };
       });
     } catch (err) {

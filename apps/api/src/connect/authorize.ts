@@ -29,6 +29,7 @@ import { sha256 } from '../lib/crypto.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { liveModeOpen, liveModeUnavailable } from '../lib/live-mode.js';
+import { usesTidepool } from '../lib/testnet.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { deleteSecret, putSecret, takeSecret } from '../secrets/secrets.js';
@@ -457,7 +458,7 @@ export async function connectStatus(
   }
 
   const nudges: ConnectStatusResponse['nudges'] =
-    (await signerPasskeyCount(ctx.merchantId)) === 1
+    !usesTidepool(ctx.livemode) && (await signerPasskeyCount(ctx.merchantId)) === 1
       ? [
           {
             code: 'single_key',
@@ -473,8 +474,15 @@ export async function connectStatus(
     ready: blocking.length === 0,
     blocking: blocking.map((code) => ({
       code,
-      message: BLOCKING[code].message,
-      href: dashboardHref(BLOCKING[code].path),
+      message:
+        code === 'test_account_pending' && usesTidepool(false)
+          ? 'Create and activate your Tidepool Test wallet on the dashboard'
+          : BLOCKING[code].message,
+      href: dashboardHref(
+        code === 'test_account_pending' && usesTidepool(false)
+          ? '/dashboard/wallet'
+          : BLOCKING[code].path,
+      ),
     })),
     nudges,
   };

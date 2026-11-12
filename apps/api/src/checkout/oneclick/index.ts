@@ -4,6 +4,9 @@ import { env } from '../../env.js';
 import { setSimulatedTxSource } from '../../near/fake.js';
 import { HttpOneClick } from './http.js';
 import { SimulatedOneClick } from './simulated.js';
+import { TidepoolOneClick } from './tidepool.js';
+import { tidepoolEnabled } from '../../lib/testnet.js';
+import { conflict } from '../../lib/errors.js';
 export {
   MemorySimStore,
   RedisSimStore,
@@ -24,9 +27,14 @@ export {
 
 let live: HttpOneClick | null = null;
 let test: SimulatedOneClick | null = null;
+let tidepool: TidepoolOneClick | null = null;
 
 export function providerFor(livemode: boolean): OneClickProvider {
-  return livemode ? liveOneClick() : simulatedOneClick();
+  return livemode
+    ? liveOneClick()
+    : tidepoolEnabled()
+      ? (tidepool ??= new TidepoolOneClick())
+      : simulatedOneClick();
 }
 
 function liveOneClick(): HttpOneClick {
@@ -42,6 +50,8 @@ function liveOneClick(): HttpOneClick {
 
 /** The process-wide test-mode provider (for `simulate()`). */
 export function simulatedOneClick(): SimulatedOneClick {
+  if (tidepoolEnabled())
+    throw conflict('Simulation is disabled: Test mode uses real testnet transfers');
   if (!test) installSimulated(new SimulatedOneClick());
   return test!;
 }
@@ -67,5 +77,6 @@ export function feeAccountFor(livemode: boolean): string {
  */
 export function resetOneClickProviders(opts: { simulated?: SimulatedOneClick } = {}): void {
   live = null;
+  tidepool = null;
   installSimulated(opts.simulated ?? null);
 }

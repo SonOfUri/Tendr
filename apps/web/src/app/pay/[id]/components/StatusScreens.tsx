@@ -83,7 +83,10 @@ function TxLink({
 }) {
   const hash = payment?.origin_tx_hash;
   if (!hash) return null;
-  const href = view.livemode && token ? explorerTxUrl(token.blockchain, hash) : null;
+  const href =
+    (view.livemode || view.test_provider === 'tidepool') && token
+      ? explorerTxUrl(token.blockchain, hash, view.test_provider === 'tidepool')
+      : null;
   const short = hash.length > 14 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
   return (
     <div>
@@ -216,7 +219,7 @@ export function StatusScreen({
               <p className="muted small">
                 If the rest doesn&apos;t arrive in time, what you sent is returned to you.
               </p>
-              {!view.livemode ? (
+              {!view.livemode && view.test_provider !== 'tidepool' ? (
                 <TestModePanel client={client} kind="topup" onDone={onRefresh} />
               ) : null}
             </>

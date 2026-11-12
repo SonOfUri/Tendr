@@ -18,7 +18,9 @@ import { recordEvent } from '../events/record.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { lockInvoice } from '../invoices/invoices.js';
 import { newId } from '../lib/ids.js';
-import { assertLiveModeOpen } from '../lib/live-mode.js';
+import { assertNativeMode, usesTidepool, intentsContractFor } from '../lib/testnet.js';
+import { TidepoolOneClick, tidepoolTransferPayload } from '../checkout/oneclick/tidepool.js';
+import { verifyTidepoolPayout } from '../checkout/tidepool-receipts.js';
 import { log } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { getRedis } from '../lib/redis.js';
@@ -48,13 +50,15 @@ export const NativePayoutInput = z.union([
 type Input = z.infer<typeof NativePayoutInput>;
 type Provider = {
   quote(input: QuoteRequest): Promise<QuoteResponse>;
-  generateIntent(signer: string, deposit: string): Promise<string>;
+  generateIntent?(signer: string, deposit: string): Promise<string>;
   submitIntent(signed: NativeSignedIntent): Promise<string>;
   status(deposit: string): Promise<StatusResponse>;
 };
 const defaults = {
-  provider: (): Provider =>
-    new HttpOneClick({ baseUrl: env().ONECLICK_BASE_URL, apiKey: env().ONECLICK_API_KEY }),
+  provider: (livemode: boolean): Provider =>
+    usesTidepool(livemode)
+      ? new TidepoolOneClick()
+      : new HttpOneClick({ baseUrl: env().ONECLICK_BASE_URL, apiKey: env().ONECLICK_API_KEY }),
   screen: screenPayoutAddress,
 };
 let deps = defaults;
@@ -117,7 +121,7 @@ async function screen(ctx: ScopeContext, address: string, chain: string) {
 
 /** No arbitrary intent endpoint. The service constructs the quote and checks its one transfer. */
 export async function createNativePayout(actor: NativeActor, input: Input) {
-  assertLiveModeOpen();
+  assertNativeMode(actor.livemode);
   const wallet = await ownedNativeWallet(actor);
   let request: { asset: string; amount: string; destinationAsset: string; destination: string };
   let invoice: Invoice | null = null;
@@ -188,8 +192,8 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
   }
   NativePayoutInput.parse(request);
   const [, destination] = await Promise.all([
-    tokenInfo(true, request.asset),
-    tokenInfo(true, request.destinationAsset),
+    tokenInfo(actor.livemode, request.asset),
+    tokenInfo(actor.livemode, request.destinationAsset),
   ]);
   if (
     invoice &&
@@ -220,7 +224,7 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
     }
   }
   await screen(actor, request.destination, destination.blockchain);
-  const provider = deps.provider();
+  const provider = deps.provider(actor.livemode);
   const quote = await provider.quote({
     dry: false,
     swapType: invoice ? 'EXACT_OUTPUT' : 'EXACT_INPUT',
@@ -256,8 +260,8 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
     );
   }
   if (invoice) request.amount = quote.quote.amountIn;
-  const balances = await nearClient(true).view<string[]>(
-    env().INTENTS_CONTRACT_LIVE,
+  const balances = await nearClient(actor.livemode).view<string[]>(
+    intentsContractFor(actor.livemode),
     'mt_batch_balance_of',
     { account_id: wallet.account.nearAccountId, token_ids: [request.asset] },
   );
@@ -268,13 +272,20 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
   ) {
     throw conflict('The wallet has insufficient available balance');
   }
-  const payload = await provider.generateIntent(
-    wallet.account.nearAccountId,
-    quote.quote.depositAddress,
-  );
+  const payload = usesTidepool(actor.livemode)
+    ? tidepoolTransferPayload({
+        signerId: wallet.account.nearAccountId,
+        depositAddress: quote.quote.depositAddress,
+        asset: request.asset,
+        amount: request.amount,
+        expiresAt: new Date(
+          Math.min(Date.parse(quote.quote.deadline ?? ''), Date.now() + 5 * 60_000),
+        ),
+      })
+    : await provider.generateIntent!(wallet.account.nearAccountId, quote.quote.depositAddress);
   const expiresAt = validateTransferPayload(payload, {
     signerId: wallet.account.nearAccountId,
-    contract: env().INTENTS_CONTRACT_LIVE,
+    contract: intentsContractFor(actor.livemode),
     depositAddress: quote.quote.depositAddress,
     asset: request.asset,
     amount: request.amount,
@@ -338,7 +349,7 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
 }
 
 export async function nativePayoutChallenge(actor: NativeActor, id: string) {
-  assertLiveModeOpen();
+  assertNativeMode(actor.livemode);
   const wallet = await ownedNativeWallet(actor);
   const p = await load(actor, id);
   if (
@@ -360,7 +371,7 @@ export async function submitNativePayout(
   id: string,
   response: AuthenticationResponseJSON,
 ) {
-  assertLiveModeOpen();
+  assertNativeMode(actor.livemode);
   const wallet = await ownedNativeWallet(actor);
   const p = await load(actor, id);
   if (p.accountId !== wallet.accountId) throw notFound('Payout not found');
@@ -370,7 +381,7 @@ export async function submitNativePayout(
   await screen(actor, p.destination, p.destinationChain);
   validateTransferPayload(p.payload, {
     signerId: wallet.account.nearAccountId,
-    contract: env().INTENTS_CONTRACT_LIVE,
+    contract: intentsContractFor(actor.livemode),
     depositAddress: p.depositAddress,
     asset: p.asset,
     amount: p.amount,
@@ -492,10 +503,11 @@ export async function processNativePayout(id: string) {
   if (claim.count !== 1) return;
   const p = await prisma.nativePayout.findUniqueOrThrow({ where: { id } });
   try {
-    const provider = deps.provider();
+    const provider = deps.provider(p.livemode);
     const current = await provider.status(p.depositAddress);
     if (current.status === 'SUCCESS') {
       if (current.swapDetails.destinationChainTxHashes.length === 0) return; // keep polling until receipt available
+      if (usesTidepool(p.livemode) && !(await verifyTidepoolPayout(p, current))) return;
       await finish(p, 'completed', current);
     } else if (current.status === 'FAILED' && p.signature && p.expiresAt > now) {
       // A signed transfer remains executable until its deadline. Do not release a refund for retry yet.

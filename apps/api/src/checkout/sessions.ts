@@ -1,3 +1,4 @@
+import { usesTidepool } from '../lib/testnet.js';
 // Checkout sessions, store side: create (secret key), read, and cancel.
 //
 // A session pins everything the checkout needs at creation: the settlement asset/chain and the
@@ -314,7 +315,8 @@ export async function readinessFor(
     db.settlementConfig.findFirst({ orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }] }),
   ]);
   const noAccount = 'The store has no active account in this mode yet';
-  if (!account) return notReady('account_missing', noAccount);
+  if (!account || (usesTidepool(livemode) && account.kind !== 'native_intents'))
+    return notReady('account_missing', noAccount);
   if (account.status !== 'active') return notReady('account_pending', noAccount);
   // A per-link asset override supplies its own payout choice. It can only credit this store's
   // Tendr account; the asset's source chain does not change the on-NEAR Intents recipient.
@@ -564,7 +566,7 @@ export async function createSession(
           hookData: hook.hookData ?? Prisma.DbNull,
           metadata: input.metadata ?? {},
           payerNote: fromLink?.payerNote ?? null,
-          feeBps: plan?.feeBps ?? DEFAULT_FEE_BPS,
+          feeBps: usesTidepool(ctx.livemode) ? 0 : (plan?.feeBps ?? DEFAULT_FEE_BPS),
           feePayer: feePayerToDb(payers.feePayer),
           gasSponsor: gasPayerToDb(payers.gasPayer),
           gasMaxUsd: link?.gasMaxUsd ?? null,

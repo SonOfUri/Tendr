@@ -1,3 +1,4 @@
+import { usesTidepool } from '../lib/testnet.js';
 // The 1Click token list per mode, cached in-process for TOKEN_CACHE_TTL_MS. Session creation reads
 // settlement-asset decimals from it; quotes can reuse `tokenInfo` / `tokenList`.
 // A provider failure is 503 PROVIDER_UNAVAILABLE (never cached); an asset missing from the list is
@@ -48,7 +49,12 @@ export async function tokenInfo(livemode: boolean, assetId: string): Promise<Tok
   if (token) return token;
   // Test mode's fixture is small; shopperTokens also merges the live catalog — resolve those
   // assets from live 1Click so quotes don't 400 after the picker shows them.
-  if (!livemode && process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
+  if (
+    !livemode &&
+    !usesTidepool(livemode) &&
+    process.env.NODE_ENV !== 'test' &&
+    process.env.VITEST !== 'true'
+  ) {
     try {
       const live = (await tokenList(true)).get(assetId);
       if (live) return live;

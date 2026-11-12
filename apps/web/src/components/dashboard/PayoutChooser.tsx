@@ -151,6 +151,27 @@ export function PayoutChooser({
     );
   }
 
+  if (view.account_kind === 'native_intents') {
+    return (
+      <>
+        <Alert tone="info">
+          {view.account_status === 'active' && view.settlement
+            ? `${storeName}’s ${modeWord} payments settle in ${view.settlement.symbol ?? view.settlement.asset}. Manage the default token on the wallet page.`
+            : `Open the dashboard, select ${storeName} and ${modeWord} mode, then create and activate its wallet with a dedicated passkey.`}
+        </Alert>
+        <Link
+          href="/dashboard/wallet"
+          target={onDone ? '_blank' : undefined}
+          rel={onDone ? 'noreferrer' : undefined}
+        >
+          Open wallet
+        </Link>
+        {next}
+        {view.account_status !== 'active' && later}
+      </>
+    );
+  }
+
   if (step === 'set') {
     const s = view.settlement!;
     return (

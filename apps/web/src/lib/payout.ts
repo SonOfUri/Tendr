@@ -14,6 +14,7 @@ export interface SettlementChoice {
 
 export interface SettlementView {
   livemode: boolean;
+  account_kind?: 'contract' | 'native_intents' | null;
   /** The mode's merchant account status, or null when it has none yet. */
   account_status: string | null;
   settlement: { asset: string; symbol: string | null; chain: string; payout_mode: string } | null;

@@ -6,7 +6,7 @@
 
 Branch: `feat/tidepool-testnet`, based on `origin/deploy` at `97471c0`.
 
-This branch contains a restricted Tidepool adapter, unit tests, and a repeatable on-chain pilot. **It does not switch the deployed dashboard/API Test mode away from the simulator.** No Railway variables, production keys, live wallets, or merchant records were changed. The pilot uses an isolated software P256 key and the existing Tendr WebAuthn encoding; browser registration, synced passkeys, recovery, checkout webhooks, and the database payment lifecycle are not yet verified against Tidepool.
+The initial pilot commit `842307f` did not switch the dashboard. The subsequent [dashboard integration](2026-11-12-tidepool-dashboard.md) adds the mode-aware API, worker, web checkout and provider setting. This document preserves the original on-chain evidence; use the integration handover for current setup and limits. Wallet-key recovery remains disabled in Test mode.
 
 ## Transaction evidence
 
@@ -38,7 +38,7 @@ The script checked successful, final NEAR receipts emitted by the pinned verifie
 - Solana RPC: `https://api.devnet.solana.com`, devnet genesis `EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG`.
 - No API credential needed. Never forward Tendr's mainnet 1Click key to Tidepool.
 
-The six-asset allowlist and chain-specific token contracts/mints live in `apps/api/src/checkout/oneclick/tidepool.ts`. It permits USDC and USDT on `near`, `base`, and `sol`, and rejects unsupported assets, invalid amounts, and app fees. The catalog must contain all six assets with the expected chain, symbol, and decimals.
+The six-asset allowlist and chain-specific token contracts/mints live in `packages/contracts/src/tidepool.ts`, consumed by the API adapter and web wallet mappings. It permits USDC and USDT on `near`, `base`, and `sol`, and rejects unsupported assets, invalid amounts, and app fees. The catalog must contain all six assets with the expected chain, symbol, and decimals.
 
 Observed differences that matter for integration:
 
@@ -69,19 +69,9 @@ npm run checkout:verify:tidepool --workspace @tendr/api -- --run
 
 Polling stops after five minutes per leg and can be resumed with the same command. A completed run does not send another payment. An expired or ambiguous deposit, refund, or failed swap requires manual reconciliation before starting a new trial. If the process was killed, confirm that it has stopped before removing its `.lock` file. Preserve the state and its keys while any swap or test balance remains outstanding.
 
-## Required application work before enabling real Test mode
+## Application integration
 
-The existing `providerFor(false)` still selects `SimulatedOneClick`. Merely replacing its URL would leave these gaps:
-
-- Add an explicit Test provider setting shared by API and worker. Pin Tidepool token IDs, verifier, and testnet RPCs. Disable simulator endpoints and simulated receipt fallbacks when Tidepool is selected.
-- Make native wallet registration, activation, balances, payouts, and settings mode-aware. Current native wallet services and the registration database constraint assume Live mode. Use distinct Test wallet credentials and keep Live/Test isolation.
-- Handle existing stores' legacy Test accounts explicitly. Do not overwrite their accounts or auto-provision the old contract wallet when native test wallets are selected.
-- Use the Tidepool transfer builder for Test withdrawals, while retaining browser origin/RP/challenge/user-verification checks, exact debit validation, idempotency, and receipt verification.
-- Test additional wallet-key and recovery operations against the Tidepool verifier version and relay. Do not advertise recovery compatibility based on this single-key transfer proof.
-- Route Base signing to `84532`, Solana signing to devnet, and NEAR signing to testnet. Update checkout token-address mappings, explorer links, and network labels; do not infer mainnet from the provider's `base`/`sol` labels.
-- Run the API/database watcher flow from Test wallet creation through payment link checkout, verified settlement, `payment.succeeded` webhook, balance update, and withdrawal. Include underpayment, expiry/refund, mixed-chain hash responses, retry, and isolation checks.
-
-This pilot is evidence that the three-chain, two-token approach is feasible. The deployment switch should follow the application integration checks above.
+The [dashboard integration handover](2026-11-12-tidepool-dashboard.md) documents the completed provider switch, Test wallet lifecycle, receipt verification, network-specific signing and legacy-account safeguards. Test wallet recovery and backup-key changes remain deliberately unavailable pending separate compatibility verification.
 
 ## Validation
 

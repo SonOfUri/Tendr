@@ -7,7 +7,7 @@ import { useDashboard } from '@/components/dashboard/DashboardShell';
 import { toast } from '@/components/toast';
 import { api, errorMessage, type StoreSummary } from '@/lib/api';
 
-type Created = StoreSummary & { testAccount: { nearAccountId: string; status: string } };
+type Created = StoreSummary & { testAccount: { nearAccountId: string; status: string } | null };
 type Phase = 'welcome' | 'ask' | 'done';
 
 const WELCOME_SEEN = 'tendr.biz-welcome-seen';
@@ -81,7 +81,11 @@ export default function StoreNamePage() {
     >
       <div className="biz-welcome-logo" aria-hidden={phase !== 'welcome'}>
         <span className="biz-welcome-ring" />
-        <img className="biz-welcome-mark biz-welcome-mark--on-dark" src="/logo-with-watermark-white.png" alt="" />
+        <img
+          className="biz-welcome-mark biz-welcome-mark--on-dark"
+          src="/logo-with-watermark-white.png"
+          alt=""
+        />
         <img
           className="biz-welcome-mark biz-welcome-mark--on-light"
           src="/logo-with-watermark-dark.png"
@@ -90,7 +94,11 @@ export default function StoreNamePage() {
       </div>
 
       {phase === 'ask' ? (
-        <form className="biz-welcome-form" onSubmit={submit} onClick={(event) => event.stopPropagation()}>
+        <form
+          className="biz-welcome-form"
+          onSubmit={submit}
+          onClick={(event) => event.stopPropagation()}
+        >
           <h1>What’s your business called?</h1>
           <p>This is the name your customers and your team will see.</p>
           <label className="biz-welcome-field">
@@ -115,7 +123,7 @@ export default function StoreNamePage() {
         <div className="biz-welcome-form">
           <h1>{created.name} is ready</h1>
           <p>
-            You can try a payment in test mode now. Before you take real money, add a second way
+            Create your Test wallet to try a payment. Before you take real money, add a second way
             into this account.
           </p>
           <button

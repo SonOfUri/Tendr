@@ -122,7 +122,7 @@ export function createEvmAdapter(
     throw new WalletError('failed', { detail: 'not an EVM asset' });
   }
   const chainId = target.chainId;
-  const network = networkName(target.blockchain);
+  const network = networkName(target.blockchain, target.network === 'testnet');
   let address: string | null = null;
 
   return {
