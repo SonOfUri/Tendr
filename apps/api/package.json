@@ -25,7 +25,8 @@
     "onchain:publish:testnet": "tsx scripts/onchain-publish-testnet.ts",
     "onchain:verify:mainnet": "tsx scripts/verify-merchant-account-mainnet.ts",
     "checkout:verify:mainnet": "tsx scripts/verify-checkout-mainnet.ts",
-    "onchain:verify:native": "tsx scripts/verify-native-intents-mainnet.ts"
+    "onchain:verify:native": "tsx scripts/verify-native-intents-mainnet.ts",
+    "checkout:verify:tidepool": "tsx scripts/verify-tidepool-testnet.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1161.0",
@@ -57,6 +58,8 @@
     "zod": "^3.24.4"
   },
   "devDependencies": {
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
     "@tendr/config-eslint": "*",
     "@tendr/config-typescript": "*",
     "@types/busboy": "^1.5.5",
