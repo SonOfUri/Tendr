@@ -58,6 +58,12 @@ The authenticated checkout asks for the address directly, without requiring emai
 
 Do not stop polling or clear the client secret merely because `status` becomes `SETTLED`: the refund hook may not have created its row yet. Keep polling while refundable excess has no return row, an address is required, or a return is processing. Show order success and the excess-return state together; the legacy demo success card alone omits these actions.
 
+## Same-token payout quotes
+
+Tidepool rejects quotes with identical origin and destination asset IDs. Test native payouts now route through the same stablecoin on another supported network inside Intents, then pay the original token to the original external address. This applies to refund approvals, withdrawals and invoice payouts; Live routing is unchanged. `quote.tidepoolRoute` identifies this case (`kind: "same_asset"`, `intermediateAsset`, `intermediateAmount`, `secondDepositAddress`). Display the combined `quote.quote.amountOut` and `minAmountOut`, which include both swaps’ fees, and the approved total `amount` debited from the wallet. Invoice output remains exact; both fees are included in its input quote.
+
+Tell the merchant this is a two-swap Test payout before signing. A failed first leg returns the original token to the Test wallet; a failed second leg may return the intermediate token there. Neither is a completed customer refund. The worker waits for both legs and independently verifies the original signed debit and the final destination receipt. Preparing a quote never signs or transfers funds. Provider quote failures return actionable 400/503 errors instead of an internal server error. The under-$1 excess policy is unchanged.
+
 ## Operator rollout
 
 Apply migration `20261112100000_tidepool_test_wallets`. Deploy the API, worker and web from the same revision. API and worker must both use `TEST_PAYMENT_PROVIDER=tidepool`, `NEAR_CLIENT_DRIVER=rpc` and no `NEAR_FAKE_SIMULATE`. Production already defaults to the RPC driver. The environment parser pins the Tidepool verifier and NEAR testnet RPCs; the adapter uses its fixed service URL without forwarding the mainnet 1Click API key.

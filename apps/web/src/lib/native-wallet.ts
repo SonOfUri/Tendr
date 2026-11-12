@@ -22,7 +22,10 @@ export interface NativePayout {
   invoiceId?: string | null;
   expiresAt: string;
   intentHash: string | null;
-  quote: { quote: { amountOut: string; minAmountOut?: string } };
+  quote: {
+    quote: { amountOut: string; minAmountOut?: string };
+    tidepoolRoute?: { kind: 'same_asset'; intermediateAsset: string };
+  };
 }
 
 export async function registerWallet(store: StoreContext) {

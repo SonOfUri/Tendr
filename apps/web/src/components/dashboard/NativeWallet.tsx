@@ -673,6 +673,13 @@ export function NativeWalletPanel({
           ) : null}
           {review ? (
             <Panel title="Review payout">
+              {review.quote.tidepoolRoute ? (
+                <Alert tone="info">
+                  This Test payout uses two swaps to return the original token. The receive amounts
+                  below include both swaps’ fees. If the second swap fails, funds return to your
+                  Test wallet in the intermediate token.
+                </Alert>
+              ) : null}
               <div className="wallet-quote">
                 <div className="wallet-quote-row">
                   <span className="wallet-quote-label">Send</span>

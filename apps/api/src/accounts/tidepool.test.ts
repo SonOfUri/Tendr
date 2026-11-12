@@ -20,6 +20,7 @@ import {
 import { dashHeaders, loginAs, type Login } from '../test/dashboard.js';
 import {
   HttpOneClick,
+  OneClickError,
   resetOneClickProviders,
   simulatedOneClick,
   type StatusResponse,
@@ -77,27 +78,31 @@ describe('Tidepool dashboard and checkout integration', () => {
     vi.spyOn(HttpOneClick.prototype, 'tokens').mockResolvedValue(
       Object.values(T).map((t) => ({ ...t, decimals: 6, priceUsd: '1' })),
     );
-    vi.spyOn(HttpOneClick.prototype, 'quote').mockImplementation(async (req) => ({
-      correlationId: randomBytes(8).toString('hex'),
-      quote: {
-        amountIn: req.amount,
-        amountOut: req.amount,
-        minAmountOut: req.amount,
-        amountInUsd: '1',
-        amountOutUsd: '1',
-        deadline: req.deadline,
-        ...(req.dry
-          ? {}
-          : {
-              depositAddress:
-                req.depositType === 'INTENTS'
-                  ? randomBytes(32).toString('hex')
-                  : req.originAsset === T.baseUsdc.assetId
-                    ? DEST
-                    : SOL,
-            }),
-      },
-    }));
+    vi.spyOn(HttpOneClick.prototype, 'quote').mockImplementation(async (req) => {
+      if (req.originAsset === req.destinationAsset)
+        throw new OneClickError('originAsset and destinationAsset must differ', 400, 'HTTP_400');
+      return {
+        correlationId: randomBytes(8).toString('hex'),
+        quote: {
+          amountIn: req.amount,
+          amountOut: req.amount,
+          minAmountOut: req.amount,
+          amountInUsd: '1',
+          amountOutUsd: '1',
+          deadline: req.deadline,
+          ...(req.dry
+            ? {}
+            : {
+                depositAddress:
+                  req.depositType === 'INTENTS'
+                    ? randomBytes(32).toString('hex')
+                    : req.originAsset === T.baseUsdc.assetId
+                      ? DEST
+                      : SOL,
+              }),
+        },
+      };
+    });
     vi.spyOn(HttpOneClick.prototype, 'status').mockImplementation(async () => status);
     vi.spyOn(HttpOneClick.prototype, 'submitIntent').mockResolvedValue('tidepool-intent');
     fakeNearClient(false).scriptView(V, 'simulate_intents', () => ({ intents_executed: [{}] }));
@@ -412,9 +417,13 @@ describe('Tidepool dashboard and checkout integration', () => {
       const payout = await post('/v1/account/native/payouts', { proposalId: refund.proposalId });
       expect(payout.statusCode, payout.body).toBe(201);
       expect(payout.json()).toMatchObject({
+        asset: originAsset,
+        destinationAsset: originAsset,
+        amount: refund.amount.toFixed(0),
         destination: address,
         proposalId: refund.proposalId,
         status: 'awaiting_signature',
+        quote: { tidepoolRoute: { kind: 'same_asset' } },
       });
       expect(
         await prisma.event.count({ where: { merchantId, type: 'refund.needs_address' } }),
@@ -447,124 +456,168 @@ describe('Tidepool dashboard and checkout integration', () => {
     expect(await prisma.accountProposal.count({ where: { merchantId } })).toBe(0);
   });
 
-  it('requires a final verifier debit and the correct Base token receipt before completing a signed withdrawal', async () => {
-    await activate();
-    fakeNearClient(false).scriptView(V, 'mt_batch_balance_of', () => ['1000000']);
-    const quoted = await post('/v1/account/native/payouts', {
-      asset: T.nearUsdc.assetId,
-      amount: '1000000',
-      destinationAsset: T.baseUsdt.assetId,
-      destination: DEST,
-    });
-    expect(quoted.statusCode, quoted.body).toBe(201);
-    const payout = quoted.json();
-    const challenge = await post(`/v1/account/native/payouts/${payout.id}/challenge`);
-    expect(JSON.parse(challenge.json().payload).verifying_contract).toBe(V);
-    const submitted = await post(`/v1/account/native/payouts/${payout.id}/submit`, {
-      response: auth.get(challenge.json().options),
-    });
-    expect(submitted.statusCode, submitted.body).toBe(202);
-    const row = await prisma.nativePayout.findUniqueOrThrow({ where: { id: payout.id } });
-    status = {
-      status: 'SUCCESS',
-      swapDetails: {
-        originChainTxHashes: [{ hash: DEBIT }],
-        destinationChainTxHashes: [{ hash: HASH }, { hash: BASE_TX }],
-        amountOut: '1000000',
-      },
-    };
-    const payload = JSON.parse(row.payload);
-    const debit = (nonce: string) =>
-      fakeNearClient(false).scriptTxStatus(DEBIT, {
-        hash: DEBIT,
-        finalized: true,
-        topLevelOk: true,
-        signerId: 'relayer.testnet',
-        receiverId: V,
-        receipts: [
-          {
-            receiptId: 'debit-receipt',
-            executorId: V,
-            ok: true,
-            logs: [
-              eventLog('nep245', '1.0.0', 'mt_transfer', [
-                {
-                  old_owner_id: payload.signer_id,
-                  new_owner_id: row.depositAddress,
-                  token_ids: [row.asset],
-                  amounts: [row.amount],
-                },
-              ]),
-              eventLog('dip4', '0.4.3', 'transfer', [
-                {
-                  account_id: payload.signer_id,
-                  receiver_id: row.depositAddress,
-                  tokens: { [row.asset]: row.amount },
-                  intent_hash: row.intentHash,
-                },
-              ]),
-              eventLog('dip4', '0.4.3', 'intents_executed', [
-                { account_id: payload.signer_id, nonce, intent_hash: row.intentHash },
-              ]),
-            ],
-          },
-        ],
+  it.each([
+    [400, 'HTTP_400', 400],
+    [429, 'HTTP_429', 503],
+    [null, 'TIMEOUT', 503],
+  ])(
+    'returns an actionable quote error for provider %s/%s without creating a payout',
+    async (status, code, expected) => {
+      await activate();
+      vi.mocked(HttpOneClick.prototype.quote).mockRejectedValueOnce(
+        new OneClickError('untrusted provider detail', status, code as string),
+      );
+      const response = await post('/v1/account/native/payouts', {
+        asset: T.nearUsdc.assetId,
+        amount: '1000000',
+        destinationAsset: T.baseUsdt.assetId,
+        destination: DEST,
       });
-    debit('different-nonce');
-    let tokenContract: string = T.baseUsdc.contract;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url, init) => {
-        const method = JSON.parse(init.body).method;
-        return Response.json({
-          result:
-            method === 'eth_chainId'
-              ? '0x14a34'
-              : method === 'eth_blockNumber'
-                ? '0x101'
-                : {
-                    status: '0x1',
-                    blockNumber: '0x100',
-                    logs: [
-                      {
-                        address: tokenContract,
-                        topics: [
-                          id('Transfer(address,address,uint256)'),
-                          `0x${'0'.repeat(64)}`,
-                          `0x${DEST.slice(2).padStart(64, '0')}`,
-                        ],
-                        data: `0x${(1_000_000).toString(16).padStart(64, '0')}`,
-                      },
-                    ],
+      expect(response.statusCode, response.body).toBe(expected);
+      expect(response.body).toContain('payment provider');
+      expect(response.body).not.toContain('untrusted provider detail');
+      expect(await prisma.nativePayout.count({ where: { merchantId } })).toBe(0);
+    },
+  );
+
+  it.each([false, true])(
+    'requires a final verifier debit and the correct Base token receipt before completing a signed withdrawal (routed: %s)',
+    async (routed) => {
+      await activate();
+      fakeNearClient(false).scriptView(V, 'mt_batch_balance_of', () => ['1000000']);
+      const quoted = await post('/v1/account/native/payouts', {
+        asset: routed ? T.baseUsdt.assetId : T.nearUsdc.assetId,
+        amount: '1000000',
+        destinationAsset: T.baseUsdt.assetId,
+        destination: DEST,
+      });
+      expect(quoted.statusCode, quoted.body).toBe(201);
+      const payout = quoted.json();
+      const challenge = await post(`/v1/account/native/payouts/${payout.id}/challenge`);
+      expect(JSON.parse(challenge.json().payload).verifying_contract).toBe(V);
+      const submitted = await post(`/v1/account/native/payouts/${payout.id}/submit`, {
+        response: auth.get(challenge.json().options),
+      });
+      expect(submitted.statusCode, submitted.body).toBe(202);
+      const row = await prisma.nativePayout.findUniqueOrThrow({ where: { id: payout.id } });
+      let second = pending();
+      if (routed) {
+        vi.mocked(HttpOneClick.prototype.status).mockImplementation(async (deposit) =>
+          deposit === row.depositAddress ? status : second,
+        );
+      }
+      status = {
+        status: 'SUCCESS',
+        swapDetails: {
+          originChainTxHashes: [{ hash: DEBIT }],
+          destinationChainTxHashes: [{ hash: HASH }, { hash: BASE_TX }],
+          amountOut: '1000000',
+        },
+      };
+      const payload = JSON.parse(row.payload);
+      const debit = (nonce: string) =>
+        fakeNearClient(false).scriptTxStatus(DEBIT, {
+          hash: DEBIT,
+          finalized: true,
+          topLevelOk: true,
+          signerId: 'relayer.testnet',
+          receiverId: V,
+          receipts: [
+            {
+              receiptId: 'debit-receipt',
+              executorId: V,
+              ok: true,
+              logs: [
+                eventLog('nep245', '1.0.0', 'mt_transfer', [
+                  {
+                    old_owner_id: payload.signer_id,
+                    new_owner_id: row.depositAddress,
+                    token_ids: [row.asset],
+                    amounts: [row.amount],
                   },
+                ]),
+                eventLog('dip4', '0.4.3', 'transfer', [
+                  {
+                    account_id: payload.signer_id,
+                    receiver_id: row.depositAddress,
+                    tokens: { [row.asset]: row.amount },
+                    intent_hash: row.intentHash,
+                  },
+                ]),
+                eventLog('dip4', '0.4.3', 'intents_executed', [
+                  { account_id: payload.signer_id, nonce, intent_hash: row.intentHash },
+                ]),
+              ],
+            },
+          ],
         });
-      }),
-    );
-    await pollNativePayouts();
-    expect(await prisma.nativePayout.findUnique({ where: { id: payout.id } })).toMatchObject({
-      status: 'submitted',
-    });
-    tokenContract = T.baseUsdt.contract;
-    await pollNativePayouts();
-    expect(await prisma.nativePayout.findUnique({ where: { id: payout.id } })).toMatchObject({
-      status: 'submitted',
-    });
-    debit(payload.nonce);
-    await pollNativePayouts();
-    expect(await prisma.nativePayout.findUnique({ where: { id: payout.id } })).toMatchObject({
-      status: 'completed',
-    });
-    expect(HttpOneClick.prototype.submitIntent).toHaveBeenCalledTimes(1);
-    expect(
-      (
-        await app.inject({
-          method: 'GET',
-          url: `/v1/account/native/payouts/${payout.id}`,
-          headers: headers(true),
-        })
-      ).statusCode,
-    ).toBe(404);
-  });
+      debit('different-nonce');
+      let tokenContract: string = T.baseUsdc.contract;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (_url, init) => {
+          const method = JSON.parse(init.body).method;
+          return Response.json({
+            result:
+              method === 'eth_chainId'
+                ? '0x14a34'
+                : method === 'eth_blockNumber'
+                  ? '0x101'
+                  : {
+                      status: '0x1',
+                      blockNumber: '0x100',
+                      logs: [
+                        {
+                          address: tokenContract,
+                          topics: [
+                            id('Transfer(address,address,uint256)'),
+                            `0x${'0'.repeat(64)}`,
+                            `0x${DEST.slice(2).padStart(64, '0')}`,
+                          ],
+                          data: `0x${(1_000_000).toString(16).padStart(64, '0')}`,
+                        },
+                      ],
+                    },
+          });
+        }),
+      );
+      await pollNativePayouts();
+      expect(await prisma.nativePayout.findUnique({ where: { id: payout.id } })).toMatchObject({
+        status: 'submitted',
+      });
+      tokenContract = T.baseUsdt.contract;
+      await pollNativePayouts();
+      expect(await prisma.nativePayout.findUnique({ where: { id: payout.id } })).toMatchObject({
+        status: 'submitted',
+      });
+      debit(payload.nonce);
+      if (routed) {
+        // The first leg's successful Intents credit cannot complete the external payout.
+        await pollNativePayouts();
+        expect(await prisma.nativePayout.findUnique({ where: { id: payout.id } })).toMatchObject({
+          status: 'submitted',
+        });
+        second = {
+          ...status,
+          swapDetails: { ...status.swapDetails, originChainTxHashes: [{ hash: HASH }] },
+        };
+      }
+      await pollNativePayouts();
+      expect(await prisma.nativePayout.findUnique({ where: { id: payout.id } })).toMatchObject({
+        status: 'completed',
+      });
+      expect(HttpOneClick.prototype.submitIntent).toHaveBeenCalledTimes(1);
+      expect(
+        (
+          await app.inject({
+            method: 'GET',
+            url: `/v1/account/native/payouts/${payout.id}`,
+            headers: headers(true),
+          })
+        ).statusCode,
+      ).toBe(404);
+    },
+  );
 
   it('replaces only an absent, unfunded legacy identity and records its previous address', async () => {
     const old = await createRow('MerchantAccount', merchantId, false, {

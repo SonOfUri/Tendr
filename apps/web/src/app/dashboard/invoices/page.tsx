@@ -396,6 +396,13 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                         </div>
                       ) : (
                         <div className="stack">
+                          {quote.quote.tidepoolRoute ? (
+                            <p className="dash-muted dash-small">
+                              This Test payout uses two swaps. The authorized debit includes both
+                              swaps’ fees. If the second swap fails, funds return to your Test
+                              wallet in the intermediate token.
+                            </p>
+                          ) : null}
                           <div className="wallet-quote">
                             <div className="wallet-quote-row">
                               <span className="wallet-quote-label">Authorize up to</span>
@@ -485,7 +492,11 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
 
                   {invoice.payout?.providerStatus?.swapDetails?.destinationChainTxHashes?.map(
                     (tx) => (
-                      <p className="dash-mono dash-small" style={{ overflowWrap: 'anywhere' }} key={tx.hash}>
+                      <p
+                        className="dash-mono dash-small"
+                        style={{ overflowWrap: 'anywhere' }}
+                        key={tx.hash}
+                      >
                         Tx: {tx.hash}
                       </p>
                     ),

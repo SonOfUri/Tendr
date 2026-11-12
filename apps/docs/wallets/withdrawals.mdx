@@ -12,13 +12,15 @@ Withdrawals send funds from your store's Intents balance to a supported external
 
 Native payout API amounts are integer strings in token base units. Do not convert through JavaScript floating point.
 
-| State                     | Meaning                                                                       |
-| ------------------------- | ----------------------------------------------------------------------------- |
-| `awaiting_signature`      | Quote prepared; wallet approval needed                                        |
-| `submitting`, `submitted` | Authorized transfer being submitted or reconciled                             |
-| `completed`               | Payout confirmed; Tidepool Test additionally verifies final on-chain receipts |
-| `refunded`                | Provider reports input returned to the store's Intents balance                |
-| `failed`, `expired`       | Follow the returned failure/expiry and review instructions                    |
+In Tidepool Test mode, sending the same token back to its network uses two swaps through another supported representation of that stablecoin inside Intents. Review the final receive amount: it includes both swaps’ fees. Your wallet signs only the initial debit. If the second swap fails, funds may return to your Test wallet in the intermediate token instead of reaching the recipient. Live routing is unchanged.
+
+| State                     | Meaning                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `awaiting_signature`      | Quote prepared; wallet approval needed                                                                 |
+| `submitting`, `submitted` | Authorized transfer being submitted or reconciled                                                      |
+| `completed`               | Payout confirmed; Tidepool Test additionally verifies final on-chain receipts                          |
+| `refunded`                | Provider reports funds returned to the store; a two-swap Test payout may return the intermediate token |
+| `failed`, `expired`       | Follow the returned failure/expiry and review instructions                                             |
 
 A timeout is not a reason to create a replacement payout. The backend can reconcile or resubmit the same signed intent. No cancellation endpoint is offered for an already authorized native payout.
 

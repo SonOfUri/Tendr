@@ -4,6 +4,7 @@ import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
 import { z } from 'zod';
 import {
   HttpOneClick,
+  OneClickError,
   type QuoteRequest,
   type QuoteResponse,
   type StatusResponse,
@@ -34,6 +35,7 @@ import {
   type NativeActor,
 } from './native-accounts.js';
 import { validateTransferPayload, type NativeSignedIntent } from './native-signing.js';
+import { quoteTidepoolPayout, tidepoolPayoutStatus } from './tidepool-payout-route.js';
 
 const amount = z
   .string()
@@ -117,6 +119,23 @@ async function screen(ctx: ScopeContext, address: string, chain: string) {
         : 'Address screening is unavailable; try again shortly',
       decision === 'block' ? 400 : 503,
     );
+}
+
+async function prepareWithProvider<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!(error instanceof OneClickError)) throw error;
+    log('warn', 'native payout quote unavailable', { code: error.code, status: error.status });
+    const rejected = error.status === 400 || error.status === 422;
+    throw new AppError(
+      rejected ? 'VALIDATION_ERROR' : 'PROVIDER_UNAVAILABLE',
+      rejected
+        ? 'The payment provider cannot quote this payout amount or route. Request a new quote; if it keeps failing, this route may be unavailable.'
+        : 'The payment provider could not prepare this payout. Please request a new quote shortly.',
+      rejected ? 400 : 503,
+    );
+  }
 }
 
 /** No arbitrary intent endpoint. The service constructs the quote and checks its one transfer. */
@@ -225,7 +244,7 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
   }
   await screen(actor, request.destination, destination.blockchain);
   const provider = deps.provider(actor.livemode);
-  const quote = await provider.quote({
+  const quoteRequest: QuoteRequest = {
     dry: false,
     swapType: invoice ? 'EXACT_OUTPUT' : 'EXACT_INPUT',
     slippageTolerance: env().CHECKOUT_SLIPPAGE_BPS,
@@ -238,7 +257,12 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
     recipient: request.destination,
     recipientType: 'DESTINATION_CHAIN',
     deadline: new Date(Date.now() + 5 * 60_000).toISOString(),
-  });
+  };
+  const quote = await prepareWithProvider(() =>
+    usesTidepool(actor.livemode)
+      ? quoteTidepoolPayout(provider, quoteRequest)
+      : provider.quote(quoteRequest),
+  );
   if (
     !quote.quote.depositAddress ||
     quote.quote.depositMemo ||
@@ -282,7 +306,9 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
           Math.min(Date.parse(quote.quote.deadline ?? ''), Date.now() + 5 * 60_000),
         ),
       })
-    : await provider.generateIntent!(wallet.account.nearAccountId, quote.quote.depositAddress);
+    : await prepareWithProvider(() =>
+        provider.generateIntent!(wallet.account.nearAccountId, quote.quote.depositAddress!),
+      );
   const expiresAt = validateTransferPayload(payload, {
     signerId: wallet.account.nearAccountId,
     contract: intentsContractFor(actor.livemode),
@@ -504,7 +530,10 @@ export async function processNativePayout(id: string) {
   const p = await prisma.nativePayout.findUniqueOrThrow({ where: { id } });
   try {
     const provider = deps.provider(p.livemode);
-    const current = await provider.status(p.depositAddress);
+    const first = await provider.status(p.depositAddress);
+    const current = usesTidepool(p.livemode)
+      ? await tidepoolPayoutStatus(provider, first, p.quote)
+      : first;
     if (current.status === 'SUCCESS') {
       if (current.swapDetails.destinationChainTxHashes.length === 0) return; // keep polling until receipt available
       if (usesTidepool(p.livemode) && !(await verifyTidepoolPayout(p, current))) return;
