@@ -734,8 +734,8 @@ final class Tendr_Order_Sync {
 	}
 
 	/**
-	 * A block-explorer link for a transaction, or null (unknown chain; test mode has NEAR
-	 * testnet only, other test-mode chains are simulated).
+	 * A block-explorer link for a transaction, or null for an unsupported network.
+	 * Test mode uses Tidepool's NEAR testnet, Base Sepolia and Solana devnet networks.
 	 *
 	 * @param string $chain    1Click chain id.
 	 * @param string $hash     Transaction hash.
@@ -745,7 +745,7 @@ final class Tendr_Order_Sync {
 		$explorers = array(
 			'near'      => array( 'https://nearblocks.io/txns/', 'https://testnet.nearblocks.io/txns/' ),
 			'eth'       => array( 'https://etherscan.io/tx/', null ),
-			'base'      => array( 'https://basescan.org/tx/', null ),
+			'base'      => array( 'https://basescan.org/tx/', 'https://sepolia.basescan.org/tx/' ),
 			'arb'       => array( 'https://arbiscan.io/tx/', null ),
 			'arbitrum'  => array( 'https://arbiscan.io/tx/', null ),
 			'pol'       => array( 'https://polygonscan.com/tx/', null ),
@@ -756,7 +756,7 @@ final class Tendr_Order_Sync {
 			'avax'      => array( 'https://snowtrace.io/tx/', null ),
 			'avalanche' => array( 'https://snowtrace.io/tx/', null ),
 			'gnosis'    => array( 'https://gnosisscan.io/tx/', null ),
-			'sol'       => array( 'https://solscan.io/tx/', null ),
+			'sol'       => array( 'https://solscan.io/tx/', 'https://explorer.solana.com/tx/' ),
 			'tron'      => array( 'https://tronscan.org/#/transaction/', null ),
 			'btc'       => array( 'https://mempool.space/tx/', null ),
 		);
@@ -765,7 +765,7 @@ final class Tendr_Order_Sync {
 			return null;
 		}
 		$base = $explorers[ $key ][ $livemode ? 0 : 1 ];
-		return null === $base ? null : $base . $hash;
+		return null === $base ? null : $base . $hash . ( ! $livemode && 'sol' === $key ? '?cluster=devnet' : '' );
 	}
 
 	/**

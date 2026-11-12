@@ -5,6 +5,8 @@ description: 'Understand optional sponsorship and token-paid network fees.'
 
 Gasless routes let eligible wallets authorize a token payment while a relayer or paymaster submits the transaction. Availability depends on the deployment, chain, token, wallet and provider configuration. Do not promise gasless payment for every supported asset.
 
+Tidepool Test mode uses normal wallet transfers with customer-paid test network fees. Gasless signing and merchant sponsorship are unavailable in Test mode, even when store sponsorship preferences are saved.
+
 ## Who pays
 
 A session may set `gas_payer` to `merchant` or `shopper`. Otherwise the payment link or store default applies.

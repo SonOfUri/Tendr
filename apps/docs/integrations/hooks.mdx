@@ -185,7 +185,7 @@ as their `relayer`).
 ```
 
 On EVM chains it is one address (`relayer-evm`) on every chain. On NEAR it is the `relayer-near`
-implicit account. The same addresses serve test and live mode; test mode never sends a transaction.
+implicit account. Tidepool Test mode does not support HOOK delivery. A Test checkout must settle into the Test merchant wallet; do not use these relayer addresses as Tidepool deposit instructions.
 
 ## Reference contracts
 

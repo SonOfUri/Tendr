@@ -49,6 +49,11 @@ final class Tendr_Test_Purchase {
 			return new WP_Error( 'tendr_live_mode', __( 'Test purchases are made in test mode only. Switch to test mode first.', 'tendr-pay-with-crypto' ) );
 		}
 
+		$status = Tendr_Settings::connect_status( true, 'test' );
+		if ( null !== $status['error'] || ! $status['ready'] || array() !== $status['blocking'] ) {
+			return new WP_Error( 'tendr_test_not_ready', __( 'Your Test wallet is not ready or could not be checked. Open Tendr settings, follow the Test wallet setup links, then retry.', 'tendr-pay-with-crypto' ) );
+		}
+
 		$user  = wp_get_current_user();
 		$order = wc_create_order(
 			array(
@@ -59,7 +64,8 @@ final class Tendr_Test_Purchase {
 		if ( is_wp_error( $order ) ) {
 			return $order;
 		}
-		$order->set_currency( get_woocommerce_currency() );
+		// The checkout minimum is 1 USD; 1 unit of the store currency can fall below it.
+		$order->set_currency( 'USD' );
 		$fee = new WC_Order_Item_Fee();
 		$fee->set_name( __( 'Tendr test payment', 'tendr-pay-with-crypto' ) );
 		$fee->set_amount( '1.00' );
@@ -75,7 +81,7 @@ final class Tendr_Test_Purchase {
 		$order->calculate_totals( false );
 		$order->set_status( 'pending' );
 		$order->save();
-		$order->add_order_note( __( 'tendr test purchase: no real money is involved. Pay it with the test panel in the tendr window.', 'tendr-pay-with-crypto' ) );
+		$order->add_order_note( __( 'Tendr Test purchase: pay with Tidepool test USDC or USDT on the network shown in checkout. These tokens have no monetary value; the paying wallet needs test network fees.', 'tendr-pay-with-crypto' ) );
 		return $order;
 	}
 

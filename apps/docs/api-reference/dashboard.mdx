@@ -22,6 +22,12 @@ Personal login security uses `/v1/auth/login-recovery/*` without store or mode h
 | Invoices         | `/v1/invoices/*`                                   | Read membership; owner approval for protected actions  |
 | AI               | `/v1/ai/insights`, `/v1/ai/themes`                 | Feature-specific permission                            |
 
+## Tidepool Test wallets
+
+With `Tendr-Livemode: false`, the native wallet registration, activation, balances, settlement and payout endpoints operate on a separate Tidepool Test wallet. `GET /v1/account` exposes `testProvider: "tidepool"` and `accountKind: "native_intents"` even before `account` exists. Use `account?.kind ?? accountKind` for setup screens. Store creation can return `testAccount: null`; wallet creation requires the owner’s dedicated passkey.
+
+Respect `account.capabilities.nativeWalletKeyManagement`: it is false for Tidepool, where extra wallet keys and recovery kits are disabled. Shopper session responses expose `test_provider: "tidepool"`; use it to select test networks and hide simulation and gasless controls.
+
 ## Native payout sequence
 
 1. `POST /v1/account/native/payouts` creates the quote/payout record.

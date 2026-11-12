@@ -8,7 +8,7 @@ NEAR Intents is an optional execution integration behind the scenes—not the Te
 
 > **Status:** stores can create checkout sessions, embed checkout, receive signed webhooks and
 > accept live payments through 1Click when the deployment is enabled and the store has a configured
-> wallet and settlement asset. Test mode is simulated. The current native Intents wallet uses a
+> wallet and settlement asset. Hosted Test mode moves Tidepool testnet tokens. The current native Intents wallet uses a
 > dedicated owner passkey; the contract-account and sponsored-payment paths have separate rollout
 > requirements. See the [merchant and developer docs](apps/docs/README.md) for current integration guidance.
 
@@ -594,7 +594,18 @@ Postgres 15 or newer, and response headers on the asset origin (see the handover
 
 ### Test mode
 
-Test keys (`tdr_test_`) use a simulated 1Click and the mock intents verifier. No real swap runs.
+Hosted Test keys (`tdr_test_`) use **Tidepool** for actual testnet payments, settlement and withdrawals
+with USDC/USDT on NEAR testnet, Base Sepolia and Solana devnet. Activate a separate Test wallet with
+its dedicated synced passkey before creating a checkout. The paying wallet needs Tidepool test
+tokens and test network gas. Test tokens have no monetary value. Extra Test wallet keys, recovery
+kits, gasless sponsorship and HOOK delivery are unavailable. See the
+[Test payment guide](https://docs.usetendr.tech/testing).
+
+#### Local simulator
+
+The following simulation controls apply only to development deployments configured with
+`TEST_PAYMENT_PROVIDER=simulated`, not hosted Tidepool Test mode.
+Local Test keys use a simulated 1Click and the mock intents verifier. No real swap runs.
 Settlement credits the store's test account through the mock verifier: in memory with the fake NEAR
 driver, on testnet with the rpc driver (any deployed environment). The simulator's settlement
 transaction is synthetic, so test mode verifies it through the simulator; live mode only ever
@@ -714,7 +725,8 @@ account is used and the sweep is off. The per-chain detail is in the
     `GASLESS_LIVE_ENABLED` at its default `false` until then: while it is false, live checkouts offer
     no gasless option, live quotes have no sponsored path and every live relayer path answers
     "gasless not available". Set it to `true` only after this list is done (and live mode itself is
-    open, `LIVE_MODE_ENABLED=true`). Test mode already simulates all of it.
+    open, `LIVE_MODE_ENABLED=true`). Local simulator mode can exercise these paths; hosted
+    Tidepool Test mode does not offer gasless sponsorship or HOOK delivery.
 14. Validate the Mintlify build and internal links before publishing documentation:
     `npm run validate --workspace=@tendr/docs` and `npm run check:links --workspace=@tendr/docs`
     under Node 22. The [docs README](apps/docs/README.md) covers the full publishing workflow.
@@ -769,8 +781,8 @@ and `SCREENING_MODE=chainalysis` on both services; completed payments are not re
 `FEE_ACCOUNT_LIVE` and `FEE_ACCOUNT_TEST` receive the `appFees`. They default to
 `fees.tendr.near` and `fees.tendr.testnet`. Each is a project 2 merchant account (the passkey
 threshold contract) whose signers are Tendr's operators, so Tendr's revenue has the same
-protection as stores' money. Test mode credits simulated fees to the testnet account through the
-mock verifier.
+protection as stores' money. Local simulator mode credits simulated fees through the mock verifier.
+Tidepool Test quotes do not charge Tendr application fees; provider and network costs can still apply.
 
 `fees` (and every label under Tendr's parents that env names, plus a static list and the
 `gas-*`, `fee-*`, `fees-*`, `intents*` and `tendr*` prefixes) is a reserved store label
@@ -1027,12 +1039,17 @@ USD amount matches `amount / rate` rounded up.
 
 `apps/woocommerce/` is the WordPress plugin **tendr: Pay with crypto** (PHP 8.0+, WordPress 6.4+,
 WooCommerce 8.5+, GPL-2.0-or-later, text domain `tendr-pay-with-crypto`). Stores install it from
-`https://pay.usetendr.tech/downloads/woocommerce`, connect in one click (Connect popup, passkey), and
+[the WooCommerce guide](https://docs.usetendr.tech/integrations/woocommerce), connect in one click (Connect popup, passkey), and
 take crypto payments in the classic and Blocks checkouts. Refunds clicked in WooCommerce become
 signer-approved proposals. Everything PHP runs in Docker through `@wordpress/env`; nothing is
 installed on the host.
 
 Version 0.2.0 sends the cart's line items with each checkout (exact unit prices, or a "Name × n" line total when the price does not divide evenly; at most 50, and it retries without items if the API rejects them) and the store's brand (name, logo, colours) on connect and on **Refresh brand from my store**, so a merchant can build a theme from their store.
+
+Version 0.3.4 explains Tidepool Test wallet setup and links its faucet. Test purchases check readiness
+with the Test credential and use 1.00 USD regardless of store currency. Test and Live readiness
+caches are separate; Base and Solana Test transactions link to Base Sepolia and Solana devnet.
+Download the ready-to-install ZIP from the guide; no build commands are required for merchants.
 
 | Command (all `--workspace=@tendr/woocommerce`) | What it does                                                    |
 | ---------------------------------------------- | --------------------------------------------------------------- |

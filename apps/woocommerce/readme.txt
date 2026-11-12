@@ -3,7 +3,7 @@ Tags: woocommerce, payments, crypto, stablecoin, checkout
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.0
-Stable tag: 0.3.3
+Stable tag: 0.3.4
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -18,11 +18,11 @@ tendr: Pay with crypto connects WooCommerce to Tendr's hosted payment service. S
 * Choose a supported settlement asset in the Tendr dashboard.
 * Send product details and your store's branding to the hosted checkout.
 * Request refunds from WooCommerce and follow their approval and payment status.
-* Use Test mode for simulated payments and Live mode for real payments.
+* Use Test mode for Tidepool testnet payments and Live mode for real payments.
 
 = Tendr service and charges =
 
-A Tendr account and connected business are required. Live payments require an active live wallet and settlement configuration. The plugin is free to install; Tendr service fees, network costs, and swap or withdrawal provider fees can apply. Review the fee settings and the quote displayed before authorizing a payment or withdrawal. Test mode is available to store managers and does not move real funds.
+A Tendr account and connected business are required. Live payments require an active live wallet and settlement configuration. The plugin is free to install; Tendr service fees, network costs, and swap or withdrawal provider fees can apply. Review the fee settings and the quote displayed before authorizing a payment or withdrawal. Test mode is available to store managers. It moves testnet tokens with no monetary value and requires an active Test wallet, a dedicated wallet passkey, and test tokens for payment and network fees.
 
 The plugin provides the WooCommerce integration. Tendr provides account connection, hosted checkout, payment sessions, settlement, refund coordination, and signed payment notifications. Uninstalling the plugin does not delete the Tendr account or move its funds.
 
@@ -34,7 +34,7 @@ The plugin uses the following Tendr endpoints. The merchant starts the connectio
 * https://api.usetendr.tech — exchanges the connection code, reads and updates connected-store settings, creates and checks payment sessions, requests and checks refunds, and disconnects the site. Payment requests include order references and order key, amount and currency, customer billing email when present, return URLs, product names, quantities, prices, and product image URLs. Brand sync sends the store name, logo/icon URLs, and theme colours after connection and when the merchant selects Refresh brand from my store. API requests include WordPress, WooCommerce, and plugin versions.
 * https://pay.usetendr.tech — hosts the shopper's checkout and serves https://pay.usetendr.tech/v1/tendr.js on the order-payment screen. This service script opens the hosted payment UI in an iframe; a direct checkout link is available as a fallback. The browser sends the checkout session URL and normal connection information such as its IP address and user agent to the service. The checkout can ask the shopper for a wallet address, token, and network to carry out the payment.
 
-The WordPress plugin calls Tendr directly. Tendr's hosted service uses payment infrastructure including NEAR Intents and 1Click to execute supported payments and withdrawals. The service's Terms and Privacy Policy describe its processing and providers. Blockchain transactions can be publicly observable; this plugin does not promise private transactions.
+The WordPress plugin calls Tendr directly. Tendr's hosted service uses payment infrastructure including NEAR Intents and 1Click for live payments and Tidepool for testnet payments to execute supported payments and withdrawals. The service's Terms and Privacy Policy describe its processing and providers. Blockchain transactions can be publicly observable; this plugin does not promise private transactions.
 
 Service: https://usetendr.tech
 Terms: https://usetendr.tech/terms
@@ -63,7 +63,9 @@ Disconnect the site before uninstalling to revoke its Tendr keys. Uninstall remo
 3. Open WooCommerce > Settings > Payments > tendr > Manage.
 4. Select Connect to tendr, sign in, and approve the business you want this site to use.
 5. Review the connected business, payment mode, fee settings, and notification email.
-6. Make a test purchase as a store manager. Complete live-wallet and settlement setup in Tendr, then switch the plugin to Live mode when ready.
+6. In Tendr, select Test mode, create and activate a dedicated Test wallet, and choose settlement. Use a synced passkey: Test wallet recovery is not available yet.
+7. Get test USDC or USDT from https://app.usetidepool.tech/faucet and test NEAR, ETH or SOL for network fees. Make a test purchase as a store manager. It creates a 1.00 USD test order without changing your store currency or adding products.
+8. Complete Live wallet and settlement setup in Tendr, then switch the plugin to Live mode when ready.
 
 == Frequently Asked Questions ==
 
@@ -73,7 +75,7 @@ No. Shoppers use the hosted checkout and its supported wallet or transfer option
 
 = Does Test mode move money? =
 
-No. Test payments are simulated. Only store managers see the payment method in Test mode. Live mode accepts real crypto and is shown to eligible shoppers.
+Test mode moves Tidepool test USDC and USDT on NEAR testnet, Base Sepolia and Solana devnet. These tokens have no monetary value. Only store managers see the payment method in Test mode. A Live wallet does not replace Test wallet setup. Live mode accepts real crypto and is shown to eligible shoppers.
 
 = When is an order marked paid? =
 
@@ -109,6 +111,13 @@ Sora source: https://github.com/sora-xor/sora-font
 Instrument Sans source: https://github.com/Instrument/instrument-sans
 
 == Changelog ==
+
+= 0.3.4 =
+* Explain Tidepool Test wallet setup, supported test networks, faucet and network fees.
+* Check Test readiness with the Test credential before creating a test purchase; keep Live and Test readiness caches separate.
+* Create test purchases in USD so the checkout minimum works with every store currency.
+* Link Base Sepolia and Solana devnet transactions to the correct test explorers.
+* Link to the current Test wallet instead of displaying an outdated connection address.
 
 = 0.3.3 =
 * Restore Reconnect for connected stores, detect site address changes, and pause checkout until the connection has moved.

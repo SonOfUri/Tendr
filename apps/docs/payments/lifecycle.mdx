@@ -9,6 +9,8 @@ A checkout session represents an amount your store wants to collect. A quote des
 
 The hosted checkout obtains a provider quote and shows its deposit instructions. A wallet submission or transaction hash is a hint for reconciliation. Tendr reconciles the deposit and settlement result, updates the session/payment, and emits a signed event.
 
+Tidepool Test checkout follows this lifecycle using actual testnet funds. Tendr independently checks final NEAR verifier receipts before emitting payment success; a provider success response alone does not settle the payment.
+
 Your browser cannot mark an order paid. A submitted transaction or AI answer does not prove settlement.
 
 | Session state       | Meaning                                    | Store action                             |

@@ -42,3 +42,9 @@ Use Node.js 22 or later. The webhook helper needs Node crypto. See the
 ## Report an issue
 
 Include the request ID, endpoint/method, HTTP status, mode, timestamp and non-secret resource ID. Do not send API keys, webhook secrets, full checkout URLs or invoice receipt tokens. A screenshot alone may not show which request failed.
+
+## Test wallet or payment is not ready
+
+In the dashboard select the same store and **Test → Wallet**, then create and activate its dedicated passkey. A Live wallet does not activate Test payments. Reopen WooCommerce’s Tendr settings and retry **Make a test purchase**; the plugin checks Test readiness using the Test credential.
+
+Use only Tidepool USDC/USDT on the network shown in checkout, with test NEAR, ETH or SOL available for fees. A missing simulation button is expected. If an older simulator checkout was open during the provider change, create a new Test checkout. If the dashboard reports a funded or existing on-chain legacy Test account, preserve it and use a new store for Tidepool.

@@ -15,6 +15,16 @@ class TestPurchaseTest extends Tendr_Test_Case {
 		self::connect_locally();
 		$this->login_admin();
 		update_option( 'woocommerce_currency', 'EUR' );
+		$this->mock_http(
+			fn() => self::response(
+				200,
+				array(
+					'ready'    => true,
+					'blocking' => array(),
+					'nudges'   => array(),
+				)
+			)
+		);
 	}
 
 	public function tear_down(): void {
@@ -32,7 +42,8 @@ class TestPurchaseTest extends Tendr_Test_Case {
 		$this->assertSame( 'yes', $order->get_meta( Tendr_Test_Purchase::META ) );
 		$this->assertSame( 'pending', $order->get_status() );
 		$this->assertSame( 'tendr', $order->get_payment_method() );
-		$this->assertSame( 'EUR', $order->get_currency() );
+		$this->assertSame( 'USD', $order->get_currency() );
+		$this->assertSame( 'EUR', get_woocommerce_currency(), 'store currency is unchanged' );
 		$this->assertSame( array(), $order->get_items( 'line_item' ), 'no products' );
 		$fees = array_values( $order->get_items( 'fee' ) );
 		$this->assertCount( 1, $fees );
@@ -48,6 +59,31 @@ class TestPurchaseTest extends Tendr_Test_Case {
 	public function test_test_purchase_is_refused_in_live_mode(): void {
 		update_option( Tendr_Connect::MODE, 'live' );
 		$this->assertWPError( Tendr_Test_Purchase::create() );
+	}
+
+	public function test_test_purchase_checks_test_readiness_and_never_uses_live_readiness(): void {
+		Tendr_Settings::connect_status( true, 'live' );
+		$this->mock_http(
+			fn() => self::response(
+				200,
+				array(
+					'ready'    => false,
+					'blocking' => array( array( 'message' => 'Create your Test wallet' ) ),
+				)
+			)
+		);
+		$result = Tendr_Test_Purchase::create();
+		$this->assertWPError( $result );
+		$this->assertSame( 'tendr_test_not_ready', $result->get_error_code() );
+		$this->assertSame( array(), wc_get_orders( array( 'limit' => -1 ) ) );
+		$last = end( $this->requests );
+		$this->assertStringContainsString( 'tdr_test_', $last['args']['headers']['Authorization'] );
+	}
+
+	public function test_test_purchase_does_not_create_an_order_when_readiness_is_unavailable(): void {
+		$this->mock_http( fn() => self::response( 503, null ) );
+		$this->assertWPError( Tendr_Test_Purchase::create() );
+		$this->assertSame( array(), wc_get_orders( array( 'limit' => -1 ) ) );
 	}
 
 	public function test_test_purchase_is_refused_without_the_capability(): void {

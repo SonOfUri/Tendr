@@ -96,7 +96,7 @@ verified `payment.succeeded` webhooks and a matching server-side session read.
 | `fetch`     | Optional compatible fetch implementation, including test doubles | Node.js `fetch`             |
 
 The package does not load environment files. Read `TENDR_SECRET_KEY` through your application's
-server environment, as in the example above. Test and live use the same base URL.
+server environment, as in the example above. Test and live use the same base URL. A Test key now uses Tidepool: activate the store’s dedicated Test wallet and fund a customer testnet wallet before creating a checkout. The SDK methods and webhook verification stay the same. See [Test payments](/testing).
 
 To check the key's store, mode and permissions without creating a payment:
 

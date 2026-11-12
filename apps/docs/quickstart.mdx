@@ -12,7 +12,7 @@ Use the hosted API at `https://api.usetendr.tech`. You need a Tendr store with t
 
 ## 1. Create a test API key
 
-Select your store and Test mode in the dashboard. Open API keys and create a key with `sessions:write` and `sessions:read`. Keep it on your server as `TENDR_SECRET_KEY`. It begins with `tdr_test_` and is shown once.
+Select your store and Test mode in the dashboard. Open **Wallet**, create its dedicated Test passkey and complete activation. Choose your settlement token, then open API keys and create a key with `sessions:write` and `sessions:read`. Keep it on your server as `TENDR_SECRET_KEY`. It begins with `tdr_test_` and is shown once.
 
 ## 2. Register your webhook
 
@@ -92,7 +92,7 @@ The response has this shape. These values are illustrative:
 
 Store the session ID against your order. Redirect to the returned `url` exactly, including its `#cs=` fragment. Do not reconstruct it or publish it in logs.
 
-Use the Test checkout's simulation controls to exercise payment outcomes. Do not transfer real tokens into a test session.
+Pay with Tidepool test USDC or USDT on NEAR testnet, Base Sepolia or Solana devnet. Fund your customer wallet from the [Tidepool faucet](https://app.usetidepool.tech/faucet) and keep test NEAR, ETH or SOL for network fees. Connect the wallet or follow the deposit instructions and wait for verified settlement. Test tokens have no monetary value. See [Test payments](/testing); simulation controls are no longer part of hosted Test checkout.
 
 ## 5. Confirm payment
 

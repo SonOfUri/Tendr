@@ -45,7 +45,7 @@ final class Tendr_Settings {
 	/**
 	 * Site-wide notices for store managers (`manage_woocommerce`):
 	 * - "tendr is in test mode" while connected in test mode (B2): only managers see the payment
-	 *   method then, and payments are simulated;
+	 *   method then, and payments use testnet tokens;
 	 * - the WordPress security keys cannot protect tendr's keys (C1): Connect is refused until
 	 *   they are fixed.
 	 */
@@ -64,7 +64,7 @@ final class Tendr_Settings {
 		}
 		if ( Tendr_Connect::is_connected() && 'test' === Tendr_Connect::mode() ) {
 			$html .= '<div class="notice notice-warning tendr-test-mode"><p><strong>' . esc_html__( 'tendr is in test mode.', 'tendr-pay-with-crypto' ) . '</strong> '
-				. esc_html__( 'Crypto payments are simulated and only store managers see the payment method.', 'tendr-pay-with-crypto' )
+				. esc_html__( 'Tidepool payments use testnet tokens with no monetary value. Only store managers see the payment method.', 'tendr-pay-with-crypto' )
 				. ' <a href="' . esc_url( self::url() ) . '">' . esc_html__( 'Go live in the tendr settings', 'tendr-pay-with-crypto' ) . '</a></p></div>';
 		}
 		return $html;
@@ -207,19 +207,21 @@ final class Tendr_Settings {
 	}
 
 	/**
-	 * `GET /v1/connect/status` with the LIVE key, cached for CACHE_TTL so the settings page never
-	 * waits on it; refreshed by a mode switch.
+	 * `GET /v1/connect/status` with the selected mode's key, cached separately per mode.
+	 * Live is the default for go-live checks; a test purchase refreshes Test readiness.
 	 *
-	 * @param bool $refresh Ask the API now.
+	 * @param bool   $refresh Ask the API now.
+	 * @param string $mode    Credential mode: test or live.
 	 * @return array{ready: bool, blocking: array, nudges: array, error: ?string}
 	 */
-	public static function connect_status( bool $refresh = false ): array {
-		$key    = self::cache_key( 'status' );
+	public static function connect_status( bool $refresh = false, string $mode = 'live' ): array {
+		$mode   = 'test' === $mode ? 'test' : 'live';
+		$key    = self::cache_key( 'status_' . $mode );
 		$cached = $refresh ? false : get_transient( $key );
 		if ( is_array( $cached ) ) {
 			return $cached;
 		}
-		$status = Tendr_Api_Client::request( 'GET', '/v1/connect/status', array(), 'live', array(), self::API_WAIT );
+		$status = Tendr_Api_Client::request( 'GET', '/v1/connect/status', array(), $mode, array(), self::API_WAIT );
 		$result = is_wp_error( $status )
 			? array(
 				'ready'    => false,
@@ -240,7 +242,7 @@ final class Tendr_Settings {
 	/**
 	 * A per-connection cache key.
 	 *
-	 * @param string $what 'status' | 'settings'.
+	 * @param string $what 'status_test' | 'status_live' | 'settings'.
 	 */
 	private static function cache_key( string $what ): string {
 		$connection = Tendr_Connect::connection();
@@ -529,7 +531,7 @@ final class Tendr_Settings {
 			. '<p><button type="button" class="button button-primary" data-tendr-connect="' . esc_url( $start ) . '">' . esc_html( $label ) . '</button>'
 			. ' <span class="tendr-connect-status" role="status" aria-live="polite"></span></p>'
 			. '<ol class="tendr-admin-steps"><li><strong>' . esc_html__( 'Connect your store', 'tendr-pay-with-crypto' ) . '</strong><span>' . esc_html__( 'Sign in to Tendr and approve this site.', 'tendr-pay-with-crypto' ) . '</span></li>'
-			. '<li><strong>' . esc_html__( 'Try a test payment', 'tendr-pay-with-crypto' ) . '</strong><span>' . esc_html__( 'Walk through checkout with a simulated payment.', 'tendr-pay-with-crypto' ) . '</span></li>'
+			. '<li><strong>' . esc_html__( 'Try a test payment', 'tendr-pay-with-crypto' ) . '</strong><span>' . esc_html__( 'Activate your Test wallet, then pay with Tidepool test tokens.', 'tendr-pay-with-crypto' ) . '</span></li>'
 			. '<li><strong>' . esc_html__( 'Go live when ready', 'tendr-pay-with-crypto' ) . '</strong><span>' . esc_html__( 'Check your setup and start accepting crypto.', 'tendr-pay-with-crypto' ) . '</span></li></ol></section></div>';
 	}
 
@@ -551,9 +553,8 @@ final class Tendr_Settings {
 		$html .= '<div class="tendr-admin-grid"><div class="tendr-admin-main"><section class="tendr-admin-card"><div class="tendr-admin-card-heading"><h3>' . esc_html__( 'Store connection', 'tendr-pay-with-crypto' ) . '</h3><span class="tendr-admin-badge">' . esc_html__( 'Connected', 'tendr-pay-with-crypto' ) . '</span></div>';
 		$html .= '<p class="tendr-admin-description">' . esc_html__( 'Connected to', 'tendr-pay-with-crypto' ) . '</p><p class="tendr-admin-store-name">' . esc_html( (string) $connection['store_name'] ) . '</p>';
 		$html .= '<dl class="tendr-admin-accounts">';
-		if ( '' !== (string) ( $connection['test_account'] ?? '' ) ) {
-			$html .= '<div><dt>' . esc_html__( 'Test account', 'tendr-pay-with-crypto' ) . '</dt><dd><code>' . esc_html( (string) $connection['test_account'] ) . '</code></dd></div>';
-		}
+		// Wallets can be created after Connect; its cached Test address may be a legacy placeholder.
+		$html .= '<div><dt>' . esc_html__( 'Test wallet', 'tendr-pay-with-crypto' ) . '</dt><dd><a href="' . esc_url( Tendr_Plugin::dashboard_url( '/dashboard/wallet', 'test' ) ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Manage in Tendr', 'tendr-pay-with-crypto' ) . '</a></dd></div>';
 		if ( '' !== (string) ( $connection['live_account'] ?? '' ) ) {
 			$html .= '<div><dt>' . esc_html__( 'Live account', 'tendr-pay-with-crypto' ) . '</dt><dd><code>' . esc_html( (string) $connection['live_account'] ) . '</code></dd></div>';
 		}
@@ -568,14 +569,22 @@ final class Tendr_Settings {
 		$html .= '<aside class="tendr-admin-side"><section class="tendr-admin-card"><div class="tendr-admin-card-heading"><h3>' . esc_html__( 'Payment mode', 'tendr-pay-with-crypto' ) . '</h3><span class="tendr-admin-badge ' . ( $live ? 'tendr-admin-badge-dark' : '' ) . '">' . esc_html( $mode ) . '</span></div>'
 			. '<p class="tendr-admin-description">' . ( $live
 				? esc_html__( 'Shoppers pay with real crypto.', 'tendr-pay-with-crypto' )
-				: esc_html__( 'Payments are simulated, and only store managers see the payment method. Going live checks with tendr that your store is ready.', 'tendr-pay-with-crypto' ) ) . '</p>'
+				: esc_html__( 'Tidepool moves test USDC and USDT on NEAR testnet, Base Sepolia and Solana devnet. Tokens have no monetary value. Only store managers see this payment method.', 'tendr-pay-with-crypto' ) ) . '</p>'
 			. wp_nonce_field( 'tendr_mode', 'tendr_mode_nonce', false, false )
 			. '<button type="submit" class="button" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', 'tendr_set_mode', $post ) ) . '" name="tendr_mode" value="' . ( $live ? 'test' : 'live' ) . '">'
 			. ( $live ? esc_html__( 'Switch to test mode', 'tendr-pay-with-crypto' ) : esc_html__( 'Switch to live mode', 'tendr-pay-with-crypto' ) ) . '</button>';
 		if ( ! $live ) {
+			$test_status = self::connect_status( false, 'test' );
+			if ( null !== $test_status['error'] ) {
+				$html .= self::notice( 'warning', __( 'Could not check Test wallet readiness. Reopen settings to retry.', 'tendr-pay-with-crypto' ) );
+			} elseif ( ! $test_status['ready'] || array() !== $test_status['blocking'] ) {
+				$html .= '<p>' . esc_html__( 'Finish Test wallet setup in Tendr before making a test purchase.', 'tendr-pay-with-crypto' ) . '</p>' . self::item_list( $test_status['blocking'] );
+			}
+			$html .= '<p><a href="' . esc_url( Tendr_Plugin::dashboard_url( '/dashboard/wallet', 'test' ) ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Open Test wallet', 'tendr-pay-with-crypto' ) . '</a> · <a href="https://app.usetidepool.tech/faucet" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Get test tokens', 'tendr-pay-with-crypto' ) . '</a></p>'
+				. '<p class="description">' . esc_html__( 'Use a separate synced Test wallet passkey. Fund your paying wallet with test USDC or USDT and test NEAR, ETH or SOL for network fees.', 'tendr-pay-with-crypto' ) . '</p>';
 			$html .= '<p>' . wp_nonce_field( Tendr_Test_Purchase::NONCE, 'tendr_test_purchase_nonce', false, false )
 				. '<button type="submit" class="button" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', 'tendr_test_purchase', $post ) ) . '">' . esc_html__( 'Make a test purchase', 'tendr-pay-with-crypto' ) . '</button></p>'
-				. '<p class="description">' . esc_html__( 'Creates a test order of 1.00 in your store currency, with no product, and opens its payment page.', 'tendr-pay-with-crypto' ) . '</p>';
+				. '<p class="description">' . esc_html__( 'Checks Test wallet readiness, then creates a 1.00 USD test order with no product and opens its payment page.', 'tendr-pay-with-crypto' ) . '</p>';
 		}
 		$html .= '</section><section class="tendr-admin-card"><h3>' . esc_html__( 'Checkout appearance', 'tendr-pay-with-crypto' ) . '</h3><p class="tendr-admin-description">' . esc_html__( 'Bring your store identity to the payment page. Sync your name, logo and theme colours with Tendr.', 'tendr-pay-with-crypto' ) . '</p>' . wp_nonce_field( Tendr_Brand::NONCE, 'tendr_brand_nonce', false, false )
 			. '<button type="submit" class="button" formmethod="post" formaction="' . esc_url( add_query_arg( 'action', Tendr_Brand::ACTION, $post ) ) . '">' . esc_html__( 'Refresh brand from my store', 'tendr-pay-with-crypto' ) . '</button>'

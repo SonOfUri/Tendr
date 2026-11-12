@@ -57,7 +57,7 @@
         "groups": [
           {
             "group": "Start here",
-            "pages": ["introduction", "quickstart", "concepts/test-and-live"]
+            "pages": ["introduction", "quickstart", "concepts/test-and-live", "testing"]
           },
           {
             "group": "Accept payments",
