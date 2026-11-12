@@ -1,16 +1,38 @@
 ---
-title: Idempotency
+title: 'Idempotency'
+description: 'Retry supported mutations without accidentally creating another operation.'
 ---
 
-Every `POST` under `/v1` accepts an `Idempotency-Key` header, so a client can retry safely after a timeout or network error.
+Send `Idempotency-Key` on supported POST requests, including session creation, payment-link creation and refund requests. Use a fresh value for each logical operation and keep it with your order.
 
-- **Scope.** Keys are per merchant and per mode: the same key in test and live mode are different keys.
-- **Format.** 1–255 characters. Use a fresh random value (for example a UUID) per logical operation.
-- **Same request, same key.** The original response is replayed with its status code and body, plus the header `Idempotent-Replayed: true`. "Same request" means the same method, path and query, and the same raw body bytes.
-- **Different request, same key.** `409 IDEMPOTENCY_CONFLICT`.
-- **Retry while the first is still running.** `409 IDEMPOTENCY_IN_PROGRESS`; retry after a short delay.
-- **Server errors are not stored.** A `5xx` response releases the key, so the retry runs the request again.
-- **Abandoned requests.** If a request dies without answering, the next retry takes its key over after 60 seconds.
-- **Expiry.** Keys are kept for 24 hours, after which the key can be reused.
+| Rule                        | Behavior                                                        |
+| --------------------------- | --------------------------------------------------------------- |
+| Namespace                   | Merchant, mode and authenticated credential/principal           |
+| Format                      | 1–255 characters; a UUID or persisted operation reference works |
+| Same key and request        | Original status/body replayed with `Idempotent-Replayed: true`  |
+| Different request, same key | `409 IDEMPOTENCY_CONFLICT`                                      |
+| Request still running       | `409 IDEMPOTENCY_IN_PROGRESS`                                   |
+| Server error                | 5xx response is not stored                                      |
+| Abandoned request           | Same request may take over after 60 seconds                     |
+| Retention                   | 24 hours                                                        |
 
-Keys are checked after authentication and request-signature verification, so an unauthenticated or unsigned request can never claim or replay a key.
+“Same request” means the same method, path/query and raw body bytes. Changing JSON serialization or whitespace can change the request hash. Switching credentials does not share the old replay entry.
+
+## With the TypeScript SDK
+
+Pass `{ idempotencyKey: savedOperationKey }` as the second argument to
+`tendr.checkoutSessions.create(input, options)`, `tendr.paymentLinks.create(input, options)` or
+`tendr.refunds.create(input, options)`. Persist the key and input before making the request.
+
+The SDK does not generate keys or retry automatically. If a request times out or is cancelled,
+the server may still have accepted it. Reconcile the operation and retry with the same key and
+identical input while the replay entry is retained. Do not switch from SDK to cURL for a retry
+unless the serialized body bytes also match. See [SDK request options](/sdks/typescript#request-options-and-errors).
+
+## Exceptions
+
+Not every endpoint participates. One-time API-key creation explicitly excludes replay caching so raw secrets are not persisted there. AI insight explanations also disable this layer. AI theme generation requires an idempotency key because it creates a draft.
+
+PATCH and DELETE are not covered by the POST replay layer. Check the endpoint's own semantics.
+
+Do not generate a new key inside every network retry. Conversely, do not reuse a key for a changed price, another order or a different refund.

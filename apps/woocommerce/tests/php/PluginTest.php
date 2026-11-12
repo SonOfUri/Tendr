@@ -31,9 +31,18 @@ class PluginTest extends Tendr_Test_Case {
 		$this->assertStringContainsString( 'WooCommerce', $html );
 
 		// With WooCommerce missing, boot() only adds the notice.
+		$translated = false;
+		add_filter(
+			'gettext_tendr-pay-with-crypto',
+			static function ( $translation ) use ( &$translated ) {
+				$translated = true;
+				return $translation;
+			}
+		);
 		$hooks_before = has_filter( 'woocommerce_payment_gateways' );
 		$booted       = Tendr_Plugin::boot( '8.2.0', null );
 		$this->assertFalse( $booted );
+		$this->assertFalse( $translated, 'Do not load translations during plugins_loaded.' );
 		$this->assertSame( $hooks_before, has_filter( 'woocommerce_payment_gateways' ) );
 		$this->assertNotFalse( has_action( 'admin_notices' ) );
 	}
@@ -59,7 +68,7 @@ class PluginTest extends Tendr_Test_Case {
 		$this->assertSame( 'tendr: Pay with crypto', $data['name'] );
 		$this->assertSame( TENDR_VERSION, $data['version'] );
 		$this->assertSame( 'GPL-2.0-or-later', $data['license'] );
-		$this->assertSame( 'tendr', $data['domain'] );
+		$this->assertSame( 'tendr-pay-with-crypto', $data['domain'] );
 		$this->assertSame( '8.0', $data['php'] );
 		$this->assertSame( '8.5', $data['wc'] );
 	}

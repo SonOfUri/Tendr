@@ -159,7 +159,7 @@ final class Tendr_Refunds {
 				esc_html(
 					sprintf(
 						/* translators: 1: amount awaiting approval, 2: most that can be refunded manually. */
-						__( 'Refunds of %1$s for this order are awaiting approval in tendr, so a manual refund can be at most %2$s now.', 'tendr' ),
+						__( 'Refunds of %1$s for this order are awaiting approval in tendr, so a manual refund can be at most %2$s now.', 'tendr-pay-with-crypto' ),
 						self::money( $order, (string) $open ),
 						self::money( $order, (string) max( 0, $remaining - $open ) )
 					)
@@ -178,25 +178,25 @@ final class Tendr_Refunds {
 	 */
 	public static function request( int $order_id, array $args, int $draft = 0 ) {
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {
-			return new WP_Error( 'tendr_refund_forbidden', __( 'You are not allowed to refund orders.', 'tendr' ) );
+			return new WP_Error( 'tendr_refund_forbidden', __( 'You are not allowed to refund orders.', 'tendr-pay-with-crypto' ) );
 		}
 		$order = wc_get_order( $order_id );
 		if ( ! $order instanceof WC_Order || '' === self::payment_id( $order ) ) {
-			return new WP_Error( 'tendr_refund_unavailable', __( 'This order was not paid through tendr, so tendr cannot refund it.', 'tendr' ) );
+			return new WP_Error( 'tendr_refund_unavailable', __( 'This order was not paid through tendr, so tendr cannot refund it.', 'tendr-pay-with-crypto' ) );
 		}
 		$formatted = wc_format_decimal( (string) ( $args['amount'] ?? '' ), wc_get_price_decimals() );
 		$plain     = self::plain( (string) $formatted );
 		if ( '0' === $plain || ! preg_match( '/^\d+(\.\d+)?$/', $plain ) ) {
-			return new WP_Error( 'tendr_refund_amount', __( 'Enter an amount to refund.', 'tendr' ) );
+			return new WP_Error( 'tendr_refund_amount', __( 'Enter an amount to refund.', 'tendr-pay-with-crypto' ) );
 		}
 
 		if ( ! Tendr_Order_Sync::lock_order( $order_id ) ) {
-			return new WP_Error( 'tendr_refund_busy', __( 'This order is being updated by tendr right now. Try the refund again in a moment.', 'tendr' ) );
+			return new WP_Error( 'tendr_refund_busy', __( 'This order is being updated by tendr right now. Try the refund again in a moment.', 'tendr-pay-with-crypto' ) );
 		}
 		try {
 			$order = wc_get_order( $order_id );
 			if ( ! $order instanceof WC_Order ) {
-				return new WP_Error( 'tendr_refund_unavailable', __( 'This order no longer exists.', 'tendr' ) );
+				return new WP_Error( 'tendr_refund_unavailable', __( 'This order no longer exists.', 'tendr-pay-with-crypto' ) );
 			}
 			$requests = self::requests( $order );
 
@@ -209,7 +209,7 @@ final class Tendr_Refunds {
 					'tendr_refund_exceeds_pending',
 					sprintf(
 						/* translators: 1: amount awaiting approval, 2: amount that can still be refunded. */
-						__( 'Refunds of %1$s for this order are already awaiting approval in tendr, so at most %2$s more can be refunded now.', 'tendr' ),
+						__( 'Refunds of %1$s for this order are already awaiting approval in tendr, so at most %2$s more can be refunded now.', 'tendr-pay-with-crypto' ),
 						self::money( $order, (string) $open ),
 						self::money( $order, (string) max( 0, $remaining - $open ) )
 					)
@@ -246,7 +246,7 @@ final class Tendr_Refunds {
 				'requested_at' => time(),
 				'wc_refund_id' => 0,
 			);
-			$prefix = 'test' === $mode ? __( '[Test]', 'tendr' ) . ' ' : '';
+			$prefix = 'test' === $mode ? __( '[Test]', 'tendr-pay-with-crypto' ) . ' ' : '';
 			$money  = self::money( $order, (string) $formatted );
 
 			$result   = Tendr_Api_Client::request( 'POST', '/v1/refunds', $body, $mode, array( 'Idempotency-Key' => $external_ref ) );
@@ -262,7 +262,7 @@ final class Tendr_Refunds {
 					$prefix . esc_html(
 						sprintf(
 							/* translators: 1: amount, 2: refund reference. */
-							__( 'tendr could not confirm the refund request of %1$s (%2$s). Check the tendr dashboard before refunding again: if tendr received it, this order is updated when the refund is sent.', 'tendr' ),
+							__( 'tendr could not confirm the refund request of %1$s (%2$s). Check the tendr dashboard before refunding again: if tendr received it, this order is updated when the refund is sent.', 'tendr-pay-with-crypto' ),
 							$money,
 							$external_ref
 						)
@@ -270,7 +270,7 @@ final class Tendr_Refunds {
 				);
 				return new WP_Error(
 					'tendr_refund_unconfirmed',
-					__( 'tendr did not confirm the refund request, so nothing is recorded here yet. Check the tendr dashboard before refunding again.', 'tendr' )
+					__( 'tendr did not confirm the refund request, so nothing is recorded here yet. Check the tendr dashboard before refunding again.', 'tendr-pay-with-crypto' )
 				);
 			}
 
@@ -285,7 +285,7 @@ final class Tendr_Refunds {
 				$note = esc_html(
 					sprintf(
 						/* translators: 1: amount, 2: why it waits (a sentence). */
-						__( 'Refund of %1$s is waiting for manual review in tendr before it can be approved. %2$s Nothing has been refunded yet.', 'tendr' ),
+						__( 'Refund of %1$s is waiting for manual review in tendr before it can be approved. %2$s Nothing has been refunded yet.', 'tendr-pay-with-crypto' ),
 						$money,
 						$why
 					)
@@ -295,18 +295,18 @@ final class Tendr_Refunds {
 				$note = esc_html(
 					sprintf(
 						/* translators: %s: amount. */
-						__( 'Refund of %s awaiting approval in tendr. Nothing is refunded until your store\'s signers approve it.', 'tendr' ),
+						__( 'Refund of %s awaiting approval in tendr. Nothing is refunded until your store\'s signers approve it.', 'tendr-pay-with-crypto' ),
 						$money
 					)
-				) . ' ' . esc_html__( 'Approve it:', 'tendr' ) . ' <a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $url ) . '</a>';
+				) . ' ' . esc_html__( 'Approve it:', 'tendr-pay-with-crypto' ) . ' <a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $url ) . '</a>';
 			}
 			$order->add_order_note( $prefix . $note );
 
 			return $review
 				/* translators: %s: amount. */
-				? sprintf( __( 'Refund of %s sent to tendr. It needs a manual review in tendr before your signers can approve it. WooCommerce will record it once it is sent.', 'tendr' ), $money )
+				? sprintf( __( 'Refund of %s sent to tendr. It needs a manual review in tendr before your signers can approve it. WooCommerce will record it once it is sent.', 'tendr-pay-with-crypto' ), $money )
 				/* translators: %s: amount. */
-				: sprintf( __( 'Refund of %s sent to your Tendr signers for approval. WooCommerce will record it once it is sent.', 'tendr' ), $money );
+				: sprintf( __( 'Refund of %s sent to your Tendr signers for approval. WooCommerce will record it once it is sent.', 'tendr-pay-with-crypto' ), $money );
 		} finally {
 			Tendr_Order_Sync::unlock_order( $order_id );
 		}//end try
@@ -320,17 +320,17 @@ final class Tendr_Refunds {
 	private static function review_reason_text( string $reason ): string {
 		switch ( $reason ) {
 			case 'needs_swap_route':
-				return __( 'The shopper paid from another chain than your settlement asset\'s: someone on your team must choose the swap route in tendr.', 'tendr' );
+				return __( 'The shopper paid from another chain than your settlement asset\'s: someone on your team must choose the swap route in tendr.', 'tendr-pay-with-crypto' );
 			case 'no_sender':
-				return __( 'tendr does not know the wallet that paid: someone on your team must enter where to send the refund in tendr.', 'tendr' );
+				return __( 'tendr does not know the wallet that paid: someone on your team must enter where to send the refund in tendr.', 'tendr-pay-with-crypto' );
 			case 'unsupported_chain':
-				return __( 'tendr cannot send to the chain the shopper paid from: someone on your team must choose another destination in tendr.', 'tendr' );
+				return __( 'tendr cannot send to the chain the shopper paid from: someone on your team must choose another destination in tendr.', 'tendr-pay-with-crypto' );
 			case 'sanctions':
-				return __( 'The wallet that paid failed sanctions screening: someone on your team must review it in tendr (a legal acknowledgement is required).', 'tendr' );
+				return __( 'The wallet that paid failed sanctions screening: someone on your team must review it in tendr (a legal acknowledgement is required).', 'tendr-pay-with-crypto' );
 			case 'price_unavailable':
-				return __( 'tendr could not price the refund in your settlement asset: someone on your team must retry it in tendr.', 'tendr' );
+				return __( 'tendr could not price the refund in your settlement asset: someone on your team must retry it in tendr.', 'tendr-pay-with-crypto' );
 			default:
-				return __( 'Refunds are paid in your settlement asset: when the shopper paid from another chain or from an exchange, someone on your team must choose the route or the address in tendr first.', 'tendr' );
+				return __( 'Refunds are paid in your settlement asset: when the shopper paid from another chain or from an exchange, someone on your team must choose the route or the address in tendr first.', 'tendr-pay-with-crypto' );
 		}
 	}
 
@@ -401,9 +401,9 @@ final class Tendr_Refunds {
 				$money        = self::money( $order, $req['amount'] );
 				$text         = 'cancelled' === $req['state']
 					/* translators: %s: amount. */
-					? sprintf( __( 'The refund of %s was not approved in tendr (it was rejected or expired). Nothing was refunded and the order totals are unchanged.', 'tendr' ), $money )
+					? sprintf( __( 'The refund of %s was not approved in tendr (it was rejected or expired). Nothing was refunded and the order totals are unchanged.', 'tendr-pay-with-crypto' ), $money )
 					/* translators: %s: amount. */
-					: sprintf( __( 'The refund of %s could not be sent by tendr. Nothing was refunded and the order totals are unchanged; refund again to retry.', 'tendr' ), $money );
+					: sprintf( __( 'The refund of %s could not be sent by tendr. Nothing was refunded and the order totals are unchanged; refund again to retry.', 'tendr-pay-with-crypto' ), $money );
 				$requests[ $ext ] = $req;
 				self::save_requests( $order, $requests );
 				Tendr_Order_Sync::note( $order, $event, esc_html( $text ) );
@@ -420,7 +420,7 @@ final class Tendr_Refunds {
 					$order,
 					$event,
 					/* translators: %s: amount. */
-					esc_html( sprintf( __( 'The refund of %s is now awaiting approval by your store\'s signers in tendr.', 'tendr' ), self::money( $order, $req['amount'] ) ) )
+					esc_html( sprintf( __( 'The refund of %s is now awaiting approval by your store\'s signers in tendr.', 'tendr-pay-with-crypto' ), self::money( $order, $req['amount'] ) ) )
 				);
 				return 'applied';
 
@@ -435,7 +435,7 @@ final class Tendr_Refunds {
 					$order,
 					$event,
 					/* translators: %s: amount. */
-					esc_html( sprintf( __( 'The refund of %s is waiting for the shopper: they paid from an exchange, and tendr has asked them by email where to receive it.', 'tendr' ), self::money( $order, $req['amount'] ) ) )
+					esc_html( sprintf( __( 'The refund of %s is waiting for the shopper: they paid from an exchange, and tendr has asked them by email where to receive it.', 'tendr-pay-with-crypto' ), self::money( $order, $req['amount'] ) ) )
 				);
 				return 'applied';
 
@@ -487,7 +487,7 @@ final class Tendr_Refunds {
 					$order,
 					$event,
 					/* translators: %s: amount. */
-					esc_html( sprintf( __( 'tendr sent the refund of %s, but WooCommerce could not record it because the order has less left to refund. Record it by hand so the totals match.', 'tendr' ), $money ) )
+					esc_html( sprintf( __( 'tendr sent the refund of %s, but WooCommerce could not record it because the order has less left to refund. Record it by hand so the totals match.', 'tendr-pay-with-crypto' ), $money ) )
 				);
 				return 'applied';
 			}
@@ -536,12 +536,12 @@ final class Tendr_Refunds {
 		$tokens = self::token_amount( $row );
 		$text   = '' !== $tokens && ! str_contains( $tokens, '(' )
 			/* translators: 1: amount in the order currency, 2: token amount, e.g. "10.05 USDC". */
-			? esc_html( sprintf( __( 'Refund of %1$s sent by tendr (%2$s, network cost included).', 'tendr' ), $money, $tokens ) )
+			? esc_html( sprintf( __( 'Refund of %1$s sent by tendr (%2$s, network cost included).', 'tendr-pay-with-crypto' ), $money, $tokens ) )
 			/* translators: %s: amount. */
-			: esc_html( sprintf( __( 'Refund of %s sent by tendr.', 'tendr' ), $money ) );
+			: esc_html( sprintf( __( 'Refund of %s sent by tendr.', 'tendr-pay-with-crypto' ), $money ) );
 		$text .= self::transaction_text( $row, $event );
 		/* translators: %s: tendr refund id. */
-		$text .= ' ' . esc_html( sprintf( __( 'tendr refund %s.', 'tendr' ), $req['refund_id'] ) );
+		$text .= ' ' . esc_html( sprintf( __( 'tendr refund %s.', 'tendr-pay-with-crypto' ), $req['refund_id'] ) );
 		Tendr_Order_Sync::note( $order, $event, $text );
 		return 'applied';
 	}
@@ -576,16 +576,16 @@ final class Tendr_Refunds {
 		$order->update_meta_data( self::UNTRACKED_META, array_slice( $noted, -50 ) );
 		$order->save_meta_data();
 
-		$text   = esc_html__( 'tendr sent a refund for this order that was not requested from WooCommerce (for example, from the tendr dashboard).', 'tendr' );
+		$text   = esc_html__( 'tendr sent a refund for this order that was not requested from WooCommerce (for example, from the tendr dashboard).', 'tendr-pay-with-crypto' );
 		$tokens = self::token_amount( $row );
 		if ( '' !== $tokens ) {
 			/* translators: %s: token amount, e.g. "1.25 USDC". */
-			$text .= ' ' . esc_html( sprintf( __( 'Amount: %s.', 'tendr' ), $tokens ) );
+			$text .= ' ' . esc_html( sprintf( __( 'Amount: %s.', 'tendr-pay-with-crypto' ), $tokens ) );
 		}
 		$text .= self::transaction_text( $row, $event );
 		/* translators: %s: tendr refund id. */
-		$text .= ' ' . esc_html( sprintf( __( 'tendr refund %s.', 'tendr' ), $tendr_id ) );
-		$text .= ' ' . esc_html__( 'WooCommerce has not recorded it: add the refund to this order by hand (Refund, then "Refund manually") so the totals match.', 'tendr' );
+		$text .= ' ' . esc_html( sprintf( __( 'tendr refund %s.', 'tendr-pay-with-crypto' ), $tendr_id ) );
+		$text .= ' ' . esc_html__( 'WooCommerce has not recorded it: add the refund to this order by hand (Refund, then "Refund manually") so the totals match.', 'tendr-pay-with-crypto' );
 		Tendr_Order_Sync::note( $order, $event, $text );
 		return 'applied';
 	}
@@ -611,7 +611,7 @@ final class Tendr_Refunds {
 		}
 		$asset = isset( $row['asset_id'] ) && is_string( $row['asset_id'] ) ? $row['asset_id'] : '';
 		/* translators: 1: amount in token base units, 2: token (asset id). */
-		return sprintf( __( '%1$s (token base units) of %2$s', 'tendr' ), $amount, $asset );
+		return sprintf( __( '%1$s (token base units) of %2$s', 'tendr-pay-with-crypto' ), $amount, $asset );
 	}
 
 	/**
@@ -627,7 +627,7 @@ final class Tendr_Refunds {
 			return '';
 		}
 		$url = Tendr_Order_Sync::explorer_url( $chain, $hash, ! empty( $event['livemode'] ) );
-		return ' ' . esc_html__( 'Transaction:', 'tendr' ) . ' ' . ( null !== $url
+		return ' ' . esc_html__( 'Transaction:', 'tendr-pay-with-crypto' ) . ' ' . ( null !== $url
 			? '<a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $url ) . '</a>'
 			: esc_html( $hash ) );
 	}
@@ -719,7 +719,7 @@ final class Tendr_Refunds {
 					esc_html(
 						sprintf(
 							/* translators: 1: amount, 2: refund reference. */
-							__( 'tendr has no record of the refund request of %1$s (%2$s): nothing was refunded, and it no longer counts against what can be refunded.', 'tendr' ),
+							__( 'tendr has no record of the refund request of %1$s (%2$s): nothing was refunded, and it no longer counts against what can be refunded.', 'tendr-pay-with-crypto' ),
 							$money,
 							$ext
 						)
@@ -737,7 +737,7 @@ final class Tendr_Refunds {
 						$order,
 						$event,
 						/* translators: %s: amount. */
-						esc_html( sprintf( __( 'The refund of %s was closed in tendr without being sent: nothing was refunded, and it no longer counts against what can be refunded.', 'tendr' ), $money ) )
+						esc_html( sprintf( __( 'The refund of %s was closed in tendr without being sent: nothing was refunded, and it no longer counts against what can be refunded.', 'tendr-pay-with-crypto' ), $money ) )
 					);
 				} elseif ( 'review' === $status && 'pending' === $req['state'] ) {
 					$req['state'] = 'review';
@@ -780,17 +780,17 @@ final class Tendr_Refunds {
 	 */
 	public static function dismiss( int $order_id, string $ext ) {
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {
-			return new WP_Error( 'tendr_refund_forbidden', __( 'You are not allowed to change refunds.', 'tendr' ) );
+			return new WP_Error( 'tendr_refund_forbidden', __( 'You are not allowed to change refunds.', 'tendr-pay-with-crypto' ) );
 		}
 		if ( ! Tendr_Order_Sync::lock_order( $order_id ) ) {
-			return new WP_Error( 'tendr_refund_busy', __( 'This order is being updated by tendr right now. Try again in a moment.', 'tendr' ) );
+			return new WP_Error( 'tendr_refund_busy', __( 'This order is being updated by tendr right now. Try again in a moment.', 'tendr-pay-with-crypto' ) );
 		}
 		try {
 			$order    = wc_get_order( $order_id );
 			$requests = $order instanceof WC_Order ? self::requests( $order ) : array();
 			$req      = $requests[ $ext ] ?? null;
 			if ( ! $order instanceof WC_Order || null === $req || 'unconfirmed' !== $req['state'] ) {
-				return new WP_Error( 'tendr_refund_not_dismissable', __( 'Only a refund request tendr never confirmed can be dismissed.', 'tendr' ) );
+				return new WP_Error( 'tendr_refund_not_dismissable', __( 'Only a refund request tendr never confirmed can be dismissed.', 'tendr-pay-with-crypto' ) );
 			}
 			$req['state']     = 'dismissed';
 			$requests[ $ext ] = $req;
@@ -800,7 +800,7 @@ final class Tendr_Refunds {
 				esc_html(
 					sprintf(
 						/* translators: 1: amount, 2: refund reference, 3: user name. */
-						__( 'The unconfirmed refund request of %1$s (%2$s) was dismissed by %3$s: it no longer counts against what can be refunded. If tendr sends it after all, this order is still updated.', 'tendr' ),
+						__( 'The unconfirmed refund request of %1$s (%2$s) was dismissed by %3$s: it no longer counts against what can be refunded. If tendr sends it after all, this order is still updated.', 'tendr-pay-with-crypto' ),
 						self::money( $order, $req['amount'] ),
 						$ext,
 						$user->display_name
@@ -821,7 +821,7 @@ final class Tendr_Refunds {
 		$order_id = isset( $_POST['tendr_dismiss_order'] ) ? absint( $_POST['tendr_dismiss_order'] ) : 0;
 		$ext      = isset( $_POST['tendr_dismiss_refund'] ) ? sanitize_text_field( wp_unslash( $_POST['tendr_dismiss_refund'] ) ) : '';
 		if ( ! wp_verify_nonce( $nonce, self::DISMISS_NONCE . '_' . $order_id ) || ! current_user_can( 'manage_woocommerce' ) ) {
-			wp_die( esc_html__( 'You are not allowed to do that.', 'tendr' ), 403 );
+			wp_die( esc_html__( 'You are not allowed to do that.', 'tendr-pay-with-crypto' ), 403 );
 		}
 		$result = self::dismiss( $order_id, $ext );
 		if ( is_wp_error( $result ) ) {
@@ -912,15 +912,15 @@ final class Tendr_Refunds {
 			switch ( $req['state'] ) {
 				case 'pending':
 					/* translators: %s: amount. */
-					$lines[] = sprintf( __( '%s: awaiting approval in tendr', 'tendr' ), $money );
+					$lines[] = sprintf( __( '%s: awaiting approval in tendr', 'tendr-pay-with-crypto' ), $money );
 					break;
 				case 'review':
 					/* translators: %s: amount. */
-					$lines[] = sprintf( __( '%s: waiting for review in tendr', 'tendr' ), $money );
+					$lines[] = sprintf( __( '%s: waiting for review in tendr', 'tendr-pay-with-crypto' ), $money );
 					break;
 				case 'unconfirmed':
 					/* translators: %s: amount. */
-					$lines[]                        = sprintf( __( '%s: not confirmed by tendr; check the tendr dashboard', 'tendr' ), $money );
+					$lines[]                        = sprintf( __( '%s: not confirmed by tendr; check the tendr dashboard', 'tendr-pay-with-crypto' ), $money );
 					$dismiss[ count( $lines ) - 1 ] = $ext;
 					break;
 			}
@@ -929,7 +929,7 @@ final class Tendr_Refunds {
 			return;
 		}
 		echo '<div class="notice notice-info inline tendr-pending-refunds" style="clear:both;margin:12px 0 0;"><p><strong>'
-			. esc_html__( 'Refunds not yet sent (not counted in the totals):', 'tendr' ) . '</strong></p><ul>';
+			. esc_html__( 'Refunds not yet sent (not counted in the totals):', 'tendr-pay-with-crypto' ) . '</strong></p><ul>';
 		$action = add_query_arg( 'action', 'tendr_dismiss_refund', admin_url( 'admin-post.php' ) );
 		$nonce  = false;
 		foreach ( $lines as $i => $line ) {
@@ -942,7 +942,7 @@ final class Tendr_Refunds {
 					$nonce = true;
 				}
 				echo ' <button type="submit" class="button button-small" formmethod="post" formaction="' . esc_url( $action ) . '" name="tendr_dismiss_refund" value="' . esc_attr( $dismiss[ $i ] ) . '">'
-					. esc_html__( 'Dismiss', 'tendr' ) . '</button>';
+					. esc_html__( 'Dismiss', 'tendr-pay-with-crypto' ) . '</button>';
 			}
 			echo '</li>';
 		}
@@ -1042,18 +1042,18 @@ final class Tendr_Refunds {
 	private static function refusal_message( WP_Error $error ): string {
 		switch ( $error->get_error_code() ) {
 			case 'AMOUNT_EXCEEDS_REFUNDABLE':
-				return __( 'This is more than tendr can still refund for this payment (counting refunds already requested), or more than your tendr account holds to cover it with its network cost.', 'tendr' ) . ' ' . $error->get_error_message();
+				return __( 'This is more than tendr can still refund for this payment (counting refunds already requested), or more than your tendr account holds to cover it with its network cost.', 'tendr-pay-with-crypto' ) . ' ' . $error->get_error_message();
 			case 'PAYMENT_NOT_REFUNDABLE':
-				return __( 'tendr cannot refund this payment: only a settled payment can be refunded.', 'tendr' );
+				return __( 'tendr cannot refund this payment: only a settled payment can be refunded.', 'tendr-pay-with-crypto' );
 			case 'UNSUPPORTED_CURRENCY':
-				return __( 'tendr can refund this order only in US dollars or in the currency it was paid in.', 'tendr' );
+				return __( 'tendr can refund this order only in US dollars or in the currency it was paid in.', 'tendr-pay-with-crypto' );
 			case 'NOT_FOUND':
-				return __( 'tendr does not know this payment for this site. It may have been paid through another connection.', 'tendr' );
+				return __( 'tendr does not know this payment for this site. It may have been paid through another connection.', 'tendr-pay-with-crypto' );
 			case 'tendr_not_connected':
 				return $error->get_error_message();
 			default:
 				/* translators: %s: error message from tendr. */
-				return sprintf( __( 'tendr refused the refund: %s', 'tendr' ), $error->get_error_message() );
+				return sprintf( __( 'tendr refused the refund: %s', 'tendr-pay-with-crypto' ), $error->get_error_message() );
 		}
 	}
 }

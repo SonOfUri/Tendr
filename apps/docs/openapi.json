@@ -1,0 +1,2106 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Tendr merchant API",
+    "version": "1.0.0",
+    "description": "Merchant integration endpoints. The secret key selects store and test/live mode. Dashboard, invoice-owner and AI management routes require user sessions and are documented separately. Source-reviewed against the implementation on 2026-11-10."
+  },
+  "servers": [
+    {
+      "url": "https://api.usetendr.tech",
+      "description": "Hosted API; use a tdr_test_ key while developing"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Server-side tdr_test_ or tdr_live_ secret API key. Never put it in a storefront bundle."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Machine-readable error code."
+              },
+              "message": {
+                "type": "string",
+                "description": "Explanation."
+              },
+              "requestId": {
+                "type": "string",
+                "description": "Support correlation ID."
+              },
+              "details": {
+                "description": "Optional structured details."
+              }
+            },
+            "required": ["code", "message", "requestId"]
+          }
+        },
+        "required": ["error"]
+      },
+      "LineItem": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Item name.",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "unit_amount": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "image_url": {
+            "type": "string",
+            "description": "HTTPS image URL.",
+            "format": "uri"
+          },
+          "description": {
+            "type": "string",
+            "description": "Item description.",
+            "maxLength": 500
+          }
+        },
+        "required": ["name", "quantity", "unit_amount"]
+      },
+      "CreateSession": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "amount_currency": {
+            "type": "string",
+            "description": "USD, supported ISO currency, or the exact configured settlement asset ID.",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "external_ref": {
+            "type": "string",
+            "description": "Your order reference.",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "success_url": {
+            "type": "string",
+            "description": "HTTP(S) return URL. Returning here is not payment proof.",
+            "format": "uri",
+            "maxLength": 2048
+          },
+          "cancel_url": {
+            "type": "string",
+            "description": "HTTP(S) cancellation URL.",
+            "format": "uri",
+            "maxLength": 2048
+          },
+          "customer_email": {
+            "type": "string",
+            "description": "Customer email.",
+            "format": "email",
+            "maxLength": 254
+          },
+          "metadata": {
+            "type": "object",
+            "maxProperties": 50,
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "description": "At most 50 keys, each 1\u201340 characters."
+          },
+          "fee_payer": {
+            "type": "string",
+            "enum": ["merchant", "shopper"]
+          },
+          "gas_payer": {
+            "type": "string",
+            "enum": ["merchant", "shopper"]
+          },
+          "payment_link_id": {
+            "type": "string",
+            "description": "Link whose settings and use limit apply.",
+            "maxLength": 64
+          },
+          "theme_id": {
+            "type": "string",
+            "description": "Store theme. Live checkout uses a published version.",
+            "maxLength": 64
+          },
+          "line_items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/LineItem"
+            }
+          },
+          "expires_in": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 1800,
+            "default": 1800
+          },
+          "hook_data": {
+            "description": "Integrator contract stores only: non-null JSON, at most 1,024 serialized UTF-8 bytes.",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "array"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          }
+        },
+        "required": ["amount", "amount_currency", "external_ref", "success_url", "cancel_url"],
+        "additionalProperties": false
+      },
+      "CreatedSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Session ID."
+          },
+          "client_secret": {
+            "type": "string",
+            "description": "Returned at creation. Keep it out of logs."
+          },
+          "url": {
+            "type": "string",
+            "description": "Use this complete URL, including the #cs fragment.",
+            "format": "uri"
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "Expiry.",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["PENDING_DEPOSIT"]
+          }
+        },
+        "required": ["id", "client_secret", "url", "expires_at", "status"]
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Session ID."
+          },
+          "livemode": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "description": "Current session status. See payment verification guide."
+          },
+          "amount": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "amount_currency": {
+            "type": "string",
+            "description": "Normalized pricing currency."
+          },
+          "external_ref": {
+            "type": "string",
+            "description": "Your order reference.",
+            "nullable": true
+          },
+          "settlement_asset": {
+            "type": "string",
+            "description": "Exact settlement asset ID."
+          },
+          "settlement_chain": {
+            "type": "string",
+            "description": "Settlement chain."
+          },
+          "fee_payer": {
+            "type": "string",
+            "enum": ["merchant", "shopper"]
+          },
+          "gas_payer": {
+            "type": "string",
+            "enum": ["merchant", "shopper"]
+          },
+          "url": {
+            "type": "string",
+            "description": "Hosted URL without the original client secret.",
+            "format": "uri"
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "Expiry.",
+            "format": "date-time"
+          },
+          "payments": {
+            "type": "array",
+            "description": "Observed payments with refunds and settlement fields.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Payment ID."
+                },
+                "status": {
+                  "type": "string",
+                  "description": "Payment status."
+                },
+                "amount_received": {
+                  "type": "string",
+                  "description": "Received amount in token base units.",
+                  "nullable": true
+                },
+                "amount_out": {
+                  "type": "string",
+                  "description": "Settled amount in destination base units.",
+                  "nullable": true
+                },
+                "settled_at": {
+                  "type": "string",
+                  "description": "Settlement timestamp.",
+                  "format": "date-time",
+                  "nullable": true
+                },
+                "refunds": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "required": ["id", "status"],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": ["id", "livemode", "status", "amount", "amount_currency", "payments"],
+        "additionalProperties": true,
+        "description": "Core fields shown here; the read also includes FX, fee, metadata, line-item and refund details."
+      },
+      "RefundRequest": {
+        "type": "object",
+        "properties": {
+          "payment": {
+            "type": "string",
+            "description": "Exactly one of payment or session.",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "session": {
+            "type": "string",
+            "description": "Exactly one of payment or session.",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "amount": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d{1,30}(\\.\\d{1,18})?$"
+          },
+          "currency": {
+            "type": "string",
+            "description": "Defaults to USD; otherwise use the session's supported original currency.",
+            "maxLength": 16,
+            "default": "USD"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason.",
+            "maxLength": 500
+          },
+          "external_ref": {
+            "type": "string",
+            "description": "Stable identifier for this refund.",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": ["amount", "external_ref"],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["payment"],
+            "not": {
+              "required": ["session"]
+            }
+          },
+          {
+            "required": ["session"],
+            "not": {
+              "required": ["payment"]
+            }
+          }
+        ]
+      },
+      "Refund": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Refund ID."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "review", "sent", "cancelled"]
+          },
+          "amount_usd": {
+            "type": "string",
+            "description": "Requested USD amount, two decimal places."
+          },
+          "refund_external_ref": {
+            "type": "string",
+            "description": "Your refund reference.",
+            "nullable": true
+          },
+          "payment_id": {
+            "type": "string",
+            "description": "Payment ID."
+          },
+          "asset_id": {
+            "type": "string",
+            "description": "Return asset ID."
+          },
+          "asset_symbol": {
+            "type": "string",
+            "description": "Symbol when available.",
+            "nullable": true
+          },
+          "asset_decimals": {
+            "type": "integer",
+            "nullable": true
+          },
+          "amount": {
+            "type": "string",
+            "description": "Refund token base units."
+          },
+          "review_reason": {
+            "type": "string",
+            "description": "Public reason for review.",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer",
+            "description": "Unix seconds."
+          }
+        },
+        "required": ["id", "status", "amount_usd", "payment_id", "asset_id", "amount", "created"]
+      },
+      "CreatePaymentLink": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Plain text without wallet addresses or payment instructions.",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "description": {
+            "type": "string",
+            "description": "Plain text description.",
+            "maxLength": 500
+          },
+          "slug": {
+            "type": "string",
+            "description": "Immutable address component. Reserved slugs are rejected.",
+            "pattern": "^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$"
+          },
+          "amount_type": {
+            "type": "string",
+            "enum": ["fixed", "open"]
+          },
+          "amount": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "currency": {
+            "type": "string",
+            "description": "USD or supported ISO currency.",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "min_amount": {
+            "type": "string",
+            "description": "Open links only. Cannot lower the USD 1 equivalent minimum.",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "note": {
+            "type": "string",
+            "enum": ["off", "optional"],
+            "default": "optional"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "inactive"]
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "Future expiry.",
+            "format": "date-time"
+          },
+          "max_uses": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "fee_payer": {
+            "type": "string",
+            "enum": ["merchant", "shopper"]
+          },
+          "gas_payer": {
+            "type": "string",
+            "enum": ["merchant", "shopper"]
+          },
+          "gas_max_usd": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "theme_id": {
+            "type": "string",
+            "description": "Theme ID.",
+            "nullable": true
+          },
+          "settlement_asset": {
+            "type": "string",
+            "description": "Exact ID from settlement-options; null inherits the store default.",
+            "minLength": 8,
+            "maxLength": 128,
+            "pattern": "^nep141:[a-z0-9._-]+$",
+            "nullable": true
+          }
+        },
+        "required": ["title", "amount_type", "currency"],
+        "additionalProperties": false,
+        "description": "Fixed links require amount; open links must omit it. min_amount applies only to open links. Minimum USD 1 equivalent is checked using current FX."
+      },
+      "UpdatePaymentLink": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Plain text without wallet addresses or payment instructions.",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "description": {
+            "type": "string",
+            "description": "Plain text description.",
+            "maxLength": 500,
+            "nullable": true
+          },
+          "amount_type": {
+            "type": "string",
+            "enum": ["fixed", "open"]
+          },
+          "amount": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "currency": {
+            "type": "string",
+            "description": "USD or supported ISO currency.",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "min_amount": {
+            "type": "string",
+            "description": "Open links only. Cannot lower the USD 1 equivalent minimum.",
+            "pattern": "^\\d+(?:\\.\\d+)?$",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "enum": ["off", "optional"],
+            "default": "optional"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "inactive"]
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "Future expiry.",
+            "format": "date-time",
+            "nullable": true
+          },
+          "max_uses": {
+            "type": "integer",
+            "minimum": 1,
+            "nullable": true
+          },
+          "fee_payer": {
+            "type": "string",
+            "enum": ["merchant", "shopper"],
+            "nullable": true
+          },
+          "gas_payer": {
+            "type": "string",
+            "enum": ["merchant", "shopper"],
+            "nullable": true
+          },
+          "gas_max_usd": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$",
+            "nullable": true
+          },
+          "theme_id": {
+            "type": "string",
+            "description": "Theme ID.",
+            "nullable": true
+          },
+          "settlement_asset": {
+            "type": "string",
+            "description": "Exact ID from settlement-options; null inherits the store default.",
+            "minLength": 8,
+            "maxLength": 128,
+            "pattern": "^nep141:[a-z0-9._-]+$",
+            "nullable": true
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Omitted fields stay unchanged; nullable fields can be cleared. Changing a fixed link's currency requires its new amount. Slug is immutable."
+      },
+      "PaymentLink": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Plain text without wallet addresses or payment instructions.",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "description": {
+            "type": "string",
+            "description": "Plain text description.",
+            "maxLength": 500,
+            "nullable": true
+          },
+          "slug": {
+            "type": "string",
+            "description": "Immutable address component. Reserved slugs are rejected.",
+            "pattern": "^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$"
+          },
+          "amount_type": {
+            "type": "string",
+            "enum": ["fixed", "open"]
+          },
+          "amount": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$",
+            "nullable": true
+          },
+          "currency": {
+            "type": "string",
+            "description": "USD or supported ISO currency.",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "min_amount": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "enum": ["off", "optional"],
+            "default": "optional"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "inactive"]
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "Future expiry.",
+            "format": "date-time",
+            "nullable": true
+          },
+          "max_uses": {
+            "type": "integer",
+            "nullable": true
+          },
+          "fee_payer": {
+            "type": "string",
+            "enum": ["merchant", "shopper"],
+            "nullable": true
+          },
+          "gas_payer": {
+            "type": "string",
+            "enum": ["merchant", "shopper"],
+            "nullable": true
+          },
+          "gas_max_usd": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$",
+            "nullable": true
+          },
+          "theme_id": {
+            "type": "string",
+            "description": "Theme ID.",
+            "nullable": true
+          },
+          "settlement_asset": {
+            "type": "string",
+            "description": "Exact ID from settlement-options; null inherits the store default.",
+            "minLength": 8,
+            "maxLength": 128,
+            "pattern": "^nep141:[a-z0-9._-]+$",
+            "nullable": true
+          },
+          "id": {
+            "type": "string",
+            "description": "Payment link ID."
+          },
+          "object": {
+            "type": "string",
+            "enum": ["payment_link"]
+          },
+          "livemode": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string",
+            "description": "Shareable page URL; test links include ?mode=test.",
+            "format": "uri"
+          },
+          "qr_url": {
+            "type": "string",
+            "description": "QR image URL.",
+            "format": "uri"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "inactive",
+              "archived",
+              "expired",
+              "used_up",
+              "merchant_not_ready"
+            ]
+          },
+          "use_count": {
+            "type": "integer"
+          },
+          "settlement_symbol": {
+            "type": "string",
+            "description": "Asset symbol.",
+            "nullable": true
+          },
+          "settlement_chain": {
+            "type": "string",
+            "description": "Asset's source chain; funds remain in the store balance.",
+            "nullable": true
+          },
+          "total_paid": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "total_refunded": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "total_paid_usd": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "total_refunded_usd": {
+            "type": "string",
+            "description": "Decimal string; never a floating-point JSON number.",
+            "pattern": "^\\d+(?:\\.\\d+)?$"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "Created time.",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "Last update.",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "livemode",
+          "title",
+          "amount_type",
+          "currency",
+          "url",
+          "qr_url",
+          "status",
+          "archived",
+          "availability"
+        ],
+        "additionalProperties": true
+      },
+      "PaymentLinkPage": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentLink"
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        },
+        "required": ["data", "has_more"]
+      },
+      "SettlementOptions": {
+        "type": "object",
+        "properties": {
+          "livemode": {
+            "type": "boolean"
+          },
+          "tokens": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "asset": {
+                  "type": "string",
+                  "description": "Exact Intents asset ID."
+                },
+                "symbol": {
+                  "type": "string",
+                  "description": "Display symbol."
+                },
+                "chain": {
+                  "type": "string",
+                  "description": "Asset source chain."
+                },
+                "decimals": {
+                  "type": "integer"
+                }
+              },
+              "required": ["asset", "symbol", "chain", "decimals"]
+            }
+          },
+          "store_default": {
+            "type": "object",
+            "properties": {
+              "asset": {
+                "type": "string",
+                "description": "Default asset."
+              },
+              "symbol": {
+                "type": "string",
+                "description": "Symbol.",
+                "nullable": true
+              },
+              "chain": {
+                "type": "string",
+                "description": "Chain.",
+                "nullable": true
+              },
+              "payout_mode": {
+                "type": "string",
+                "enum": ["intents", "wallet"]
+              }
+            },
+            "required": ["asset", "symbol", "chain", "payout_mode"],
+            "nullable": true
+          }
+        },
+        "required": ["livemode", "tokens", "store_default"]
+      }
+    }
+  },
+  "paths": {
+    "/v1/checkout/sessions": {
+      "post": {
+        "operationId": "createSession",
+        "summary": "Create a checkout session",
+        "description": "Requires a secret API key with `sessions:write`. Store the session ID and use the complete returned URL. Settlement is derived from the store or payment link.",
+        "tags": ["Checkout sessions"],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "description": "Reuse for the same logical operation and request bytes."
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedSession"
+                },
+                "example": {
+                  "id": "ses_example",
+                  "client_secret": "ses_example_secret_example",
+                  "url": "https://pay.usetendr.tech/ses_example#cs=ses_example_secret_example",
+                  "expires_at": "2026-11-10T16:30:00.000Z",
+                  "status": "PENDING_DEPOSIT"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden or live actions unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in this store/mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSession"
+              },
+              "example": {
+                "amount": "25.00",
+                "amount_currency": "USD",
+                "external_ref": "order-1042",
+                "success_url": "https://shop.example/orders/1042",
+                "cancel_url": "https://shop.example/cart",
+                "line_items": [
+                  {
+                    "name": "Everyday T-shirt",
+                    "quantity": 1,
+                    "unit_amount": "25.00"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/checkout/sessions/{id}": {
+      "get": {
+        "operationId": "retrieveSession",
+        "summary": "Retrieve a checkout session",
+        "description": "Requires a secret API key with `sessions:read`. Returns payments and refunds for server-side reconciliation. The original client secret is not returned.",
+        "tags": ["Checkout sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ID belonging to the selected store and mode."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden or live actions unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in this store/mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/checkout/sessions/{id}/expire": {
+      "post": {
+        "operationId": "expireSession",
+        "summary": "Expire a checkout session",
+        "description": "Requires a secret API key with `sessions:write`. Does not reverse a deposit or cancel funds already in flight. Reconcile state conflicts before offering a replacement.",
+        "tags": ["Checkout sessions"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ID belonging to the selected store and mode."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "description": "Reuse for the same logical operation and request bytes."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden or live actions unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in this store/mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payment_links": {
+      "post": {
+        "operationId": "createPaymentLink",
+        "summary": "Create a payment link",
+        "description": "Requires a secret API key with `payment_links:write`. ",
+        "tags": ["Payment links"],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "description": "Reuse for the same logical operation and request bytes."
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden or live actions unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in this store/mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePaymentLink"
+              },
+              "example": {
+                "title": "Design deposit",
+                "amount_type": "fixed",
+                "amount": "250.00",
+                "currency": "USD",
+                "max_uses": 1
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listPaymentLinks",
+        "summary": "List payment links",
+        "description": "Requires a secret API key with `payment_links:read`. ",
+        "tags": ["Payment links"],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "starting_after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["active", "inactive"]
+            }
+          },
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentLinkPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden or live actions unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in this store/mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payment_links/settlement-options": {
+      "get": {
+        "operationId": "settlementOptions",
+        "summary": "List settlement assets",
+        "description": "Requires a secret API key with `payment_links:read`. Select exact asset IDs from this catalog. An asset's chain is not an external payout destination.",
+        "tags": ["Payment links"],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementOptions"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden or live actions unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in this store/mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payment_links/{id}": {
+      "get": {
+        "operationId": "retrievePaymentLink",
+        "summary": "Retrieve a payment link",
+        "description": "Requires a secret API key with `payment_links:read`. ",
+        "tags": ["Payment links"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ID belonging to the selected store and mode."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden or live actions unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in this store/mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updatePaymentLink",
+        "summary": "Update a payment link",
+        "description": "Requires a secret API key with `payment_links:write`. ",
+        "tags": ["Payment links"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ID belonging to the selected store and mode."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden or live actions unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in this store/mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePaymentLink"
+              },
+              "example": {
+                "status": "inactive"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "archivePaymentLink",
+        "summary": "Archive a payment link",
+        "description": "Requires a secret API key with `payment_links:write`. Archive preserves historical payments. Restore with PATCH archived:false.",
+        "tags": ["Payment links"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ID belonging to the selected store and mode."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden or live actions unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in this store/mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/refunds": {
+      "post": {
+        "operationId": "requestRefund",
+        "summary": "Request a refund",
+        "description": "Requires a secret API key with `refunds:write`. Exactly one of payment or session is required. This requests a refund; wallet authorization and confirmed execution are separate.",
+        "tags": ["Refunds"],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "description": "Reuse for the same logical operation and request bytes."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Existing refund for this external reference.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refund"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refund"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden or live actions unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in this store/mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundRequest"
+              },
+              "example": {
+                "session": "ses_01M72ZNWZ8XFA8TRHJK7E91299",
+                "amount": "5.00",
+                "currency": "USD",
+                "external_ref": "order-1042-refund-1",
+                "reason": "Returned item"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/refunds/{id}/cancel": {
+      "post": {
+        "operationId": "cancelRefund",
+        "summary": "Cancel a refund request",
+        "description": "Requires a secret API key with `refunds:write`. Only before a proposal exists; otherwise REFUND_HAS_PROPOSAL. Does not reverse an already sent refund.",
+        "tags": ["Refunds"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Resource ID belonging to the selected store and mode."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "description": "Reuse for the same logical operation and request bytes."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refund"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden or live actions unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in this store/mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

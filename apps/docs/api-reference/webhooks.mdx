@@ -3,7 +3,7 @@ title: Webhooks
 ---
 
 Tendr sends signed webhooks for checkout, refund, gas and hook events. Add endpoints in the dashboard or
-with `POST /v1/webhooks/endpoints`. Omit `events` to receive all of them. See
+with `POST /v1/webhooks/endpoints` using a dashboard session (a secret API key is not accepted). Omit `events` to receive all of them. See
 [Webhook signatures](/security/webhook-signatures) for verification.
 
 The body is `{ id, type, created, livemode, data }`. `data.external_ref` is your order id. A retry or a
@@ -14,41 +14,41 @@ retried with exponential backoff for 3 days, and you can resend any delivery fro
 
 Every delivery is a `POST` with these headers:
 
-| Header | Value |
-| --- | --- |
+| Header            | Value                                                                                                                                                                                                                                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Tendr-Signature` | `t=<unix seconds>,v1=<hex>`: HMAC-SHA256 of `<t>.<raw body>` with the endpoint's signing secret. For 24 hours after a secret rotation it carries a second `v1=` signed with the old secret; accept a match on any `v1`. The timestamp is the `t` in this header (there is no separate timestamp header). |
-| `Tendr-Event-Id` | The event `id`, the same on every retry and resend. |
-| `Content-Type` | `application/json` |
-| `User-Agent` | `Tendr-Webhooks/1.0` |
+| `Tendr-Event-Id`  | The event `id`, the same on every retry and resend.                                                                                                                                                                                                                                                      |
+| `Content-Type`    | `application/json`                                                                                                                                                                                                                                                                                       |
+| `User-Agent`      | `Tendr-Webhooks/1.0`                                                                                                                                                                                                                                                                                     |
 
 Verify the raw body before parsing it, and reject a `t` more than 5 minutes old. See
 [Webhook signatures](/security/webhook-signatures).
 
 ## Checkout, payment and refund events
 
-| Event | When |
-| --- | --- |
-| `checkout.session.expired` | A session expired without a payment. |
-| `payment.detected` | A deposit for the session was seen on chain. |
-| `payment.processing` | The deposit is being swapped and settled. |
-| `payment.succeeded` | The payment settled to your payout destination. Mark the order paid on this event. |
-| `payment.refunded` | The payment was refunded (see the `refund.*` events for each return). |
-| `payment.late` | A deposit arrived after the session ended. |
-| `payment.held` | The payment is held for review. |
-| `refund.pending` | A refund was created and waits to be sent. |
-| `refund.sent` | A refund was sent on chain. |
-| `refund.needs_address` | A refund needs a refund address before it can be sent. |
-| `refund.cancelled` | A refund's proposal was rejected by the signers or expired. No money moved. |
-| `refund.failed` | A refund failed when it executed on chain. No money moved. |
+| Event                      | When                                                                                         |
+| -------------------------- | -------------------------------------------------------------------------------------------- |
+| `checkout.session.expired` | A session expired without a payment.                                                         |
+| `payment.detected`         | A deposit for the session was seen on chain.                                                 |
+| `payment.processing`       | The deposit is being swapped and settled.                                                    |
+| `payment.succeeded`        | The payment settled to the configured settlement account. Mark the order paid on this event. |
+| `payment.refunded`         | The payment was refunded (see the `refund.*` events for each return).                        |
+| `payment.late`             | A deposit arrived after the session ended.                                                   |
+| `payment.held`             | The payment is held for review.                                                              |
+| `refund.pending`           | A refund was created and waits to be sent.                                                   |
+| `refund.sent`              | A refund was sent on chain.                                                                  |
+| `refund.needs_address`     | A refund needs a refund address before it can be sent.                                       |
+| `refund.cancelled`         | A refund's proposal was rejected by the signers or expired. No money moved.                  |
+| `refund.failed`            | A refund failed when it executed on chain. No money moved.                                   |
 
 ## Gasless and hook events
 
-| Event | When |
-| --- | --- |
-| `gas.budget_low` | Sponsored gas reserved plus spent crossed 80% of the month's budget. Once per calendar month (UTC) per mode. |
-| `gas.budget_exhausted` | A payment was not sponsored because the month's budget is used up. Once per month per mode. |
-| `hook.succeeded` | Your contract accepted the `onTendrDeposit` or `on_tendr_deposit` call. |
-| `hook.failed` | Tendr gave up calling your contract. Sent once per hook call. |
+| Event                  | When                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `gas.budget_low`       | Sponsored gas reserved plus spent crossed 80% of the month's budget. Once per calendar month (UTC) per mode. |
+| `gas.budget_exhausted` | A payment was not sponsored because the month's budget is used up. Once per month per mode.                  |
+| `hook.succeeded`       | Your contract accepted the `onTendrDeposit` or `on_tendr_deposit` call.                                      |
+| `hook.failed`          | Tendr gave up calling your contract. Sent once per hook call.                                                |
 
 `gas.budget_low` and `gas.budget_exhausted` carry `mode` (`test` or `live`), `month` (`YYYY-MM`),
 `budget_usd`, `reserved_usd`, `spent_usd` and `remaining_usd`. `gas.budget_exhausted` also carries
@@ -63,10 +63,10 @@ Verify the raw body before parsing it, and reject a `t` more than 5 minutes old.
 Every checkout, payment and refund event carries `data.payment_link_id` and `data.payer_note` next to
 `external_ref`. They are always present:
 
-| Key | Value |
-| --- | --- |
+| Key               | Value                                                                                          |
+| ----------------- | ---------------------------------------------------------------------------------------------- |
 | `payment_link_id` | The id of the [payment link](/payment-links/overview) the session was created from, or `null`. |
-| `payer_note` | The note the payer left on the link page (plain text, up to 280 characters), or `null`. |
+| `payer_note`      | The note the payer left on the link page (plain text, up to 280 characters), or `null`.        |
 
 Sessions made from a link's public page have no `external_ref` (it is `null`): match them by
 `payment_link_id` instead. Treat `payer_note` as untrusted text and escape it wherever you show it.

@@ -1,5 +1,36 @@
 ---
-title: E-commerce
+title: 'Choose an integration'
+description: 'Select the TypeScript SDK, HTTP API, payment links, WooCommerce or the Shopify pilot.'
 ---
 
-Use Tendr for product checkout. Confirm fulfillment only after `payment.settled` or a `SETTLED` payment status from the API.
+<CardGroup cols={2}>
+  <Card title="TypeScript and JavaScript" icon="code" href="/sdks/typescript">
+    Install @usetendr/sdk from npm for Node.js 22+ servers. Includes types and webhook verification.
+  </Card>
+  <Card title="Hosted checkout" icon="code" href="/quickstart">
+    Create sessions from your server and confirm orders through webhooks.
+  </Card>
+  <Card title="Payment links" icon="link" href="/payment-links/overview">
+    Share a hosted page or QR code without a checkout integration.
+  </Card>
+  <Card title="WooCommerce" icon="store" href="/integrations/woocommerce">
+    Connect WordPress, accept payments and reconcile refunds.
+  </Card>
+  <Card title="Shopify pilot" icon="bag-shopping" href="/integrations/shopify">
+    Understand the offsite connector and approval requirements.
+  </Card>
+  <Card title="HTTP API" icon="book" href="/api-reference/overview">
+    Integrate from another server language with the same hosted endpoints.
+  </Card>
+</CardGroup>
+
+For a custom Node.js store, use the SDK on your server to create a session, then redirect the
+customer to its returned URL or open the [checkout embed](/payments/embedded-checkout).
+The browser embed is separate from the server SDK. WooCommerce merchants can install the plugin
+directly; they do not need an npm package.
+
+## Shared integration rules
+
+Price orders on your server. Preserve the returned session URL and secret fragment. Confirm fulfillment only after verified `payment.succeeded` and server-side corroboration. There is no `payment.settled` webhook.
+
+A dedicated store wallet authorizes outgoing funds. Installing a plugin does not grant it your wallet passkey.

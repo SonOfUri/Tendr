@@ -1,72 +1,264 @@
 ---
 title: TypeScript SDK
+description: Typed server-side checkout, payment links, refunds, themes, gas settings and webhook verification.
 ---
 
-```ts
-import { TendrClient } from '@tendr/sdk';
-import { verifyWebhookSignature } from '@tendr/sdk/webhook';
+[`@usetendr/sdk`](https://www.npmjs.com/package/@usetendr/sdk) is available on npm under the MIT license.
+The current release is `0.2.0`.
 
-const client = new TendrClient({
-  baseUrl: 'http://localhost:4000',
-  apiKey: process.env.TENDR_SECRET_KEY, // tdr_test_… or tdr_live_…
-});
+## Install
+
+Requires Node.js 22 or later. The package includes compiled JavaScript and TypeScript declarations;
+no Tendr repository checkout or build is needed.
+
+```sh
+npm install @usetendr/sdk
 ```
 
-The client currently handles authentication, `Idempotency-Key` headers, timeouts and typed errors (`TendrApiError`). Endpoint methods so far: `client.paymentLinks`, `client.themes`, `client.themeAssets` and `client.checkoutSessions.create` (below). Quotes and payments are coming in the checkout project.
+ES modules and CommonJS are supported. The package has no runtime dependencies.
+
+<CodeGroup>
+
+```typescript ES modules
+import { TendrClient } from '@usetendr/sdk';
+import { constructWebhookEvent } from '@usetendr/sdk/webhook';
+```
+
+```javascript CommonJS
+const { TendrClient } = require('@usetendr/sdk');
+const { constructWebhookEvent } = require('@usetendr/sdk/webhook');
+```
+
+</CodeGroup>
+
+Use the SDK in a Node.js server route, background job or backend service. For Next.js, keep it in
+server code and use the Node.js runtime for webhook handlers. The package does not need separate
+type definitions or a build from the Tendr repository.
+
+## Migrating from tendr-sdk
+
+If you installed `tendr-sdk`, replace it with the official organization package:
+
+```sh
+npm uninstall tendr-sdk
+npm install @usetendr/sdk
+```
+
+Update imports to `@usetendr/sdk` and `@usetendr/sdk/webhook`. Version `0.2.0` uses the same API,
+credentials and response types as the earlier `tendr-sdk@0.2.0` release.
+
+Older examples may refer to the unpublished workspace name `@tendr/sdk`. Use `@usetendr/sdk` for
+public npm installations and imports.
+
+## Create and retrieve a checkout
+
+```typescript
+import { TendrClient } from '@usetendr/sdk';
+
+const apiKey = process.env.TENDR_SECRET_KEY;
+if (!apiKey) throw new Error('Set TENDR_SECRET_KEY on your server');
+const tendr = new TendrClient({ apiKey });
+
+const created = await tendr.checkoutSessions.create(
+  {
+    amount: '25.00',
+    amount_currency: 'USD',
+    external_ref: 'order-1042',
+    success_url: 'https://shop.example/orders/1042',
+    cancel_url: 'https://shop.example/cart',
+    line_items: [{ name: 'T-shirt', quantity: 1, unit_amount: '25.00' }],
+  },
+  { idempotencyKey: 'order-1042-checkout-1' },
+);
+
+// Save created.id and the COMPLETE created.url, then redirect the customer.
+const session = await tendr.checkoutSessions.retrieve(created.id);
+```
+
+The client defaults to `https://api.usetendr.tech`. Your secret key selects the store and test/live
+mode. Keep it server-side; the SDK refuses browser construction. For a browser checkout, use the
+[embed](/payments/embedded-checkout).
+
+Creation and retrieval return different typed responses. Only creation returns `client_secret` and
+the URL's `#cs=…` fragment. Save that complete URL if you need to reopen checkout. Retrieval returns
+status, payments, refunds, fees and settlement details, but cannot restore the secret.
+
+Price orders on your server. Amounts and token base units are strings. Confirm fulfillment from
+verified `payment.succeeded` webhooks and a matching server-side session read.
+
+## Client configuration
+
+| Option      | Purpose                                                          | Default                     |
+| ----------- | ---------------------------------------------------------------- | --------------------------- |
+| `apiKey`    | Required server secret key: `tdr_test_…` or `tdr_live_…`         | None                        |
+| `baseUrl`   | API origin without `/v1`; use HTTPS                              | `https://api.usetendr.tech` |
+| `timeoutMs` | Positive integer deadline covering the request and response body | `15000`                     |
+| `fetch`     | Optional compatible fetch implementation, including test doubles | Node.js `fetch`             |
+
+The package does not load environment files. Read `TENDR_SECRET_KEY` through your application's
+server environment, as in the example above. Test and live use the same base URL. A Test key now uses Tidepool: activate the store’s dedicated Test wallet and fund a customer testnet wallet before creating a checkout. The SDK methods and webhook verification stay the same. See [Test payments](/testing).
+
+To check the key's store, mode and permissions without creating a payment:
+
+```typescript
+const identity = await tendr.ping();
+console.log(identity.merchantId, identity.livemode, identity.scopes);
+```
+
+Changing to a live key does not activate a wallet or configure settlement. Complete the
+[production checklist](/security/production-checklist) before accepting live payments.
+
+## Available methods
+
+| Resource           | Methods                                                                                                                                            |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client             | `ping`                                                                                                                                             |
+| `checkoutSessions` | `create`, `retrieve`, `expire`                                                                                                                     |
+| `refunds`          | `create`, `cancel`                                                                                                                                 |
+| `paymentLinks`     | `create`, `list`, `iterate`, `retrieve`, `update`, `archive`, `settlementOptions`                                                                  |
+| `themes`           | `presets`, `list`, `iterate`, `create`, `retrieve`, `update`, `delete`, `publish`, `setDefault`, `validate`, `preview`, `fromWebsite`, `fromStore` |
+| `themeAssets`      | `upload`, `list`, `delete`                                                                                                                         |
+| `gasPolicy`        | `retrieve`, `usage`, `update`                                                                                                                      |
+| `gasSponsorships`  | `list`, `iterate`                                                                                                                                  |
+| `hookCalls`        | `list`, `iterate`, `resend`                                                                                                                        |
+
+## Permissions and boundaries
+
+Create an [API key](/security/api-keys) with only the required scopes:
+
+| Operation                                            | Required scope        |
+| ---------------------------------------------------- | --------------------- |
+| Create or expire a checkout                          | `sessions:write`      |
+| Retrieve a checkout and its payments/refunds         | `sessions:read`       |
+| Create or cancel a refund request                    | `refunds:write`       |
+| Read links or settlement options                     | `payment_links:read`  |
+| Create, update or archive links                      | `payment_links:write` |
+| Read themes or assets                                | `themes:read`         |
+| Change themes or assets, validate or preview themes  | `themes:write`        |
+| Read gas sponsorships or integrator hook calls       | `payments:read`       |
+| Change gas policy or resend a failed integrator hook | `sessions:write`      |
+| Read gas policy/usage or check identity with `ping`  | Any valid secret key  |
+
+Theme publishing and default selection require live mode. Connected-site keys cannot change gas
+policy or access integrator hooks. `hookCalls.resend(paymentId)` retries a failed contract hook
+using a **payment ID** and may spend gas; it does not resend a webhook or repeat a payment.
+
+Dashboard-only APIs, invoices, AI, key/webhook management and wallet signing/recovery use different
+credentials and are outside this SDK. A secret key does not replace a wallet passkey. Keys configured
+to require optional HMAC request signing are not supported by this release.
 
 ## Payment links
 
-```ts
-const link = await client.paymentLinks.create(
-  { title: 'Logo deposit', amount_type: 'fixed', amount: '250.00', currency: 'USD', max_uses: 1 },
-  { idempotencyKey: 'invoice-114' },
+```typescript
+const settlement = await tendr.paymentLinks.settlementOptions();
+const token = settlement.tokens.find((t) => t.symbol === 'USDC' && t.chain === 'base');
+if (!token) throw new Error('Choose a supported token');
+
+const link = await tendr.paymentLinks.create(
+  {
+    title: 'Design deposit',
+    amount_type: 'fixed',
+    amount: '250.00',
+    currency: 'USD',
+    settlement_asset: token.asset,
+  },
+  { idempotencyKey: 'design-deposit-1042' },
 );
-console.log(link.url, link.qr_url);
 
-const page = await client.paymentLinks.list({ status: 'active', limit: 20 });
-await client.paymentLinks.update(link.id, { status: 'inactive', max_uses: null }); // null clears
-await client.paymentLinks.archive(link.id);
+await tendr.paymentLinks.update(link.id, { status: 'inactive' });
 ```
 
-`create`, `list`, `retrieve`, `update` and `archive` map to the
-[payment links API](/api-reference/payment-links) and throw `TendrApiError` with its error codes
-(`LINK_NOT_SUPPORTED`, `AMOUNT_TOO_LOW`, and so on). The key needs `payment_links:read` or
-`payment_links:write`.
+The settlement override credits the selected asset to the same Tendr wallet. Omit it to inherit the
+store default. It is not an external payout address.
 
-## Checkout themes
+## Refund requests
 
-```ts
-const theme = await client.themes.create({ name: 'Spring', from: { preset: 'fashion' } });
+```typescript
+const refund = await tendr.refunds.create(
+  { session: created.id, amount: '5.00', currency: 'USD', external_ref: 'refund-1042-1' },
+  { idempotencyKey: 'refund-1042-1' },
+);
+```
 
-const logo = await client.themeAssets.upload({
-  kind: 'logo',
-  file: new Blob([await readFile('logo.png')], { type: 'image/png' }),
-  filename: 'logo.png',
-});
+Supply exactly one of `session` or `payment`. This creates a refund request; wallet authorization and
+confirmed execution are separate. Follow its progress through session refunds or signed webhooks.
+`refunds.cancel` is only available before a proposal exists. See [Refunds](/payments/refunds).
 
-const { valid, problems } = await client.themes.validate(theme.draft);
-const { url } = await client.themes.preview(theme.id, {
-  sample: 'checkout',
-  scheme: 'dark',
-  viewport: 'phone',
-});
+## Pagination
 
-await client.themes.publish(theme.id); // needs a live key
-await client.themes.setDefault(theme.id);
+```typescript
+const page = await tendr.paymentLinks.list({ status: 'active', limit: 20 });
+for await (const link of tendr.paymentLinks.iterate({ status: 'active', limit: 20 })) {
+  console.log(link.id, link.title);
+}
+```
 
-await client.checkoutSessions.create({
-  amount: '35.00',
-  amount_currency: 'USD',
-  external_ref: 'order-1042',
-  success_url: 'https://shop.example/thanks',
-  cancel_url: 'https://shop.example/cart',
-  theme_id: theme.id,
-  line_items: [{ name: 'Linen tee', quantity: 2, unit_amount: '12.50' }],
+Iterators fetch pages as you consume them. Breaking the loop stops further requests. List methods
+preserve the API's response shape, including `has_more` and any `next_cursor`.
+
+## Request options and errors
+
+All methods accept a final `{ signal, timeoutMs }` argument. The default timeout is 15 seconds and
+includes reading the response body. POST methods also accept `idempotencyKey`.
+
+```typescript
+import { TendrApiError, TendrTimeoutError } from '@usetendr/sdk';
+
+try {
+  await tendr.checkoutSessions.retrieve(created.id, { timeoutMs: 5_000 });
+} catch (error) {
+  if (error instanceof TendrApiError) {
+    console.error(error.status, error.code, error.requestId);
+  } else if (error instanceof TendrTimeoutError) {
+    // Reconcile the operation before retrying a write.
+  } else {
+    throw error;
+  }
+}
+```
+
+The SDK never automatically retries or creates idempotency keys. Save one key per operation and reuse
+it with identical input when retrying. Cancellation or timeout does not prove a write failed.
+POST replay expires after 24 hours; PATCH, PUT and DELETE are outside that replay layer. See
+[Idempotency](/concepts/idempotency). Multipart upload boundaries can change between calls, so reconcile
+the asset list before retrying an upload.
+
+`TendrApiError` preserves HTTP status, API code, request ID, details and any `retryAfter` header.
+`TendrConnectionError` reports network failures; `TendrTimeoutError` extends it.
+`TendrAbortError` reports caller cancellation, and `TendrResponseError` reports invalid successful
+JSON or a pagination cursor that does not advance. Redirects are not followed.
+
+## Verify a webhook
+
+```typescript
+import { constructWebhookEvent } from '@usetendr/sdk/webhook';
+
+const event = constructWebhookEvent({
+  payload: rawBody, // string or Uint8Array/Buffer before JSON parsing
+  signatureHeader,
+  secret: endpointSigningSecret,
 });
 ```
 
-`client.themes` has `presets`, `list`, `create`, `retrieve`, `update`, `delete`, `publish`, `setDefault`, `validate`, `preview`, `fromWebsite` and `fromStore`. `client.themeAssets` has `upload` (multipart), `list` and `delete`. Errors such as `THEME_INVALID` carry `details.problems`. See the [themes API](/api-reference/themes). The key needs `themes:read` or `themes:write`.
+Verification checks the signature and timestamp before parsing the event envelope. Invalid
+signatures/envelopes throw `TendrWebhookError`. `verifyWebhookSignature` is available when you only
+need a boolean. Both accept rotation signatures and default to a five-minute clock tolerance.
 
-## Webhooks
+This subpath uses Node crypto and must stay server-side. Validate event-specific `data` fields,
+deduplicate event IDs durably, and match the stored order, mode, amount and settled payment through
+`checkoutSessions.retrieve`. The package includes a framework-neutral webhook handler example.
+See [Webhook signatures](/security/webhook-signatures).
 
-Webhook verification is Node-only — do not import `@tendr/sdk/webhook` into browser bundles.
+## Complete integration examples
+
+The npm package includes two server examples in `node_modules/@usetendr/sdk/examples`:
+
+- [`checkout.ts`](https://github.com/SonOfUri/Tendr/blob/usetendr-sdk-v0.2.0/packages/sdk/examples/checkout.ts)
+  creates a checkout from a server-priced order with a stable operation key.
+- [`webhook.ts`](https://github.com/SonOfUri/Tendr/blob/usetendr-sdk-v0.2.0/packages/sdk/examples/webhook.ts)
+  verifies raw request bytes, checks mode, reconciles a settled USD order and delegates durable
+  deduplication to your database adapter.
+
+Adapt the order storage and fulfillment transaction to your application. The webhook example uses
+USD orders deliberately; integrations priced in other currencies must also reconcile the stored
+FX information. See [Settlement](/payments/settlement).

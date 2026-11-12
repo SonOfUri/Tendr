@@ -10,6 +10,17 @@
  */
 class OrderStatusTest extends Tendr_Test_Case {
 
+	public function test_transaction_explorers_keep_tidepool_networks_separate_from_live(): void {
+		$hash = '0x' . str_repeat( 'a', 64 );
+		$this->assertSame( 'https://sepolia.basescan.org/tx/' . $hash, Tendr_Order_Sync::explorer_url( 'base', $hash, false ) );
+		$this->assertSame( 'https://basescan.org/tx/' . $hash, Tendr_Order_Sync::explorer_url( 'base', $hash, true ) );
+		$this->assertSame( 'https://explorer.solana.com/tx/abc123?cluster=devnet', Tendr_Order_Sync::explorer_url( 'sol', 'abc123', false ) );
+		$this->assertSame( 'https://solscan.io/tx/abc123', Tendr_Order_Sync::explorer_url( 'sol', 'abc123', true ) );
+		$this->assertSame( 'https://testnet.nearblocks.io/txns/abc123', Tendr_Order_Sync::explorer_url( 'near', 'abc123', false ) );
+		$this->assertNull( Tendr_Order_Sync::explorer_url( 'eth', $hash, false ) );
+		$this->assertNull( Tendr_Order_Sync::explorer_url( 'base', '../bad?hash', false ) );
+	}
+
 	/**
 	 * A pending order.
 	 *

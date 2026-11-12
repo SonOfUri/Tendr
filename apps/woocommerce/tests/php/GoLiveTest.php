@@ -164,7 +164,7 @@ class GoLiveTest extends Tendr_Test_Case {
 		$this->assertStringNotContainsString( 'Add a payout method', $html );
 	}
 
-	public function test_nudges_persist_and_the_page_reads_the_api_once_per_minute(): void {
+	public function test_nudges_persist_and_the_page_caches_readiness_separately_per_mode(): void {
 		$this->status( false, array(), array( self::nudge() ) );
 		$calls = fn( string $path ) => count( array_filter( $this->requests, static fn( $r ) => str_ends_with( (string) wp_parse_url( $r['url'], PHP_URL_PATH ), $path ) ) );
 
@@ -173,17 +173,17 @@ class GoLiveTest extends Tendr_Test_Case {
 
 		$this->assertStringContainsString( 'lock you out', $first, 'nudges show without any switch attempt' );
 		$this->assertStringContainsString( 'lock you out', $second, 'and keep showing' );
-		$this->assertSame( 1, $calls( '/v1/connect/status' ), 'status is cached' );
+		$this->assertSame( 2, $calls( '/v1/connect/status' ), 'Test and Live status are each fetched once and cached' );
 		$this->assertSame( 1, $calls( '/v1/settings/checkout' ), 'settings are cached' );
 		$request = $this->requests[0];
 		$this->assertSame( 3, $request['args']['timeout'], 'a cold cache waits at most 3 s' );
 
 		// A switch attempt and a save refresh them.
 		Tendr_Settings::set_mode( 'live' );
-		$this->assertSame( 2, $calls( '/v1/connect/status' ) );
+		$this->assertSame( 3, $calls( '/v1/connect/status' ) );
 		Tendr_Settings::save_settings( array( 'default_fee_payer' => 'shopper' ) );
 		$this->assertMatchesRegularExpression( '/<option value="shopper" selected/', Tendr_Settings::render() );
-		$this->assertSame( 2, $calls( '/v1/connect/status' ) );
+		$this->assertSame( 3, $calls( '/v1/connect/status' ) );
 	}
 
 	public function test_go_live_stays_in_test_mode_when_status_cannot_be_read(): void {
@@ -287,6 +287,30 @@ class GoLiveTest extends Tendr_Test_Case {
 	}
 
 	// ---------------------------------------------------------------- settings.
+
+	public function test_test_wallet_readiness_uses_test_credentials_and_a_separate_cache(): void {
+		$this->status( true );
+		$this->assertTrue( Tendr_Settings::connect_status( true )['ready'] );
+		$this->status(
+			false,
+			array(
+				array(
+					'code'    => 'test_account_pending',
+					'message' => 'Create and activate your Tidepool Test wallet',
+					'href'    => Tendr_Plugin::app_base() . '/dashboard/wallet',
+				),
+			)
+		);
+		$this->assertFalse( Tendr_Settings::connect_status( false, 'test' )['ready'] );
+		$this->assertTrue( Tendr_Settings::connect_status()['ready'] );
+		$last = end( $this->requests );
+		$this->assertSame( 'Bearer ' . $this->issued['test']['secret_key'], $last['args']['headers']['Authorization'] );
+		$html = Tendr_Settings::render();
+		$this->assertStringContainsString( 'Create and activate your Tidepool Test wallet', $html );
+		$this->assertStringContainsString( 'https://app.usetidepool.tech/faucet', $html );
+		$this->assertStringNotContainsString( 'Payments are simulated', $html );
+		$this->assertStringNotContainsString( 'corner-a.tendr.testnet', $html, 'Connect address snapshots may be stale after Test wallet creation' );
+	}
 
 	public function test_settings_save_calls_patch_and_shows_confirm_inbox_notice(): void {
 		$html = Tendr_Settings::render();

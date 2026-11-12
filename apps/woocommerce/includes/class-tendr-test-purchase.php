@@ -40,13 +40,18 @@ final class Tendr_Test_Purchase {
 	 */
 	public static function create() {
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {
-			return new WP_Error( 'tendr_forbidden', __( 'You are not allowed to do that.', 'tendr' ) );
+			return new WP_Error( 'tendr_forbidden', __( 'You are not allowed to do that.', 'tendr-pay-with-crypto' ) );
 		}
 		if ( ! Tendr_Connect::is_connected() ) {
-			return new WP_Error( 'tendr_not_connected', __( 'Connect this site to tendr first.', 'tendr' ) );
+			return new WP_Error( 'tendr_not_connected', __( 'Connect this site to tendr first.', 'tendr-pay-with-crypto' ) );
 		}
 		if ( 'test' !== Tendr_Connect::mode() ) {
-			return new WP_Error( 'tendr_live_mode', __( 'Test purchases are made in test mode only. Switch to test mode first.', 'tendr' ) );
+			return new WP_Error( 'tendr_live_mode', __( 'Test purchases are made in test mode only. Switch to test mode first.', 'tendr-pay-with-crypto' ) );
+		}
+
+		$status = Tendr_Settings::connect_status( true, 'test' );
+		if ( null !== $status['error'] || ! $status['ready'] || array() !== $status['blocking'] ) {
+			return new WP_Error( 'tendr_test_not_ready', __( 'Your Test wallet is not ready or could not be checked. Open Tendr settings, follow the Test wallet setup links, then retry.', 'tendr-pay-with-crypto' ) );
 		}
 
 		$user  = wp_get_current_user();
@@ -59,9 +64,10 @@ final class Tendr_Test_Purchase {
 		if ( is_wp_error( $order ) ) {
 			return $order;
 		}
-		$order->set_currency( get_woocommerce_currency() );
+		// The checkout minimum is 1 USD; 1 unit of the store currency can fall below it.
+		$order->set_currency( 'USD' );
 		$fee = new WC_Order_Item_Fee();
-		$fee->set_name( __( 'Tendr test payment', 'tendr' ) );
+		$fee->set_name( __( 'Tendr test payment', 'tendr-pay-with-crypto' ) );
 		$fee->set_amount( '1.00' );
 		$fee->set_total( '1.00' );
 		$fee->set_tax_status( 'none' );
@@ -70,12 +76,12 @@ final class Tendr_Test_Purchase {
 			$order->set_billing_email( $user->user_email );
 		}
 		$order->set_payment_method( Tendr_Gateway::ID );
-		$order->set_payment_method_title( __( 'Pay with crypto', 'tendr' ) );
+		$order->set_payment_method_title( __( 'Pay with crypto', 'tendr-pay-with-crypto' ) );
 		$order->update_meta_data( self::META, 'yes' );
 		$order->calculate_totals( false );
 		$order->set_status( 'pending' );
 		$order->save();
-		$order->add_order_note( __( 'tendr test purchase: no real money is involved. Pay it with the test panel in the tendr window.', 'tendr' ) );
+		$order->add_order_note( __( 'Tendr Test purchase: pay with Tidepool test USDC or USDT on the network shown in checkout. These tokens have no monetary value; the paying wallet needs test network fees.', 'tendr-pay-with-crypto' ) );
 		return $order;
 	}
 
@@ -95,7 +101,7 @@ final class Tendr_Test_Purchase {
 	public static function handle_request(): void {
 		$nonce = isset( $_POST['tendr_test_purchase_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['tendr_test_purchase_nonce'] ) ) : '';
 		if ( ! wp_verify_nonce( $nonce, self::NONCE ) || ! current_user_can( 'manage_woocommerce' ) ) {
-			wp_die( esc_html__( 'You are not allowed to do that.', 'tendr' ), 403 );
+			wp_die( esc_html__( 'You are not allowed to do that.', 'tendr-pay-with-crypto' ), 403 );
 		}
 		$order = self::create();
 		if ( is_wp_error( $order ) ) {
@@ -124,7 +130,7 @@ final class Tendr_Test_Purchase {
 	 */
 	public static function render_column( $column, $order ): void {
 		if ( 'order_number' === $column && $order instanceof WC_Order && self::is_test( $order ) ) {
-			echo ' <mark class="order-status tendr-test-badge" style="margin-left:4px;"><span>' . esc_html__( 'Test', 'tendr' ) . '</span></mark>';
+			echo ' <mark class="order-status tendr-test-badge" style="margin-left:4px;"><span>' . esc_html__( 'Test', 'tendr-pay-with-crypto' ) . '</span></mark>';
 		}
 	}
 
@@ -151,7 +157,7 @@ final class Tendr_Test_Purchase {
 	 */
 	public static function add_bulk_action( $actions ): array {
 		$actions                      = is_array( $actions ) ? $actions : array();
-		$actions[ self::BULK_ACTION ] = __( 'Delete tendr test orders', 'tendr' );
+		$actions[ self::BULK_ACTION ] = __( 'Delete tendr test orders', 'tendr-pay-with-crypto' );
 		return $actions;
 	}
 
@@ -210,7 +216,7 @@ final class Tendr_Test_Purchase {
 		echo '<div class="notice notice-success is-dismissible"><p>' . esc_html(
 			sprintf(
 				/* translators: %d: number of orders. */
-				_n( '%d tendr test order deleted.', '%d tendr test orders deleted.', $count, 'tendr' ),
+				_n( '%d tendr test order deleted.', '%d tendr test orders deleted.', $count, 'tendr-pay-with-crypto' ),
 				$count
 			)
 		) . '</p></div>';

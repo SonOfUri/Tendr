@@ -1,0 +1,27 @@
+---
+title: 'Withdraw funds'
+description: 'Review the network, address and quote, then approve with your wallet passkey.'
+---
+
+Withdrawals send funds from your store's Intents balance to a supported external wallet.
+
+1. Choose the asset to spend, amount, receiving token/network and destination address.
+2. Review the exact address, input, estimated output, minimum output and expiry. Quotes can include provider/network fees.
+3. Approve the stored payout payload with the dedicated wallet passkey.
+4. Keep the payout ID and follow its state until the outcome is known.
+
+Native payout API amounts are integer strings in token base units. Do not convert through JavaScript floating point.
+
+| State                     | Meaning                                                                       |
+| ------------------------- | ----------------------------------------------------------------------------- |
+| `awaiting_signature`      | Quote prepared; wallet approval needed                                        |
+| `submitting`, `submitted` | Authorized transfer being submitted or reconciled                             |
+| `completed`               | Payout confirmed; Tidepool Test additionally verifies final on-chain receipts |
+| `refunded`                | Provider reports input returned to the store's Intents balance                |
+| `failed`, `expired`       | Follow the returned failure/expiry and review instructions                    |
+
+A timeout is not a reason to create a replacement payout. The backend can reconcile or resubmit the same signed intent. No cancellation endpoint is offered for an already authorized native payout.
+
+An intent hash is not a destination-chain transaction hash. For Live withdrawals, completion reflects the provider result, not an additional independent destination-chain proof. Tidepool Test withdrawals additionally require finalized destination evidence for the correct token, recipient and minimum amount, plus verifier execution matching the signed wallet debit and nonce.
+
+See [Dashboard API boundaries](/api-reference/dashboard) for authenticated payout routes.

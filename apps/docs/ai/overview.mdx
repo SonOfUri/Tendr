@@ -1,0 +1,37 @@
+---
+title: 'Tendr AI'
+description: 'Explain checkout facts, compare routes, understand metrics and draft themes.'
+---
+
+Tendr integrates NEAR AI Cloud on the server. Browsers call Tendr; model credentials are never sent to customers.
+
+| Feature            | Result                                 | Human control                         |
+| ------------------ | -------------------------------------- | ------------------------------------- |
+| Checkout assistant | Answers grounded in checkout facts     | Customer chooses and approves payment |
+| Route comparison   | Quote previews for supported assets    | Obtain a fresh executable quote       |
+| Merchant insights  | Explanations of real aggregate metrics | Merchant reviews the report           |
+| Theme generation   | Unpublished theme draft                | Merchant previews and publishes       |
+
+## Checkout help
+
+Questions accept up to 1,000 characters. Responses are ordinary JSON with an answer and facts, not a streaming conversation. There is no server-side chat-history field.
+
+The payment API and signed webhook remain authoritative. An assistant answer cannot approve or verify money movement.
+
+## Route recommendations
+
+Compare one to four distinct supported assets. Results identify recommended, cheapest and fastest assets when enough information exists.
+
+“Cheapest” compares quoted input USD **excluding wallet gas**. Missing balances or ETAs mean unknown. Previews expire within 30 seconds and allocate no deposit address. Request a fresh ordinary quote after route selection.
+
+## Merchant insights
+
+Choose one to 90 days. Metrics cover created, quoted, deposited, settled, expired-without-deposit and refunded sessions. These are session counts, not visitor analytics. Totals remain separated by order currency and are not net wallet balances or accounting revenue.
+
+Null conversion rates mean there is no calculation basis. Metric reads work without a model key; keep metrics visible if explanations are unavailable.
+
+## Theme generation
+
+Give the draft a name and describe its appearance. Tendr validates the generated document. It stays unpublished until you explicitly preview and publish it.
+
+AI does not move funds, sign withdrawals or automatically pay invoices. See the [AI API](/api-reference/ai).

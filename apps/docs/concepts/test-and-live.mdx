@@ -1,0 +1,39 @@
+---
+title: Test and live modes
+description: Keep testnet tokens and live funds separate throughout your integration.
+---
+
+Both modes use the same API base URL. Your credential selects the mode.
+
+| Mode | Secret key prefix | Payment behavior                                                                     |
+| ---- | ----------------- | ------------------------------------------------------------------------------------ |
+| Test | `tdr_test_`       | Tidepool testnet deposits, settlement and withdrawals; tokens have no monetary value |
+| Live | `tdr_live_`       | Real provider quotes, transfers and settlement                                       |
+
+Use separate keys, webhook secrets, order records and configuration. Resources from another store or mode are not accessible with your current credential.
+
+## Start testing
+
+Create and activate a dedicated wallet in **Dashboard → Test → Wallet** before creating checkout sessions. Use a synced passkey you can access from your devices. A Live wallet does not complete Test wallet setup.
+
+Tidepool supports test USDC and USDT on NEAR testnet, Base Sepolia and Solana devnet. Get tokens from the [Tidepool faucet](https://app.usetidepool.tech/faucet) and obtain test NEAR, ETH or SOL for network fees. Checkout sends transactions and waits for verification; there are no simulation buttons. See the [Test payment walkthrough](/testing).
+
+Test wallet recovery kits, extra wallet keys, gasless sponsorship and HOOK delivery are not available in this integration.
+
+## Go live
+
+1. Activate the store's live wallet and select its settlement asset.
+2. Register the production origin if you embed checkout.
+3. Register and verify live webhook delivery.
+4. Change the server credential to a live key.
+5. Perform a small payment and confirm both Tendr and your order records.
+
+A live key alone does not activate a wallet or enable live payments on a deployment. `ACCOUNT_NOT_READY` means the store needs setup; `LIVE_MODE_UNAVAILABLE` means live actions are disabled on the deployment.
+
+## Links and plugins
+
+Test links contain `?mode=test`. Removing it does not turn that link into a live link.
+
+WooCommerce hides Tendr from shoppers in Test mode; store managers can test it. Connecting or reconnecting starts in Test mode.
+
+Test and Live wallets each have their own dedicated passkey and Intents account identifier. Historical simulated payments remain history; they are not a Tidepool balance. If the dashboard reports an existing on-chain legacy Test account, preserve it and create a new store for Tidepool testing.

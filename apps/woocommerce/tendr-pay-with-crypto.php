@@ -1,9 +1,8 @@
 <?php
 /**
  * Plugin Name:          tendr: Pay with crypto
- * Plugin URI:           https://usetendr.tech
  * Description:          Take crypto payments in WooCommerce. They settle into your own tendr account; connect in one click, no keys to copy.
- * Version:              0.3.0
+ * Version:              0.3.4
  * Requires at least:    6.4
  * Requires PHP:         8.0
  * Requires Plugins:     woocommerce
@@ -11,7 +10,7 @@
  * Author URI:           https://usetendr.tech
  * License:              GPL-2.0-or-later
  * License URI:          https://www.gnu.org/licenses/gpl-2.0.html
- * Text Domain:          tendr
+ * Text Domain:          tendr-pay-with-crypto
  * WC requires at least: 8.5
  * WC tested up to:      11.2
  *
@@ -20,7 +19,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'TENDR_VERSION', '0.3.0' );
+define( 'TENDR_VERSION', '0.3.4' );
 define( 'TENDR_PLUGIN_FILE', __FILE__ );
 define( 'TENDR_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -30,7 +29,7 @@ if ( version_compare( PHP_VERSION, '8.0', '<' ) ) {
 		'admin_notices',
 		function () {
 			if ( current_user_can( 'activate_plugins' ) ) {
-				echo '<div class="notice notice-error"><p>' . esc_html__( 'tendr: Pay with crypto needs PHP 8.0 or later.', 'tendr' ) . '</p></div>';
+				echo '<div class="notice notice-error"><p>' . esc_html__( 'tendr: Pay with crypto needs PHP 8.0 or later.', 'tendr-pay-with-crypto' ) . '</p></div>';
 			}
 		}
 	);
@@ -48,10 +47,6 @@ require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-webhooks.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-order-sync.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-refunds.php';
 require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-test-purchase.php';
-require_once TENDR_PLUGIN_DIR . 'includes/class-tendr-updater.php';
-
-// Updates work even when WooCommerce is missing, so a fixed version can always be installed.
-Tendr_Updater::register();
 
 register_activation_hook( __FILE__, array( 'Tendr_Webhooks', 'activate' ) );
 register_deactivation_hook( __FILE__, array( 'Tendr_Webhooks', 'deactivate' ) );

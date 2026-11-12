@@ -1,0 +1,66 @@
+---
+title: 'Embed checkout'
+description: 'Open checkout in a modal or mount it inside your store page.'
+---
+
+Create a session on your server, then pass its returned URL to Tendr's browser script.
+
+```html
+<script src="https://pay.usetendr.tech/v1/tendr.js"></script>
+<button id="pay" type="button">Pay with crypto</button>
+<script>
+  // checkoutSession is the JSON returned by your own server.
+  document.querySelector('#pay').addEventListener('click', () => {
+    Tendr.open({
+      sessionUrl: checkoutSession.url,
+      onEvent(event) {
+        if (event.type === 'complete') {
+          window.location.assign('/orders/1042');
+        }
+      },
+    });
+  });
+</script>
+```
+
+Your server still verifies payment before fulfillment.
+
+The modal opens up to 960px wide on desktop, with space around it and a separate close button.
+It fits smaller screens automatically; longer checkout steps scroll inside the popup.
+
+## Register the store origin
+
+The checkout's `frame-ancestors` policy allows only the merchant's registered checkout domains. Register the exact origin, including scheme and any non-default port. A path is not part of an origin.
+
+WooCommerce Connect registers both the origin and webhook destination. After a site address or tunnel hostname changes, **reconnect the plugin**. Adding only a checkout domain does not move the webhook destination.
+
+A direct hosted-page redirect does not require iframe permission.
+
+## Mount inline
+
+```javascript
+const widget = Tendr.mount(document.querySelector('#checkout'), {
+  sessionUrl: checkoutSession.url,
+  onEvent(event) {
+    console.log(event.type); // Do not log session URLs or secrets.
+  },
+});
+
+// When leaving the view:
+widget.unmount();
+```
+
+`Tendr.open()` returns a handle with `close()`. Opening another modal closes the previous one.
+
+| Event      | Meaning                                           |
+| ---------- | ------------------------------------------------- |
+| `ready`    | Checkout initialized                              |
+| `status`   | Checkout reports a status update                  |
+| `complete` | Show confirmation UI and reconcile on your server |
+| `close`    | Modal closed                                      |
+
+The SDK verifies message origin, source frame and session ID. Events are informational; fulfill from [verified webhooks](/security/webhook-signatures).
+
+## Blocked frame
+
+Check the browser console for a `frame-ancestors` error and correct domain registration. Keep a link to the returned hosted URL as a fallback. WooCommerce 0.3.3 opens that same URL after 15 seconds without an initialized checkout.

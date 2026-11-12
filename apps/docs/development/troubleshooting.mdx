@@ -1,12 +1,50 @@
 ---
-title: Troubleshooting
+title: 'Troubleshooting'
+description: 'Resolve common checkout, credential, invoice and integration failures.'
 ---
 
-| Symptom                                      | Fix                                                                                                                                                                                                                                   |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `401 UNAUTHORIZED` from `/v1/ping`           | Use a key printed by `npm run db:seed`. Raw keys are shown once; to get new ones, reset the dev database (`npx dotenv -e ../../.env -- prisma migrate reset` in `apps/api`) and run `npm run db:seed` again                           |
-| Database connection failed                   | Start Docker Compose Postgres (`docker compose -f infra/docker/docker-compose.yml up -d`)                                                                                                                                             |
-| Redis connection errors                      | Start Docker Compose Redis (host port 6380)                                                                                                                                                                                           |
-| `409 IDEMPOTENCY_CONFLICT`                   | An `Idempotency-Key` was reused with a different request; use a new key                                                                                                                                                               |
-| `401 UNAUTHENTICATED` from the dashboard API | The dashboard session is missing or expired, or a passkey ceremony failed (a failed ceremony does not sign you out). Sign in again with your passkey or a magic link.                                                                 |
-| `403 LIVE_MODE_UNAVAILABLE`                  | Live payments are not open yet on this platform. Going live and every write in live mode (a live key, a live session or link, a live connection) are refused; live reads and test mode work as usual. Use test mode until live opens. |
+| Symptom                      | Likely check                                                                                                   |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `400 Bad Request`            | Read JSON error code/message and `details.field`; check decimal strings, required fields and unexpected fields |
+| `401`                        | Wrong/revoked credential, expired session or required confirmation                                             |
+| `403`                        | Wrong credential type, missing permission/scope or disabled live mode                                          |
+| `404` for a known ID         | Store and test/live mode match the credential                                                                  |
+| `ACCOUNT_NOT_READY`          | Activate wallet and set settlement in the correct mode                                                         |
+| `IDEMPOTENCY_CONFLICT`       | Reused key with changed path/body/query                                                                        |
+| Blank checkout frame         | Browser `frame-ancestors` error; current origin not registered                                                 |
+| Paid in Tendr, order pending | Webhook destination, delivery attempts, signature and order matching                                           |
+| No invoice email             | Address, spam folder, verified sender setup and rate limits                                                    |
+| AI unavailable               | Provider configuration, availability or rate limit; keep ordinary checkout usable                              |
+
+## Changed WordPress address
+
+Reconnect to the same store from WooCommerce's Tendr settings. Registering only a new checkout origin does not update the old webhook URL. Version 0.3.3 pauses checkout while the saved address is stale. Reconnecting starts in Test mode.
+
+## Different device, same email
+
+Sign in to the same identity and select the same store/mode. The wallet is tied to the store, not the browser. Wallet signing requires the dedicated wallet passkey; an email login does not supply it.
+
+## TypeScript SDK
+
+| Symptom                                       | What to check                                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cannot resolve `@tendr/sdk`                   | Install `@usetendr/sdk` and update both main and `/webhook` imports. The old workspace name was not the public npm package.                       |
+| `TendrClient is server-only`                  | Move client construction into a server route or backend job. Use the checkout URL or browser embed in the frontend.                               |
+| Invalid `apiKey`                              | Supply a server secret key beginning with `tdr_test_` or `tdr_live_`. Load it in the server environment; the SDK does not read environment files. |
+| Requests go to `/v1/v1/...`                   | Remove `/v1` from `baseUrl`, or omit the option to use the hosted API default.                                                                    |
+| `SIGNATURE_INVALID` on every API request      | The key requires HMAC request signing, which SDK 0.2.0 does not generate. Use an HTTP integration implementing the configured signing policy.     |
+| `TendrTimeoutError` or `TendrConnectionError` | Reconcile writes before retrying. Reuse the same saved operation key and identical input; the SDK does not retry automatically.                   |
+| `TendrWebhookError`                           | Use the endpoint signing secret and original body bytes, preserve the signature header, and check the server clock.                               |
+
+Use Node.js 22 or later. The webhook helper needs Node crypto. See the
+[SDK guide](/sdks/typescript) for configuration, scopes and error types.
+
+## Report an issue
+
+Include the request ID, endpoint/method, HTTP status, mode, timestamp and non-secret resource ID. Do not send API keys, webhook secrets, full checkout URLs or invoice receipt tokens. A screenshot alone may not show which request failed.
+
+## Test wallet or payment is not ready
+
+In the dashboard select the same store and **Test → Wallet**, then create and activate its dedicated passkey. A Live wallet does not activate Test payments. Reopen WooCommerce’s Tendr settings and retry **Make a test purchase**; the plugin checks Test readiness using the Test credential.
+
+Use only Tidepool USDC/USDT on the network shown in checkout, with test NEAR, ETH or SOL available for fees. A missing simulation button is expected. If an older simulator checkout was open during the provider change, create a new Test checkout. If the dashboard reports a funded or existing on-chain legacy Test account, preserve it and use a new store for Tidepool.

@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "npx --yes mintlify@4.2.83 dev --port 3001",
-    "build": "echo \"Mintlify build runs via mintlify CLI / hosting\"",
-    "lint": "echo \"docs lint skipped\"",
-    "typecheck": "echo \"docs typecheck skipped\"",
-    "test": "echo \"docs tests skipped\""
+    "dev": "npx --yes mint@4.3.12 dev --port 3001",
+    "build": "npx --yes mint@4.3.12 validate",
+    "lint": "node scripts/check-docs.mjs",
+    "typecheck": "node scripts/check-docs.mjs",
+    "test": "node scripts/check-docs.mjs",
+    "validate": "npx --yes mint@4.3.12 validate",
+    "check:links": "npx --yes mint@4.3.12 broken-links"
   }
 }

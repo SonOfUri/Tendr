@@ -1,0 +1,47 @@
+---
+title: 'Refund a payment'
+description: 'Request a refund, authorize it from the store wallet, and reconcile the result.'
+---
+
+A refund request creates a record for review and authorization. It does not immediately transfer funds.
+
+## Request from your server
+
+Use a secret key with `refunds:write`. Supply exactly one of `payment` or `session`.
+
+```bash
+curl --fail-with-body https://api.usetendr.tech/v1/refunds \
+  -H "Authorization: Bearer $TENDR_SECRET_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1042-refund-1" \
+  --data '{
+    "session": "ses_example",
+    "amount": "5.00",
+    "currency": "USD",
+    "external_ref": "order-1042-refund-1",
+    "reason": "Returned item"
+  }'
+```
+
+Replace the sample session ID. The default currency is USD. A supported original order currency uses the session's stored conversion rate. In the response, `amount` is return-token base units; `amount_usd` is the requested USD value.
+
+Reuse `external_ref` for the same refund operation. Reusing it for a different amount is a conflict.
+
+## Approval and completion
+
+Tendr checks refundability, remaining amount, destination and applicable policy. Some returns need a customer-supplied address or merchant review.
+
+For a native live wallet, the owner reviews and signs the linked payout with the dedicated wallet passkey. Contract-account environments can use signer proposals and timelocks. Do not assume one approval mechanism across wallet types.
+
+| Status      | Meaning                                                     |
+| ----------- | ----------------------------------------------------------- |
+| `pending`   | Waiting for processing or authorization                     |
+| `review`    | Needs an address, policy review or execution issue resolved |
+| `sent`      | Refund transfer completed                                   |
+| `cancelled` | Request closed without being sent                           |
+
+Subscribe to `refund.sent`, `refund.needs_address`, `refund.cancelled` and `refund.failed`. Match `refund_external_ref` to your record. Update your order after the confirmed outcome.
+
+`POST /v1/refunds/{id}/cancel` cancels an eligible request before a proposal exists. `REFUND_HAS_PROPOSAL` means use the dashboard review flow.
+
+WooCommerce retains a pending refund until Tendr confirms it was sent. Clicking “Refund via tendr” does not prove receipt.

@@ -1,36 +1,136 @@
 ---
-title: Quickstart
+title: Accept your first payment
+description: Create a test checkout from your server, open the hosted page, and verify the result.
 ---
 
-# Quickstart
+Use the hosted API at `https://api.usetendr.tech`. You need a Tendr store with test payment setup completed, a test secret key, and a publicly reachable HTTPS webhook endpoint.
+
+<Tip>
+  Using WooCommerce? [Download and install the Tendr plugin](/integrations/woocommerce) from your
+  WordPress admin. It connects your store and handles API keys and webhooks automatically.
+</Tip>
+
+## 1. Create a test API key
+
+Select your store and Test mode in the dashboard. Open **Wallet**, create its dedicated Test passkey and complete activation. Choose your settlement token, then open API keys and create a key with `sessions:write` and `sessions:read`. Keep it on your server as `TENDR_SECRET_KEY`. It begins with `tdr_test_` and is shown once.
+
+## 2. Register your webhook
+
+In the dashboard's webhook settings, add your HTTPS endpoint and subscribe to `payment.succeeded` and `checkout.session.expired`. Save its signing secret separately. [Verify every delivery](/security/webhook-signatures) before changing an order.
+
+## 3. Create a checkout session
+
+For TypeScript or JavaScript on Node.js 22+, install the public SDK in your server application:
 
 ```bash
-cp .env.example .env
-docker compose -f infra/docker/docker-compose.yml up -d   # Postgres + Redis
-npm install
-npm run build --workspace=@tendr/contracts
-npm run db:migrate:dev --workspace=@tendr/api
-npm run db:migrate:test --workspace=@tendr/api
-npm run db:seed   # prints the Demo Merchant's API keys once
-npm run dev
+npm install @usetendr/sdk
 ```
 
-Check a seeded key against the API:
+Set `TENDR_SECRET_KEY` in your server's environment. Use the price from your order database and
+reuse the same idempotency key when retrying the same request. Other server languages can use
+the equivalent HTTP request below.
 
-```bash
-curl -sS http://localhost:4000/v1/ping \
-  -H "Authorization: Bearer tdr_test_..."
+<CodeGroup>
+
+```typescript TypeScript
+import { TendrClient } from '@usetendr/sdk';
+
+const apiKey = process.env.TENDR_SECRET_KEY;
+if (!apiKey) throw new Error('Set TENDR_SECRET_KEY on your server');
+const tendr = new TendrClient({ apiKey });
+
+const created = await tendr.checkoutSessions.create(
+  {
+    amount: '25.00',
+    amount_currency: 'USD',
+    external_ref: 'order-1042',
+    success_url: 'https://shop.example/orders/1042',
+    cancel_url: 'https://shop.example/cart',
+    line_items: [{ name: 'Everyday T-shirt', quantity: 1, unit_amount: '25.00' }],
+  },
+  { idempotencyKey: 'order-1042-checkout-1' },
+);
+
+// Persist created.id and the complete created.url before redirecting the customer.
 ```
+
+```bash cURL
+curl --fail-with-body https://api.usetendr.tech/v1/checkout/sessions \
+  -H "Authorization: Bearer $TENDR_SECRET_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1042-checkout-1" \
+  --data '{
+    "amount": "25.00",
+    "amount_currency": "USD",
+    "external_ref": "order-1042",
+    "success_url": "https://shop.example/orders/1042",
+    "cancel_url": "https://shop.example/cart",
+    "line_items": [
+      { "name": "Everyday T-shirt", "quantity": 1, "unit_amount": "25.00" }
+    ]
+  }'
+```
+
+</CodeGroup>
+
+The SDK uses `https://api.usetendr.tech` by default. Keep the client and its secret key on your
+server; the customer only needs the returned checkout URL.
+
+The response has this shape. These values are illustrative:
 
 ```json
 {
-  "merchantId": "mer_...",
-  "livemode": false,
-  "principal": "secret_key",
-  "scopes": ["sessions:read", "..."]
+  "id": "ses_example",
+  "client_secret": "ses_example_secret_example",
+  "url": "https://pay.usetendr.tech/ses_example#cs=ses_example_secret_example",
+  "expires_at": "2026-11-10T16:30:00.000Z",
+  "status": "PENDING_DEPOSIT"
 }
 ```
 
-A `tdr_live_` key returns `"livemode": true`. See [API keys](/security/api-keys) for key formats and request signing.
+## 4. Open checkout
 
-<Note>Checkout endpoints (sessions, quotes, payments) are coming in the checkout project.</Note>
+Store the session ID against your order. Redirect to the returned `url` exactly, including its `#cs=` fragment. Do not reconstruct it or publish it in logs.
+
+Pay with Tidepool test USDC or USDT on NEAR testnet, Base Sepolia or Solana devnet. Fund your customer wallet from the [Tidepool faucet](https://app.usetidepool.tech/faucet) and keep test NEAR, ETH or SOL for network fees. Connect the wallet or follow the deposit instructions and wait for verified settlement. Test tokens have no monetary value. See [Test payments](/testing); simulation controls are no longer part of hosted Test checkout.
+
+## 5. Confirm payment
+
+Verify the signature on `payment.succeeded`, deduplicate its event ID, and match its session and `external_ref` to your order. Check the mode and expected amount before fulfillment.
+
+A success redirect or a popup closing is a UI signal. Your server determines whether the order is paid from the verified event and stored payment data.
+
+<CodeGroup>
+
+```typescript TypeScript
+// Use the session ID saved with the order, not an ID supplied by the browser.
+const session = await tendr.checkoutSessions.retrieve(created.id);
+```
+
+```bash cURL
+curl --fail-with-body "https://api.usetendr.tech/v1/checkout/sessions/$SESSION_ID" \
+  -H "Authorization: Bearer $TENDR_SECRET_KEY"
+```
+
+</CodeGroup>
+
+The session read includes status, payments, refunds, settlement and your order reference. It does not return the original client secret.
+
+Use `constructWebhookEvent` from `@usetendr/sdk/webhook` to verify the original request bytes before
+parsing the event. Follow the [webhook guide](/security/webhook-signatures) for signature checks,
+order reconciliation and duplicate delivery handling.
+
+<CardGroup cols={2}>
+  <Card title="SDK reference" icon="code" href="/sdks/typescript">
+    Explore payment links, refunds, pagination, request options and typed errors.
+  </Card>
+  <Card title="Embed checkout" icon="window-maximize" href="/payments/embedded-checkout">
+    Keep checkout in a modal or inline frame.
+  </Card>
+  <Card title="Go live" icon="circle-check" href="/security/production-checklist">
+    Verify credentials, wallet readiness and confirmation.
+  </Card>
+  <Card title="Retry safely" icon="rotate" href="/concepts/idempotency">
+    Reconcile uncertain requests and reuse the same operation key.
+  </Card>
+</CardGroup>

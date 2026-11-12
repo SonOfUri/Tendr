@@ -1,0 +1,45 @@
+---
+title: 'Contractor invoices'
+description: 'Receive itemized invoices and pay contractors from your Tendr wallet.'
+---
+
+An invoice requests an outgoing payment from your business. A payment link collects money from a customer.
+
+Enable your page at `https://invoice.usetendr.tech/<business>` in invoice settings. You need an active native live wallet.
+
+## Contractor workflow
+
+1. Open the business invoice page.
+2. Enter a name, email, reference and optional due date.
+3. Add one to 50 breakdown lines with a description and amount.
+4. Select a supported receiving token/network and external wallet address.
+5. Submit and verify the email using Tendr's link.
+
+A full Tendr account is not required. Email verification makes the invoice available in the business inbox; it does not authorize payment.
+
+## Exact totals
+
+Line amounts use the receiving token's display units. The backend converts them to exact base units and sums them, rejecting excess precision rather than rounding.
+
+For example, `125.00` and `25.50` USDC request `150.50` USDC. Every line uses the same receiving asset. Submit the breakdown, not a separately editable total. Descriptions allow up to 200 characters. Memo/tag-dependent destinations are unsupported.
+
+## Business workflow
+
+Review contractor details, breakdown, reference, receiving asset and exact address. Select the store asset to fund payment, review the quote, then sign with the wallet passkey. Tendr tracks the payout and updates the invoice when the outcome is known.
+
+| State                   | Meaning                      |
+| ----------------------- | ---------------------------- |
+| `awaiting_verification` | Contractor must verify email |
+| `open`                  | Ready for owner review       |
+| `processing`            | Payment processing           |
+| `paid`                  | Associated payout completed  |
+| `rejected`              | Business declined            |
+| `payment_review`        | Payment needs investigation  |
+
+## Email and receipts
+
+Contractors receive verification and status messages. Receipt links carry secret tokens; keep them private. The business receives a verified-invoice notification.
+
+If verification expires, resubmit the same reference for a fresh link. Requests are rate-limited. Pausing incoming invoices does not cancel an already authorized payout.
+
+See the [Invoice API](/api-reference/invoices).

@@ -1,0 +1,51 @@
+---
+title: 'Invoice API'
+description: 'Public contractor submission and protected business-side payment actions.'
+---
+
+## Contractor routes
+
+The public invoice host uses these routes. Use the business slug from its invoice URL.
+
+| Endpoint                                    | Input                                  | Result                                              |
+| ------------------------------------------- | -------------------------------------- | --------------------------------------------------- |
+| `GET /v1/invoices/public/:business`         | None                                   | Business name/slug and supported destination tokens |
+| `POST /v1/invoices/public/:business`        | Contractor and itemized invoice fields | HTTP 202; verification email requested              |
+| `POST /v1/invoices/public/:business/verify` | `{token}` from verification link       | Verified invoice                                    |
+| `POST /v1/invoices/public/:business/status` | `{token}` from receipt link            | That invoice's status                               |
+
+```json
+{
+  "contractorName": "Alex Example",
+  "email": "alex@example.com",
+  "reference": "INV-1042",
+  "dueDate": "2026-12-15",
+  "destinationAsset": "nep141:REPLACE_WITH_CATALOG_ASSET",
+  "destination": "REPLACE_WITH_RECEIVING_ADDRESS",
+  "items": [
+    { "description": "Design work", "amount": "125.00" },
+    { "description": "Revisions", "amount": "25.50" }
+  ]
+}
+```
+
+Choose the real asset from the token catalog and a valid address for that network. `dueDate` is optional. New clients send `items`; do not add `amount` or `description` at the top level. The API rejects mixed legacy/itemized shapes and calculates the total itself.
+
+One to 50 lines; description 1–200 characters; positive decimal amount strings within the token's precision. Memo/tag destinations are excluded. Email request limits currently include three per mailbox and ten per IP per hour, plus a global limit.
+
+## Business routes
+
+Use the [dashboard session](/api-reference/dashboard). Reads require `account:read`; protected owner actions require `security:propose` and recent login confirmation.
+
+| Endpoint                       | Input                                                |
+| ------------------------------ | ---------------------------------------------------- |
+| `GET /v1/invoices/settings`    | Current settings                                     |
+| `PUT /v1/invoices/settings`    | `{enabled: true}` or `{enabled: false}`              |
+| `GET /v1/invoices?cursor=...`  | Optional cursor                                      |
+| `GET /v1/invoices/:id`         | Invoice ID                                           |
+| `POST /v1/invoices/:id/reject` | No body fields                                       |
+| `POST /v1/invoices/:id/payout` | `{asset: "nep141:..."}` for the store asset to spend |
+
+Creating an invoice payout returns a payout record. Complete the ordinary wallet challenge/sign/submit sequence; never mark the invoice paid from the creation response.
+
+Receipt/verification tokens are credentials. Redact them from analytics and logs. See [Contractor invoices](/invoices/overview).

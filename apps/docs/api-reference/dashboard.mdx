@@ -1,0 +1,41 @@
+---
+title: 'Dashboard API boundaries'
+description: 'Use authenticated user sessions for wallet and administrative features.'
+---
+
+These endpoints serve Tendr's dashboard. They do not accept a merchant secret key in place of a user session.
+
+## Session context
+
+Requests use the authenticated session cookie with `credentials: include`, `tendr-merchant` for the selected store and `tendr-livemode` (`true` or `false`). Writes also send the `tendr-csrf` value from the CSRF cookie. Sensitive actions require a recent login-passkey confirmation.
+
+Only approved dashboard origins can make these cookie-authenticated calls. Do not put a server key into a frontend to work around session requirements.
+
+Personal login security uses `/v1/auth/login-recovery/*` without store or mode headers. Code generation requires a session, CSRF and recent login-passkey confirmation. Recovery combines a fresh emailed token, a saved code and a new WebAuthn registration. See [Login recovery](/security/login-recovery).
+
+| Area             | Routes                                             | Access                                                 |
+| ---------------- | -------------------------------------------------- | ------------------------------------------------------ |
+| Payments         | `GET /v1/payments`, `GET /v1/payments/:id`         | `account:read`                                         |
+| API keys         | `GET/POST /v1/api_keys`, `DELETE /v1/api_keys/:id` | Owner/admin; writes need recent confirmation           |
+| Webhook settings | `/v1/webhooks/endpoints` and delivery routes       | `settings:manage`; creation/rotation need confirmation |
+| Native wallet    | `/v1/account/native/*`                             | Owner workflow and explicit wallet signatures          |
+| Invoices         | `/v1/invoices/*`                                   | Read membership; owner approval for protected actions  |
+| AI               | `/v1/ai/insights`, `/v1/ai/themes`                 | Feature-specific permission                            |
+
+## Tidepool Test wallets
+
+With `Tendr-Livemode: false`, the native wallet registration, activation, balances, settlement and payout endpoints operate on a separate Tidepool Test wallet. `GET /v1/account` exposes `testProvider: "tidepool"` and `accountKind: "native_intents"` even before `account` exists. Use `account?.kind ?? accountKind` for setup screens. Store creation can return `testAccount: null`; wallet creation requires the owner’s dedicated passkey.
+
+Respect `account.capabilities.nativeWalletKeyManagement`: it is false for Tidepool, where extra wallet keys and recovery kits are disabled. Shopper session responses expose `test_provider: "tidepool"`; use it to select test networks and hide simulation and gasless controls.
+
+## Native payout sequence
+
+1. `POST /v1/account/native/payouts` creates the quote/payout record.
+2. `POST /v1/account/native/payouts/:id/challenge` returns stored `payload` and WebAuthn `options`.
+3. Sign with the dedicated wallet credential. Do not reconstruct the payload JSON.
+4. `POST /v1/account/native/payouts/:id/submit` with `{response}` returns acceptance, not completion.
+5. Poll `GET /v1/account/native/payouts/:id` until reconciled.
+
+The list endpoint returns `{payouts}` for the latest 100 records, with no cursor pagination. See [Withdrawals](/wallets/withdrawals).
+
+A recent login confirmation authorizes dashboard operations; the dedicated wallet signature authorizes money movement. They are separate checks.

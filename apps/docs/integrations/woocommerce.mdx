@@ -1,0 +1,83 @@
+---
+title: 'WooCommerce'
+description: 'Download the Tendr plugin, install it in WordPress, and connect your store.'
+---
+
+The Tendr plugin supports WooCommerce's classic and Blocks checkout. It creates or reuses a checkout session per order, opens hosted checkout and updates the order from signed Tendr webhooks.
+
+<Card
+  title="Download Tendr for WooCommerce"
+  icon="download"
+  href="https://github.com/SonOfUri/Tendr/releases/download/woocommerce-v0.3.4/tendr-pay-with-crypto-0.3.4.zip"
+>
+  Version 0.3.4 · Ready-to-install ZIP. Download it and upload it in WordPress—no code or terminal
+  required.
+</Card>
+
+## Install and connect
+
+<Steps>
+  <Step title="Install the plugin">
+    WooCommerce must be active. The plugin requires WordPress 6.4+, WooCommerce 8.5+ and PHP 8.0+.
+
+    [Download the plugin ZIP](https://github.com/SonOfUri/Tendr/releases/download/woocommerce-v0.3.4/tendr-pay-with-crypto-0.3.4.zip)
+    and leave it compressed. In your WordPress admin, open **Plugins → Add New → Upload Plugin**,
+    choose `tendr-pay-with-crypto-0.3.4.zip`, click **Install Now**, then **Activate Plugin**.
+
+  </Step>
+  <Step title="Prepare the site">
+    Use a publicly reachable HTTPS site with pretty permalinks. The storefront and admin must share
+    an origin, and WordPress REST must serve the default **wp-json** route.
+  </Step>
+  <Step title="Connect your store">
+    Open **WooCommerce → Settings → Payments → tendr**. Click **Connect to tendr**, sign in, select
+    your existing Tendr store and approve with your login passkey. Keys and webhook secrets are
+    exchanged automatically. The plugin registers payment notifications for you.
+  </Step>
+  <Step title="Test checkout">
+    Connection starts in Test mode. Only store managers see the method. In Tendr, select the same business and **Test → Wallet**, create a dedicated synced Test passkey, activate the wallet and choose settlement. A Live wallet does not replace this step.
+
+    Get test USDC or USDT from the [Tidepool faucet](https://app.usetidepool.tech/faucet) and test NEAR, ETH or SOL for network fees. Return to the plugin settings and choose **Make a test purchase**. The plugin checks Test wallet readiness, creates a **1.00 USD** test order and opens checkout without adding a product or changing your store currency. Pay on NEAR testnet, Base Sepolia or Solana devnet and verify the order result. See [Test payments](/testing).
+
+  </Step>
+  <Step title="Go live">
+    Activate the live wallet, configure settlement and select **Switch to live mode**. Tendr checks
+    readiness. Shoppers can then use **Pay with crypto**.
+  </Step>
+</Steps>
+
+Test tokens have no monetary value. Test wallet recovery and backup wallet keys are not available yet; keep access to the synced Test wallet passkey.
+
+## Update the plugin
+
+Download the new ZIP from [Tendr's plugin releases](https://github.com/SonOfUri/Tendr/releases?q=woocommerce-v).
+In WordPress, open **Plugins → Add New → Upload Plugin**, select the ZIP and click **Install Now**.
+When WordPress detects the existing plugin, choose **Replace current with uploaded**.
+
+Take a store backup before updating. Keep the existing plugin installed while replacing it so your
+connection and settings are retained. The ZIP is available directly from Tendr; a WordPress.org
+listing is not required to install it.
+
+## Payment and refund behavior
+
+A popup closing does not mark an order paid. The plugin verifies webhook signatures and matches the session, reference, mode and amount before updating the order. Test and live records remain separate.
+
+A refund request goes through Tendr's review/wallet authorization flow. WooCommerce records the completed refund when Tendr confirms it was sent.
+
+## Site address changes
+
+After changing the domain, HTTPS scheme or subdirectory, click **Reconnect to tendr** and select the same store. Reconnecting moves the checkout domain and notification destination and hands earlier orders to the replacement connection.
+
+Use Reconnect without disconnecting first, so the old connection credentials remain available for the hand-over. Reconnect starts in Test mode; switch back to Live after the readiness check.
+
+Version 0.3.3 and later detect a stale address and pause crypto checkout until reconnecting. For other iframe-loading failures the plugin falls back to the same hosted session after 15 seconds.
+
+## Troubleshooting
+
+| Symptom                                    | Check                                                                             |
+| ------------------------------------------ | --------------------------------------------------------------------------------- |
+| Customers cannot see Tendr                 | Live mode, gateway enabled, wallet ready, current site connection                 |
+| Blank iframe or broken-page icon           | Exact store origin in checkout domains; reconnect after a move                    |
+| Payment visible in Tendr but order pending | Webhook destination, HTTPS reachability, delivery logs and signature verification |
+| Stored keys cannot be read                 | WordPress security salts changed; reconnect                                       |
+| Connect cannot return                      | Same admin/store origin, pretty permalinks, default REST prefix                   |

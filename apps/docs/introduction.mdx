@@ -1,17 +1,53 @@
 ---
-title: Introduction
-description: Tendr universal checkout for digital commerce
+title: Build with Tendr
+description: Accept crypto payments, settle into your store wallet, and pay contractors across supported networks.
 ---
 
-# Tendr
+Tendr connects your store to crypto payments. Create a checkout from your server, share a payment link, or connect WooCommerce. Your customer chooses a supported token and network; Tendr routes the payment into your store's configured settlement asset.
 
-**One checkout. Every way to pay.**
+<CardGroup cols={2}>
+  <Card title="Accept your first payment" icon="bolt" href="/quickstart">
+    Create a test checkout and confirm it with a signed webhook.
+  </Card>
+  <Card title="Install the TypeScript SDK" icon="code" href="/sdks/typescript">
+    Use @usetendr/sdk for typed server requests and webhook verification.
+  </Card>
+  <Card title="Connect WooCommerce" icon="store" href="/integrations/woocommerce">
+    Add crypto payments to an existing WordPress store.
+  </Card>
+  <Card title="Share a payment link" icon="link" href="/payment-links/overview">
+    Collect fixed or open amounts without writing an integration.
+  </Card>
+  <Card title="Pay contractor invoices" icon="file-invoice" href="/invoices/overview">
+    Receive itemized invoices and approve payment from your store wallet.
+  </Card>
+  <Card title="Explore the API" icon="book" href="/api-reference/overview">
+    Find endpoints, credential requirements and request examples.
+  </Card>
+</CardGroup>
 
-Tendr is a checkout and payment-orchestration layer. Merchants integrate once; customers pay with supported digital assets; Tendr coordinates sessions, quotes, verification, and webhooks.
+## The payment flow
 
-<Warning>
-  **Foundation only** — API keys, test and live modes, the event log and the worker are in place;
-  checkout endpoints come in the checkout project. No real funds move yet.
-</Warning>
+```mermaid
+flowchart TD
+    A[Your server creates a session] --> B[Customer pays with a supported asset]
+    B --> C[Tendr settles into your store wallet]
+    C --> D[Your server verifies the webhook]
+    D --> E[Confirm the order and fulfill]
+    classDef default fill:transparent,stroke:#888,stroke-width:1px
+```
 
-NEAR Intents may be used as an execution adapter for supported routes. It is not the Tendr brand.
+## Explore Tendr
+
+| You want to                                    | Start here                                |
+| ---------------------------------------------- | ----------------------------------------- |
+| Choose the asset your business receives        | [Settlement](/payments/settlement)        |
+| Understand wallet ownership and signing        | [Wallets and passkeys](/wallets/overview) |
+| Explain checkout facts or business performance | [Tendr AI](/ai/overview)                  |
+| Explore Shopify support                        | [Shopify pilot](/integrations/shopify)    |
+
+<Note>
+  Test mode moves Tidepool testnet tokens with no monetary value. Live mode moves real funds and
+  requires an active wallet, settlement configuration, and live availability on the deployment. See
+  [Test and live modes](/concepts/test-and-live).
+</Note>

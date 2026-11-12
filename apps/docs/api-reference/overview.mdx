@@ -1,32 +1,44 @@
 ---
-title: API overview
+title: 'API overview'
+description: 'Base URLs, credentials and the supported integration surfaces.'
 ---
 
-Base URL (local): `http://localhost:4000`
+The hosted API base URL is `https://api.usetendr.tech`. Request and response bodies use JSON unless an upload endpoint explicitly requires multipart form data.
 
-Auth: `Authorization: Bearer <api_key>` — see [API keys](/security/api-keys).
+For Node.js 22+ servers, install [`@usetendr/sdk`](/sdks/typescript):
 
-| Endpoint         | Auth                      | Description                                   |
-| ---------------- | ------------------------- | --------------------------------------------- |
-| `GET /v1/health` | none                      | Liveness check                                |
-| `GET /v1/ping`   | secret or publishable key | Echoes the caller's merchant, mode and scopes |
-
-Payment links and checkout themes have their own pages: [payment links](/api-reference/payment-links) and [themes](/api-reference/themes). Checkout endpoints (sessions, quotes, payments, refunds, webhook endpoints) are coming in the checkout project.
-
-Errors:
-
-```json
-{
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "...",
-    "requestId": "..."
-  }
-}
+```bash
+npm install @usetendr/sdk
 ```
 
-Errors any endpoint can return:
+The SDK provides typed requests and responses, pagination helpers and webhook verification.
+It uses the same API keys, scopes and test/live boundaries as these HTTP endpoints. Follow the
+[quickstart](/quickstart) for equivalent TypeScript and cURL checkout examples.
 
-| Code                    | Status | When                                                                                                                                                                                                                |
-| ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `LIVE_MODE_UNAVAILABLE` | 403    | Live payments are not open yet on this platform. Going live and every write in live mode (a live key, a live session or link, a live connection) are refused. Live reads and everything in test mode work as usual. |
+## Choose the right credential
+
+| Surface                 | Credential                                              | Purpose                                                |
+| ----------------------- | ------------------------------------------------------- | ------------------------------------------------------ |
+| Merchant integration    | Secret API key                                          | Sessions, payment links, themes and refund requests    |
+| Dashboard               | User session cookie, store/mode headers, CSRF on writes | Wallets, invoices, AI insights, webhook/key management |
+| Hosted shopper checkout | Session `client_secret`                                 | One checkout's state, tokens, quotes and help          |
+| Public invoice form     | Public submit plus emailed verification/receipt token   | Contractor workflow                                    |
+
+A secret API key is not a dashboard session. For example, `GET /v1/payments`, webhook management and invoice-owner routes are dashboard-only. Use the merchant session read to reconcile your server-created payment.
+
+## Conventions
+
+- Send server keys as `Authorization: Bearer <key>`.
+- Mode comes from the key. Test and live use the same base URL.
+- Monetary values are strings. Session amounts use the stated currency; native payout amounts use token base units.
+- Use an [idempotency key](/concepts/idempotency) for supported POST mutations.
+- Follow each endpoint's pagination shape; there is no universal pagination contract.
+- Preserve unknown response fields for compatibility. Do not send unknown request fields to strict endpoints.
+
+## Reference coverage
+
+The endpoint explorer documents merchant session, payment-link and refund operations. [Themes](/api-reference/themes), [webhooks](/api-reference/webhooks), [AI](/api-reference/ai), [invoices](/api-reference/invoices) and [dashboard boundaries](/api-reference/dashboard) have separate guides.
+
+The examples default to test credentials. API examples are copyable server-side requests; the documentation does not need your production secrets.
+
+See [API keys](/security/api-keys), [errors](/api-reference/errors) and [webhook signatures](/security/webhook-signatures).

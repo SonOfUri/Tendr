@@ -106,10 +106,10 @@ final class Tendr_Brand {
 	public static function refresh(): bool {
 		$result = self::send();
 		if ( is_wp_error( $result ) ) {
-			Tendr_Settings::flash( 'warning', __( 'Could not send your store\'s look to tendr:', 'tendr' ) . ' ' . $result->get_error_message() );
+			Tendr_Settings::flash( 'warning', __( 'Could not send your store\'s look to tendr:', 'tendr-pay-with-crypto' ) . ' ' . $result->get_error_message() );
 			return false;
 		}
-		Tendr_Settings::flash( 'success', __( 'Your store\'s name, logo and colours were sent to tendr.', 'tendr' ) );
+		Tendr_Settings::flash( 'success', __( 'Your store\'s name, logo and colours were sent to tendr.', 'tendr-pay-with-crypto' ) );
 		return true;
 	}
 
@@ -120,7 +120,7 @@ final class Tendr_Brand {
 	public static function send_after_connect(): void {
 		$result = self::send();
 		if ( is_wp_error( $result ) ) {
-			Tendr_Settings::flash( 'warning', __( 'Connected, but your store\'s look could not be sent to tendr yet. Use "Refresh brand from my store" to try again.', 'tendr' ) );
+			Tendr_Settings::flash( 'warning', __( 'Connected, but your store\'s look could not be sent to tendr yet. Use "Refresh brand from my store" to try again.', 'tendr-pay-with-crypto' ) );
 		}
 	}
 
@@ -130,7 +130,7 @@ final class Tendr_Brand {
 	public static function handle_refresh_request(): void {
 		$nonce = isset( $_POST['tendr_brand_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['tendr_brand_nonce'] ) ) : '';
 		if ( ! wp_verify_nonce( $nonce, self::NONCE ) || ! current_user_can( 'manage_woocommerce' ) ) {
-			wp_die( esc_html__( 'You are not allowed to do that.', 'tendr' ), 403 );
+			wp_die( esc_html__( 'You are not allowed to do that.', 'tendr-pay-with-crypto' ), 403 );
 		}
 		self::refresh();
 		wp_safe_redirect( Tendr_Settings::url() );

@@ -32,6 +32,8 @@ tests_add_filter(
 	'setup_theme',
 	static function () {
 		WC_Install::install();
+		// Refund tests cover both storage engines; a fresh install may leave HPOS disabled.
+		wc_get_container()->get( \Automattic\WooCommerce\Internal\DataStores\Orders\DataSynchronizer::class )->create_database_tables();
 		$GLOBALS['wp_roles'] = null; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
 		wp_roles();
 	}

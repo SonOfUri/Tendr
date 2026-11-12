@@ -6,17 +6,21 @@ description: Share a link or a QR code and get paid, with no website or code on 
 A payment link is a reusable page at `https://pay.usetendr.tech/<your-store>/<link>`. The payer opens it,
 sees what they are paying for, and presses **Pay**. Tendr then opens the normal checkout, so everything
 else works as it does for a session your own site creates: quotes, gasless payments, refunds, webhooks
-and payouts to your account. Tendr never holds the money.
+and payouts to your account. For native live wallets, settlement credits your store-controlled Intents balance.
 
 Make links with the API (`POST /v1/payment_links`, see the [reference](/api-reference/payment-links)),
 the [TypeScript SDK](/sdks/typescript#payment-links) or the dashboard.
 
+## Choose the settlement asset
+
+Use the dashboard or `GET /v1/payment_links/settlement-options` to choose a supported asset. An explicit `settlement_asset` overrides the store default for this link; null inherits it. The selected chain identifies the asset representation in the same store wallet, not an external withdrawal destination. See [Settlement](/payments/settlement).
+
 ## Kinds of link
 
-| Kind | Payer sees | Use it for |
-| --- | --- | --- |
-| `fixed` | The price you set. | An invoice, a product, a deposit. |
-| `open` | A box to type an amount. | Donations, tips, "pay what you owe". |
+| Kind    | Payer sees               | Use it for                           |
+| ------- | ------------------------ | ------------------------------------ |
+| `fixed` | The price you set.       | An invoice, a product, a deposit.    |
+| `open`  | A box to type an amount. | Donations, tips, "pay what you owe". |
 
 An open link can set `min_amount` to raise its floor. It cannot lower it.
 
@@ -57,7 +61,7 @@ With `note: "optional"` (the default) the payer can leave a short message with t
 
 Test and live links are separate. A link made with a test key has a `url` that ends in `?mode=test`.
 Without `?mode=test` only live links resolve, so a test link never answers on the live address. Test
-links use test checkout: no real money moves.
+links use Tidepool checkout and move testnet tokens with no monetary value. Activate the Test wallet first; the payer needs test USDC/USDT and the network’s test fee token. See [Test payments](/testing).
 
 ## QR codes and preview cards
 
@@ -70,12 +74,12 @@ store's initial.
 
 ## Switching off, archiving, limits
 
-| Action | How | Result |
-| --- | --- | --- |
-| Switch off | `PATCH` with `status: "inactive"` | The page says the link is not taking payments. Switch it back on any time. |
-| Archive | `DELETE`, or `PATCH` with `archived: true` | Hidden from the default list and unavailable. The payer sees it as switched off. `archived: false` restores it. |
-| Expire | `expires_at` | After this time the link is `expired`. |
-| Limit | `max_uses` | The link stops once that many payments have settled. |
+| Action     | How                                        | Result                                                                                                          |
+| ---------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Switch off | `PATCH` with `status: "inactive"`          | The page says the link is not taking payments. Switch it back on any time.                                      |
+| Archive    | `DELETE`, or `PATCH` with `archived: true` | Hidden from the default list and unavailable. The payer sees it as switched off. `archived: false` restores it. |
+| Expire     | `expires_at`                               | After this time the link is `expired`.                                                                          |
+| Limit      | `max_uses`                                 | The link stops once that many payments have settled.                                                            |
 
 A link is never deleted: its payments and totals stay. The `slug` is part of the shared address and
 **cannot be changed** after creation. To retire an address, archive the link and make a new one.
@@ -110,14 +114,14 @@ A link accepts at most 200 open sessions that have a quote. Past that the page a
 
 Every link read returns:
 
-| Field | Meaning |
-| --- | --- |
-| `use_count` | Settled payments. |
-| `total_paid`, `total_refunded` | In the link's currency. |
-| `total_paid_usd`, `total_refunded_usd` | In USD, as charged. |
+| Field                                  | Meaning                 |
+| -------------------------------------- | ----------------------- |
+| `use_count`                            | Settled payments.       |
+| `total_paid`, `total_refunded`         | In the link's currency. |
+| `total_paid_usd`, `total_refunded_usd` | In USD, as charged.     |
 
 Only settled payments count towards `total_paid`. A refund counts towards `total_refunded` once it has
-executed on chain. To list the payments of one link, use `GET /v1/payments?payment_link_id=<id>`.
+executed on chain. To list the payments of one link, use `GET /v1/payments?payment_link_id=<id>` with a dashboard session, not a secret API key.
 
 ## Who cannot use links
 

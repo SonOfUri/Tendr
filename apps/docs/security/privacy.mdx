@@ -1,0 +1,24 @@
+---
+title: 'Privacy and transaction visibility'
+description: 'Understand what is public on-chain and what is access-controlled.'
+---
+
+Tendr payments are **not anonymous or untraceable**. Source-chain transfers, destination-chain withdrawals and Intents activity can expose amounts, addresses, timestamps and relationships.
+
+Observers may connect a customer transfer to a merchant wallet through transaction data, routing records or reused addresses. Cross-chain routing does not by itself hide that relationship.
+
+## Access-controlled data
+
+Merchant API keys and dashboard sessions scope reads to a store and mode. Order references, customer email, invoice information and internal payment details are not intended as public blockchain metadata. A checkout client secret grants access to its checkout; treat it as sensitive.
+
+- Keep API and webhook secrets on your server.
+- Avoid customer names, email or confidential invoice details in public references or on-chain hook data.
+- Redact URL fragments, authorization headers and receipt tokens from logs.
+- Verify webhooks before acting on them.
+- Describe your own data collection and retention accurately.
+
+## AI data
+
+Tendr sends bounded checkout/store context through its server-side AI integration. Provider credentials stay on the server. Do not describe it as verified private AI or client-to-model end-to-end encryption: independent attestation verification and that encryption flow are not implemented.
+
+This page describes technical visibility. It does not replace the service's privacy policy or your store's customer disclosures.

@@ -241,6 +241,28 @@ class CheckoutTest extends Tendr_Test_Case {
 
 	// ---------------------------------------------------------------- create.
 
+	public function test_a_site_move_blocks_new_sessions_and_existing_payment_frames(): void {
+		self::connect_locally();
+		$order = self::order();
+		self::gateway()->process_payment( $order->get_id() );
+		$connection             = Tendr_Connect::connection();
+		$connection['site_url'] = 'https://previous-store.example';
+		update_option( Tendr_Connect::CONNECTION, $connection );
+		$this->requests        = array();
+		$GLOBALS['wp_scripts'] = null; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- fresh page.
+
+		$this->assertSame( 'failure', self::gateway()->process_payment( $order->get_id() )['result'] );
+		$this->assertStringContainsString( 'Crypto payment is unavailable right now', wc_get_notices( 'error' )[0]['notice'] );
+		$this->assertSame( array(), $this->requests, 'do not create or reuse payments with an obsolete notification address' );
+		ob_start();
+		Tendr_Gateway::receipt_page( $order->get_id() );
+		$html = (string) ob_get_clean();
+		$this->assertStringContainsString( 'store updates its connection', $html );
+		$this->assertStringNotContainsString( 'data-tendr-pay', $html );
+		$this->assertFalse( wp_script_is( 'tendr-checkout', 'enqueued' ) );
+		$this->assertSame( 'pending', wc_get_order( $order->get_id() )->get_status() );
+	}
+
 	public function test_process_payment_sends_exact_body_for_an_ngn_order_and_idempotency_key(): void {
 		$issued = self::connect_locally();
 		$order  = self::order( 'NGN', '78500.00' );

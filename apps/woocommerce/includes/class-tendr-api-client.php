@@ -33,7 +33,7 @@ final class Tendr_Api_Client {
 	public static function request( string $method, string $path, array $body = array(), string $mode = 'test', array $headers = array(), int $timeout = self::TIMEOUT ) {
 		$credentials = Tendr_Credentials::get( $mode );
 		if ( null === $credentials ) {
-			return new WP_Error( 'tendr_not_connected', __( 'This site is not connected to tendr. Connect it from the tendr payment settings.', 'tendr' ) );
+			return new WP_Error( 'tendr_not_connected', __( 'This site is not connected to tendr. Connect it from the tendr payment settings.', 'tendr-pay-with-crypto' ) );
 		}
 		$headers['Authorization'] = 'Bearer ' . $credentials['secret_key'];
 		return self::send( $method, $path, $body, $headers, $timeout );
@@ -114,7 +114,7 @@ final class Tendr_Api_Client {
 			self::log( $method, $path, $headers, null, $response->get_error_code(), $response->get_error_message(), null );
 			return new WP_Error(
 				'tendr_unreachable',
-				__( 'Could not reach tendr. Check the site can make outgoing HTTPS requests, then try again.', 'tendr' ),
+				__( 'Could not reach tendr. Check the site can make outgoing HTTPS requests, then try again.', 'tendr-pay-with-crypto' ),
 				array( 'status' => 0 )
 			);
 		}
@@ -126,7 +126,7 @@ final class Tendr_Api_Client {
 		if ( $status >= 200 && $status < 300 ) {
 			if ( ! is_array( $data ) ) {
 				self::log( $method, $path, $headers, $status, 'tendr_bad_response', 'Response was not JSON', null );
-				return new WP_Error( 'tendr_bad_response', __( 'tendr sent a response this plugin could not read. Try again.', 'tendr' ), array( 'status' => $status ) );
+				return new WP_Error( 'tendr_bad_response', __( 'tendr sent a response this plugin could not read. Try again.', 'tendr-pay-with-crypto' ), array( 'status' => $status ) );
 			}
 			return $data;
 		}
@@ -136,7 +136,7 @@ final class Tendr_Api_Client {
 		$message = ( isset( $error['message'] ) && is_string( $error['message'] ) && '' !== $error['message'] )
 			? self::scrub( wp_strip_all_tags( $error['message'] ) )
 			/* translators: %d: HTTP status code. */
-			: sprintf( __( 'tendr returned an error (HTTP %d). Try again.', 'tendr' ), $status );
+			: sprintf( __( 'tendr returned an error (HTTP %d). Try again.', 'tendr-pay-with-crypto' ), $status );
 		$request_id = ( isset( $error['requestId'] ) && is_string( $error['requestId'] ) ) ? $error['requestId'] : null;
 
 		self::log( $method, $path, $headers, $status, $code, $message, $request_id );

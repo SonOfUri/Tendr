@@ -96,7 +96,7 @@ final class Tendr_Order_Sync {
 			return;
 		}
 		echo '<div class="notice notice-warning inline tendr-test-payment" style="clear:both;margin:12px 0 0;"><p><strong>'
-			. esc_html__( 'Paid with a tendr TEST payment: no real money was received. Do not ship.', 'tendr' )
+			. esc_html__( 'Paid with a tendr TEST payment: no real money was received. Do not ship.', 'tendr-pay-with-crypto' )
 			. '</strong></p></div>';
 	}
 
@@ -267,7 +267,7 @@ final class Tendr_Order_Sync {
 			self::note(
 				$order,
 				$event,
-				__( 'A crypto payment settled for this order, but the order stays on hold because an earlier payment for it is held for review. Check the tendr review queue before shipping.', 'tendr' )
+				__( 'A crypto payment settled for this order, but the order stays on hold because an earlier payment for it is held for review. Check the tendr review queue before shipping.', 'tendr-pay-with-crypto' )
 				. ' ' . $details . ' ' . self::review_link( self::mode_of( $event ) )
 			);
 			return 'applied';
@@ -282,7 +282,7 @@ final class Tendr_Order_Sync {
 			self::note(
 				$order,
 				$event,
-				__( 'Another crypto payment settled for this order, which is already paid. Refund it from the order if it was not expected.', 'tendr' ) . ' ' . $details
+				__( 'Another crypto payment settled for this order, which is already paid. Refund it from the order if it was not expected.', 'tendr-pay-with-crypto' ) . ' ' . $details
 			);
 			return 'applied';
 		}
@@ -296,7 +296,7 @@ final class Tendr_Order_Sync {
 			self::note(
 				$order,
 				$event,
-				__( 'Payment received for a cancelled order: reopen the order or refund it from tendr.', 'tendr' ) . ' ' . $details . $fx_text . self::overpaid_line( $payment )
+				__( 'Payment received for a cancelled order: reopen the order or refund it from tendr.', 'tendr-pay-with-crypto' ) . ' ' . $details . $fx_text . self::overpaid_line( $payment )
 			);
 			return 'applied';
 		}
@@ -305,7 +305,7 @@ final class Tendr_Order_Sync {
 		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- WooCommerce core hook.
 		$valid = (array) apply_filters( 'woocommerce_valid_order_statuses_for_payment_complete', array( 'on-hold', 'pending', 'failed', 'cancelled' ), $order );
 		if ( ! $order->has_status( array_diff( $valid, array( 'cancelled' ) ) ) ) {
-			self::note( $order, $event, __( 'A crypto payment settled for this order, but its status does not allow marking it paid.', 'tendr' ) . ' ' . $details );
+			self::note( $order, $event, __( 'A crypto payment settled for this order, but its status does not allow marking it paid.', 'tendr-pay-with-crypto' ) . ' ' . $details );
 			return 'applied';
 		}
 
@@ -328,7 +328,7 @@ final class Tendr_Order_Sync {
 
 		$order->update_meta_data( self::META_PAID_LIVEMODE, empty( $event['livemode'] ) ? 'no' : 'yes' );
 		$order->payment_complete( $payment_id );
-		$text = __( 'Crypto payment received.', 'tendr' ) . ' ' . $details . $fx_text . self::overpaid_line( $payment );
+		$text = __( 'Crypto payment received.', 'tendr-pay-with-crypto' ) . ' ' . $details . $fx_text . self::overpaid_line( $payment );
 		self::note( $order, $event, $text );
 		return 'applied';
 	}
@@ -354,13 +354,13 @@ final class Tendr_Order_Sync {
 			self::note(
 				$order,
 				$event,
-				__( 'tendr is holding a crypto return for this order for review: the wallet that paid failed sanctions screening. Nothing is sent until it is reviewed.', 'tendr' )
+				__( 'tendr is holding a crypto return for this order for review: the wallet that paid failed sanctions screening. Nothing is sent until it is reviewed.', 'tendr-pay-with-crypto' )
 				. ' ' . $details . ' ' . self::review_link( self::mode_of( $event ) )
 			);
 			return 'applied';
 		}
 
-		$text = __( 'A crypto payment for this order is on hold for review: the paying wallet failed sanctions screening. tendr never releases held funds on its own, and this order will not move to Processing.', 'tendr' )
+		$text = __( 'A crypto payment for this order is on hold for review: the paying wallet failed sanctions screening. tendr never releases held funds on its own, and this order will not move to Processing.', 'tendr-pay-with-crypto' )
 			. ' ' . $details . ' ' . self::review_link( self::mode_of( $event ) );
 
 		if ( $order->has_status( array( 'pending', 'failed' ) ) ) {
@@ -394,7 +394,7 @@ final class Tendr_Order_Sync {
 		self::note(
 			$order,
 			$event,
-			__( 'A crypto payment arrived after this checkout expired. tendr is returning it to the shopper; the order is unchanged.', 'tendr' )
+			__( 'A crypto payment arrived after this checkout expired. tendr is returning it to the shopper; the order is unchanged.', 'tendr-pay-with-crypto' )
 			. ' ' . self::payment_details( $order, $event, $view, $payment )
 		);
 		return 'applied';
@@ -419,8 +419,8 @@ final class Tendr_Order_Sync {
 
 		if ( 'underpaid' === $reason || 'failed' === $reason ) {
 			$what = 'underpaid' === $reason
-				? __( 'Underpaid: the shopper sent less than the order total, and tendr is returning the deposit to them.', 'tendr' )
-				: __( 'The crypto payment could not be completed, and tendr is returning the deposit to the shopper.', 'tendr' );
+				? __( 'Underpaid: the shopper sent less than the order total, and tendr is returning the deposit to them.', 'tendr-pay-with-crypto' )
+				: __( 'The crypto payment could not be completed, and tendr is returning the deposit to the shopper.', 'tendr-pay-with-crypto' );
 			// Only the order's current session decides its status; an older session's return is
 			// just news (the current session may still be payable).
 			$current = (string) $order->get_meta( Tendr_Gateway::META_SESSION_ID ) === (string) ( $view['id'] ?? '' );
@@ -429,12 +429,12 @@ final class Tendr_Order_Sync {
 				return 'applied';
 			}
 			if ( self::can_still_pay( $order, $event, $view ) ) {
-				self::note( $order, $event, $what . ' ' . __( 'The shopper can still pay the full amount; the order stays pending.', 'tendr' ) . ' ' . $details );
+				self::note( $order, $event, $what . ' ' . __( 'The shopper can still pay the full amount; the order stays pending.', 'tendr-pay-with-crypto' ) . ' ' . $details );
 				return 'applied';
 			}
 			$order->update_status(
 				'failed',
-				self::prefix( $event ) . $what . ' ' . __( 'The deposit was returned and the checkout is closed; the shopper can try again from the order.', 'tendr' ) . ' ' . $details
+				self::prefix( $event ) . $what . ' ' . __( 'The deposit was returned and the checkout is closed; the shopper can try again from the order.', 'tendr-pay-with-crypto' ) . ' ' . $details
 			);
 			return 'applied';
 		}//end if
@@ -443,14 +443,14 @@ final class Tendr_Order_Sync {
 			self::note(
 				$order,
 				$event,
-				__( 'The held payment was returned to the wallet that sent it. This order is still on hold: cancel this order if it will not be paid.', 'tendr' ) . ' ' . $details
+				__( 'The held payment was returned to the wallet that sent it. This order is still on hold: cancel this order if it will not be paid.', 'tendr-pay-with-crypto' ) . ' ' . $details
 			);
 			return 'applied';
 		}
 
 		$text = 'late' === $reason
-			? __( 'The late payment is being returned to the shopper; the order is unchanged.', 'tendr' )
-			: __( 'tendr is returning a crypto payment for this order to the shopper; the order is unchanged.', 'tendr' );
+			? __( 'The late payment is being returned to the shopper; the order is unchanged.', 'tendr-pay-with-crypto' )
+			: __( 'tendr is returning a crypto payment for this order to the shopper; the order is unchanged.', 'tendr-pay-with-crypto' );
 		self::note( $order, $event, $text . ' ' . $details );
 		return 'applied';
 	}
@@ -483,10 +483,10 @@ final class Tendr_Order_Sync {
 			}
 			$order->update_meta_data( self::META_EXPIRED_NOTED, (string) $view['id'] );
 			$order->save();
-			self::note( $order, $event, __( 'The crypto checkout expired without a payment. The order stays pending: the shopper can pay it again from the order, which starts a new checkout.', 'tendr' ) );
+			self::note( $order, $event, __( 'The crypto checkout expired without a payment. The order stays pending: the shopper can pay it again from the order, which starts a new checkout.', 'tendr-pay-with-crypto' ) );
 			return 'applied';
 		}
-		$order->update_status( 'cancelled', self::prefix( $event ) . __( 'The crypto checkout expired without a payment.', 'tendr' ) );
+		$order->update_status( 'cancelled', self::prefix( $event ) . __( 'The crypto checkout expired without a payment.', 'tendr-pay-with-crypto' ) );
 		return 'applied';
 	}
 
@@ -592,7 +592,7 @@ final class Tendr_Order_Sync {
 	 * @param array $event Event.
 	 */
 	public static function prefix( array $event ): string {
-		return empty( $event['livemode'] ) ? __( '[Test]', 'tendr' ) . ' ' : '';
+		return empty( $event['livemode'] ) ? __( '[Test]', 'tendr-pay-with-crypto' ) . ' ' : '';
 	}
 
 	/**
@@ -615,31 +615,31 @@ final class Tendr_Order_Sync {
 		$parts = array();
 		$paid  = null !== $usd
 			/* translators: %s: amount in US dollars, e.g. $49.00. */
-			? sprintf( __( 'Amount: %s', 'tendr' ), $usd )
+			? sprintf( __( 'Amount: %s', 'tendr-pay-with-crypto' ), $usd )
 			: ( isset( $payment['amount_received'] ) && is_string( $payment['amount_received'] )
 				/* translators: %s: amount in the token's base units. */
-				? sprintf( __( 'Amount: %s (token base units)', 'tendr' ), $payment['amount_received'] )
+				? sprintf( __( 'Amount: %s (token base units)', 'tendr-pay-with-crypto' ), $payment['amount_received'] )
 				: '' );
 		if ( '' !== $paid ) {
 			$parts[] = esc_html( $paid );
 		}
 		if ( '' !== $asset ) {
 			/* translators: %s: token (asset id). */
-			$parts[] = esc_html( sprintf( __( 'Token: %s', 'tendr' ), $asset ) );
+			$parts[] = esc_html( sprintf( __( 'Token: %s', 'tendr-pay-with-crypto' ), $asset ) );
 		}
 		if ( '' !== $chain ) {
 			/* translators: %s: chain name, e.g. Ethereum. */
-			$parts[] = esc_html( sprintf( __( 'Chain: %s', 'tendr' ), self::chain_name( $chain ) ) );
+			$parts[] = esc_html( sprintf( __( 'Chain: %s', 'tendr-pay-with-crypto' ), self::chain_name( $chain ) ) );
 		}
 		$hash = isset( $payment['origin_tx_hash'] ) && is_string( $payment['origin_tx_hash'] ) ? $payment['origin_tx_hash'] : '';
 		if ( '' !== $hash ) {
 			$url     = self::explorer_url( $chain, $hash, ! empty( $event['livemode'] ) );
-			$parts[] = esc_html__( 'Transaction:', 'tendr' ) . ' ' . ( null !== $url
+			$parts[] = esc_html__( 'Transaction:', 'tendr-pay-with-crypto' ) . ' ' . ( null !== $url
 				? '<a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $url ) . '</a>'
 				: esc_html( $hash ) );
 		}
 		/* translators: %s: tendr payment id. */
-		$parts[] = esc_html( sprintf( __( 'tendr payment %s', 'tendr' ), (string) ( $payment['id'] ?? '' ) ) );
+		$parts[] = esc_html( sprintf( __( 'tendr payment %s', 'tendr-pay-with-crypto' ), (string) ( $payment['id'] ?? '' ) ) );
 		return implode( '. ', $parts ) . '.';
 	}
 
@@ -662,7 +662,7 @@ final class Tendr_Order_Sync {
 		return esc_html(
 			sprintf(
 				/* translators: 1: original amount, 2: USD amount, 3: rate, 4: original currency code. */
-				__( 'Converted %1$s → %2$s at 1 USD = %3$s %4$s', 'tendr' ),
+				__( 'Converted %1$s → %2$s at 1 USD = %3$s %4$s', 'tendr-pay-with-crypto' ),
 				$original,
 				$usd,
 				self::group( (string) $fx['rate'] ),
@@ -681,7 +681,7 @@ final class Tendr_Order_Sync {
 		$priced = Tendr_Gateway::session_total( $view ) ?? array( (string) ( $view['amount'] ?? '?' ), (string) ( $view['amount_currency'] ?? '' ) );
 		return sprintf(
 			/* translators: 1: amount the session asked for, 2: the order's current total. */
-			__( 'Paid %1$s but the order total is %2$s — check before shipping.', 'tendr' ),
+			__( 'Paid %1$s but the order total is %2$s — check before shipping.', 'tendr-pay-with-crypto' ),
 			self::money( $priced[0], $priced[1] ),
 			self::money( wc_format_decimal( (string) $order->get_total(), wc_get_price_decimals() ), (string) $order->get_currency() )
 		);
@@ -709,9 +709,9 @@ final class Tendr_Order_Sync {
 			return '';
 		}
 		if ( true === ( $payment['kept_small_overpayment'] ?? null ) ) {
-			return ' ' . esc_html__( 'The shopper paid slightly more than the order total; the extra (under $1 after network costs) was kept.', 'tendr' );
+			return ' ' . esc_html__( 'The shopper paid slightly more than the order total; the extra (under $1 after network costs) was kept.', 'tendr-pay-with-crypto' );
 		}
-		return ' ' . esc_html__( 'The shopper paid more than the order total; tendr is returning the extra to them.', 'tendr' );
+		return ' ' . esc_html__( 'The shopper paid more than the order total; tendr is returning the extra to them.', 'tendr-pay-with-crypto' );
 	}
 
 	/**
@@ -730,12 +730,12 @@ final class Tendr_Order_Sync {
 	 */
 	public static function review_link( string $mode ): string {
 		$url = Tendr_Plugin::dashboard_url( '/dashboard/review', $mode );
-		return esc_html__( 'Review queue:', 'tendr' ) . ' <a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $url ) . '</a>';
+		return esc_html__( 'Review queue:', 'tendr-pay-with-crypto' ) . ' <a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $url ) . '</a>';
 	}
 
 	/**
-	 * A block-explorer link for a transaction, or null (unknown chain; test mode has NEAR
-	 * testnet only, other test-mode chains are simulated).
+	 * A block-explorer link for a transaction, or null for an unsupported network.
+	 * Test mode uses Tidepool's NEAR testnet, Base Sepolia and Solana devnet networks.
 	 *
 	 * @param string $chain    1Click chain id.
 	 * @param string $hash     Transaction hash.
@@ -745,7 +745,7 @@ final class Tendr_Order_Sync {
 		$explorers = array(
 			'near'      => array( 'https://nearblocks.io/txns/', 'https://testnet.nearblocks.io/txns/' ),
 			'eth'       => array( 'https://etherscan.io/tx/', null ),
-			'base'      => array( 'https://basescan.org/tx/', null ),
+			'base'      => array( 'https://basescan.org/tx/', 'https://sepolia.basescan.org/tx/' ),
 			'arb'       => array( 'https://arbiscan.io/tx/', null ),
 			'arbitrum'  => array( 'https://arbiscan.io/tx/', null ),
 			'pol'       => array( 'https://polygonscan.com/tx/', null ),
@@ -756,7 +756,7 @@ final class Tendr_Order_Sync {
 			'avax'      => array( 'https://snowtrace.io/tx/', null ),
 			'avalanche' => array( 'https://snowtrace.io/tx/', null ),
 			'gnosis'    => array( 'https://gnosisscan.io/tx/', null ),
-			'sol'       => array( 'https://solscan.io/tx/', null ),
+			'sol'       => array( 'https://solscan.io/tx/', 'https://explorer.solana.com/tx/' ),
 			'tron'      => array( 'https://tronscan.org/#/transaction/', null ),
 			'btc'       => array( 'https://mempool.space/tx/', null ),
 		);
@@ -765,7 +765,7 @@ final class Tendr_Order_Sync {
 			return null;
 		}
 		$base = $explorers[ $key ][ $livemode ? 0 : 1 ];
-		return null === $base ? null : $base . $hash;
+		return null === $base ? null : $base . $hash . ( ! $livemode && 'sol' === $key ? '?cluster=devnet' : '' );
 	}
 
 	/**

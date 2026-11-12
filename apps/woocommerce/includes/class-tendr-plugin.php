@@ -42,13 +42,13 @@ final class Tendr_Plugin {
 	 * @return bool Whether the plugin booted.
 	 */
 	public static function boot( string $php_version, ?string $wc_version ): bool {
-		$error = self::requirement_error( $php_version, $wc_version );
-		if ( null !== $error ) {
+		// Bootstrap runs on plugins_loaded; translate requirement messages only when displayed.
+		if ( version_compare( $php_version, self::MIN_PHP, '<' ) || null === $wc_version || version_compare( $wc_version, self::MIN_WC, '<' ) ) {
 			add_action(
 				'admin_notices',
-				static function () use ( $error ) {
+				static function () use ( $php_version, $wc_version ) {
 					if ( current_user_can( 'activate_plugins' ) ) {
-						echo self::requirements_notice_html( $error ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in requirements_notice_html().
+						echo self::requirements_notice_html( (string) self::requirement_error( $php_version, $wc_version ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in requirements_notice_html().
 					}
 				}
 			);
@@ -84,14 +84,14 @@ final class Tendr_Plugin {
 	public static function requirement_error( string $php_version, ?string $wc_version ): ?string {
 		if ( version_compare( $php_version, self::MIN_PHP, '<' ) ) {
 			/* translators: %s: the PHP version this site runs. */
-			return sprintf( __( 'tendr: Pay with crypto needs PHP 8.0 or later. This site runs PHP %s.', 'tendr' ), $php_version );
+			return sprintf( __( 'tendr: Pay with crypto needs PHP 8.0 or later. This site runs PHP %s.', 'tendr-pay-with-crypto' ), $php_version );
 		}
 		if ( null === $wc_version ) {
-			return __( 'tendr: Pay with crypto needs WooCommerce. Install and activate WooCommerce 8.5 or later.', 'tendr' );
+			return __( 'tendr: Pay with crypto needs WooCommerce. Install and activate WooCommerce 8.5 or later.', 'tendr-pay-with-crypto' );
 		}
 		if ( version_compare( $wc_version, self::MIN_WC, '<' ) ) {
 			/* translators: %s: the WooCommerce version this site runs. */
-			return sprintf( __( 'tendr: Pay with crypto needs WooCommerce 8.5 or later. This site runs WooCommerce %s.', 'tendr' ), $wc_version );
+			return sprintf( __( 'tendr: Pay with crypto needs WooCommerce 8.5 or later. This site runs WooCommerce %s.', 'tendr-pay-with-crypto' ), $wc_version );
 		}
 		return null;
 	}

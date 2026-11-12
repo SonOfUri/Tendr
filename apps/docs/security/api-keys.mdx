@@ -19,6 +19,11 @@ Keys are stored as SHA-256 hashes. The list shows only the prefix, permissions, 
 
 Never put secret keys in `NEXT_PUBLIC_*` variables or browser bundles. The hosted checkout and `tendr.js` use a checkout session's client secret; they do not need your server's API key.
 
+With [`@usetendr/sdk`](/sdks/typescript), pass the secret key to `new TendrClient({ apiKey })`.
+The client adds the bearer header. Use `tdr_test_…` or `tdr_live_…`; a publishable key is not accepted
+by the server SDK. The key determines the store and mode, so there is no separate SDK live-mode
+switch. `tendr.ping()` returns the authenticated merchant, mode and scopes without creating a payment.
+
 The management endpoints use dashboard cookies, store/mode headers and CSRF protection:
 
 - `GET /v1/api_keys` returns `{ api_keys: [...] }` for the selected store and mode.
@@ -28,6 +33,10 @@ The management endpoints use dashboard cookies, store/mode headers and CSRF prot
 Creation does not accept `Idempotency-Key`: raw secrets must never enter the response replay cache. If the creation response is lost, refresh the list, revoke the newly created key and create a replacement. Creating a live key does not bypass the platform's live-mode or wallet-readiness checks.
 
 ## Request signing (optional)
+
+`@usetendr/sdk@0.2.0` does not generate request-signing headers. Keys that require HMAC request
+signing must use an HTTP integration that implements the signing rules below. This is separate
+from webhook signature verification, which the SDK supports.
 
 A secret key can have a signing secret. When it does, requests may carry a `Tendr-Signature` header, and a key marked "signing required" rejects any request without a valid one (`401 SIGNATURE_INVALID`).
 

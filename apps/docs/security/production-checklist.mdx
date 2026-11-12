@@ -1,10 +1,34 @@
 ---
-title: Production checklist
+title: 'Go live checklist'
+description: 'Check your store, integration and operational recovery before accepting real payments.'
 ---
 
-- [ ] Live provider implemented against official docs
-- [ ] `NODE_ENV=production` with `KEYVAULT_DRIVER=gcp` (Cloud KMS); the local key vault is refused in production
-- [ ] HTTPS everywhere; webhook URL allowlisting
-- [ ] Production merchant auth (not seeded keys)
-- [ ] Runtime database role without `UPDATE`/`DELETE` on `events` (see `infra/terraform/README.md`)
-- [ ] No secrets in client bundles
+## Store setup
+
+- [ ] Live wallet is active and the owner can use its dedicated passkey.
+- [ ] Settlement asset is selected from the supported catalog.
+- [ ] The owner understands current recovery and shared-control limits.
+- [ ] Live mode is available on the deployment.
+
+## Integration
+
+- [ ] Secret keys stay server-side and have only required scopes.
+- [ ] Live and test credentials, webhook secrets and records are separate.
+- [ ] Order totals come from your server, with exact decimal handling.
+- [ ] Supported mutations use persisted idempotency keys.
+- [ ] Embedded checkout origins match actual production origins.
+- [ ] Webhooks reach public HTTPS endpoints and signatures are checked against raw bytes.
+- [ ] Event processing is durable, deduplicated and tied to the expected store/mode/order.
+- [ ] Fulfillment waits for verified `payment.succeeded` and corroboration.
+
+## Recovery and customer experience
+
+- [ ] Slow, expired, underpaid, late and refunded paths have been tested.
+- [ ] A browser timeout cannot create a second transfer.
+- [ ] Failed webhook deliveries and pending refund approvals are monitored.
+- [ ] Your customer terms, privacy information and support details are accurate and reachable.
+- [ ] A small live payment and withdrawal have been reconciled end to end.
+
+For WooCommerce, reconnect after a site-address change. For Shopify, complete the platform's payments approval and installation requirements first.
+
+Deployment operators should also validate their provider credentials, production key storage, database privileges and backups. Those controls are separate from this merchant integration checklist.
