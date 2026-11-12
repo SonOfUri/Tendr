@@ -7,8 +7,8 @@ import type { Quote, SessionView, Token } from '@/lib/checkout/api';
 import { encodeErc20Transfer } from '@/lib/wallets/evm';
 
 vi.mock('@/lib/env', async (original) => {
-  const module = await original<typeof import('@/lib/env')>();
-  return { ...module, publicEnv: { ...module.publicEnv, e2eInjectedWallet: true } };
+  const imported = await original<typeof import('@/lib/env')>();
+  return { ...imported, publicEnv: { ...imported.publicEnv, e2eInjectedWallet: true } };
 });
 vi.mock('@/components/QrImage', () => ({ QrImage: () => null }));
 vi.mock('@/components/checkout/CheckoutAiFab', () => ({ CheckoutAiFab: () => null }));
