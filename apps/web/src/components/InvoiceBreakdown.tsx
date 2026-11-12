@@ -1,5 +1,4 @@
-import { formatUnits } from '@/lib/assets';
-import type { InvoiceView } from '@/lib/invoices';
+import { formatInvoiceAmount, type InvoiceView } from '@/lib/invoices';
 import styles from './InvoiceBreakdown.module.css';
 
 export function InvoiceBreakdown({ invoice }: { invoice: InvoiceView }) {
@@ -10,23 +9,21 @@ export function InvoiceBreakdown({ invoice }: { invoice: InvoiceView }) {
       <thead>
         <tr>
           <th scope="col">Description</th>
-          <th scope="col">Amount ({invoice.symbol})</th>
+          <th scope="col">Amount ({invoice.amountCurrency === 'USD' ? 'USD' : invoice.symbol})</th>
         </tr>
       </thead>
       <tbody>
         {items.map((item, index) => (
           <tr key={index}>
             <td>{item.description}</td>
-            <td>{formatUnits(item.amount, invoice.decimals)}</td>
+            <td>{formatInvoiceAmount(invoice, item.amount)}</td>
           </tr>
         ))}
       </tbody>
       <tfoot>
         <tr>
           <th scope="row">Total</th>
-          <td>
-            {formatUnits(invoice.amount, invoice.decimals)} {invoice.symbol}
-          </td>
+          <td>{formatInvoiceAmount(invoice)}</td>
         </tr>
       </tfoot>
     </table>

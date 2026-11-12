@@ -27,6 +27,7 @@ describe('contractor invoice API', () => {
     contractorName: 'Contractor',
     email: `contractor-${randomBytes(6).toString('hex')}@example.com`,
     reference: 'INV-001',
+    amountCurrency: 'USD' as const,
     description: 'Design work',
     amount: '100.25',
     destinationAsset: ASSET,
@@ -39,6 +40,7 @@ describe('contractor invoice API', () => {
       contractorName: legacy.contractorName,
       email: legacy.email,
       reference: legacy.reference,
+      amountCurrency: legacy.amountCurrency,
       destinationAsset: legacy.destinationAsset,
       destination: legacy.destination,
       items: [
@@ -117,7 +119,7 @@ describe('contractor invoice API', () => {
     expect(new URL(mail.sent.at(-1)!.data.url!).pathname).toBe('/invoice/business');
     const draft = await prisma.invoice.findFirstOrThrow();
     expect(draft.accessTokenHash).not.toBe(token);
-    expect(draft.amount).toBe('100250000');
+    expect(draft.amount).toBe('10025');
     expect(
       (await app.inject({ method: 'GET', url: '/v1/invoices', headers: headers() })).json()
         .invoices,
@@ -128,7 +130,7 @@ describe('contractor invoice API', () => {
     );
     expect((await post(`${BASE}/verify`, { token })).json()).toMatchObject({
       status: 'open',
-      amount: '100250000',
+      amount: '10025',
       destination: DEST,
     });
     expect((await post(`${BASE}/verify`, { token })).statusCode).toBe(200);
@@ -155,7 +157,7 @@ describe('contractor invoice API', () => {
     expect(await prisma.invoice.count()).toBe(1);
     expect((await post(`${BASE}/verify`, { token: old })).statusCode).toBe(401);
     expect((await post(`${BASE}/verify`, { token: fresh })).json()).toMatchObject({
-      amount: '100250000',
+      amount: '10025',
       destination: DEST,
     });
     await post(BASE, body);
@@ -167,10 +169,11 @@ describe('contractor invoice API', () => {
     const created = await post(BASE, body);
     expect(created.statusCode, created.body).toBe(202);
     const expected = {
-      amount: '300000',
+      amount: '30',
+      amountCurrency: 'USD',
       items: [
-        { description: 'Design work', amount: '100000' },
-        { description: 'Materials', amount: '200000' },
+        { description: 'Design work', amount: '10' },
+        { description: 'Materials', amount: '20' },
       ],
     };
     expect(await prisma.invoice.findFirstOrThrow()).toMatchObject(expected);
@@ -193,6 +196,9 @@ describe('contractor invoice API', () => {
   it('rejects overriding totals, invalid item counts, amounts and precision before storing a breakdown', async () => {
     for (const patch of [
       { amount: '999' },
+      { amountCurrency: 'TOKEN' },
+      { amountCurrency: undefined },
+      { items: [{ description: 'Service', amount: '1.001' }] },
       { description: 'Override' },
       { items: [] },
       { items: Array.from({ length: 51 }, () => ({ description: 'Service', amount: '1' })) },
@@ -202,7 +208,7 @@ describe('contractor invoice API', () => {
       { items: [{ description: 'Service', amount: '0.0000001' }] },
       {
         items: [
-          { description: 'Service', amount: '340282366920938463463374607431768' },
+          { description: 'Service', amount: '3402823669209384634633746074317682114.55' },
           { description: 'Service', amount: '1' },
         ],
       },
@@ -214,13 +220,17 @@ describe('contractor invoice API', () => {
     expect(mail.sent).toHaveLength(0);
   });
 
-  it('shows legacy invoices as a single item without changing the payable total', async () => {
+  it('preserves previously issued token invoices as a single item without repricing them', async () => {
     const legacy = input();
     expect((await post(BASE, legacy)).statusCode).toBe(202);
     // Existing rows have no items column value; rollout must preserve them and old clients.
-    await prisma.invoice.updateMany({ data: { items: Prisma.DbNull } });
+    await prisma.invoice.updateMany({
+      data: { items: Prisma.DbNull, amountCurrency: 'TOKEN', amount: '100250000' },
+    });
     expect((await post(`${BASE}/status`, { token: secret() })).json()).toMatchObject({
       description: legacy.description,
+      amountCurrency: 'TOKEN',
+      amountDecimals: 6,
       amount: '100250000',
       items: [{ description: legacy.description, amount: '100250000' }],
     });

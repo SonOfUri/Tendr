@@ -2133,6 +2133,13 @@ enum InvoiceStatus {
   @@map("invoice_status")
 }
 
+enum InvoiceAmountCurrency {
+  TOKEN
+  USD
+
+  @@map("invoice_amount_currency")
+}
+
 model Invoice {
   id                 String        @id
   merchantId         String        @map("merchant_id")
@@ -2147,6 +2154,8 @@ model Invoice {
   destinationChain   String        @map("destination_chain")
   destination        String
   amount             String
+  /// USD invoices store cents. Existing TOKEN invoices retain their agreed token units.
+  amountCurrency     InvoiceAmountCurrency @default(TOKEN) @map("amount_currency")
   symbol             String
   decimals           Int
   status             InvoiceStatus @default(awaiting_verification)

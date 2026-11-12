@@ -730,6 +730,93 @@ describe('native passkey wallet API', () => {
   }
   const invoiceQuote = (id: string) => post(`/v1/invoices/${id}/payout`, { asset: USDC });
 
+  it.each([true, false])(
+    'prices a USD invoice from a fresh rate and checks the signed token target after rates change (full delivery: %s)',
+    async (full) => {
+      await activate();
+      const invoice = await bill();
+      await prisma.invoice.update({
+        where: { id: invoice.id },
+        data: { amountCurrency: 'USD', amount: '100' },
+      });
+      // Activation populated the ordinary five-minute catalog cache at $1. The invoice must fetch $2.
+      vi.mocked(HttpOneClick.prototype.tokens).mockResolvedValue([
+        { assetId: USDC, blockchain: 'near', decimals: 6, symbol: 'USDC', priceUsd: '1' },
+        { assetId: BASE, blockchain: 'base', decimals: 6, symbol: 'USDC', priceUsd: '2' },
+      ]);
+      const quoted = await invoiceQuote(invoice.id);
+      expect(quoted.statusCode, quoted.body).toBe(201);
+      expect(lastQuote).toMatchObject({ swapType: 'EXACT_OUTPUT', amount: '500000' });
+      const payout = quoted.json();
+      expect(payout.quote.invoicePricing).toMatchObject({
+        amountCurrency: 'USD',
+        amount: '100',
+        destinationAmount: '500000',
+        priceUsd: '2',
+      });
+      const challenge = (await post(`${base}/payouts/${payout.id}/challenge`)).json();
+      await post(`${base}/payouts/${payout.id}/submit`, { response: auth.get(challenge.options) });
+      vi.mocked(HttpOneClick.prototype.tokens).mockRejectedValue(
+        new Error('Prices unavailable after signing'),
+      );
+      resetTokenCache();
+      status = {
+        status: 'SUCCESS',
+        swapDetails: {
+          amountOut: full ? '500000' : '400000',
+          originChainTxHashes: [],
+          destinationChainTxHashes: [{ hash: 'usd-invoice-tx' }],
+        },
+      };
+      await pollNativePayouts();
+      expect(await prisma.invoice.findUnique({ where: { id: invoice.id } })).toMatchObject({
+        amountCurrency: 'USD',
+        amount: '100',
+        status: full ? 'paid' : 'payment_review',
+      });
+    },
+  );
+
+  it('does not assume a dollar peg when the receiving token price is missing', async () => {
+    await activate();
+    const invoice = await bill();
+    await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { amountCurrency: 'USD', amount: '100' },
+    });
+    vi.mocked(HttpOneClick.prototype.tokens).mockResolvedValue([
+      { assetId: USDC, blockchain: 'near', decimals: 6, symbol: 'USDC', priceUsd: '1' },
+      { assetId: BASE, blockchain: 'base', decimals: 6, symbol: 'USDC' },
+    ]);
+    const result = await invoiceQuote(invoice.id);
+    expect(result.statusCode, result.body).toBe(503);
+    expect(result.body).toContain('current USD price');
+    expect(await prisma.nativePayout.count({ where: { invoiceId: invoice.id } })).toBe(0);
+  });
+
+  it('reprices an expired USD quote without changing the dollar invoice total', async () => {
+    await activate();
+    const invoice = await bill();
+    await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { amountCurrency: 'USD', amount: '100' },
+    });
+    const first = (await invoiceQuote(invoice.id)).json();
+    expect(first.quote.quote.amountOut).toBe('1000000');
+    await prisma.nativePayout.update({ where: { id: first.id }, data: { expiresAt: new Date(0) } });
+    vi.mocked(HttpOneClick.prototype.tokens).mockResolvedValue([
+      { assetId: USDC, blockchain: 'near', decimals: 6, symbol: 'USDC', priceUsd: '1' },
+      { assetId: BASE, blockchain: 'base', decimals: 6, symbol: 'USDC', priceUsd: '2' },
+    ]);
+    const second = (await invoiceQuote(invoice.id)).json();
+    expect(second.id).not.toBe(first.id);
+    expect(second.quote.quote.amountOut).toBe('500000');
+    expect(await prisma.invoice.findUnique({ where: { id: invoice.id } })).toMatchObject({
+      amount: '100',
+      amountCurrency: 'USD',
+    });
+  });
+
   it('quotes the exact invoice output and serializes concurrent attempts', async () => {
     await activate();
     const invoice = await bill();

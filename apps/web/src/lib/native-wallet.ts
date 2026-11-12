@@ -25,6 +25,13 @@ export interface NativePayout {
   quote: {
     quote: { amountOut: string; minAmountOut?: string };
     tidepoolRoute?: { kind: 'same_asset'; intermediateAsset: string };
+    invoicePricing?: {
+      amountCurrency: 'USD';
+      amount: string;
+      destinationAmount: string;
+      priceUsd: string;
+      quotedAt: string;
+    };
   };
 }
 

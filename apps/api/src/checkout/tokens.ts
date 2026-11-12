@@ -15,9 +15,12 @@ const cache = new Map<boolean, Entry>();
 const inflight = new Map<boolean, Promise<Map<string, TokenInfo>>>();
 
 /** The mode's token list by asset id. Throws PROVIDER_UNAVAILABLE (503) when 1Click fails. */
-export async function tokenList(livemode: boolean): Promise<Map<string, TokenInfo>> {
+export async function tokenList(
+  livemode: boolean,
+  options: { fresh?: boolean } = {},
+): Promise<Map<string, TokenInfo>> {
   const hit = cache.get(livemode);
-  if (hit && Date.now() - hit.at < TOKEN_CACHE_TTL_MS) return hit.tokens;
+  if (!options.fresh && hit && Date.now() - hit.at < TOKEN_CACHE_TTL_MS) return hit.tokens;
   let p = inflight.get(livemode);
   if (!p) {
     p = providerFor(livemode)
@@ -44,8 +47,12 @@ export async function tokenList(livemode: boolean): Promise<Map<string, TokenInf
 }
 
 /** One asset's info. Throws UNSUPPORTED_ASSET (400) when the provider does not list it. */
-export async function tokenInfo(livemode: boolean, assetId: string): Promise<TokenInfo> {
-  const token = (await tokenList(livemode)).get(assetId);
+export async function tokenInfo(
+  livemode: boolean,
+  assetId: string,
+  options: { fresh?: boolean } = {},
+): Promise<TokenInfo> {
+  const token = (await tokenList(livemode, options)).get(assetId);
   if (token) return token;
   // Test mode's fixture is small; shopperTokens also merges the live catalog — resolve those
   // assets from live 1Click so quotes don't 400 after the picker shows them.

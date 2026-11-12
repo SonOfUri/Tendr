@@ -1,8 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { InvoiceItemsInputSchema, invoiceBreakdown } from './invoices.js';
+import {
+  InvoiceItemsInputSchema,
+  InvoiceUsdItemsInputSchema,
+  INVOICE_USD_DECIMALS,
+  invoiceBreakdown,
+} from './invoices.js';
 
 describe('invoice breakdown amounts', () => {
   const item = (amount: string) => ({ description: 'Services', amount });
+  it('sums USD line items in cents and rejects fractions of a cent', () => {
+    expect(
+      invoiceBreakdown(
+        InvoiceUsdItemsInputSchema.parse([item('125.00'), item('25.50')]),
+        INVOICE_USD_DECIMALS,
+      ),
+    ).toEqual({ items: [item('12500'), item('2550')], amount: '15050' });
+    expect(InvoiceUsdItemsInputSchema.safeParse([item('1.001')]).success).toBe(false);
+  });
   it('adds decimal token amounts exactly, including values beyond Number precision', () => {
     expect(invoiceBreakdown([item('0.1'), item('0.2')], 6)).toEqual({
       items: [item('100000'), item('200000')],

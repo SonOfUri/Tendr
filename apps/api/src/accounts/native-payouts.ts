@@ -18,6 +18,11 @@ import { env } from '../env.js';
 import { recordEvent } from '../events/record.js';
 import { AppError, conflict, notFound } from '../lib/errors.js';
 import { lockInvoice } from '../invoices/invoices.js';
+import {
+  invoiceDeliveryTarget,
+  invoiceUsdTokenAmount,
+  type InvoicePricing,
+} from '../invoices/pricing.js';
 import { newId } from '../lib/ids.js';
 import { assertNativeMode, usesTidepool, intentsContractFor } from '../lib/testnet.js';
 import { TidepoolOneClick, tidepoolTransferPayload } from '../checkout/oneclick/tidepool.js';
@@ -212,7 +217,9 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
   NativePayoutInput.parse(request);
   const [, destination] = await Promise.all([
     tokenInfo(actor.livemode, request.asset),
-    tokenInfo(actor.livemode, request.destinationAsset),
+    tokenInfo(actor.livemode, request.destinationAsset, {
+      fresh: invoice?.amountCurrency === 'USD',
+    }),
   ]);
   if (
     invoice &&
@@ -220,6 +227,23 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
       invoice.decimals !== destination.decimals)
   )
     throw conflict('The invoice token metadata has changed; review this invoice before payment');
+  let invoicePricing: InvoicePricing | undefined;
+  if (invoice?.amountCurrency === 'USD') {
+    request.amount = invoiceUsdTokenAmount(
+      invoice.amount,
+      destination.priceUsd,
+      destination.decimals,
+    );
+    invoicePricing = {
+      amountCurrency: 'USD',
+      amount: invoice.amount,
+      destinationAsset: request.destinationAsset,
+      destinationAmount: request.amount,
+      priceUsd: destination.priceUsd!,
+      quotedAt: new Date().toISOString(),
+    };
+  }
+  const invoiceOutput = invoice ? request.amount : null;
   if (!isValidAddress(destination.blockchain, request.destination))
     throw new AppError('VALIDATION_ERROR', 'Invalid destination address for this token chain', 400);
   // Refunds never reinterpret a NEAR wrapped-token address as an external-chain destination.
@@ -258,24 +282,23 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
     recipientType: 'DESTINATION_CHAIN',
     deadline: new Date(Date.now() + 5 * 60_000).toISOString(),
   };
-  const quote = await prepareWithProvider(() =>
-    usesTidepool(actor.livemode)
-      ? quoteTidepoolPayout(provider, quoteRequest)
-      : provider.quote(quoteRequest),
+  const quote: QuoteResponse & { invoicePricing?: InvoicePricing } = await prepareWithProvider(
+    () =>
+      usesTidepool(actor.livemode)
+        ? quoteTidepoolPayout(provider, quoteRequest)
+        : provider.quote(quoteRequest),
   );
   if (
     !quote.quote.depositAddress ||
     quote.quote.depositMemo ||
     !amount.safeParse(quote.quote.amountIn).success ||
-    (invoice
-      ? quote.quote.amountOut !== invoice.amount
-      : quote.quote.amountIn !== request.amount) ||
+    (invoice ? quote.quote.amountOut !== invoiceOutput : quote.quote.amountIn !== request.amount) ||
     !amount.safeParse(quote.quote.amountOut).success ||
     (!invoice && !amount.safeParse(quote.quote.minAmountOut).success) ||
     (quote.quote.minAmountOut !== undefined &&
       (!amount.safeParse(quote.quote.minAmountOut).success ||
         BigInt(quote.quote.minAmountOut) > BigInt(quote.quote.amountOut) ||
-        (invoice !== null && BigInt(quote.quote.minAmountOut) < BigInt(invoice.amount))))
+        (invoiceOutput !== null && BigInt(quote.quote.minAmountOut) < BigInt(invoiceOutput))))
   ) {
     throw new AppError(
       'PROVIDER_UNAVAILABLE',
@@ -283,6 +306,7 @@ export async function createNativePayout(actor: NativeActor, input: Input) {
       503,
     );
   }
+  if (invoicePricing) quote.invoicePricing = invoicePricing;
   if (invoice) request.amount = quote.quote.amountIn;
   const balances = await nearClient(actor.livemode).view<string[]>(
     intentsContractFor(actor.livemode),
@@ -474,10 +498,12 @@ async function finish(
     });
     if (invoice) {
       const delivered = providerStatus.swapDetails.amountOut;
+      const target = invoiceDeliveryTarget(invoice, p.quote);
       const paid =
         status === 'completed' &&
+        target !== null &&
         amount.safeParse(delivered).success &&
-        BigInt(delivered!) >= BigInt(invoice.amount);
+        BigInt(delivered!) >= BigInt(target);
       // An incomplete SUCCESS receipt is never permission to pay again.
       const invoiceStatus = status === 'completed' ? (paid ? 'paid' : 'payment_review') : 'open';
       await tx.invoice.updateMany({

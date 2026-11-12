@@ -1,8 +1,9 @@
 import type { Invoice, NativePayout, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import {
-  InvoiceDecimalAmountSchema,
-  InvoiceItemsInputSchema,
+  InvoiceUsdAmountSchema,
+  InvoiceUsdItemsInputSchema,
+  INVOICE_USD_DECIMALS,
   invoiceAmountUnits,
   invoiceBreakdown,
   type InvoiceItem,
@@ -30,16 +31,18 @@ const InvoiceBaseInput = z
     contractorName: text(120),
     email: EmailSchema,
     reference: text(80),
+    // Explicit currency prevents an already-open token form from silently changing its terms.
+    amountCurrency: z.literal('USD'),
     dueDate: z.string().date().optional(),
     destinationAsset: z.string().min(8).max(256).startsWith('nep141:'),
     destination: text(128),
   })
   .strict();
-// New clients send only the breakdown. Keep the original shape for already-open forms.
+// New clients send only the breakdown. Single-line clients must also specify USD.
 // The strict union rejects requests that try to override the calculated total.
 export const InvoiceInput = z.union([
-  InvoiceBaseInput.extend({ items: InvoiceItemsInputSchema }).strict(),
-  InvoiceBaseInput.extend({ description: text(2000), amount: InvoiceDecimalAmountSchema }).strict(),
+  InvoiceBaseInput.extend({ items: InvoiceUsdItemsInputSchema }).strict(),
+  InvoiceBaseInput.extend({ description: text(2000), amount: InvoiceUsdAmountSchema }).strict(),
 ]);
 export const InvoiceTokenInput = z
   .object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) })
@@ -79,7 +82,12 @@ export async function publicInvoiceBusiness(slug: string) {
   const tokens = [...(await tokenList(true)).values()]
     // Only routes whose external destination validator is implemented; memo/tag routes excluded.
     .filter((t) => chainFamily(t.blockchain) !== 'other');
-  return { business: { name: business.name, slug: business.slug }, tokens };
+  return {
+    business: { name: business.name, slug: business.slug },
+    amountCurrency: 'USD',
+    amountDecimals: INVOICE_USD_DECIMALS,
+    tokens,
+  };
 }
 
 /** Fail closed: one mailbox cannot be spammed by rotating IPs or businesses. */
@@ -118,7 +126,7 @@ export async function submitInvoice(slug: string, input: z.infer<typeof InvoiceI
   try {
     breakdown = invoiceBreakdown(
       'items' in input ? input.items : [{ description: input.description, amount: input.amount }],
-      token.decimals,
+      INVOICE_USD_DECIMALS,
     );
   } catch (error) {
     throw new AppError('VALIDATION_ERROR', (error as Error).message, 400);
@@ -182,6 +190,8 @@ export function invoiceView(row: WithPayouts) {
     destinationAsset: row.destinationAsset,
     destinationChain: row.destinationChain,
     amount: row.amount,
+    amountCurrency: row.amountCurrency,
+    amountDecimals: row.amountCurrency === 'USD' ? INVOICE_USD_DECIMALS : row.decimals,
     symbol: row.symbol,
     decimals: row.decimals,
     status: row.status,
@@ -195,6 +205,8 @@ export function invoiceView(row: WithPayouts) {
             p.status === 'awaiting_signature' && p.expiresAt <= new Date() ? 'expired' : p.status,
           asset: p.asset,
           amount: p.amount,
+          destinationAmount:
+            (p.quote as { quote?: { amountOut?: string } })?.quote?.amountOut ?? null,
           expiresAt: p.expiresAt,
           providerStatus: p.providerStatus,
         }

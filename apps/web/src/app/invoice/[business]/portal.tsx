@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { invoiceBreakdown, MAX_INVOICE_ITEMS } from '@tendr/contracts';
+import { invoiceBreakdown, MAX_INVOICE_ITEMS, INVOICE_USD_DECIMALS } from '@tendr/contracts';
 import { InvoiceBreakdown } from '@/components/InvoiceBreakdown';
 import { TendrLogo } from '@/components/TendrLogo';
 import { DemoAssetModal } from '@/components/demo/DemoAssetModal';
@@ -10,7 +10,12 @@ import type { Token } from '@/lib/checkout/api';
 import { buildDemoAssetOptions } from '@/lib/demo-assets';
 import { publicEnv } from '@/lib/env';
 import { formatUnits, chainLabel } from '@/lib/assets';
-import { INVOICE_STATUS, type InvoiceView } from '@/lib/invoices';
+import {
+  INVOICE_STATUS,
+  formatInvoiceUsd,
+  formatInvoiceAmount,
+  type InvoiceView,
+} from '@/lib/invoices';
 import styles from './portal.module.css';
 
 type PortalToken = { assetId: string; symbol: string; decimals: number; blockchain: string };
@@ -44,11 +49,10 @@ export function InvoicePortal({ business }: { business: string }) {
     [data?.tokens],
   );
   const total = (() => {
-    if (!receivingToken) return { amount: '0', error: '' };
     const entered = items.filter((item) => item.amount !== '');
     if (!entered.length) return { amount: '0', error: '' };
     try {
-      return { amount: invoiceBreakdown(entered, receivingToken.decimals).amount, error: '' };
+      return { amount: invoiceBreakdown(entered, INVOICE_USD_DECIMALS).amount, error: '' };
     } catch (e) {
       return { amount: '0', error: (e as Error).message };
     }
@@ -122,6 +126,7 @@ export function InvoicePortal({ business }: { business: string }) {
         contractorName: form.get('name'),
         email: form.get('email'),
         reference: form.get('reference'),
+        amountCurrency: 'USD',
         items: items.map(({ description, amount }) => ({ description, amount })),
         destination: form.get('destination'),
         destinationAsset: asset,
@@ -149,9 +154,7 @@ export function InvoicePortal({ business }: { business: string }) {
           <>
             <p className={styles.eyebrow}>{INVOICE_STATUS[invoice.status]}</p>
             <h1>Invoice {invoice.reference}</h1>
-            <p className={styles.total}>
-              {formatUnits(invoice.amount, invoice.decimals)} {invoice.symbol}
-            </p>
+            <p className={styles.total}>{formatInvoiceAmount(invoice)}</p>
             <dl>
               <dt>From</dt>
               <dd>
@@ -167,6 +170,17 @@ export function InvoicePortal({ business }: { business: string }) {
               ) : null}
               <dt>Receiving network</dt>
               <dd>{chainLabel(invoice.destinationChain)}</dd>
+              <dt>Receiving token</dt>
+              <dd>{invoice.symbol}</dd>
+              {invoice.payout?.destinationAmount ? (
+                <>
+                  <dt>Quoted payout</dt>
+                  <dd>
+                    {formatUnits(invoice.payout.destinationAmount, invoice.decimals)}{' '}
+                    {invoice.symbol}
+                  </dd>
+                </>
+              ) : null}
               <dt>Receiving wallet</dt>
               <dd className={styles.address}>{invoice.destination}</dd>
               <dt>Asset</dt>
@@ -269,18 +283,21 @@ export function InvoicePortal({ business }: { business: string }) {
                     onChange={setAsset}
                   />
                 ) : (
-                  <p className={styles.hint}>No receiving tokens are available for this business.</p>
+                  <p className={styles.hint}>
+                    No receiving tokens are available for this business.
+                  </p>
                 )}
                 {receivingToken ? (
-                  <p className={styles.hint}>
-                    Network: {chainLabel(receivingToken.blockchain)}
-                  </p>
+                  <p className={styles.hint}>Network: {chainLabel(receivingToken.blockchain)}</p>
                 ) : null}
               </div>
 
               <fieldset className={styles.breakdown} disabled={busy}>
                 <legend>Payment breakdown</legend>
-                <p>List each service or expense. All amounts use the selected receiving token.</p>
+                <p>
+                  List each service or expense in US dollars. The receiving token does not change
+                  the invoice total.
+                </p>
                 {items.map((item, index) => (
                   <div className={styles.lineItem} key={item.id}>
                     <label>
@@ -295,7 +312,7 @@ export function InvoicePortal({ business }: { business: string }) {
                       />
                     </label>
                     <label>
-                      Amount{receivingToken ? ` (${receivingToken.symbol})` : ''}
+                      Amount (USD)
                       <input
                         aria-label={`Item ${index + 1} amount`}
                         value={item.amount}
@@ -303,7 +320,7 @@ export function InvoicePortal({ business }: { business: string }) {
                         inputMode="decimal"
                         required
                         maxLength={70}
-                        pattern="[0-9]+([.][0-9]+)?"
+                        pattern="[0-9]+([.][0-9]{1,2})?"
                         placeholder="0.00"
                       />
                     </label>
@@ -337,9 +354,7 @@ export function InvoicePortal({ business }: { business: string }) {
                 <div className={styles.totalRow}>
                   <strong>Total</strong>
                   <output aria-label="Invoice total" aria-live="polite">
-                    {receivingToken && !total.error
-                      ? `${formatUnits(total.amount, receivingToken.decimals)} ${receivingToken.symbol}`
-                      : '—'}
+                    {!total.error ? formatInvoiceUsd(total.amount) : '—'}
                   </output>
                 </div>
               </fieldset>
@@ -356,7 +371,8 @@ export function InvoicePortal({ business }: { business: string }) {
               </label>
               <p className={styles.hint}>
                 Use a wallet on the selected network. Addresses requiring a memo or destination tag
-                are not supported. The business covers the quoted transfer cost.
+                are not supported. The token amount is calculated at the current USD rate when the
+                business reviews payment. The business covers the quoted transfer cost.
               </p>
               <button
                 type="submit"

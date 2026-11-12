@@ -11,7 +11,7 @@ Enable your page at `https://invoice.usetendr.tech/<business>` in invoice settin
 
 1. Open the business invoice page.
 2. Enter a name, email, reference and optional due date.
-3. Add one to 50 breakdown lines with a description and amount.
+3. Add one to 50 breakdown lines with a description and amount in USD.
 4. Select a supported receiving token/network and external wallet address.
 5. Submit and verify the email using Tendr's link.
 
@@ -19,13 +19,15 @@ A full Tendr account is not required. Email verification makes the invoice avail
 
 ## Exact totals
 
-Line amounts use the receiving token's display units. The backend converts them to exact base units and sums them, rejecting excess precision rather than rounding.
+Line amounts and totals are in **US dollars**, with at most two decimal places. The backend stores and adds exact cents; choosing a receiving token does not change the dollar total.
 
-For example, `125.00` and `25.50` USDC request `150.50` USDC. Every line uses the same receiving asset. Submit the breakdown, not a separately editable total. Descriptions allow up to 200 characters. Memo/tag-dependent destinations are unsupported.
+For example, `$125.00` and `$25.50` make a **$150.50 invoice**, whether the contractor chooses USDC, ETH or another supported token. Submit the breakdown, not a separately editable total. Descriptions allow up to 200 characters. Memo/tag-dependent destinations are unsupported.
 
 ## Business workflow
 
-Review contractor details, breakdown, reference, receiving asset and exact address. Select the store asset to fund payment, review the quote, then sign with the wallet passkey. Tendr tracks the payout and updates the invoice when the outcome is known.
+Review contractor details, breakdown, reference, receiving asset and exact address. Select the store asset to fund payment, review the quote, then sign with the wallet passkey. Tendr fetches the receiving token's current USD price when preparing the payment quote and rounds its token output up to the next smallest unit. The quote fixes the token amount for approval; fees are added to the business's source-wallet debit. Token prices can change after approval; the token quantity is fixed for that payout. An expired quote may use a new rate, while the USD invoice total stays fixed. Tendr tracks delivery against the approved token amount before marking the invoice paid.
+
+Previously issued token-denominated invoices keep their original amounts and remain explicitly labeled in their token.
 
 | State                   | Meaning                      |
 | ----------------------- | ---------------------------- |

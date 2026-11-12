@@ -21,7 +21,7 @@ import { EmptyState, ErrorState, PageHeader, Panel, Select } from '@/components/
 import { PageSkeleton } from '@/components/dashboard/Skeleton';
 import { api, type Balances, type StoreContext } from '@/lib/api';
 import { formatAmount, formatUnits, chainLabel } from '@/lib/assets';
-import { INVOICE_STATUS, type InvoiceView } from '@/lib/invoices';
+import { INVOICE_STATUS, formatInvoiceAmount, type InvoiceView } from '@/lib/invoices';
 import { signPayout, type NativePayout } from '@/lib/native-wallet';
 import { withStepUp } from '@/lib/webauthn';
 import { loadIntentsCatalog } from '@/lib/intents-catalog';
@@ -224,7 +224,7 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                               <span className="dash-muted"> · {i.contractorName}</span>
                             </span>
                             <span className="dash-invoice-row-meta">
-                              {formatUnits(i.amount, i.decimals)} {i.symbol}
+                              {formatInvoiceAmount(i)}
                               {i.dueDate ? ` · Due ${i.dueDate}` : ''}
                             </span>
                           </span>
@@ -292,9 +292,7 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
               ) : (
                 <div className="stack dash-invoice-detail">
                   <div className="dash-invoice-hero">
-                    <p className="dash-invoice-amount">
-                      {formatUnits(invoice.amount, invoice.decimals)} {invoice.symbol}
-                    </p>
+                    <p className="dash-invoice-amount">{formatInvoiceAmount(invoice)}</p>
                     <p className="dash-muted dash-small">
                       From {invoice.contractorName} · {invoice.email}
                     </p>
@@ -413,7 +411,8 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                             <div className="wallet-quote-row">
                               <span className="wallet-quote-label">Contractor receives</span>
                               <strong>
-                                {formatUnits(invoice.amount, invoice.decimals)} {invoice.symbol}
+                                {formatUnits(quote.quote.quote.amountOut, invoice.decimals)}{' '}
+                                {invoice.symbol}
                               </strong>
                             </div>
                             <div className="wallet-quote-row">
@@ -426,6 +425,9 @@ function Inbox({ context, owner }: { context: StoreContext; owner: boolean }) {
                             </div>
                           </div>
                           <p className="dash-muted dash-small">
+                            {invoice.amountCurrency === 'USD'
+                              ? 'The USD invoice total is fixed. This quote locks the receiving token amount at the current rate. '
+                              : ''}
                             Transfer costs are included in the debit. Unused input returns to your
                             wallet. Signing uses your wallet passkey.
                           </p>
