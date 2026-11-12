@@ -238,6 +238,119 @@ describe('Tidepool dashboard and checkout integration', () => {
     expect(fakeNearClient(true).calls).toHaveLength(0);
   });
 
+  it('keeps a partial Tidepool deposit open and reduces the same-address top-up until verified settlement', async () => {
+    const account = await activate();
+    const { shopper, session, quote } = await checkout();
+    for (const amount of ['400000', '700000']) {
+      status = {
+        status: 'INCOMPLETE_DEPOSIT',
+        swapDetails: {
+          depositedAmount: amount,
+          originChainTxHashes: [],
+          destinationChainTxHashes: [],
+        },
+      };
+      await pollDeposit(quote.deposit_address, { livemode: false });
+      const view = (await shopper('GET', 'session')).json();
+      expect(view.status).toBe('PROCESSING');
+      expect(view.payments).toHaveLength(1);
+      expect(view.payments[0]).toMatchObject({ state: 'underpaid', amount_received: amount });
+      expect(view.topup).toMatchObject({
+        deposit_address: quote.deposit_address,
+        remaining_amount: String(1_000_000 - Number(amount)),
+        message: `Send the remaining ${amount === '400000' ? '0.6' : '0.3'} USDC to the same address`,
+      });
+      expect(view.quote.id).toBe(quote.id);
+      expect((await shopper('POST', 'quote', { origin_asset: T.solUsdc.assetId })).statusCode).toBe(
+        409,
+      );
+    }
+    expect(await prisma.quote.count({ where: { sessionId: session.id } })).toBe(1);
+    expect(await prisma.quote.findUnique({ where: { id: quote.id } })).toMatchObject({
+      supersededAt: null,
+    });
+    expect(await prisma.event.count({ where: { merchantId, type: 'payment.succeeded' } })).toBe(0);
+
+    status = {
+      status: 'SUCCESS',
+      swapDetails: {
+        depositedAmount: '1000000',
+        amountIn: '1000000',
+        amountOut: '1000000',
+        originChainTxHashes: [],
+        destinationChainTxHashes: [{ hash: HASH }],
+      },
+    };
+    credit(HASH, account.nearAccountId, true);
+    await pollDeposit(quote.deposit_address, { livemode: false });
+    await pollDeposit(quote.deposit_address, { livemode: false });
+    expect((await shopper('GET', 'session')).json()).toMatchObject({
+      status: 'SETTLED',
+      topup: null,
+    });
+    expect(await prisma.event.count({ where: { merchantId, type: 'payment.succeeded' } })).toBe(1);
+  });
+
+  it('removes Tidepool top-ups at the deadline and records the provider refund without settling', async () => {
+    await activate();
+    const { shopper, quote } = await checkout();
+    status = {
+      status: 'INCOMPLETE_DEPOSIT',
+      swapDetails: {
+        depositedAmount: '500000',
+        originChainTxHashes: [],
+        destinationChainTxHashes: [],
+      },
+    };
+    await pollDeposit(quote.deposit_address, { livemode: false });
+    const row = await prisma.quote.findUniqueOrThrow({ where: { id: quote.id } });
+    setWatcherDeps({ now: () => new Date(row.deadline.getTime() + 1) });
+    expect((await shopper('GET', 'session')).json().topup).toBeNull();
+    await pollDeposit(quote.deposit_address, { livemode: false });
+    expect(await prisma.quote.findUnique({ where: { id: quote.id } })).toMatchObject({
+      supersededAt: expect.any(Date),
+    });
+    status = {
+      status: 'REFUNDED',
+      swapDetails: {
+        ...status.swapDetails,
+        refundedAmount: '500000',
+        refundReason: 'PARTIAL_DEPOSIT',
+      },
+    };
+    await pollDeposit(quote.deposit_address, { livemode: false });
+    await pollDeposit(quote.deposit_address, { livemode: false });
+    expect((await shopper('GET', 'session')).json()).toMatchObject({
+      topup: null,
+      payments: [expect.objectContaining({ state: 'refunded', refunded_amount: '500000' })],
+    });
+    expect(await prisma.event.count({ where: { merchantId, type: 'payment.succeeded' } })).toBe(0);
+    expect(await prisma.event.count({ where: { merchantId, type: 'payment.refunded' } })).toBe(1);
+  });
+
+  it('honors disabled top-ups and never offers a superseded Tidepool address after re-enabling', async () => {
+    await activate();
+    const { shopper, quote } = await checkout();
+    vi.stubEnv('CHECKOUT_TOPUP_ENABLED', 'false');
+    loadEnv();
+    status = {
+      status: 'INCOMPLETE_DEPOSIT',
+      swapDetails: {
+        depositedAmount: '500000',
+        originChainTxHashes: [],
+        destinationChainTxHashes: [],
+      },
+    };
+    await pollDeposit(quote.deposit_address, { livemode: false });
+    expect((await shopper('GET', 'session')).json()).toMatchObject({
+      status: 'PENDING_DEPOSIT',
+      topup: null,
+    });
+    vi.stubEnv('CHECKOUT_TOPUP_ENABLED', 'true');
+    loadEnv();
+    expect((await shopper('GET', 'session')).json().topup).toBeNull();
+  });
+
   it('requires a final verifier debit and the correct Base token receipt before completing a signed withdrawal', async () => {
     await activate();
     fakeNearClient(false).scriptView(V, 'mt_batch_balance_of', () => ['1000000']);

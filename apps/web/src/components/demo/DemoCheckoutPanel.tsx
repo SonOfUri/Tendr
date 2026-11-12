@@ -180,6 +180,15 @@ export function DemoCheckoutPanel({
       setPhase('waiting');
     } else if (screen.kind === 'expired') {
       setPhase('expired');
+    } else if (
+      screen.kind === 'pay' &&
+      screen.notice === 'previous_returned' &&
+      view &&
+      screenFor(view, new Date()).kind !== 'pay'
+    ) {
+      // Only a completed return reopens this card. PENDING_DEPOSIT alone can mean
+      // the shopper just sent funds and the provider has not detected them yet.
+      setPhase('pay');
     }
     return next;
   }, [client, uiOnly, view]);

@@ -104,6 +104,27 @@ describe('screenFor', () => {
     }
   });
 
+  it('keeps an underpayment or pending refund visible after the session reopens', () => {
+    expect(screenFor(view({ payments: [payment('underpaid')] }), NOW).kind).toBe('underpaid');
+    expect(screenFor(view({ payments: [payment('refunding')] }), NOW).kind).toBe('refunded');
+    expect(
+      screenFor(view({ payments: [payment('refunded')], expires_at: EARLIER }), NOW).kind,
+    ).toBe('refunded');
+  });
+
+  it('stops showing a cached top-up as soon as its deadline passes, even if polling fails', () => {
+    expect(
+      screenFor(
+        view({
+          status: 'PROCESSING',
+          payments: [payment('underpaid')],
+          topup: { ...TOPUP, deadline: EARLIER },
+        }),
+        NOW,
+      ).kind,
+    ).toBe('underpaid');
+  });
+
   it('SCREENING_PENDING looks like converting to the shopper', () => {
     expect(
       screenFor(view({ status: 'SCREENING_PENDING', payments: [payment('converting')] }), NOW),

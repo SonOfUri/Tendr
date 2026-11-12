@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { TIDEPOOL_TOKENS } from '@tendr/contracts';
 import { DemoCheckoutPanel } from '@/components/demo/DemoCheckoutPanel';
@@ -126,5 +126,10 @@ it('connects a Tidepool wallet, enables Pay, switches to Base Sepolia and reques
   await waitFor(() =>
     expect(fetcher.mock.calls.some(([url]) => url.endsWith('/deposit'))).toBe(true),
   );
+  // The refresh immediately after submission still says PENDING_DEPOSIT. It must
+  // not reopen Pay while the provider is catching up and allow another send.
+  await act(async () => {});
+  expect(screen.queryByRole('button', { name: 'Pay 1 USDC' })).toBeNull();
+  expect(screen.getByText('Confirming')).toBeTruthy();
   expect(fetcher.mock.calls.some(([url]) => url.endsWith('/simulate'))).toBe(false);
 });

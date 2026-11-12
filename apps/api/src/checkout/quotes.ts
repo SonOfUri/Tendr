@@ -358,7 +358,7 @@ async function topupOffer(ctx: ShopperCtx, payments: PaymentRow[], now: Date) {
   );
   if (!p) return null;
   const q = await ctx.db.quote.findFirst({ where: { id: p.quoteId } });
-  if (!q || q.deadline.getTime() <= now.getTime()) return null;
+  if (!q || q.supersededAt || q.deadline.getTime() <= now.getTime()) return null;
   const remaining = BigInt(q.amountIn.toFixed(0)) - BigInt(p.amountReceived.toFixed(0));
   if (remaining <= 0n) return null;
   let label = `${remaining.toString()} base units`;

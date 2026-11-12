@@ -95,15 +95,22 @@ function processingKind(p: SessionPayment | null, hasTopup: boolean): ScreenKind
 }
 
 function kindOf(v: SessionView, latest: SessionPayment | null, now: Date): ScreenKind {
+  const canTopup = !!v.topup && Date.parse(v.topup.deadline) > now.getTime();
   switch (v.status) {
     case 'PENDING_DEPOSIT': {
+      // A reopened underpayment is still waiting for its return. Never hide that behind
+      // a payment/confirmation card, or offer the expired deposit address again.
+      if (latest?.state === 'underpaid') return canTopup ? 'topup' : 'underpaid';
+      if (latest?.state === 'refunding') return 'refunded';
       const expires = Date.parse(v.expires_at);
-      if (!latest && Number.isFinite(expires) && expires <= now.getTime()) return 'expired';
+      if (Number.isFinite(expires) && expires <= now.getTime()) {
+        return latest?.state === 'refunded' ? 'refunded' : 'expired';
+      }
       return 'pay';
     }
     case 'PROCESSING':
     case 'SCREENING_PENDING':
-      return processingKind(latest, !!v.topup);
+      return processingKind(latest, canTopup);
     case 'SETTLED':
       return 'complete';
     case 'REFUNDED':

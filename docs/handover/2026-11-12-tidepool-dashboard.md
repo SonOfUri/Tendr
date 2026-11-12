@@ -36,11 +36,17 @@ The shared allowlist is `packages/contracts/src/tidepool.ts`: USDC and USDT on t
 ## Intentional limits
 
 - Test wallet backup-key changes and offline recovery kits are disabled (`capabilities.nativeWalletKeyManagement: false`). A synced or cross-device-accessible original wallet passkey is required to withdraw. Existing Live key management is unchanged.
-- Customer-paid test gas only. No gasless sponsorship, HOOK delivery, checkout top-up quotes or Tendr app fees in this integration. Solver/network costs may reduce withdrawal output; display the quote.
+- Customer-paid test gas only. No gasless sponsorship, HOOK delivery or Tendr app fees in this integration. Solver/network costs may reduce withdrawal output; display the quote.
 - Testnet screening is recorded as skipped with reason `tidepool_testnet`, not as a successful sanctions check. Live screening configuration is unchanged.
 - An old Test placeholder is replaced only after checking that its NEAR account does not exist, it holds no Tidepool funds and no recent provisioner lease is active. Its previous identity is saved in an audit event. An actual legacy on-chain account is preserved; create a new store to try Tidepool in that case.
 - Old simulator quotes cannot be revived, simulated or watched as Tidepool quotes. Create a new Test checkout after switching providers.
 - Tidepool is an independent testnet service. Unavailable routes, faucet limits or RPC outages must produce actionable retry/error states, never simulated success.
+
+## Partial deposits and returns
+
+Tidepool top-ups are enabled by default in Test; `CHECKOUT_TOPUP_ENABLED=false` disables them. Live keeps its existing opt-in setting. An `INCOMPLETE_DEPOSIT` stays `PROCESSING` until the quote deadline. The shopper session exposes `payments[].state: "underpaid"` and `topup` with `payment_id`, `origin_asset`, `deposit_address`, `remaining_amount` (integer base units), `deadline` and `message`. Display the exact remainder, the test network and a countdown. Send the remainder to that same address; do not create another quote. The remainder is the original quoted `amount_in` minus the total observed deposit, and updates after each provider observation. Never show a top-up for an expired or superseded quote, including when a cached response outlives its deadline.
+
+After a top-up, keep polling. Only verified settlement completes the order. At expiry, the provider returns partial funds to the quote's refund destination. With a shopper refund address this is a direct return; a copy-address quote without one returns into the store's Test wallet and requires a merchant-approved return. If the provider gives no sender address, the return is `review`; tell the shopper to contact the store, not that funds have already reached their external wallet. Keep refund status visible even when the session has reopened as `PENDING_DEPOSIT`. Do not keep the confirming card mounted over an underpayment or return screen.
 
 ## Operator rollout
 
@@ -50,7 +56,7 @@ The provider switch defaults to `simulated` for isolated development and unit te
 
 ## Verification
 
-The earlier pilot moved real test tokens Solana → NEAR merchant → Base and recorded final transaction evidence. Application integration tests additionally cover WebAuthn registration/activation in Test with Live disabled, new-store creation, safe placeholder replacement, catalog isolation, simulator rejection, final-receipt settlement, exactly one success event, signed payout verification and mode isolation. Test withdrawals require final destination token evidence and verifier execution matching the signed merchant/nonce/debit. Provider `SUCCESS` alone is insufficient.
+The earlier pilot moved real test tokens Solana → NEAR merchant → Base and recorded final transaction evidence. Application integration tests additionally cover WebAuthn registration/activation in Test with Live disabled, new-store creation, safe placeholder replacement, catalog isolation, simulator rejection, repeated partial deposits and exact top-up remainders, quote expiry and refunds, final-receipt settlement, exactly one success event, signed payout verification and mode isolation. Test withdrawals require final destination token evidence and verifier execution matching the signed merchant/nonce/debit. Provider `SUCCESS` alone is insufficient.
 
 Browser passkey availability still depends on the user's credential provider. A software authenticator test or deployment health check is not evidence that a particular user's device can access its wallet passkey.
 

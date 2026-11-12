@@ -171,6 +171,112 @@ describe('the active hosted checkout provider', () => {
 });
 
 describe('hosted confirmation progress', () => {
+  it('replaces confirming with the exact testnet top-up, then removes instructions at the deadline', async () => {
+    vi.useFakeTimers();
+    const view = session('tidepool');
+    view.status = 'PROCESSING';
+    view.payments = [
+      {
+        id: 'pay_test',
+        state: 'detected',
+        amount_received: '500000',
+        overpaid_amount: null,
+        refunded_amount: null,
+        kept_small_overpayment: false,
+        origin_tx_hash: null,
+        created_at: new Date().toISOString(),
+      },
+    ];
+    const fetcher = mockCheckoutApi(view);
+    await act(async () => render(<Checkout sessionId={id} />));
+    expect(screen.queryByText('You sent less than the full amount')).toBeNull();
+    view.payments[0].state = 'underpaid';
+    view.topup = {
+      payment_id: 'pay_test',
+      origin_asset: token.asset_id,
+      deposit_address: view.quote!.deposit_address,
+      remaining_amount: '500000',
+      message: 'Send the remaining 0.5 USDC to the same address',
+      deadline: new Date(Date.now() + 10_000).toISOString(),
+    };
+    await act(() => vi.advanceTimersByTimeAsync(2500));
+    expect(
+      screen.getByRole('heading', { name: 'You sent less than the full amount' }),
+    ).toBeTruthy();
+    expect(screen.getByText('Send the remaining 0.5 USDC to the same address')).toBeTruthy();
+    expect(screen.getByText('Base Sepolia')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Copy the amount, 0.5 USDC' })).toBeTruthy();
+    expect(screen.queryByText(/Simulate a payment/)).toBeNull();
+    expect(fetcher.mock.calls.some(([url]) => url.includes('/quote'))).toBe(false);
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(screen.getByRole('heading', { name: 'Payment incomplete' })).toBeTruthy();
+    expect(screen.queryByText(view.quote!.deposit_address)).toBeNull();
+  });
+
+  it('shows a reopened refund in review instead of remaining on confirming or offering another payment', async () => {
+    vi.useFakeTimers();
+    const view = session('tidepool');
+    view.status = 'PROCESSING';
+    view.payments = [
+      {
+        id: 'pay_test',
+        state: 'detected',
+        amount_received: '500000',
+        overpaid_amount: null,
+        refunded_amount: null,
+        kept_small_overpayment: false,
+        origin_tx_hash: null,
+        created_at: new Date().toISOString(),
+      },
+    ];
+    const fetcher = mockCheckoutApi(view);
+    await act(async () => render(<Checkout sessionId={id} />));
+    view.status = 'PENDING_DEPOSIT';
+    view.expires_at = new Date(Date.now() - 1).toISOString();
+    view.quote = null;
+    view.payments[0].state = 'refunding';
+    view.refunds = [
+      {
+        id: 'ref_test',
+        payment_id: 'pay_test',
+        asset: token.asset_id,
+        amount: '500000',
+        needs_address: false,
+        state: 'review',
+      },
+    ];
+    await act(() => vi.advanceTimersByTimeAsync(2500));
+    expect(screen.getByRole('heading', { name: 'Your refund needs attention' })).toBeTruthy();
+    expect(screen.getByText(/Contact the store to arrange the return/)).toBeTruthy();
+    expect(screen.queryByText('Deposit address')).toBeNull();
+    expect(fetcher.mock.calls.some(([url]) => url.includes('/quote'))).toBe(false);
+  });
+
+  it('leaves confirming when a refunded attempt reopens for a fresh payment', async () => {
+    vi.useFakeTimers();
+    const view = session('tidepool');
+    view.status = 'PROCESSING';
+    view.payments = [
+      {
+        id: 'pay_test',
+        state: 'detected',
+        amount_received: '500000',
+        overpaid_amount: null,
+        refunded_amount: null,
+        kept_small_overpayment: false,
+        origin_tx_hash: null,
+        created_at: new Date().toISOString(),
+      },
+    ];
+    mockCheckoutApi(view);
+    await act(async () => render(<Checkout sessionId={id} />));
+    view.status = 'PENDING_DEPOSIT';
+    view.payments[0].state = 'refunded';
+    await act(() => vi.advanceTimersByTimeAsync(2500));
+    expect(screen.getByText('Deposit address')).toBeTruthy();
+    expect(screen.queryByText('All set')).toBeNull();
+  });
+
   it('waits for API settlement in the full checkout instead of completing the Test flow on a timer', async () => {
     vi.useFakeTimers();
     const view = session('tidepool');

@@ -203,8 +203,8 @@ const DEFAULT_DEPS: WatcherDeps = {
   provider: providerFor,
   near: nearClient,
   screen: screenAddress,
-  topupEnabled: (livemode) =>
-    !usesTidepool(livemode) && (env().CHECKOUT_TOPUP_ENABLED ?? !livemode),
+  // Tidepool accumulates deposits at the original address until the quote deadline.
+  topupEnabled: (livemode) => env().CHECKOUT_TOPUP_ENABLED ?? !livemode,
   resolveSenders: defaultResolveSenders,
   simulatedTx: (hash) => simulatedOneClick().destinationTx(hash),
 };

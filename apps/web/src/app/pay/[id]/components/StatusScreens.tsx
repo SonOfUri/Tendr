@@ -211,7 +211,7 @@ export function StatusScreen({
                   address={offer.deposit_address}
                   amount={remaining}
                   symbol={t.symbol}
-                  network={networkName(t.blockchain)}
+                  network={networkName(t.blockchain, view.test_provider === 'tidepool')}
                 />
               ) : (
                 <p className="address">{offer.deposit_address}</p>
@@ -257,17 +257,27 @@ export function StatusScreen({
 
     case 'refunded': {
       // No return rows on a refunded session: it went straight back to the shopper's address.
-      const done = sent || (view.status === 'REFUNDED' && returns.length === 0);
+      const review = returns.some((r) => r.state === 'review');
+      const done =
+        !review &&
+        (sent ||
+          ((view.status === 'REFUNDED' || payment?.state === 'refunded') && returns.length === 0));
       return (
         <section className="pay-section" aria-labelledby="pay-refund-title">
           <h2 id="pay-refund-title">
-            {done ? 'Your money was returned' : 'Your refund is being processed'}
+            {review
+              ? 'Your refund needs attention'
+              : done
+                ? 'Your money was returned'
+                : 'Your refund is being processed'}
           </h2>
           <p>
             This order wasn&apos;t paid.{' '}
-            {done
-              ? 'The money you sent was sent back to you.'
-              : "We're sending the money you paid back to you."}
+            {review
+              ? 'Contact the store to arrange the return of your payment.'
+              : done
+                ? 'The money you sent was sent back to you.'
+                : "We're sending the money you paid back to you."}
           </p>
           <p className="muted small">
             The cost of sending it back is taken from the amount returned.
