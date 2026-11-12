@@ -19,6 +19,7 @@ The public invoice host uses these routes. Use the business slug from its invoic
   "contractorName": "Alex Example",
   "email": "alex@example.com",
   "reference": "INV-1042",
+  "amountCurrency": "USD",
   "dueDate": "2026-12-15",
   "destinationAsset": "nep141:REPLACE_WITH_CATALOG_ASSET",
   "destination": "REPLACE_WITH_RECEIVING_ADDRESS",
@@ -31,7 +32,7 @@ The public invoice host uses these routes. Use the business slug from its invoic
 
 Choose the real asset from the token catalog and a valid address for that network. `dueDate` is optional. New clients send `items`; do not add `amount` or `description` at the top level. The API rejects mixed legacy/itemized shapes and calculates the total itself.
 
-One to 50 lines; description 1–200 characters; positive decimal amount strings within the token's precision. Memo/tag destinations are excluded. Email request limits currently include three per mailbox and ten per IP per hour, plus a global limit.
+One to 50 lines; description 1–200 characters; positive decimal **USD** amount strings with at most two decimal places. `amountCurrency: "USD"` is required so an older token-based form cannot be silently reinterpreted. Memo/tag destinations are excluded. Email request limits currently include three per mailbox and ten per IP per hour, plus a global limit.
 
 ## Business routes
 
@@ -46,6 +47,8 @@ Use the [dashboard session](/api-reference/dashboard). Reads require `account:re
 | `POST /v1/invoices/:id/reject` | No body fields                                       |
 | `POST /v1/invoices/:id/payout` | `{asset: "nep141:..."}` for the store asset to spend |
 
-Creating an invoice payout returns a payout record. Complete the ordinary wallet challenge/sign/submit sequence; never mark the invoice paid from the creation response.
+Invoice responses include `amountCurrency` and `amountDecimals`. For `USD`, `amount` and every `items[].amount` are integer **cents** and `amountDecimals` is `2`; `symbol` and `decimals` describe the receiving token only. Historical `TOKEN` invoices retain integer token units.
+
+Creating an invoice payout returns a payout record. For USD invoices, `quote.invoicePricing` records the original USD cents (`amount`), `destinationAsset`, exact `destinationAmount`, the freshly fetched `priceUsd`, and `quotedAt`. Display `quote.quote.amountOut` as the receiving token quantity, separately from the invoice dollar total. The server uses an EXACT_OUTPUT quote and validates delivery against this saved token amount even if prices subsequently change. Missing or invalid USD prices produce a 503 instead of an assumed $1 peg. The invoice view also exposes `payout.destinationAmount` for the quoted receiving amount. Complete the ordinary wallet challenge/sign/submit sequence; never mark the invoice paid from the creation response.
 
 Receipt/verification tokens are credentials. Redact them from analytics and logs. See [Contractor invoices](/invoices/overview).
