@@ -196,6 +196,12 @@ describe('Tidepool dashboard and checkout integration', () => {
       test_provider: 'tidepool',
     });
     expect((await shopper('GET', 'tokens')).json().tokens).toHaveLength(6);
+    const recommendations = await shopper('POST', 'ai/recommendations', {
+      assets: [{ asset_id: T.solUsdc.assetId }],
+    });
+    expect(recommendations.statusCode, recommendations.body).toBe(200);
+    expect(recommendations.json()).toMatchObject({ source: 'testnet_quotes' });
+    expect(recommendations.json().routes).toHaveLength(1);
     expect((await shopper('POST', 'simulate', { scenario: 'exact' })).statusCode).toBe(404);
     expect(() => simulatedOneClick()).toThrow('Simulation is disabled');
     expect((await shopper('POST', 'quote', { origin_asset: 'nep141:usdc.near' })).statusCode).toBe(

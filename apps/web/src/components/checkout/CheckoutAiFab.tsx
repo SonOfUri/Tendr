@@ -204,8 +204,12 @@ export function CheckoutAiFab({ client, sessionId, options, amountLabel, onPickR
 
           {tab === 'routes' && phase.k === 'routes' ? (
             <div className="demo-tendrai-cards" role="list">
-              {phase.data.source === 'simulated_quotes' ? (
-                <p className="demo-checkout-muted">Test mode · simulated quotes</p>
+              {phase.data.source !== 'live_quotes' ? (
+                <p className="demo-checkout-muted">
+                  {phase.data.source === 'testnet_quotes'
+                    ? 'Test mode · Tidepool testnet quotes'
+                    : 'Test mode · simulated quotes'}
+                </p>
               ) : null}
               <p className="demo-checkout-muted">
                 Ranked by quoted input USD (excludes wallet gas). Previews expire quickly — get a

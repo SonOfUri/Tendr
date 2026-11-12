@@ -15,8 +15,12 @@ type Props = {
   payEyebrow: string;
   amountLabel: string;
   successHint?: string;
-  /** Test mode — fake addresses / simulated settlement. */
+  /** Test tokens have no monetary value; this does not imply simulated settlement. */
   testMode?: boolean;
+  /** Only the frontend playground may animate confirmation steps on a timer. */
+  uiOnly?: boolean;
+  /** API-confirmed steps; settlement remains pending until the success variant. */
+  confirmationStep?: 0 | 1 | 2;
   onContinue?: () => void;
   onClose?: () => void;
 };
@@ -36,33 +40,35 @@ export function DemoStatusCard({
   amountLabel,
   successHint,
   testMode = false,
+  uiOnly = false,
+  confirmationStep = 0,
   onContinue,
   onClose,
 }: Props) {
-  const poweredByTone: 'white' | 'black' =
-    logoTone ?? (skin === 'gaming' ? 'white' : 'black');
+  const poweredByTone: 'white' | 'black' = logoTone ?? (skin === 'gaming' ? 'white' : 'black');
   const shellRef = useRef<HTMLDivElement>(null);
   /** How many steps are complete (1 = payment detected done; 3 = settlement done). */
-  const [progress, setProgress] = useState(1);
+  const [demoProgress, setDemoProgress] = useState(1);
+  const progress = uiOnly ? demoProgress : confirmationStep;
   useEffect(() => {
     if (variant !== 'success' || !shellRef.current) return;
     return burstDemoConfetti(shellRef.current);
   }, [variant]);
 
   useEffect(() => {
-    if (variant !== 'confirming') {
-      setProgress(1);
+    if (!uiOnly || variant !== 'confirming') {
+      setDemoProgress(1);
       return;
     }
     // Start with step 1 done + step 2 active, then advance to settlement, then all done.
-    setProgress(1);
-    const toConfirmingDone = window.setTimeout(() => setProgress(2), CONFIRM_STEP_MS);
-    const toSettlementDone = window.setTimeout(() => setProgress(3), CONFIRM_STEP_MS * 2);
+    setDemoProgress(1);
+    const toConfirmingDone = window.setTimeout(() => setDemoProgress(2), CONFIRM_STEP_MS);
+    const toSettlementDone = window.setTimeout(() => setDemoProgress(3), CONFIRM_STEP_MS * 2);
     return () => {
       window.clearTimeout(toConfirmingDone);
       window.clearTimeout(toSettlementDone);
     };
-  }, [variant]);
+  }, [variant, uiOnly]);
 
   const confirming = variant === 'confirming';
   const expired = variant === 'expired';
@@ -90,9 +96,11 @@ export function DemoStatusCard({
       : merchantName;
 
   const copy = confirming
-    ? skin === 'gaming'
-      ? 'Loot detected — confirming on-chain…'
-      : 'Payment detected — confirming on-chain…'
+    ? progress === 0
+      ? 'Waiting for payment confirmation…'
+      : skin === 'gaming'
+        ? 'Loot detected — confirming on-chain…'
+        : 'Payment detected — confirming on-chain…'
     : expired
       ? skin === 'gaming'
         ? 'This checkout timed out. Start again from the store.'
@@ -127,7 +135,10 @@ export function DemoStatusCard({
               height={40}
             />
           ) : (
-            <span className="demo-checkout-store-logo demo-checkout-store-logo-fallback" aria-hidden>
+            <span
+              className="demo-checkout-store-logo demo-checkout-store-logo-fallback"
+              aria-hidden
+            >
               {merchantName.trim().charAt(0).toUpperCase() || 'T'}
             </span>
           )}
@@ -141,13 +152,18 @@ export function DemoStatusCard({
             <p
               className="demo-pay-test"
               role="note"
-              title="Test mode — no real funds move."
+              title="Test mode — test tokens have no monetary value."
             >
               Test
             </p>
           ) : null}
           {onClose ? (
-            <button type="button" className="demo-checkout-close" aria-label="Close" onClick={onClose}>
+            <button
+              type="button"
+              className="demo-checkout-close"
+              aria-label="Close"
+              onClick={onClose}
+            >
               ×
             </button>
           ) : null}
@@ -255,11 +271,7 @@ export function DemoStatusCard({
       )}
 
       <p className="demo-checkout-footnote">
-        <TendrLogo
-          size={skin === 'gaming' ? 16 : 22}
-          variant="color"
-          tone={poweredByTone}
-        />
+        <TendrLogo size={skin === 'gaming' ? 16 : 22} variant="color" tone={poweredByTone} />
         {skin === 'gaming' ? (
           <>
             CHECKOUT BY <strong>TENDR</strong>

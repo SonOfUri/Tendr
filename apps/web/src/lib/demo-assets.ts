@@ -1,4 +1,5 @@
 import type { Token } from '@/lib/checkout/api';
+import { networkName } from '@/lib/checkout/format';
 import { chainDisplayName, chainLogo, sortChainIds, type ChainLogo } from '@/lib/chain-logos';
 import {
   coingeckoLogoMap,
@@ -200,7 +201,7 @@ function pickPrimary(tokens: Token[]): Token {
   })[0]!;
 }
 
-function optionFromGroup(tokens: Token[]): DemoAssetOption {
+function optionFromGroup(tokens: Token[], testnet: boolean): DemoAssetOption {
   const primary = pickPrimary(tokens);
   const meta = demoAssetMeta(primary.symbol);
   const byChain = new Map<string, Token>();
@@ -215,7 +216,7 @@ function optionFromGroup(tokens: Token[]): DemoAssetOption {
     return {
       assetId: token.asset_id,
       blockchain: id,
-      name: logo.name || chainDisplayName(id),
+      name: testnet ? networkName(id, true) : logo.name || chainDisplayName(id),
       logoSrc: logo.logoSrc,
       token,
     };
@@ -224,12 +225,12 @@ function optionFromGroup(tokens: Token[]): DemoAssetOption {
     .filter((v) => v.logoSrc)
     .map((v) => ({ id: v.blockchain, name: v.name, logoSrc: v.logoSrc }));
   const withLogo = tokens.find((t) => t.logo_url) ?? primary;
-  const label = meta
-    ? `${meta.name} (${meta.symbol})`
-    : primary.symbol.replace(/^\$/, '');
+  const label = meta ? `${meta.name} (${meta.symbol})` : primary.symbol.replace(/^\$/, '');
   const detail =
     chains.length === 1
-      ? chainDisplayName(chains[0]!)
+      ? testnet
+        ? networkName(chains[0]!, true)
+        : chainDisplayName(chains[0]!)
       : `${chains.length} networks`;
 
   return {
@@ -244,10 +245,10 @@ function optionFromGroup(tokens: Token[]): DemoAssetOption {
 }
 
 /**
- * Build the Asset dropdown from live 1Click tokens.
+ * Build the Asset dropdown from the checkout token catalog, with explicit Tidepool network names.
  * Same symbol across chains collapses to one row with overlapping network logos.
  */
-export function buildDemoAssetOptions(apiTokens: Token[]): DemoAssetOption[] {
+export function buildDemoAssetOptions(apiTokens: Token[], testnet = false): DemoAssetOption[] {
   const groups = new Map<string, Token[]>();
   const usedAssetIds = new Set<string>();
 
@@ -262,7 +263,7 @@ export function buildDemoAssetOptions(apiTokens: Token[]): DemoAssetOption[] {
     groups.set(key, list);
   }
 
-  const options = [...groups.values()].map(optionFromGroup);
+  const options = [...groups.values()].map((tokens) => optionFromGroup(tokens, testnet));
 
   options.sort((a, b) => {
     const aMeta = demoAssetMeta(a.token?.symbol ?? '');

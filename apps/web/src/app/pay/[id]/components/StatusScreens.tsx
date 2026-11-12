@@ -219,7 +219,7 @@ export function StatusScreen({
               <p className="muted small">
                 If the rest doesn&apos;t arrive in time, what you sent is returned to you.
               </p>
-              {!view.livemode && view.test_provider !== 'tidepool' ? (
+              {!view.livemode && view.test_provider === 'simulated' ? (
                 <TestModePanel client={client} kind="topup" onDone={onRefresh} />
               ) : null}
             </>

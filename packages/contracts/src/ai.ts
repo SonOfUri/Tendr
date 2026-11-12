@@ -60,7 +60,7 @@ export interface RouteRecommendations {
   fastest: string | null;
   generated_at: string;
   expires_at: string;
-  source: 'live_quotes' | 'simulated_quotes';
+  source: 'live_quotes' | 'testnet_quotes' | 'simulated_quotes';
   ranking_basis: 'quoted_input_usd_excluding_wallet_gas';
   wallet_gas_included: false;
   requires_fresh_quote: true;

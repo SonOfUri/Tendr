@@ -1,12 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  createCheckoutClient,
-  type Quote,
-  type SessionView,
-  type Token,
-} from '@/lib/checkout/api';
+import { createCheckoutClient, type Quote, type SessionView, type Token } from '@/lib/checkout/api';
 import { formatUnits, networkName } from '@/lib/checkout/format';
 import { screenFor } from '@/lib/checkout/status';
 import { buildDemoAssetOptions } from '@/lib/demo-assets';
@@ -118,8 +113,7 @@ export function DemoCheckoutPanel({
   blocked,
   onDidntGoThrough,
 }: Props) {
-  const logoTone: 'white' | 'black' =
-    skin === 'gaming' || uiTheme === 'dark' ? 'white' : 'black';
+  const logoTone: 'white' | 'black' = skin === 'gaming' || uiTheme === 'dark' ? 'white' : 'black';
   const client = useMemo(
     () => createCheckoutClient({ baseUrl: publicEnv.apiBaseUrl, secret: clientSecret }),
     [clientSecret],
@@ -132,18 +126,18 @@ export function DemoCheckoutPanel({
   const [quote, setQuote] = useState<Quote | null>(bootstrap?.quote ?? null);
   const [method, setMethod] = useState<PayMethod>('transfer');
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
-  const [phase, setPhase] = useState<
-    'loading' | 'pay' | 'waiting' | 'done' | 'expired' | 'error'
-  >(() => {
-    if (bootstrap?.session) {
-      const kind = screenFor(bootstrap.session, new Date()).kind;
-      if (kind === 'complete') return 'done';
-      if (kind === 'detected' || kind === 'converting') return 'waiting';
-      if (kind === 'expired') return 'expired';
-      return 'pay';
-    }
-    return uiOnly ? 'pay' : 'loading';
-  });
+  const [phase, setPhase] = useState<'loading' | 'pay' | 'waiting' | 'done' | 'expired' | 'error'>(
+    () => {
+      if (bootstrap?.session) {
+        const kind = screenFor(bootstrap.session, new Date()).kind;
+        if (kind === 'complete') return 'done';
+        if (kind === 'detected' || kind === 'converting') return 'waiting';
+        if (kind === 'expired') return 'expired';
+        return 'pay';
+      }
+      return uiOnly ? 'pay' : 'loading';
+    },
+  );
   const [busy, setBusy] = useState(false);
   /** Skip the first auto-quote when bootstrap already supplied one for this token. */
   const skipQuoteForToken = useRef<string | null>(
@@ -157,7 +151,9 @@ export function DemoCheckoutPanel({
   const demoTimerStartedAt = useRef<number | null>(null);
   const demoTimerPausedMs = useRef(0);
   const demoTimerPauseBegan = useRef<number | null>(null);
-  const assetOptions = useMemo(() => buildDemoAssetOptions(tokens), [tokens]);
+  const testnet = !uiOnly && view?.livemode === false && view.test_provider === 'tidepool';
+  const simulated = uiOnly || (view?.livemode === false && view.test_provider === 'simulated');
+  const assetOptions = useMemo(() => buildDemoAssetOptions(tokens, testnet), [tokens, testnet]);
   const selectedToken = tokens.find((t) => t.asset_id === tokenId) ?? null;
   const amountUsd = view?.amount ?? amountHint ?? '0';
 
@@ -315,7 +311,10 @@ export function DemoCheckoutPanel({
         setPhase('waiting');
         return;
       }
-      void reporter.record(result).then(() => refresh()).catch(() => undefined);
+      void reporter
+        .record(result)
+        .then(() => refresh())
+        .catch(() => undefined);
       setPhase('waiting');
     },
     [reporter, refresh, uiOnly],
@@ -393,20 +392,23 @@ export function DemoCheckoutPanel({
   }, [quote, method, assetPickerOpen, phase, uiOnly]);
 
   const amountLabel =
-    amountDisplay ??
-    (view ? `$${view.amount}` : amountHint ? `$${amountHint}` : '—');
+    amountDisplay ?? (view ? `$${view.amount}` : amountHint ? `$${amountHint}` : '—');
   const sendAmount =
     quote && selectedToken ? formatUnits(quote.amount_in, selectedToken.decimals) : null;
   const showPayChrome = phase === 'loading' || phase === 'pay' || phase === 'error';
   const quoteReady = Boolean(quote && selectedToken && sendAmount);
-  /** Fake deposit addresses — never send real funds. */
+  // Test mode can send real testnet transactions; only the simulator uses fake addresses.
   const testMode = Boolean(uiOnly || (view && !view.livemode));
+  const currentScreen = view ? screenFor(view, new Date()).kind : null;
+  const confirmationStep =
+    currentScreen === 'converting' ? 2 : currentScreen === 'detected' ? 1 : 0;
 
   const enterClass = booted ? '' : ' demo-checkout-overlay-in';
   const cardEnterClass = booted ? '' : ' demo-checkout-card-in';
 
   if (phase === 'waiting' || phase === 'done' || phase === 'expired') {
-    const variant = phase === 'waiting' ? 'confirming' : phase === 'expired' ? 'expired' : 'success';
+    const variant =
+      phase === 'waiting' ? 'confirming' : phase === 'expired' ? 'expired' : 'success';
     return (
       <div
         className={`demo-checkout-overlay${enterClass}`}
@@ -430,6 +432,8 @@ export function DemoCheckoutPanel({
           amountLabel={amountLabel}
           successHint={successHint}
           testMode={testMode}
+          uiOnly={uiOnly}
+          confirmationStep={confirmationStep}
           onClose={phase === 'waiting' || phase === 'expired' ? onClose : undefined}
           onContinue={phase === 'expired' ? onClose : onComplete}
         />
@@ -463,9 +467,15 @@ export function DemoCheckoutPanel({
               <p
                 className="demo-pay-test"
                 role="note"
-                title="Test mode — deposit addresses are fake. Don’t send real funds."
+                title={
+                  testnet
+                    ? 'Tidepool Test mode — send only test tokens on the selected test network.'
+                    : simulated
+                      ? 'Simulated Test mode — deposit addresses are fake. Don’t send funds.'
+                      : 'Test mode — follow the selected network’s test-token instructions.'
+                }
               >
-                Test
+                {testnet ? 'Testnet' : 'Test'}
               </p>
             ) : null}
             <button
@@ -561,11 +571,12 @@ export function DemoCheckoutPanel({
                   address={quote!.deposit_address}
                   amount={sendAmount!}
                   symbol={selectedToken!.symbol}
-                  network={networkName(selectedToken!.blockchain)}
+                  network={networkName(selectedToken!.blockchain, testnet)}
                   deadline={quote!.deadline}
-                  testMode={testMode}
+                  simulated={simulated}
+                  testnet={testnet}
                 />
-                {!uiOnly && view && !view.livemode ? (
+                {!uiOnly && simulated ? (
                   <TestModePanel
                     client={client}
                     kind="pay"
@@ -586,6 +597,7 @@ export function DemoCheckoutPanel({
                   quote={quote}
                   token={selectedToken}
                   livemode={view?.livemode ?? false}
+                  testnet={testnet}
                   sessionId={sessionId}
                   autoOpen
                   openWalletWindow={openWalletWindow}
@@ -595,7 +607,7 @@ export function DemoCheckoutPanel({
                   onWalletAddress={requoteForWallet}
                   onDepositSent={onDepositSent}
                 />
-                {!uiOnly && view && !view.livemode ? (
+                {!uiOnly && simulated ? (
                   <TestModePanel
                     client={client}
                     kind="pay"
@@ -672,7 +684,10 @@ export function DemoCheckoutOpening({
       aria-label="Opening checkout"
       aria-busy="true"
     >
-      <div className="demo-checkout-card demo-checkout-card-wide demo-checkout-card-in" data-skin={skin}>
+      <div
+        className="demo-checkout-card demo-checkout-card-wide demo-checkout-card-in"
+        data-skin={skin}
+      >
         <div className="demo-checkout-card-top">
           <div className="demo-checkout-store">
             <StoreLogo src={merchantLogoUrl} name={merchantName} />
@@ -683,7 +698,12 @@ export function DemoCheckoutOpening({
               <h2 className="demo-checkout-title">{productName}</h2>
             </div>
           </div>
-          <button type="button" className="demo-checkout-close" aria-label="Close checkout" onClick={onClose}>
+          <button
+            type="button"
+            className="demo-checkout-close"
+            aria-label="Close checkout"
+            onClick={onClose}
+          >
             ×
           </button>
         </div>
@@ -718,4 +738,3 @@ export function DemoCheckoutOpening({
     </div>
   );
 }
-

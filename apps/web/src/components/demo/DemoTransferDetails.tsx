@@ -60,8 +60,10 @@ type Props = {
   symbol: string;
   network: string;
   deadline: string;
-  /** Fake address — warn shoppers not to send real funds. */
-  testMode?: boolean;
+  /** Simulator only: the deposit address cannot receive a payment. */
+  simulated?: boolean;
+  /** Tidepool: the deposit receives tokens on the selected test network. */
+  testnet?: boolean;
 };
 
 export function DemoTransferDetails({
@@ -70,7 +72,8 @@ export function DemoTransferDetails({
   symbol,
   network,
   deadline,
-  testMode = false,
+  simulated = false,
+  testnet = false,
 }: Props) {
   const now = useNow();
   const left = Date.parse(deadline) - now;
@@ -129,10 +132,19 @@ export function DemoTransferDetails({
       </div>
 
       <p className="demo-transfer-warn" role="note">
-        {testMode ? (
+        {simulated ? (
           <>
-            <strong>Test mode</strong> — this address is fake. Don&apos;t send real{' '}
-            {symbol}. Use Simulate a payment instead.
+            <strong>Test mode</strong> — this address is fake. Don&apos;t send real {symbol}. Use
+            Simulate a payment instead.
+          </>
+        ) : testnet ? (
+          <>
+            Send exactly{' '}
+            <strong>
+              {amount} test {symbol}
+            </strong>{' '}
+            on <strong>{network}</strong>. Keep test NEAR, ETH or SOL for test network fees. These
+            tokens have no monetary value.
           </>
         ) : (
           <>

@@ -15,6 +15,7 @@ import {
   buildQuoteRequests,
 } from '../checkout/pricing.js';
 import { AppError, conflict } from '../lib/errors.js';
+import { usesTidepool } from '../lib/testnet.js';
 import { aiSession, type AiContext } from './context.js';
 import { reserveAiUsage } from './budget.js';
 
@@ -134,7 +135,7 @@ export async function recommendRoutes(
     fastest: fastest?.asset_id ?? null,
     generated_at: now.toISOString(),
     expires_at: new Date(Math.min(now.getTime() + 30_000, s.expiresAt.getTime())).toISOString(),
-    source: ctx.livemode ? 'live_quotes' : 'simulated_quotes',
+    source: ctx.livemode ? 'live_quotes' : usesTidepool(false) ? 'testnet_quotes' : 'simulated_quotes',
     ranking_basis: 'quoted_input_usd_excluding_wallet_gas',
     wallet_gas_included: false,
     requires_fresh_quote: true,

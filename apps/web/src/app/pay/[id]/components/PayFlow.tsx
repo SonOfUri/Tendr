@@ -404,7 +404,7 @@ export function PayFlow({
               {quote.small_overpay_notice ? (
                 <p className="muted small">{leftoversNotice(quote.small_overpay_usd)}</p>
               ) : null}
-              {!view.livemode && view.test_provider !== 'tidepool' ? (
+              {!view.livemode && view.test_provider === 'simulated' ? (
                 <TestModePanel client={client} kind="pay" onDone={onRefresh} />
               ) : null}
             </>

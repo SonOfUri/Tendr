@@ -29,6 +29,8 @@ Use the existing dashboard cookie/CSRF authentication, `Tendr-Merchant` and `Ten
 
 Shopper session responses expose `test_provider: "tidepool"`. Only this explicit value enables real Test wallet payments. Hide simulation controls and gasless signing for these sessions. Never infer mainnet from the provider's `near`, `base` or `sol` chain labels.
 
+The hosted `/pay/[id]` page renders `DemoCheckoutPanel` for its main payment flow. Despite its name, this component handles hosted payments as well as the frontend playground; updating only `PayFlow` does not update the active checkout. It now passes Tidepool testnet settings to the wallet connector, labels network choices and deposit instructions correctly, and exposes simulation controls only for an explicit `simulated` provider. Only the `uiOnly` playground advances confirmation steps on a timer; hosted progress follows API status. AI recommendation responses use `source: "testnet_quotes"` for Tidepool, separate from `simulated_quotes` and `live_quotes`.
+
 The shared allowlist is `packages/contracts/src/tidepool.ts`: USDC and USDT on three networks, all six decimals. Base chain ID is `84532`; Solana is devnet; NEAR is testnet. Explorer links and connected wallets must use these networks. The `0x…` merchant address identifies its P256 balance inside the pinned NEAR verifier; it is not an EVM deposit address.
 
 ## Intentional limits
