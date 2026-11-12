@@ -7,9 +7,9 @@
 //
 // - `queueReturn` (the watcher's `onReturnNeeded` hook): the estimated cross-chain return fee
 //   (gas-estimates.ts) is deducted; a net worth under SMALL_OVERPAY_USD is kept by the merchant
-//   (`kept_small_overpayment`, no signer). A known exchange sender (exchanges.ts) is held as
-//   `needs_address` (`refund.needs_address`, the shopper is emailed or the checkout asks). Any
-//   other sender gets a refund row and a `refund` draft (`refund.pending`).
+//   (`kept_small_overpayment`, no signer). Manual overpayments and known exchange senders wait
+//   with `needs_address` (`refund.needs_address`, the shopper is emailed or the checkout asks). Any
+//   other return with a known sender gets a refund row and a `refund` draft (`refund.pending`).
 // - Durable and idempotent: one refund row per (payment, reason) (unique index). The hook runs
 //   after the watcher's commit, so `sweepReturns` (every minute) re-queues any return the hook
 //   missed and retries drafts that could not be made yet (screening unavailable, account busy).
@@ -36,7 +36,8 @@ import {
   type Refund,
   type Session,
 } from '@prisma/client';
-import { SMALL_OVERPAY_USD } from '@tendr/contracts';
+import { SMALL_OVERPAY_USD, TIDEPOOL_TOKENS } from '@tendr/contracts';
+import { usesTidepool } from '../lib/testnet.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -160,15 +161,28 @@ export function oneclickChainOf(contractChain: string): string {
  * `ft_withdraw`, or null when there is none (a Swap route would be needed). Checked with the
  * same rules the contract applies (`poaRouteError`).
  */
-export function returnRoute(asset: string, chain: string, address: string): WithdrawRoute | null {
+export function returnRoute(
+  asset: string,
+  chain: string,
+  address: string,
+  livemode?: boolean,
+): WithdrawRoute | null {
   const token = poaTokenOf(asset);
   if (!token) return null;
   const route: WithdrawRoute = { poa: { token_contract: token } };
+  if (livemode === false && usesTidepool(false)) {
+    const t = Object.values(TIDEPOOL_TOKENS).find((t) => t.assetId === asset);
+    return t?.blockchain === chain && isValidAddress(chain, address) ? route : null;
+  }
   return poaRouteError(asset, route, chain, address) ? null : route;
 }
 
 /** Contract chains `asset` can be returned to directly: `near`, plus its PoA bridge's chain. */
-export function returnChainsOf(asset: string): string[] {
+export function returnChainsOf(asset: string, livemode?: boolean): string[] {
+  if (livemode === false && usesTidepool(false)) {
+    const t = Object.values(TIDEPOOL_TOKENS).find((t) => t.assetId === asset);
+    return t ? [t.blockchain] : [];
+  }
   const token = poaTokenOf(asset);
   if (!token) return [];
   const label = token.endsWith('.omft.near') ? (token.split(/[-.]/)[0] ?? '') : '';
@@ -252,6 +266,27 @@ export async function queueReturn(
 
   const amount = BigInt(info.amount);
   if (amount <= 0n) return null;
+  // A manual transfer does not establish a safe return address: the sender may be an
+  // exchange or intermediary. Ask after settlement, even when its sender is detectable.
+  if (info.reason === 'overpaid' && p.heldReason !== 'sanctions' && p.status !== 'HELD') {
+    const perUnit = await usdPerUnit(ctx.livemode, info.assetId, q);
+    let returnChain = p.senderChain;
+    if (!returnChain) {
+      try {
+        returnChain = (await tokenInfo(ctx.livemode, info.assetId)).blockchain;
+      } catch {
+        /* Check again when the address is supplied. */
+      }
+    }
+    if (perUnit && returnChain) {
+      const { net, netUsd } = netOfReturnFee(amount, perUnit, D(gasEstimateUsd(returnChain)));
+      if (net <= 0n || netUsd.lt(SMALL_OVERPAY_USD)) {
+        await keepSmall(ctx, p.id, info.reason);
+        return null;
+      }
+    }
+    return queueOverpaymentAddress(ctx, p, info);
+  }
   const sender = p.senderAddress;
   const senderChain = p.senderChain;
   const base = { paymentId: p.id, reason: info.reason, assetId: info.assetId } as const;
@@ -331,6 +366,37 @@ export async function queueReturn(
   return draftIfReady(ctx, refund.id);
 }
 
+async function queueOverpaymentAddress(ctx: ScopeContext, p: Payment, info: ReturnInfo) {
+  const session = await prisma.session.findFirstOrThrow({
+    where: { id: p.sessionId, ...tenantOf(ctx) },
+    select: { externalRef: true, paymentLinkId: true, payerNote: true, customerEmail: true },
+  });
+  const { refund, created } = await insertRefund(
+    ctx,
+    {
+      paymentId: p.id,
+      reason: info.reason,
+      assetId: info.assetId,
+      // Gross until the shopper chooses the destination network; fillAddress nets its fee.
+      amount: info.amount,
+      needsAddress: true,
+    },
+    async (tx, row) => {
+      await recordEvent(tx, ctx, {
+        aggregateType: 'refund',
+        aggregateId: row.id,
+        type: 'refund.needs_address',
+        payload: {
+          ...refundPayload(row, p.sessionId, session),
+          customer_email_on_file: session.customerEmail !== null,
+        },
+      });
+    },
+  );
+  if (created && session.customerEmail) await emailNeedsAddress(ctx, refund.id);
+  return refund;
+}
+
 /** Records a refund 1Click made itself (to an ORIGIN_CHAIN address): no draft, no signer. */
 async function recordDirectRefund(
   ctx: ScopeContext,
@@ -358,8 +424,13 @@ async function recordDirectRefund(
  * `kept_small_overpayment` flag. A payment waiting in REFUNDING is done (REFUNDED) — and a
  * late-deposit session waiting on it closes — only once no other return of it is still open.
  */
-export async function keepSmall(ctx: ScopeContext, paymentId: string, reason: ReturnReason) {
-  await tenantTransaction(ctx, async (tx) => {
+export async function keepSmall(
+  ctx: ScopeContext,
+  paymentId: string,
+  reason: ReturnReason,
+  inTx?: Tx,
+) {
+  const apply = async (tx: Tx) => {
     await lockPayment(tx, ctx, paymentId);
     const p = await tx.payment.findFirstOrThrow({ where: { id: paymentId, ...tenantOf(ctx) } });
     if (p.keptSmallReasons.includes(reason)) return;
@@ -378,7 +449,9 @@ export async function keepSmall(ctx: ScopeContext, paymentId: string, reason: Re
       });
       await closeSession(tx, ctx, p.sessionId, p.id);
     }
-  });
+  };
+  if (inTx) await apply(inTx);
+  else await tenantTransaction(ctx, apply);
 }
 
 /** Refund statuses of a return that still needs something (C41): not sent, or in review. */
@@ -689,7 +762,7 @@ export async function draftReturn(
     }
     if (decision === 'block') return blockReturn(ctx, r.id);
   }
-  const route = returnRoute(r.assetId, r.destinationChain, r.destination);
+  const route = returnRoute(r.assetId, r.destinationChain, r.destination, ctx.livemode);
   if (!route) return markReview(ctx, r.id, REVIEW.needsSwapRoute);
   const action = {
     refund: {
@@ -1044,9 +1117,9 @@ async function fillAddress(
   if (!isValidAddress(oneclick, input.address)) {
     throw invalidInput(`That is not a valid ${oneclick} address`, { field: 'address' });
   }
-  if (!returnRoute(r.assetId, chain, input.address)) {
+  if (!returnRoute(r.assetId, chain, input.address, ctx.livemode)) {
     throw invalidInput('This refund cannot be sent on that network', {
-      chains: returnChainsOf(r.assetId).map(oneclickChainOf),
+      chains: returnChainsOf(r.assetId, ctx.livemode).map(oneclickChainOf),
     });
   }
   const { decision } = await deps.screen(ctx, {
@@ -1064,6 +1137,20 @@ async function fillAddress(
   // A store refund (the merchant pays the network cost): the fee is re-estimated for the chain the
   // shopper chose, on top of the same requested amount.
   let regross: { amount: string; returnFee: string } | null = null;
+  let kept = false;
+  if (r.reason === 'overpaid') {
+    const p = await prisma.payment.findFirstOrThrow({
+      where: { id: r.paymentId, ...tenantOf(ctx) },
+    });
+    const q = await prisma.quote.findFirstOrThrow({ where: { id: p.quoteId, ...tenantOf(ctx) } });
+    const perUnit = await usdPerUnit(ctx.livemode, r.assetId, q);
+    if (!perUnit?.gt(0))
+      throw new AppError('PROVIDER_UNAVAILABLE', 'Please try again in a few minutes', 503);
+    const gross = BigInt(r.amount.toFixed(0)) + BigInt(r.returnFee?.toFixed(0) ?? '0');
+    const { fee, net, netUsd } = netOfReturnFee(gross, perUnit, D(gasEstimateUsd(oneclick)));
+    regross = { amount: net.toString(), returnFee: fee.toString() };
+    kept = net <= 0n || netUsd.lt(SMALL_OVERPAY_USD);
+  }
   if (r.reason === 'merchant') {
     const p = await prisma.payment.findFirstOrThrow({
       where: { id: r.paymentId, ...tenantOf(ctx) },
@@ -1087,35 +1174,46 @@ async function fillAddress(
     }
     regross = { amount: (requested + fee).toString(), returnFee: fee.toString() };
   }
-  const { count } = await prisma.refund.updateMany({
-    where: {
-      id: r.id,
-      ...tenantOf(ctx),
-      ...NOT_CLOSED_MERCHANT,
-      needsAddress: true,
-      status: 'pending',
-      ...(tokenHash ? { addressTokenHash: tokenHash } : {}),
-      ...(regross ? { amount: r.amount, returnFee: r.returnFee } : {}),
-    },
-    data: {
-      ...(regross ?? {}),
-      destination: input.address,
-      destinationChain: chain,
-      needsAddress: false,
-      addressTokenHash: null,
-      addressTokenExpiresAt: null,
-    },
+  const { count } = await tenantTransaction(ctx, async (tx) => {
+    await lockPayment(tx, ctx, r.paymentId);
+    const result = await tx.refund.updateMany({
+      where: {
+        id: r.id,
+        ...tenantOf(ctx),
+        ...NOT_CLOSED_MERCHANT,
+        needsAddress: true,
+        status: 'pending',
+        payment: {
+          OR: [{ heldReason: null }, { heldReason: { not: 'sanctions' } }],
+          status: { not: 'HELD' },
+        },
+        ...(tokenHash ? { addressTokenHash: tokenHash } : {}),
+        ...(regross ? { amount: r.amount, returnFee: r.returnFee } : {}),
+      },
+      data: {
+        ...(regross ?? {}),
+        destination: input.address,
+        destinationChain: chain,
+        needsAddress: false,
+        addressTokenHash: null,
+        addressTokenExpiresAt: null,
+        ...(kept ? { reviewReason: REVIEW.keptSmall } : {}),
+      },
+    });
+    if (result.count > 0 && kept) await keepSmall(ctx, r.paymentId, 'overpaid', tx);
+    return result;
   });
   if (count === 0) {
     if (tokenHash) throw invalidToken();
     throw conflict('This refund already has an address');
   }
+  if (kept) return { refund_id: r.id, status: 'kept_small' };
   const drafted = await draftIfReadyScreened(ctx, r.id, input.address);
   return { refund_id: drafted.id, status: drafted.proposalId ? 'pending_approval' : 'queued' };
 }
 
 /**
- * The shopper says where an exchange-sent return should go (Ruling C3), from the checkout page
+ * The shopper supplies a manual overpayment or exchange return destination from checkout
  * (client secret): format check, route check, sanctions screen, then the address is stored,
  * `needs_address` clears and the draft is created.
  */
@@ -1217,7 +1315,9 @@ export async function shopperRefunds(ctx: ShopperCtx) {
       asset: r.assetId,
       amount: r.amount.toFixed(0),
       needs_address: r.needsAddress,
-      chains: r.needsAddress ? returnChainsOf(r.assetId).map(oneclickChainOf) : undefined,
+      chains: r.needsAddress
+        ? returnChainsOf(r.assetId, ctx.livemode).map(oneclickChainOf)
+        : undefined,
       state:
         r.status === 'confirmed'
           ? 'sent'
@@ -1259,7 +1359,7 @@ export async function emailNeedsAddress(ctx: ScopeContext, refundId: string): Pr
         merchant_name: s.merchant.name,
         amount,
         refund_id: r.id,
-        refund_address_url: `${checkoutUrl(s.id)}/refund-address?t=${encodeURIComponent(token)}`,
+        refund_address_url: `${checkoutUrl(s.id)}/refund-address?t=${encodeURIComponent(token)}${usesTidepool(ctx.livemode) ? `&testnet=1&chain=${returnChainsOf(r.assetId, ctx.livemode)[0] ?? ''}` : ''}`,
       },
     });
     return true;

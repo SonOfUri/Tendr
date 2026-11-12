@@ -213,7 +213,9 @@ describe('return to sender', () => {
     });
 
   /** A manual send (no refund address) that overpays 10%: the excess lands in the account. */
-  async function overpaid(opts: { sender?: string; amount?: string; email?: string } = {}) {
+  async function overpaid(
+    opts: { sender?: string; amount?: string; email?: string; autoAddress?: boolean } = {},
+  ) {
     const s = await newSession(
       opts.amount ?? '25.00',
       opts.email ? { customer_email: opts.email } : {},
@@ -227,10 +229,26 @@ describe('return to sender', () => {
     await poll(q.deposit_address);
     const p = await paymentOf(q.id);
     expect(p.status).toBe('SETTLED');
-    return { s, q, p, excess: BigInt(q.amount_in) / 10n };
+    // Most tests below exercise an approved destination's draft/lifecycle. Supply it
+    // through the shopper endpoint; address-intake tests opt out or use an exchange.
+    const waiting = (await refundsOf(p.id)).find((r) => r.needsAddress);
+    let addressResult;
+    if (
+      waiting &&
+      opts.autoAddress !== false &&
+      p.senderAddress &&
+      !isExchangeAddress('eth', p.senderAddress)
+    ) {
+      addressResult = await call('POST', 'refund-address', s.client_secret, {
+        refund_id: waiting.id,
+        address: p.senderAddress,
+        chain: 'eth',
+      });
+    }
+    return { s, q, p, addressResult, excess: BigInt(q.amount_in) / 10n };
   }
 
-  it('a normal manual-send overpay creates a refund draft with the right route and net amount', async () => {
+  it('a manual-send overpay creates a refund draft after the customer supplies its return address', async () => {
     const { s, p, excess } = await overpaid();
     const [r] = await refundsOf(p.id);
     expect(r).toMatchObject({
@@ -277,6 +295,25 @@ describe('return to sender', () => {
     expect(await eventsOf('refund.pending')).toHaveLength(1);
   });
 
+  it('asks every manual overpayer for an address instead of reusing the detected sender', async () => {
+    const { s, p, excess } = await overpaid({ autoAddress: false });
+    const [r] = await refundsOf(p.id);
+    expect(r).toMatchObject({
+      needsAddress: true,
+      destination: null,
+      destinationChain: null,
+      proposalId: null,
+      reviewReason: null,
+    });
+    expect((await call('GET', 'session', s.client_secret)).json().refunds[0].needs_address).toBe(
+      true,
+    );
+    await queueReturn(ctx(), p, { reason: 'overpaid', assetId: ETH, amount: excess.toString() });
+    await sweepReturns();
+    expect(await eventsOf('refund.needs_address')).toHaveLength(1);
+    expect(await prisma.accountProposal.count()).toBe(0);
+  });
+
   it('a return worth < $1 after the return fee is kept (no draft)', async () => {
     // $12 session: the excess is ≈ $1.20 gross (the watcher queues it), $0.70 net of the $0.50
     // return fee → kept by the merchant.
@@ -291,6 +328,47 @@ describe('return to sender', () => {
     ).toBe(true);
     await sweepReturns();
     expect(await refundsOf(p.id)).toEqual([]);
+  });
+
+  it('records the minimum-return decision atomically if the amount is below the threshold when an address is supplied', async () => {
+    const { s, p } = await overpaid({ autoAddress: false });
+    const [r] = await refundsOf(p.id);
+    await prisma.refund.update({
+      where: { id: r!.id },
+      data: { amount: (ETH_FEE_WEI + 1000n).toString() },
+    });
+    const res = await call('POST', 'refund-address', s.client_secret, {
+      refund_id: r!.id,
+      address: WALLET,
+      chain: 'eth',
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().status).toBe('kept_small');
+    expect(await prisma.refund.findUnique({ where: { id: r!.id } })).toMatchObject({
+      needsAddress: false,
+      reviewReason: 'kept_small',
+      proposalId: null,
+    });
+    expect(await paymentOf(p.quoteId)).toMatchObject({
+      keptSmallReasons: ['overpaid'],
+      keptSmallOverpayment: true,
+    });
+    expect(await prisma.accountProposal.count()).toBe(0);
+  });
+
+  it('a return placed on hold while awaiting an address cannot be claimed through checkout', async () => {
+    const { s, p } = await overpaid({ autoAddress: false });
+    await prisma.payment.update({ where: { id: p.id }, data: { heldReason: 'sanctions' } });
+    const res = await call('POST', 'refund-address', s.client_secret, {
+      address: WALLET,
+      chain: 'eth',
+    });
+    expect(res.statusCode).toBe(409);
+    expect((await refundsOf(p.id))[0]).toMatchObject({
+      needsAddress: true,
+      destination: null,
+      proposalId: null,
+    });
   });
 
   it('an underpaid store-path refund under $1 is kept and the payment completes', async () => {
@@ -382,22 +460,32 @@ describe('return to sender', () => {
     expect((await refundsOf(p.id))[0]!.proposalId).not.toBeNull();
   });
 
-  it('a sanctioned sender destination is never drafted (screened right before drafting)', async () => {
+  it('a blocked suggested destination is refused without turning the settled order into a hold', async () => {
     setRefundDeps({ screen: async () => ({ decision: 'block' }) });
-    const { p } = await overpaid();
+    const { p, addressResult } = await overpaid();
     const [r] = await refundsOf(p.id);
-    expect(r).toMatchObject({ status: 'failed', reviewReason: 'sanctions', proposalId: null });
+    expect(addressResult?.statusCode).toBe(403);
+    expect(r).toMatchObject({
+      status: 'pending',
+      reviewReason: null,
+      needsAddress: true,
+      proposalId: null,
+    });
     expect(await prisma.accountProposal.count()).toBe(0);
-    const [held] = await eventsOf('payment.held');
-    expect(held!.payload).toMatchObject({ payment_id: p.id, held_reason: 'sanctions' });
+    expect(await eventsOf('payment.held')).toHaveLength(0);
   });
 
-  it('screening unavailable: no draft yet; the sweeper drafts once screening answers', async () => {
+  it('screening unavailable: keep asking for an address until a screened submission succeeds', async () => {
     setRefundDeps({ screen: async () => ({ decision: 'unavailable' }) });
-    const { p } = await overpaid();
+    const { s, p, addressResult } = await overpaid();
     const [r] = await refundsOf(p.id);
     expect(r).toMatchObject({ status: 'pending', proposalId: null, reviewReason: null });
+    expect(addressResult?.statusCode).toBe(503);
     setRefundDeps(null);
+    expect(
+      (await call('POST', 'refund-address', s.client_secret, { address: WALLET, chain: 'eth' }))
+        .statusCode,
+    ).toBe(200);
     await sweepReturns();
     expect((await refundsOf(p.id))[0]!.proposalId).not.toBeNull();
   });
@@ -450,8 +538,8 @@ describe('return to sender', () => {
     expect(await refundsOf(p.id)).toEqual([]);
     expect(await sweepReturns()).toBeGreaterThan(0);
     const [r] = await refundsOf(p.id);
-    expect(r!.proposalId).not.toBeNull();
-    expect(await eventsOf('refund.pending')).toHaveLength(1);
+    expect(r).toMatchObject({ needsAddress: true, proposalId: null });
+    expect(await eventsOf('refund.needs_address')).toHaveLength(1);
   });
 
   it('an executed refund proposal marks the refund sent and completes the payment', async () => {
@@ -535,10 +623,10 @@ describe('return to sender', () => {
     const refunds = await refundsOf(p.id);
     expect(refunds.map((r) => r.reason).sort()).toEqual(['late', 'overpaid']);
     const over = refunds.find((r) => r.reason === 'overpaid')!;
-    expect(over).toMatchObject({ assetId: ETH, destination: p.senderAddress });
-    expect(over.amount.toFixed()).toBe((excess - ETH_FEE_WEI).toString());
-    // Screened and drafted like every return; repeats are no-ops.
-    expect(over.proposalId).not.toBeNull();
+    expect(over).toMatchObject({ assetId: ETH, destination: null, needsAddress: true });
+    expect(over.amount.toFixed()).toBe(excess.toString());
+    // The refundable excess waits for the shopper's chosen destination.
+    expect(over.proposalId).toBeNull();
     await sweepReturns();
     await queueReturn(ctx(), p, { reason: 'overpaid', assetId: ETH, amount: excess.toString() });
     expect(await refundsOf(p.id)).toHaveLength(2);
@@ -571,14 +659,14 @@ describe('return to sender', () => {
     expect(cur.keptSmallReasons).toEqual(['late']);
     // The excess is still open, so the payment waits.
     expect(cur.status).toBe('REFUNDING');
-    // The ≈$2.50 excess is queued and drafted.
+    // The ≈$2.50 excess asks for an address even though another return was kept.
     const r = await queueReturn(ctx(), cur, {
       reason: 'overpaid',
       assetId: ETH,
       amount: excess.toString(),
     });
     expect(r).toMatchObject({ reason: 'overpaid', assetId: ETH });
-    expect(r!.proposalId).not.toBeNull();
+    expect(r).toMatchObject({ needsAddress: true, proposalId: null });
     cur = await paymentOf(p.quoteId);
     expect(cur.keptSmallReasons).toEqual(['late']);
   });
@@ -639,7 +727,7 @@ describe('return to sender', () => {
     await sweepReturns();
     const [over] = await refundsOf(p.id);
     expect(over).toMatchObject({ reason: 'overpaid', assetId: ETH });
-    expect(over!.proposalId).not.toBeNull();
+    expect(over).toMatchObject({ needsAddress: true, proposalId: null });
   });
 
   it('C40: an excess kept small never keeps the late return (overpaid first, then late)', async () => {

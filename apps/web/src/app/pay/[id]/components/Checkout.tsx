@@ -426,7 +426,8 @@ export function Checkout({ sessionId }: { sessionId: string }) {
   const logoUrl = themeLogoUrl(theme) ?? '';
   const amountDisplay = formatOrderAmount(view.amount, view.amount_currency, settlementSymbol);
   const title = productTitle(view);
-  const useDemo = DEMO_SCREEN.has(screen.kind);
+  const hasExcess = view.payments.some((p) => p.overpaid_amount && /[1-9]/.test(p.overpaid_amount));
+  const useDemo = DEMO_SCREEN.has(screen.kind) && !(screen.kind === 'complete' && hasExcess);
   const blocked = paymentBlock({
     status: view.status,
     pending: pendingTx,
@@ -525,6 +526,7 @@ export function Checkout({ sessionId }: { sessionId: string }) {
           <NeedsAddressPanel
             client={client}
             refund={screen.refundNeedingAddress}
+            testnet={view.test_provider === 'tidepool'}
             onDone={refresh}
           />
         </div>

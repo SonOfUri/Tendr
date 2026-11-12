@@ -180,6 +180,17 @@ describe('review queue', () => {
     expect(r.p.status).toBe('HELD');
     return r;
   };
+  async function overpayWithAddress() {
+    const result = await paid('overpay');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout/client/refund-address',
+      headers: { authorization: `Bearer ${result.s.client_secret}` },
+      payload: { address: result.p.senderAddress, chain: 'eth' },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    return result;
+  }
   const delivered = async (depositAddress: string) =>
     BigInt((await sim.status(depositAddress)).swapDetails.amountOut!);
 
@@ -457,7 +468,7 @@ describe('review queue', () => {
   });
 
   it('re-drafting waits until the old proposal is verified ended ON CHAIN', async () => {
-    const { p } = await paid('overpay');
+    const { p } = await overpayWithAddress();
     const [r] = await prisma.refund.findMany({ where: { paymentId: p.id } });
     const first = r!.proposalId!;
     expect(first).toBeTruthy();
@@ -530,7 +541,7 @@ describe('review queue', () => {
       ['expired', 'refund.cancelled', 'expired', 'proposal_expired'],
       ['failed', 'refund.failed', 'failed', 'transfer_failed'],
     ] as const) {
-      const { p } = await paid('overpay');
+      const { p } = await overpayWithAddress();
       const [r] = await prisma.refund.findMany({ where: { paymentId: p.id } });
       const old = r!.proposalId!;
       // Cancelled in Postgres through a stale claim (still linked); the chain says how it ended.
@@ -707,8 +718,18 @@ describe('review queue', () => {
     // payment.held with the blocked destination.
     setRefundDeps({ screen: async () => ({ decision: 'block' }) });
     const { p } = await paid('overpay');
+    const [waiting] = await prisma.refund.findMany({ where: { paymentId: p.id } });
+    // Model an address saved before a worker retry: screening is repeated when drafting.
+    await prisma.refund.update({
+      where: { id: waiting!.id },
+      data: {
+        needsAddress: false,
+        destination: p.senderAddress,
+        destinationChain: 'eth',
+      },
+    });
+    const r = await draftReturn({ merchantId: merchant.id, livemode: false }, waiting!.id);
     setRefundDeps(null);
-    const [r] = await prisma.refund.findMany({ where: { paymentId: p.id } });
     expect(r).toMatchObject({ status: 'failed', reviewReason: 'sanctions' });
     // A later block of another destination (e.g. the list changed after a review screen).
     const ctx = { merchantId: merchant.id, livemode: false };

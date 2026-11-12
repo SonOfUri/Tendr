@@ -5,6 +5,14 @@ description: 'Request a refund, authorize it from the store wallet, and reconcil
 
 A refund request creates a record for review and authorization. It does not immediately transfer funds.
 
+## Overpayments
+
+When a customer pays manually and sends too much, checkout asks for a return address after the order settles. The customer enters a wallet they control on an offered network. If they paid through **Connect wallet**, the quote already contains their wallet's return address and the payment provider returns the excess there directly.
+
+For manual payments, the merchant approves the return from the store wallet. Saving a return address does not itself send funds. Excess worth less than **$1 after return fees** stays with the store under the existing minimum-return policy.
+
+Keep checkout open to supply the address. If a customer email was provided, Tendr also sends a link for supplying it later. Test payments use test-network addresses and test tokens.
+
 ## Request from your server
 
 Use a secret key with `refunds:write`. Supply exactly one of `payment` or `session`.
@@ -31,7 +39,7 @@ Reuse `external_ref` for the same refund operation. Reusing it for a different a
 
 Tendr checks refundability, remaining amount, destination and applicable policy. Some returns need a customer-supplied address or merchant review.
 
-For a native live wallet, the owner reviews and signs the linked payout with the dedicated wallet passkey. Contract-account environments can use signer proposals and timelocks. Do not assume one approval mechanism across wallet types.
+For a native wallet, including a Tidepool Test wallet, the owner reviews and signs the linked payout with the dedicated wallet passkey. Contract-account environments can use signer proposals and timelocks. Do not assume one approval mechanism across wallet types.
 
 | Status      | Meaning                                                     |
 | ----------- | ----------------------------------------------------------- |

@@ -68,21 +68,24 @@ export function EmailPanel({ client, onDone }: { client: CheckoutClient; onDone:
 export function NeedsAddressPanel({
   client,
   refund,
+  testnet = false,
   onDone,
 }: {
   client: CheckoutClient;
   refund: SessionRefund;
+  testnet?: boolean;
   onDone: () => void;
 }) {
   return (
     <section className="pay-section pay-action" aria-labelledby="pay-address-title">
       <h2 id="pay-address-title">Tell us where to send your money back</h2>
       <p>
-        Your payment came from an exchange, so we can&apos;t send it straight back. Give us an
-        address you control and we&apos;ll send it there.
+        Enter a wallet address you control to receive your return. The network fee is deducted from
+        the amount returned.
       </p>
       <ReturnAddressForm
         chains={refund.chains ?? []}
+        testnet={testnet}
         submit={async (address, chain) => {
           await client.refundAddress({ refund_id: refund.id, address, chain });
         }}

@@ -48,6 +48,16 @@ Tidepool top-ups are enabled by default in Test; `CHECKOUT_TOPUP_ENABLED=false` 
 
 After a top-up, keep polling. Only verified settlement completes the order. At expiry, the provider returns partial funds to the quote's refund destination. With a shopper refund address this is a direct return; a copy-address quote without one returns into the store's Test wallet and requires a merchant-approved return. If the provider gives no sender address, the return is `review`; tell the shopper to contact the store, not that funds have already reached their external wallet. Keep refund status visible even when the session has reopened as `PENDING_DEPOSIT`. Do not keep the confirming card mounted over an underpayment or return screen.
 
+## Overpayment return addresses
+
+For a manual payment without a supplied refund address, refundable excess now creates `refunds[].needs_address: true` even when the sender is detectable. Show the return-address form after the order settles. Do not assume a blockchain sender is a safe customer return address. Connected-wallet quotes already supply the wallet as `refund_address`; the provider returns excess there directly, so no second address request or merchant transfer is needed.
+
+Keep the current policy: excess worth less than $1 after estimated return fees stays with the store. For a pending manual return, `amount` is gross until the address is supplied; the API estimates the destination network fee and stores the net amount. `POST /v1/checkout/client/refund-address` accepts `refund_id`, `address` and `chain`, validates and screens the address, and creates a merchant-approval draft. It can return `kept_small` if the chosen network's fee reduces the net below the minimum. Never describe address submission as a completed refund.
+
+The authenticated checkout asks for the address directly, without requiring email first. If customer email is already on file, the existing single-use return link is sent too. Use the API's `refunds[].chains`; Tidepool lists the original token's test network (Base Sepolia, Solana devnet or NEAR testnet). The owner approves the resulting refund through the native payout/passkey flow, including in Test.
+
+Do not stop polling or clear the client secret merely because `status` becomes `SETTLED`: the refund hook may not have created its row yet. Keep polling while refundable excess has no return row, an address is required, or a return is processing. Show order success and the excess-return state together; the legacy demo success card alone omits these actions.
+
 ## Operator rollout
 
 Apply migration `20261112100000_tidepool_test_wallets`. Deploy the API, worker and web from the same revision. API and worker must both use `TEST_PAYMENT_PROVIDER=tidepool`, `NEAR_CLIENT_DRIVER=rpc` and no `NEAR_FAKE_SIMULATE`. Production already defaults to the RPC driver. The environment parser pins the Tidepool verifier and NEAR testnet RPCs; the adapter uses its fixed service URL without forwarding the mainnet 1Click API key.

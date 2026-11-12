@@ -28,6 +28,7 @@ import { resetTokenCache } from '../checkout/tokens.js';
 import { pollDeposit, registerWatcherHooks, setWatcherDeps } from '../checkout/watcher.js';
 import { createStore } from '../merchants/signup.js';
 import { pollNativePayouts } from './native-payouts.js';
+import { registerRefundHooks, sweepReturns } from '../checkout/refunds.js';
 
 const SOL = '7SEYS3n5AWC3B6aXUp2TycE2eUYyDCX8x6Koc8qSLRLt';
 const DEST = '0x1111111111111111111111111111111111111111';
@@ -62,6 +63,7 @@ describe('Tidepool dashboard and checkout integration', () => {
     resetOneClickProviders();
     setWatcherDeps(null);
     registerWatcherHooks();
+    registerRefundHooks();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     status = pending();
     auth = new SoftAuthenticator();
@@ -87,7 +89,12 @@ describe('Tidepool dashboard and checkout integration', () => {
         ...(req.dry
           ? {}
           : {
-              depositAddress: req.depositType === 'INTENTS' ? randomBytes(32).toString('hex') : SOL,
+              depositAddress:
+                req.depositType === 'INTENTS'
+                  ? randomBytes(32).toString('hex')
+                  : req.originAsset === T.baseUsdc.assetId
+                    ? DEST
+                    : SOL,
             }),
       },
     }));
@@ -126,7 +133,7 @@ describe('Tidepool dashboard and checkout integration', () => {
     expect(activated.statusCode, activated.body).toBe(200);
     return activated.json() as { nearAccountId: string };
   }
-  async function checkout() {
+  async function checkout(options: { manual?: boolean; originAsset?: string } = {}) {
     const key = (await createApiKey(merchantId, { livemode: false })).raw;
     const res = await app.inject({
       method: 'POST',
@@ -150,9 +157,8 @@ describe('Tidepool dashboard and checkout integration', () => {
         ...(payload ? { payload } : {}),
       });
     const q = await shopper('POST', 'quote', {
-      origin_asset: T.solUsdc.assetId,
-      refund_address: SOL,
-      refund_chain: 'sol',
+      origin_asset: options.originAsset ?? T.solUsdc.assetId,
+      ...(options.manual ? {} : { refund_address: SOL, refund_chain: 'sol' }),
     });
     expect(q.statusCode, q.body).toBe(201);
     return { session, shopper, quote: q.json() as { deposit_address: string; id: string } };
@@ -349,6 +355,96 @@ describe('Tidepool dashboard and checkout integration', () => {
     vi.stubEnv('CHECKOUT_TOPUP_ENABLED', 'true');
     loadEnv();
     expect((await shopper('GET', 'session')).json().topup).toBeNull();
+  });
+
+  it.each([
+    [T.solUsdc.assetId, 'sol', SOL],
+    [T.baseUsdc.assetId, 'base', DEST],
+  ])(
+    'collects a manual overpayment return address even without sender metadata, then prepares an owner-approved Test refund (%s)',
+    async (originAsset, chain, address) => {
+      const account = await activate();
+      const { shopper, quote } = await checkout({ manual: true, originAsset });
+      status = {
+        status: 'SUCCESS',
+        swapDetails: {
+          depositedAmount: '4000000',
+          amountIn: '1000000',
+          amountOut: '1000000',
+          refundedAmount: '3000000',
+          originChainTxHashes: [],
+          destinationChainTxHashes: [{ hash: HASH }],
+        },
+      };
+      credit(HASH, account.nearAccountId, true);
+      await pollDeposit(quote.deposit_address, { livemode: false });
+      await sweepReturns();
+      const view = (await shopper('GET', 'session')).json();
+      expect(view.status).toBe('SETTLED');
+      expect(view.refunds).toHaveLength(1);
+      expect(view.refunds[0]).toMatchObject({
+        needs_address: true,
+        chains: [chain],
+        state: 'processing',
+      });
+      expect(await prisma.accountProposal.count({ where: { merchantId } })).toBe(0);
+      const wrongNetwork = await shopper('POST', 'refund-address', {
+        refund_id: view.refunds[0].id,
+        address: 'receiver.testnet',
+        chain: 'near',
+      });
+      expect(wrongNetwork.statusCode).toBe(400);
+      const filled = await shopper('POST', 'refund-address', {
+        refund_id: view.refunds[0].id,
+        address,
+        chain,
+      });
+      expect(filled.statusCode, filled.body).toBe(200);
+      expect(filled.json().status).toBe('pending_approval');
+      const refund = await prisma.refund.findUniqueOrThrow({ where: { id: view.refunds[0].id } });
+      expect(refund).toMatchObject({
+        needsAddress: false,
+        destination: address,
+        destinationChain: chain,
+        reviewReason: null,
+      });
+      fakeNearClient(false).scriptView(V, 'mt_batch_balance_of', () => ['4000000']);
+      const payout = await post('/v1/account/native/payouts', { proposalId: refund.proposalId });
+      expect(payout.statusCode, payout.body).toBe(201);
+      expect(payout.json()).toMatchObject({
+        destination: address,
+        proposalId: refund.proposalId,
+        status: 'awaiting_signature',
+      });
+      expect(
+        await prisma.event.count({ where: { merchantId, type: 'refund.needs_address' } }),
+      ).toBe(1);
+      expect(await prisma.event.count({ where: { merchantId, type: 'refund.sent' } })).toBe(0);
+    },
+  );
+
+  it('records a connected-wallet excess return without asking for an address or drafting another transfer', async () => {
+    const account = await activate();
+    const { shopper, quote } = await checkout();
+    status = {
+      status: 'SUCCESS',
+      swapDetails: {
+        depositedAmount: '4000000',
+        amountIn: '1000000',
+        amountOut: '1000000',
+        refundedAmount: '3000000',
+        originChainTxHashes: [],
+        destinationChainTxHashes: [{ hash: HASH }],
+      },
+    };
+    credit(HASH, account.nearAccountId, true);
+    await pollDeposit(quote.deposit_address, { livemode: false });
+    await sweepReturns();
+    const view = (await shopper('GET', 'session')).json();
+    expect(view.refunds).toEqual([
+      expect.objectContaining({ needs_address: false, state: 'sent' }),
+    ]);
+    expect(await prisma.accountProposal.count({ where: { merchantId } })).toBe(0);
   });
 
   it('requires a final verifier debit and the correct Base token receipt before completing a signed withdrawal', async () => {

@@ -188,7 +188,12 @@ describe('screenFor', () => {
       }),
       NOW,
     );
-    expect(late).toMatchObject({ kind: 'late', action: 'email', terminal: false, pollMs: POLL_MS });
+    expect(late).toMatchObject({
+      kind: 'late',
+      action: 'needs_address',
+      terminal: false,
+      pollMs: POLL_MS,
+    });
   });
 
   it('held → refunded: polling stops once the refund completes', () => {
@@ -242,7 +247,7 @@ describe('screenFor', () => {
     expect(s.refundNeedingAddress?.id).toBe('ref_1');
   });
 
-  it('asks for an email when one is needed (before the address form)', () => {
+  it('collects the return address directly without requiring an email first', () => {
     const s = screenFor(
       view({
         status: 'LATE_DEPOSIT',
@@ -252,8 +257,31 @@ describe('screenFor', () => {
       }),
       NOW,
     );
-    expect(s.action).toBe('email');
+    expect(s.action).toBe('needs_address');
     expect(s.terminal).toBe(false);
+  });
+
+  it('keeps polling a settled overpayment through the return-hook gap and merchant approval', () => {
+    const p = payment('settled', { overpaid_amount: '5000000', kept_extra: false });
+    expect(screenFor(view({ status: 'SETTLED', payments: [p] }), NOW)).toMatchObject({
+      kind: 'complete',
+      terminal: false,
+    });
+    expect(
+      screenFor(
+        view({ status: 'SETTLED', payments: [p], refunds: [refund({ needs_address: true })] }),
+        NOW,
+      ),
+    ).toMatchObject({ action: 'needs_address', terminal: false });
+    expect(
+      screenFor(view({ status: 'SETTLED', payments: [p], refunds: [refund()] }), NOW).terminal,
+    ).toBe(false);
+    expect(
+      screenFor(
+        view({ status: 'SETTLED', payments: [p], refunds: [refund({ state: 'sent' })] }),
+        NOW,
+      ).terminal,
+    ).toBe(true);
   });
 
   it('every known session status maps to a real screen', () => {

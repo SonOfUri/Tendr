@@ -15,7 +15,19 @@ export default async function RefundAddressPage({
 }) {
   const { id: sessionId } = await params;
   if (!SESSION_ID.test(sessionId)) notFound();
-  const t = (await searchParams).t;
+  const query = await searchParams;
+  const t = query.t;
   const token = typeof t === 'string' && t.length > 0 && t.length <= 256 ? t : null;
-  return <RefundAddressByToken token={token} />;
+  const testnet = query.testnet === '1';
+  const chain =
+    typeof query.chain === 'string' && ['near', 'base', 'sol'].includes(query.chain)
+      ? query.chain
+      : null;
+  return (
+    <RefundAddressByToken
+      token={token}
+      testnet={testnet}
+      chains={testnet && chain ? [chain] : []}
+    />
+  );
 }

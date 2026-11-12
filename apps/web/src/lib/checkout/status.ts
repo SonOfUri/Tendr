@@ -139,15 +139,32 @@ export function screenFor(v: SessionView, now: Date): ScreenState {
     kind = 'checking';
   }
   const refundNeedingAddress = refunds.find((r) => r?.needs_address === true) ?? null;
-  // An email first (the address link is mailed to it), then the address itself.
-  const action: ScreenAction =
-    v?.needs_email === true ? 'email' : refundNeedingAddress ? 'needs_address' : null;
+  // The authenticated checkout can collect an address immediately. Email links remain
+  // available when the customer supplied an email or returns after closing checkout.
+  const action: ScreenAction = refundNeedingAddress
+    ? 'needs_address'
+    : v?.needs_email === true
+      ? 'email'
+      : null;
   const notice =
     kind === 'pay' && (latest?.state === 'refunded' || latest?.state === 'refunding')
       ? 'previous_returned'
       : null;
   const status = SessionStatusSchema.safeParse(v?.status);
-  const terminal = status.success && isTerminalSession(status.data) && action === null;
+  // Settlement commits before the return hook runs. Keep polling through that gap,
+  // otherwise the success response clears the secret before we can ask for an address.
+  const returnPending =
+    refunds.some((r) => r.state === 'processing') ||
+    payments.some(
+      (p) =>
+        !!p.overpaid_amount &&
+        /[1-9]/.test(p.overpaid_amount) &&
+        !p.kept_extra &&
+        !p.kept_small_overpayment &&
+        !refunds.some((r) => r.payment_id === p.id),
+    );
+  const terminal =
+    status.success && isTerminalSession(status.data) && action === null && !returnPending;
   return {
     kind,
     terminal,

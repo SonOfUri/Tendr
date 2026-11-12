@@ -171,6 +171,72 @@ describe('the active hosted checkout provider', () => {
 });
 
 describe('hosted confirmation progress', () => {
+  it('continues polling after settlement, asks a manual overpayer for a Test return address and records it', async () => {
+    vi.useFakeTimers();
+    const view = session('tidepool');
+    view.status = 'SETTLED';
+    view.payments = [
+      {
+        id: 'pay_test',
+        state: 'settled',
+        amount_received: '4000000',
+        overpaid_amount: '3000000',
+        refunded_amount: '3000000',
+        kept_small_overpayment: false,
+        kept_extra: false,
+        origin_tx_hash: null,
+        created_at: new Date().toISOString(),
+      },
+    ];
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/session')) return Response.json(view);
+      if (url.endsWith('/tokens')) return Response.json({ tokens: [token] });
+      if (url.endsWith('/refund-address')) {
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          refund_id: 'ref_test',
+          chain: 'base',
+          address: '0x' + '1'.repeat(40),
+        });
+        view.refunds[0].needs_address = false;
+        return Response.json({ refund_id: 'ref_test', status: 'pending_approval' });
+      }
+      throw new Error('Unexpected request ' + url);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    await act(async () => render(<Checkout sessionId={id} />));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(screen.getByText('✓ Payment complete')).toBeTruthy();
+    view.needs_email = true;
+    view.refunds = [
+      {
+        id: 'ref_test',
+        payment_id: 'pay_test',
+        asset: token.asset_id,
+        amount: '3000000',
+        needs_address: true,
+        chains: ['base'],
+        state: 'processing',
+      },
+    ];
+    await act(() => vi.advanceTimersByTimeAsync(2500));
+    expect(
+      screen.getByRole('heading', { name: 'Tell us where to send your money back' }),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText('Email')).toBeNull();
+    expect(screen.queryByText(/payment came from an exchange/)).toBeNull();
+    fireEvent.change(screen.getByLabelText('Your address on Base Sepolia'), {
+      target: { value: '0x' + '1'.repeat(40) },
+    });
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: 'Send my money here' })),
+    );
+    view.needs_email = false;
+    await act(() => vi.advanceTimersByTimeAsync(2500));
+    expect(screen.queryByLabelText('Your address on Base Sepolia')).toBeNull();
+    expect(fetcher.mock.calls.filter(([url]) => url.endsWith('/refund-address'))).toHaveLength(1);
+    expect(screen.getByText('✓ Payment complete')).toBeTruthy();
+  });
+
   it('replaces confirming with the exact testnet top-up, then removes instructions at the deadline', async () => {
     vi.useFakeTimers();
     const view = session('tidepool');

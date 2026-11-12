@@ -3,7 +3,7 @@
 // "it stays with the store" is said only when nothing of this payment is being returned at all.
 import type { SessionPayment, SessionRefund } from './api';
 
-export type ExtraPaidNotice = 'returning' | 'contact' | 'sent' | 'kept' | null;
+export type ExtraPaidNotice = 'address' | 'returning' | 'contact' | 'sent' | 'kept' | null;
 
 /**
  * - `contact`: a return of this payment is in review (blocked, or its proposal ended): the shopper
@@ -16,9 +16,10 @@ export type ExtraPaidNotice = 'returning' | 'contact' | 'sent' | 'kept' | null;
  */
 export function extraPaidNotice(
   payment: Pick<SessionPayment, 'id' | 'overpaid_amount' | 'kept_small_overpayment' | 'kept_extra'>,
-  refunds: Pick<SessionRefund, 'payment_id' | 'state'>[],
+  refunds: (Pick<SessionRefund, 'payment_id' | 'state'> & { needs_address?: boolean })[],
 ): ExtraPaidNotice {
   const mine = refunds.filter((r) => r.payment_id === payment.id && r.state !== 'kept');
+  if (mine.some((r) => r.needs_address)) return 'address';
   if (mine.some((r) => r.state === 'review')) return 'contact';
   if (mine.some((r) => r.state !== 'sent')) return 'returning';
   if (mine.length > 0) return 'sent';

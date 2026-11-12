@@ -26,6 +26,7 @@ import { verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { decodeClientDataJSON, isoBase64URL } from '@simplewebauthn/server/helpers';
 import {
   isSecurityKind,
+  TIDEPOOL_TOKENS,
   SignerKeySchema,
   type MerchantPermission,
   type ProposalKind,
@@ -58,6 +59,7 @@ import {
   type ApprovalIntent,
 } from './encoding.js';
 import { isValidAddress } from '../checkout/address-format.js';
+import { usesTidepool } from '../lib/testnet.js';
 import { canonicalIntentsChain, oneclickChainId } from '../checkout/intents-catalog.js';
 import { nsToDate, parseAccountEvents, u64Of, type AccountEvent } from './events.js';
 import { afterAccountEvents, applyAccountEventsTx } from './watcher.js';
@@ -511,6 +513,25 @@ export async function validateLocally(ctx: ScopeContext, action: ActionJson): Pr
       const v = a.refund as ActionOf<'refund'>;
       positive(v.amount);
       if (!SUPPORTED_CHAINS.includes(v.destination_chain)) throw invalid('unsupported chain');
+      if (usesTidepool(ctx.livemode)) {
+        const t = Object.values(TIDEPOOL_TOKENS).find((t) => t.assetId === v.asset);
+        if (
+          !t ||
+          t.blockchain !== v.destination_chain ||
+          !isValidAddress(t.blockchain, v.destination)
+        ) {
+          throw invalid('unsupported Test refund destination');
+        }
+        const routeError = poaRouteError(
+          v.asset,
+          v.route,
+          v.destination_chain,
+          v.destination,
+          'tp-omft.testnet',
+        );
+        if (routeError) throw invalid(routeError);
+        return;
+      }
       const routeError = poaRouteError(v.asset, v.route, v.destination_chain, v.destination);
       if (routeError) throw invalid(routeError);
       return;

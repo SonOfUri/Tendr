@@ -30,11 +30,13 @@ export function ReturnAddressForm({
   chains,
   submit,
   onDone,
+  testnet = false,
 }: {
   /** The networks this return can go to; empty means any supported network. */
   chains: string[];
   submit: (address: string, chain: string) => Promise<void>;
   onDone: () => void;
+  testnet?: boolean;
 }) {
   const id = useId();
   const [allowed, setAllowed] = useState(chains.length > 0 ? chains : RETURN_NETWORKS);
@@ -42,7 +44,7 @@ export function ReturnAddressForm({
   const [address, setAddress] = useState('');
   const [busy, setBusy] = useState(false);
   const [invalid, setInvalid] = useState(false);
-  const network = networkName(chain);
+  const network = networkName(chain, testnet);
 
   async function send() {
     const value = address.trim();
@@ -78,7 +80,7 @@ export function ReturnAddressForm({
           <select value={chain} onChange={(e) => setChain(e.target.value)}>
             {allowed.map((c) => (
               <option key={c} value={c}>
-                {networkName(c)}
+                {networkName(c, testnet)}
               </option>
             ))}
           </select>

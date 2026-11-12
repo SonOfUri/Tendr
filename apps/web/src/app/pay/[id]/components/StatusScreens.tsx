@@ -174,7 +174,12 @@ export function StatusScreen({
             ) : null}
             <TxLink view={view} payment={payment} token={token} />
           </dl>
-          {notice === 'kept' ? (
+          {notice === 'address' ? (
+            <p className="muted small">
+              You sent extra. Enter your return address below so the store can return the refundable
+              amount.
+            </p>
+          ) : notice === 'kept' ? (
             <p className="muted small">
               You sent a little extra. Leftovers under $1 aren&apos;t returned, so it stays with the
               store.
