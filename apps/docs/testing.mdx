@@ -23,6 +23,12 @@ Create a payment link while **Test** is selected, then open its checkout. Choose
 
 The checkout waits for settlement verification before confirming success. You can then see the payment and balance in the dashboard. API integrations use the same checkout flow with a Test API key; normal payment webhooks report the Test payment result.
 
+### Test a partial payment
+
+Send less than the quoted amount. Once Tidepool detects it, checkout shows the remaining amount and a countdown. Send that remainder in the same token, on the same test network, to the same deposit address before the quote expires. The order completes only after the full payment settles.
+
+After the deadline, stop sending to that address. Partial funds are returned to the quote's refund destination. If no customer refund address was supplied, they return to the store's Test wallet for the merchant to arrange the customer's return. A refund marked as needing attention requires the store's help; it has not yet reached the customer's external wallet.
+
 ## Withdraw
 
 From **Test → Wallet**, choose the balance, destination token and external testnet wallet address. Review the quoted output and approve with your Test wallet passkey. The withdrawal completes after Tendr verifies the destination transaction.
