@@ -802,11 +802,6 @@ function WriteScene({
         tapRef.current();
         setActive(step.key);
         await wait(160, timers);
-        if (step.pace === 0) {
-          setValues((current) => ({ ...current, [step.key]: step.text }));
-          await wait(240, timers);
-          continue;
-        }
         for (let i = 1; i <= step.text.length; i++) {
           if (cancelled) return;
           setValues((current) => ({ ...current, [step.key]: step.text.slice(0, i) }));
