@@ -219,7 +219,6 @@ export function InvoicingDemo() {
     }, fromTypedField ? 980 : 1560);
     const go = window.setTimeout(() => {
       if (playGen.current !== gen) return;
-      if (beat === 'paid') return;
       advanceRef.current();
     }, fromTypedField ? 1280 : 1880);
     return () => {
