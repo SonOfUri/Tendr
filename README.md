@@ -11,7 +11,7 @@ Tendr lets a business accept supported crypto assets, choose what it receives, a
 
 A customer can pay from one network while the business receives its chosen asset in NEAR Intents. The business can then authorize a withdrawal to a supported external wallet. Tendr tracks the payment through settlement and sends signed order notifications.
 
-[Try the playground](https://demo.usetendr.tech) · [Open the dashboard](https://app.usetendr.tech) · [Merchant docs](https://docs.usetendr.tech) · [Download the WooCommerce plugin](https://pay.usetendr.tech/downloads/woocommerce) · [Reviewer guide](docs/JUDGING_GUIDE.md)
+[Try the playground](https://demo.usetendr.tech) · [WordPress store demo](https://wpdemo.usetendr.tech) · [Open the dashboard](https://app.usetendr.tech) · [Merchant docs](https://docs.usetendr.tech) · [Download the WooCommerce plugin](https://pay.usetendr.tech/downloads/woocommerce) · [Reviewer guide](docs/JUDGING_GUIDE.md)
 
 **Source for review:** this README lives on `main`. The current payment, wallet, AI and invoice implementation described below is on [`deploy` at `2623e8d`](https://github.com/SonOfUri/Tendr/tree/2623e8dc8d5ee5fbf8f8b3bd31daf885ad7fdcde). Source and evidence links are pinned to that revision. [Local setup](docs/DEVELOPMENT.md#check-out-the-reviewed-application) selects it explicitly; `main` does not yet contain all of those application changes.
 
@@ -29,7 +29,13 @@ Open the [playground](https://demo.usetendr.tech). Choose **E-commerce**, **Fint
 
 **Expected result:** a branded checkout with asset selection, payment instructions and a simulated completion state. This playground is UI-only; its timers and sample AI responses are not evidence of a payment or a live model call. Its addresses and React code snippets are illustrative. Use a dashboard-generated Test checkout for transfers and the published server SDK or browser embed for integration.
 
-### 2. Make an actual testnet payment
+### 2. Try the WordPress / WooCommerce store
+
+Open the [hosted WordPress demo](https://wpdemo.usetendr.tech), choose a product, add it to the cart and continue to checkout to inspect the Tendr payment option.
+
+**Expected result:** a WooCommerce cart and checkout integrated with the Tendr gateway. You can inspect the store without completing a payment. For a payment, follow the mode, token and network displayed by checkout; the store demo is not automatically a Test-mode session.
+
+### 3. Make an actual testnet payment
 
 1. Sign in to the [dashboard](https://app.usetendr.tech), create/select a store and choose **Test**.
 2. Open **Wallet**, register the dedicated Test wallet passkey and complete activation. Choose a default settlement asset.
@@ -40,7 +46,7 @@ Open the [playground](https://demo.usetendr.tech). Choose **E-commerce**, **Fint
 
 **Expected result:** test funds move and the API records verified settlement. These tokens have no monetary value. Test wallet setup requires a usable passkey; extra Test keys and recovery kits are not available. [Detailed Test instructions](https://github.com/SonOfUri/Tendr/blob/2623e8dc8d5ee5fbf8f8b3bd31daf885ad7fdcde/apps/docs/testing.mdx) · [Recorded end-to-end evidence](#recorded-cross-chain-payment)
 
-### 3. Inspect the implementation without external accounts
+### 4. Inspect the implementation without external accounts
 
 Follow the [local setup and verification commands](docs/DEVELOPMENT.md). The focused unit suites use mocked providers; the full API/browser suites use isolated databases and simulators. The [reviewer guide](docs/JUDGING_GUIDE.md) maps each claim to implementation and tests.
 
@@ -123,7 +129,7 @@ The report also records returned unused input, public addresses and the verifica
 
 ## Integrate
 
-**WooCommerce:** [download the ZIP](https://pay.usetendr.tech/downloads/woocommerce), install it through WordPress and connect the store. No local build is required. [Plugin guide](https://docs.usetendr.tech/integrations/woocommerce)
+**WooCommerce:** [try the hosted store demo](https://wpdemo.usetendr.tech), or [download the ZIP](https://pay.usetendr.tech/downloads/woocommerce), install it through WordPress and connect the store. No local build is required. [Plugin guide](https://docs.usetendr.tech/integrations/woocommerce)
 
 **TypeScript / JavaScript:** install the public server package with `npm install @usetendr/sdk`. Use it to create a checkout on your server, redirect the customer to the returned URL, and verify signed webhooks before fulfilling the order. [SDK guide](https://docs.usetendr.tech/sdks/typescript) · [Published 0.2.0 source](https://github.com/SonOfUri/Tendr/tree/usetendr-sdk-v0.2.0/packages/sdk)
 
