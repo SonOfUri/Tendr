@@ -23,6 +23,7 @@ import {
 } from './lib/checkout/frame-origins';
 import { WALLET_CONNECT_HOSTS, WALLET_FRAME_HOSTS } from './lib/checkout/wallet-hosts';
 import { NOT_FOUND_PATH, routeForHost } from './lib/hosts';
+import { isInvoicingDemoHost } from './lib/invoicing-demo-host';
 import {
   checkoutContentSecurityPolicy,
   connectContentSecurityPolicy,
@@ -85,6 +86,12 @@ const POLICY_PATH =
 const NO_STORE_PATHS = ['/connect', '/settings/notification-email/verify'];
 
 export async function middleware(request: NextRequest) {
+  const requestHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+  if (request.nextUrl.pathname === '/' && isInvoicingDemoHost(requestHost)) {
+    const target = request.nextUrl.clone();
+    target.pathname = '/invoicing-demo';
+    return NextResponse.rewrite(target);
+  }
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   const nonce = btoa(String.fromCharCode(...bytes));
