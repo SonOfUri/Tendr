@@ -1,0 +1,199 @@
+.mc {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(1.5rem, 4vw, 4rem);
+  color: #fff;
+  font-family: var(--tendr-font-display, 'Rethink Sans', 'Segoe UI', sans-serif);
+}
+
+.mc-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 1.2rem;
+  width: min(1080px, 100%);
+}
+
+.mc-hero {
+  margin: 0;
+  font-size: clamp(2.8rem, 5.6vw, 5.1rem);
+  font-weight: 600;
+  letter-spacing: -0.045em;
+  line-height: 1.02;
+}
+
+.mc-drop {
+  display: inline-block;
+  animation: mc-drop 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.mc-drop-2 { animation-delay: 0.7s; }
+.mc-drop-3 { animation-delay: 1.45s; }
+.mc-drop-4 { animation-delay: 2.3s; }
+
+.mc-mark {
+  display: inline-block;
+  margin: 0 0.04em;
+  padding: 0.02em 0.22em 0.08em;
+  border-radius: 0.16em;
+  background: #fff;
+  color: #111;
+  line-height: 1.05;
+}
+
+.mc-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.9rem;
+  width: 100%;
+}
+
+.mc-card {
+  min-height: 168px;
+  padding: 1.35rem 1.2rem 1.2rem;
+  border-radius: 18px;
+  background: #fff;
+  color: #111;
+  text-align: left;
+  animation: mc-drop 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.mc-card:nth-child(1) { animation-delay: 0.2s; }
+.mc-card:nth-child(2) { animation-delay: 1.5s; }
+.mc-card:nth-child(3) { animation-delay: 2.8s; }
+.mc-card:nth-child(4) { animation-delay: 4.1s; }
+
+.mc-card h2 {
+  margin: 1rem 0 0;
+  font-size: clamp(1.2rem, 1.7vw, 1.6rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.mc-card p {
+  margin: 0.35rem 0 0;
+  color: #333;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.mc-icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 12px;
+  background: #111;
+  color: #fff;
+}
+
+.mc-icon svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mc-aside {
+  margin: 0.4rem 0 0;
+  color: rgba(255, 255, 255, 0.94);
+  font-size: clamp(1.35rem, 2.2vw, 1.8rem);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  animation: mc-drop 0.65s cubic-bezier(0.22, 1, 0.36, 1) 5.6s both;
+}
+
+.mc-kicker {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  animation: mc-drop 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.mc-paths .mc-card { min-height: 132px; }
+.mc-paths .mc-card:nth-child(1) { animation-delay: 0.55s; }
+.mc-paths .mc-card:nth-child(2) { animation-delay: 1.7s; }
+.mc-paths .mc-card:nth-child(3) { animation-delay: 2.85s; }
+.mc-paths .mc-card:nth-child(4) { animation-delay: 4s; }
+
+.mc-aside-late {
+  animation-delay: 6.4s;
+}
+
+.mc-end {
+  position: absolute;
+  inset: 0;
+  background: #000 url('/onboarding-bg-image.png') center / cover no-repeat;
+}
+
+.mc-end-logo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  animation: mc-logo-rise 1.7s cubic-bezier(0.16, 1, 0.3, 1) 0.45s both;
+}
+
+.mc-end-logo span {
+  font-size: clamp(3.2rem, 6vw, 5.4rem);
+  font-weight: 600;
+  letter-spacing: -0.05em;
+  line-height: 1;
+}
+
+.mc-end-powered {
+  position: absolute;
+  left: 50%;
+  bottom: 6.5%;
+  width: min(460px, 48vw);
+  height: auto;
+  animation: mc-badge-in 0.9s cubic-bezier(0.22, 1, 0.36, 1) 2.15s both;
+}
+
+@keyframes mc-drop {
+  from { opacity: 0; transform: translateY(-28px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes mc-logo-rise {
+  from { opacity: 0; transform: translate(-50%, 38vh); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+@keyframes mc-badge-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(16px); }
+  to { opacity: 1; transform: translateX(-50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-drop,
+  .mc-card,
+  .mc-aside,
+  .mc-kicker,
+  .mc-end-logo,
+  .mc-end-powered {
+    animation: none !important;
+    opacity: 1 !important;
+  }
+
+  .mc-end-logo {
+    transform: translate(-50%, -50%);
+  }
+
+  .mc-end-powered {
+    transform: translateX(-50%);
+  }
+}

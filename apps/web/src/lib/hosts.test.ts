@@ -279,6 +279,9 @@ describe('invoice host', () => {
   it('keeps dashboards on the app origin and blocks checkout/demo paths', () => {
     expect(invoice('/dashboard/invoices')).toEqual(redirect(`${APP}/dashboard/invoices`));
     expect(invoice('/demo')).toEqual(notFound);
+    expect(invoice('/motion-intro')).toEqual(next);
+    expect(invoice('/motion-2')).toEqual(next);
+    expect(invoice('/motion-conclusion')).toEqual(next);
     expect(invoice('/acme/coffee')).toEqual(notFound);
     expect(invoice('/invoice/acme')).toEqual(notFound);
     expect(invoice('/acme', 'unknown.example.com')).toEqual(next);

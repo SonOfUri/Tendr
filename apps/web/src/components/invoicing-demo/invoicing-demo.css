@@ -1,3 +1,26 @@
+.motion-frame {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  box-sizing: border-box;
+  padding: 12px;
+  background: #fff;
+}
+
+.motion-stage {
+  position: relative;
+  height: 100%;
+  border-radius: 18px;
+  background-color: #0a0a0a;
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.12) 1px, transparent 1.2px);
+  background-size: 22px 22px;
+  overflow: hidden;
+}
+
+nextjs-portal {
+  display: none !important;
+}
+
 .inv-demo {
   position: fixed;
   inset: 0;

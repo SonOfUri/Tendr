@@ -47,6 +47,9 @@ export const RESERVED_LINK_SLUGS: readonly string[] = [
   'settings',
   'icons',
   'fonts',
+  'motion-intro',
+  'motion-2',
+  'motion-conclusion',
 ];
 
 export const PaymentLinkAvailabilitySchema = z.enum([

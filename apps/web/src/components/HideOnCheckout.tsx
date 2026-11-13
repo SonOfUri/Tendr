@@ -24,7 +24,7 @@ export function HideOnCheckout({ children }: { children: ReactNode }) {
   }, []);
   if (pathname && isShopperPath(pathname)) return null;
   if (pathname === '/' || pathname === '/demo' || pathname?.startsWith('/demo/')) return null;
-  if (pathname?.startsWith('/invoicing-demo')) return null;
+  if (pathname?.startsWith('/invoicing-demo') || pathname?.startsWith('/motion')) return null;
   // Merchant dashboard has its own app chrome (sidebar + top bar).
   if (pathname?.startsWith('/invoice/')) return null;
   if (invoiceHost || invoicingDemoHost) return null;

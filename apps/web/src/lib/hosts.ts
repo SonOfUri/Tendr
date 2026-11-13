@@ -75,6 +75,9 @@ export const KNOWN_TOP_LEVEL_PATHS: readonly string[] = [
   'invoice',
   'demo',
   'api',
+  'motion-intro',
+  'motion-2',
+  'motion-conclusion',
 ];
 
 const KNOWN = new Set(KNOWN_TOP_LEVEL_PATHS);
@@ -165,6 +168,7 @@ export function routeForHost(input: {
     if (APP.has(seg) && input.appOrigin) return redirect(`${input.appOrigin}${pathname}${search}`);
     if (PAY_SERVED.includes(seg as (typeof PAY_SERVED)[number]) || seg === 'tendr-appearance.js')
       return NEXT;
+    if (seg === 'motion-intro' || seg === 'motion-2' || seg === 'motion-conclusion') return NEXT;
     if (/^\/[a-z0-9][a-z0-9-]*\/?$/.test(pathname) && !KNOWN.has(seg))
       return { kind: 'rewrite', pathname: `/invoice${pathname}` };
     return NOT_FOUND;

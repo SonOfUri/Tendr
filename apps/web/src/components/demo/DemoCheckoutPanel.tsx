@@ -63,6 +63,10 @@ type Props = {
   /** A payment may already be on its way — blocks further wallet sends. */
   blocked?: PaymentBlock;
   onDidntGoThrough?: () => void;
+  /** Film only: skip the automatic success timer. Live demo leaves this unset. */
+  manualSettle?: boolean;
+  /** Film only: bump to move the panel to confirming, then success. */
+  filmSettle?: number;
 };
 
 type PayMethod = 'transfer' | 'wallet';
@@ -117,6 +121,8 @@ export function DemoCheckoutPanel({
   checkBeforeSend,
   blocked,
   onDidntGoThrough,
+  manualSettle = false,
+  filmSettle,
 }: Props) {
   const logoTone: 'white' | 'black' =
     skin === 'gaming' || uiTheme === 'dark' ? 'white' : 'black';
@@ -345,7 +351,7 @@ export function DemoCheckoutPanel({
   // Pauses while asset dropdown is open or Connect wallet is selected.
   // Never advances real hosted checkouts — those follow on-chain session state.
   useEffect(() => {
-    if (!uiOnly) return;
+    if (!uiOnly || manualSettle) return;
     if (!quote || completed.current) return;
     if (phase === 'loading' || phase === 'error' || phase === 'done') return;
 
@@ -390,7 +396,17 @@ export function DemoCheckoutPanel({
     tick();
     const id = window.setInterval(tick, 200);
     return () => window.clearInterval(id);
-  }, [quote, method, assetPickerOpen, phase, uiOnly]);
+  }, [quote, method, assetPickerOpen, phase, uiOnly, manualSettle]);
+
+  useEffect(() => {
+    if (!uiOnly || !manualSettle || filmSettle == null || filmSettle < 1) return;
+    setPhase('waiting');
+    const timer = window.setTimeout(() => {
+      completed.current = true;
+      setPhase('done');
+    }, 2400);
+    return () => window.clearTimeout(timer);
+  }, [filmSettle, manualSettle, uiOnly]);
 
   const amountLabel =
     amountDisplay ??
