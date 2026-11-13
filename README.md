@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="apps/docs/images/logo-White.png">
-  <img src="apps/docs/images/logo-black.png" alt="Tendr" width="180">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/SonOfUri/Tendr/50444d3a642cb2e977c2fd54710d88c864b72188/apps/docs/images/logo-White.png">
+  <img src="https://raw.githubusercontent.com/SonOfUri/Tendr/50444d3a642cb2e977c2fd54710d88c864b72188/apps/docs/images/logo-black.png" alt="Tendr" width="180">
 </picture>
 
 # Tendr
@@ -13,7 +13,7 @@ A customer can pay from one network while the business receives its chosen asset
 
 [Try the playground](https://demo.usetendr.tech) · [WordPress store demo](https://wpdemo.usetendr.tech) · [Open the dashboard](https://app.usetendr.tech) · [Merchant docs](https://docs.usetendr.tech) · [Download the WooCommerce plugin](https://pay.usetendr.tech/downloads/woocommerce) · [Reviewer guide](docs/JUDGING_GUIDE.md)
 
-**Source for review:** this README lives on `main`. The current payment, wallet, AI and invoice implementation described below is on [`deploy` at `2623e8d`](https://github.com/SonOfUri/Tendr/tree/2623e8dc8d5ee5fbf8f8b3bd31daf885ad7fdcde). Source and evidence links are pinned to that revision. [Local setup](docs/DEVELOPMENT.md#check-out-the-reviewed-application) selects it explicitly; `main` does not yet contain all of those application changes.
+**Source for review:** this README is maintained on `main` and mirrored across branches. The current payment, wallet, AI and invoice implementation described below is on [`deploy` at `2623e8d`](https://github.com/SonOfUri/Tendr/tree/2623e8dc8d5ee5fbf8f8b3bd31daf885ad7fdcde). Source and evidence links are pinned to that revision. Application code varies by branch; [local setup](docs/DEVELOPMENT.md#check-out-the-reviewed-application) selects the reviewed revision explicitly.
 
 ## The problem
 

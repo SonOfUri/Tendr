@@ -1,6 +1,6 @@
 # Local development and verification
 
-These commands target the application tree described in the [README](../README.md), after checking out the exact application revision below. The documentation lives on `main`, whose application code is older; do not run the Tidepool-specific checks against `main`. Node 22, npm 10 and Docker are the baseline; [`.nvmrc`](https://github.com/SonOfUri/Tendr/blob/2623e8dc8d5ee5fbf8f8b3bd31daf885ad7fdcde/.nvmrc), [package scripts](https://github.com/SonOfUri/Tendr/blob/2623e8dc8d5ee5fbf8f8b3bd31daf885ad7fdcde/package.json) and [CI](https://github.com/SonOfUri/Tendr/blob/2623e8dc8d5ee5fbf8f8b3bd31daf885ad7fdcde/.github/workflows/ci.yml) are the source of truth.
+These commands target the application tree described in the [README](../README.md), after checking out the exact application revision below. The documentation is mirrored across branches whose application code can differ; run the Tidepool-specific checks against the pinned revision below. Node 22, npm 10 and Docker are the baseline; [`.nvmrc`](https://github.com/SonOfUri/Tendr/blob/2623e8dc8d5ee5fbf8f8b3bd31daf885ad7fdcde/.nvmrc), [package scripts](https://github.com/SonOfUri/Tendr/blob/2623e8dc8d5ee5fbf8f8b3bd31daf885ad7fdcde/package.json) and [CI](https://github.com/SonOfUri/Tendr/blob/2623e8dc8d5ee5fbf8f8b3bd31daf885ad7fdcde/.github/workflows/ci.yml) are the source of truth.
 
 The default local environment uses simulated Test payments, a fake NEAR client, logged email and disabled model calls. It does not require GCP billing, a mainnet wallet or a NEAR AI key.
 

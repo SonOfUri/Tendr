@@ -1,6 +1,6 @@
 # Tendr: reviewer guide
 
-This guide connects product claims to observable behavior, code and tests. This guide is maintained on `main`; it evaluates application baseline `deploy@2623e8d`, not the older application code on `main`. Implementation/test links are pinned to that revision. The public SDK is independently versioned at `usetendr-sdk-v0.2.0`. The [README](../README.md) is the product overview; [DEVELOPMENT.md](DEVELOPMENT.md) contains reproducible commands.
+This guide connects product claims to observable behavior, code and tests. This guide is maintained on `main` and mirrored across branches; it evaluates application baseline `deploy@2623e8d`, regardless of the branch currently open. Implementation/test links are pinned to that revision. The public SDK is independently versioned at `usetendr-sdk-v0.2.0`. The [README](../README.md) is the product overview; [DEVELOPMENT.md](DEVELOPMENT.md) contains reproducible commands.
 
 ## A short review path
 
